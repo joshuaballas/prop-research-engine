@@ -1,0 +1,471 @@
+using System.Diagnostics;
+using System.Text.Json;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
+using SportsBetting.Api.Data;
+using SportsBetting.Api.Models;
+
+namespace SportsBetting.Api.Predictions;
+
+public sealed class PredictionGenerationService(
+    ApplicationDbContext dbContext,
+    IPredictionRepository predictionRepository,
+    IPredictionFeatureService featureService,
+    IOptions<PredictionGenerationOptions> options,
+    ILogger<PredictionGenerationService> logger) : IPredictionGenerationService
+{
+    private const string ModelName = "BaselineAverageModel";
+    private const string ModelVersion = "1.0";
+    private const int TheOddsFreshnessWindowHours = 24;
+
+    public async Task<PredictionGenerationResult> GenerateMlbBaselinePredictionsAsync(CancellationToken cancellationToken)
+    {
+        return await GenerateMlbBaselinePredictionsAsync(
+            PredictionGenerationScope.FullMlb,
+            request: null,
+            cancellationToken);
+    }
+
+    public async Task<PredictionGenerationResult> GenerateTheOddsMlbBaselinePredictionsAsync(
+        TheOddsMlbPredictionGenerationRequest request,
+        CancellationToken cancellationToken)
+    {
+        return await GenerateMlbBaselinePredictionsAsync(
+            PredictionGenerationScope.TheOdds,
+            request,
+            cancellationToken);
+    }
+
+    private async Task<PredictionGenerationResult> GenerateMlbBaselinePredictionsAsync(
+        PredictionGenerationScope scope,
+        TheOddsMlbPredictionGenerationRequest? request,
+        CancellationToken cancellationToken)
+    {
+        var stopwatch = Stopwatch.StartNew();
+        var observedAt = DateTimeOffset.UtcNow;
+        var loadCandidatePropsStopwatch = Stopwatch.StartNew();
+        var props = scope == PredictionGenerationScope.TheOdds
+            ? await LoadTheOddsCandidatePropsAsync(request ?? new TheOddsMlbPredictionGenerationRequest(null, null, null), observedAt, cancellationToken)
+            : await LoadFullMlbCandidatePropsAsync(cancellationToken);
+        loadCandidatePropsStopwatch.Stop();
+
+        var predictionRun = new PredictionRun
+        {
+            Id = Guid.NewGuid(),
+            ModelName = ModelName,
+            ModelVersion = ModelVersion,
+            CreatedAt = observedAt,
+            Notes = BuildRunNotes(scope, request)
+        };
+        var skipCounts = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["NoHistoricalResults"] = 0,
+            ["NoSportsbookLine"] = 0,
+            ["NoPropType"] = 0,
+            ["InsufficientHistory"] = 0
+        };
+        var suppressionCounts = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["RecommendationSuppressedByThreshold"] = 0,
+            ["RecommendationSuppressedByPropTypeFilter"] = 0
+        };
+        var generationOptions = options.Value;
+        var enabledPropTypes = generationOptions.EnabledPropTypes
+            .Where(propType => !string.IsNullOrWhiteSpace(propType))
+            .Select(NormalizePropTypeName)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        var featureGenerationMs = 0L;
+        var probabilityOrRecommendationMs = 0L;
+
+        foreach (var prop in props)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            if (string.IsNullOrWhiteSpace(prop.PropTypeName))
+            {
+                IncrementSkip(skipCounts, "NoPropType");
+                continue;
+            }
+
+            if (prop.SportsbookLine is null)
+            {
+                IncrementSkip(skipCounts, "NoSportsbookLine");
+                continue;
+            }
+
+            var eventDate = DateOnly.FromDateTime(prop.StartsAt.UtcDateTime);
+            var featureStopwatch = Stopwatch.StartNew();
+            var features = await featureService.GeneratePlayerFeaturesAsync(
+                prop.PlayerId,
+                prop.PropTypeId,
+                eventDate,
+                cancellationToken);
+            featureStopwatch.Stop();
+            featureGenerationMs += featureStopwatch.ElapsedMilliseconds;
+
+            if (features.HistoricalGamesAvailable == 0)
+            {
+                IncrementSkip(skipCounts, "NoHistoricalResults");
+                continue;
+            }
+
+            if (features.SeasonAverage is null
+                || features.Last10GameAverage is null
+                || features.Last5GameAverage is null)
+            {
+                IncrementSkip(skipCounts, "InsufficientHistory");
+                continue;
+            }
+
+            var predictedValue = (features.SeasonAverage.Value * 0.50m)
+                + (features.Last10GameAverage.Value * 0.30m)
+                + (features.Last5GameAverage.Value * 0.20m);
+            predictedValue = Math.Round(predictedValue, 4);
+
+            var recommendationStopwatch = Stopwatch.StartNew();
+            var edge = Math.Round(predictedValue - prop.SportsbookLine.Value, 4);
+            var confidence = CalculateConfidence(features);
+            var recommendation = GetRecommendation(
+                edge,
+                prop.PropTypeName,
+                generationOptions.OverEdgeThreshold,
+                generationOptions.UnderEdgeThreshold,
+                enabledPropTypes,
+                suppressionCounts);
+            recommendationStopwatch.Stop();
+            probabilityOrRecommendationMs += recommendationStopwatch.ElapsedMilliseconds;
+
+            predictionRun.Predictions.Add(new Prediction
+            {
+                Id = Guid.NewGuid(),
+                PredictionRunId = predictionRun.Id,
+                PropId = prop.Id,
+                PredictedProbability = null,
+                PredictedValue = predictedValue,
+                SportsbookLine = prop.SportsbookLine,
+                Edge = edge,
+                Recommendation = recommendation,
+                Confidence = confidence,
+                CreatedAt = observedAt
+            });
+        }
+
+        var skippedReasonAggregationStopwatch = Stopwatch.StartNew();
+        foreach (var skipCount in skipCounts
+            .Concat(suppressionCounts)
+            .Where(skipCount => skipCount.Value > 0))
+        {
+            predictionRun.SkipCounts.Add(new PredictionRunSkipCount
+            {
+                Id = Guid.NewGuid(),
+                PredictionRunId = predictionRun.Id,
+                Reason = skipCount.Key,
+                Count = skipCount.Value,
+                CreatedAt = observedAt
+            });
+        }
+        skippedReasonAggregationStopwatch.Stop();
+
+        predictionRun.CompletedAt = DateTimeOffset.UtcNow;
+
+        var persistenceStopwatch = Stopwatch.StartNew();
+        await predictionRepository.AddPredictionRunAsync(predictionRun, cancellationToken);
+        persistenceStopwatch.Stop();
+
+        stopwatch.Stop();
+
+        logger.LogInformation(
+            "Generated MLB baseline predictions. Scope: {Scope}; props evaluated: {PropsEvaluated}; predictions generated: {PredictionsGenerated}; skipped props: {SkippedProps}; threshold suppressions: {ThresholdSuppressions}; prop-type suppressions: {PropTypeSuppressions}; duration: {DurationMs}ms.",
+            scope,
+            props.Count,
+            predictionRun.Predictions.Count,
+            skipCounts.Values.Sum(),
+            suppressionCounts["RecommendationSuppressedByThreshold"],
+            suppressionCounts["RecommendationSuppressedByPropTypeFilter"],
+            stopwatch.ElapsedMilliseconds);
+
+        return new PredictionGenerationResult(
+            predictionRun.Id,
+            ModelName,
+            ModelVersion,
+            props.Count,
+            predictionRun.Predictions.Count,
+            skipCounts.Values.Sum(),
+            suppressionCounts["RecommendationSuppressedByThreshold"],
+            suppressionCounts["RecommendationSuppressedByPropTypeFilter"],
+            stopwatch.Elapsed,
+            new PredictionGenerationTimingDiagnostics(
+                stopwatch.ElapsedMilliseconds,
+                loadCandidatePropsStopwatch.ElapsedMilliseconds,
+                featureGenerationMs,
+                probabilityOrRecommendationMs,
+                persistenceStopwatch.ElapsedMilliseconds,
+                skippedReasonAggregationStopwatch.ElapsedMilliseconds,
+                0),
+            scope == PredictionGenerationScope.TheOdds ? "TheOddsApiMlb" : "FullMlb");
+    }
+
+    private async Task<List<PredictionCandidateProp>> LoadFullMlbCandidatePropsAsync(CancellationToken cancellationToken)
+    {
+        return await dbContext.Props
+            .AsNoTracking()
+            .Where(prop => prop.League != null && prop.League.Code == "MLB")
+            .OrderBy(prop => prop.StartsAt)
+            .ThenBy(prop => prop.Id)
+            .Select(prop => new PredictionCandidateProp(
+                prop.Id,
+                prop.PlayerId,
+                prop.PropTypeId,
+                prop.PropType == null ? string.Empty : prop.PropType.Name,
+                prop.StartsAt,
+                prop.PlatformProps
+                    .OrderByDescending(platformProp => platformProp.ObservedAt)
+                    .ThenByDescending(platformProp => platformProp.Id)
+                    .Select(platformProp => (decimal?)platformProp.CurrentLine)
+                    .FirstOrDefault()))
+            .ToListAsync(cancellationToken);
+    }
+
+    private async Task<List<PredictionCandidateProp>> LoadTheOddsCandidatePropsAsync(
+        TheOddsMlbPredictionGenerationRequest request,
+        DateTimeOffset observedAt,
+        CancellationToken cancellationToken)
+    {
+        using var providerFilter = JsonSerializer.SerializeToDocument(new { dataProvider = "The Odds API" });
+        var freshnessCutoff = observedAt.AddHours(-TheOddsFreshnessWindowHours);
+        var rows = await dbContext.PlatformProps
+            .AsNoTracking()
+            .Where(platformProp => platformProp.Metadata != null
+                && EF.Functions.JsonContains(platformProp.Metadata, providerFilter)
+                && platformProp.Status == "active"
+                && platformProp.ObservedAt >= freshnessCutoff
+                && platformProp.Prop != null
+                && platformProp.Prop.League != null
+                && platformProp.Prop.League.Code == "MLB")
+            .OrderByDescending(platformProp => platformProp.ObservedAt)
+            .ThenByDescending(platformProp => platformProp.Id)
+            .Select(platformProp => new TheOddsCandidatePlatformProp(
+                platformProp.Id,
+                platformProp.PropId,
+                platformProp.CurrentLine,
+                platformProp.ObservedAt,
+                platformProp.Metadata,
+                platformProp.Prop!.PlayerId,
+                platformProp.Prop.PropTypeId,
+                platformProp.Prop.PropType == null ? string.Empty : platformProp.Prop.PropType.Name,
+                platformProp.Prop.StartsAt))
+            .ToListAsync(cancellationToken);
+
+        var eventIdFilter = NullIfWhiteSpace(request.EventId);
+        var bookmakerFilter = SplitCsv(request.Bookmakers);
+        var marketFilter = SplitCsv(request.Markets);
+
+        return rows
+            .Where(row => MatchesTheOddsFilters(row.Metadata, eventIdFilter, bookmakerFilter, marketFilter))
+            .GroupBy(row => row.PropId)
+            .Select(group => group
+                .OrderByDescending(row => row.ObservedAt)
+                .ThenByDescending(row => row.PlatformPropId)
+                .First())
+            .OrderBy(row => row.StartsAt)
+            .ThenBy(row => row.PropId)
+            .Select(row => new PredictionCandidateProp(
+                row.PropId,
+                row.PlayerId,
+                row.PropTypeId,
+                row.PropTypeName,
+                row.StartsAt,
+                row.CurrentLine))
+            .ToList();
+    }
+
+    private static bool MatchesTheOddsFilters(
+        JsonDocument? metadata,
+        string? eventId,
+        IReadOnlySet<string> bookmakers,
+        IReadOnlySet<string> markets)
+    {
+        if (!string.IsNullOrWhiteSpace(eventId)
+            && !string.Equals(ExtractMetadataString(metadata, "eventInfo", "eventId"), eventId, StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        if (bookmakers.Count > 0)
+        {
+            var bookmakerKey = ExtractMetadataString(metadata, "bookmaker", "key");
+            var bookmakerTitle = ExtractMetadataString(metadata, "bookmaker", "title");
+            if ((bookmakerKey is null || !bookmakers.Contains(bookmakerKey))
+                && (bookmakerTitle is null || !bookmakers.Contains(bookmakerTitle)))
+            {
+                return false;
+            }
+        }
+
+        if (markets.Count > 0)
+        {
+            var marketKey = ExtractMetadataString(metadata, "market", "key");
+            if (marketKey is null || !markets.Contains(marketKey))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static string? ExtractMetadataString(JsonDocument? metadata, string sectionName, string propertyName)
+    {
+        return metadata?.RootElement.ValueKind == JsonValueKind.Object
+            && metadata.RootElement.TryGetProperty(sectionName, out var section)
+            && section.ValueKind == JsonValueKind.Object
+            && section.TryGetProperty(propertyName, out var property)
+            && property.ValueKind == JsonValueKind.String
+            ? property.GetString()
+            : null;
+    }
+
+    private static IReadOnlySet<string> SplitCsv(string? value)
+    {
+        return string.IsNullOrWhiteSpace(value)
+            ? new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+            : value
+                .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .Where(item => !string.IsNullOrWhiteSpace(item))
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+    }
+
+    private static string? NullIfWhiteSpace(string? value)
+    {
+        return string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+    }
+
+    private static string BuildRunNotes(
+        PredictionGenerationScope scope,
+        TheOddsMlbPredictionGenerationRequest? request)
+    {
+        if (scope != PredictionGenerationScope.TheOdds)
+        {
+            return "Baseline weighted-average predictions generated from prop_results features.";
+        }
+
+        return string.Join(
+            " ",
+            "Scoped The Odds API MLB baseline weighted-average predictions generated from fresh persisted platform_props.",
+            $"eventId={NullIfWhiteSpace(request?.EventId) ?? "any"};",
+            $"bookmakers={NullIfWhiteSpace(request?.Bookmakers) ?? "any"};",
+            $"markets={NullIfWhiteSpace(request?.Markets) ?? "any"}.");
+    }
+
+    private static void IncrementSkip(Dictionary<string, int> skipCounts, string reason)
+    {
+        skipCounts[reason] = skipCounts.GetValueOrDefault(reason) + 1;
+    }
+
+    private static string GetRecommendation(
+        decimal edge,
+        string propType,
+        decimal overEdgeThreshold,
+        decimal underEdgeThreshold,
+        IReadOnlySet<string> enabledPropTypes,
+        IDictionary<string, int> suppressionCounts)
+    {
+        string recommendation;
+        if (edge >= overEdgeThreshold)
+        {
+            recommendation = "OVER";
+        }
+        else if (edge <= -underEdgeThreshold)
+        {
+            recommendation = "UNDER";
+        }
+        else
+        {
+            IncrementSuppression(suppressionCounts, "RecommendationSuppressedByThreshold");
+            return "PASS";
+        }
+
+        if (enabledPropTypes.Count == 0 || enabledPropTypes.Contains(NormalizePropTypeName(propType)))
+        {
+            return recommendation;
+        }
+
+        IncrementSuppression(suppressionCounts, "RecommendationSuppressedByPropTypeFilter");
+        return "PASS";
+    }
+
+    private static void IncrementSuppression(IDictionary<string, int> suppressionCounts, string reason)
+    {
+        suppressionCounts[reason] = suppressionCounts.TryGetValue(reason, out var count)
+            ? count + 1
+            : 1;
+    }
+
+    private static string NormalizePropTypeName(string propTypeName)
+    {
+        var builder = new System.Text.StringBuilder(propTypeName.Length);
+
+        foreach (var character in propTypeName.Trim().ToUpperInvariant())
+        {
+            if (char.IsLetterOrDigit(character))
+            {
+                builder.Append(character);
+            }
+        }
+
+        return builder.ToString();
+    }
+
+    private static decimal CalculateConfidence(PlayerPredictionFeatures features)
+    {
+        var confidence = 0.50m;
+
+        if (features.SeasonGamesAvailable >= 25)
+        {
+            confidence += 0.10m;
+        }
+
+        if (features.SeasonGamesAvailable >= 50)
+        {
+            confidence += 0.10m;
+        }
+
+        if (features.HistoricalGamesAvailable >= 100)
+        {
+            confidence += 0.10m;
+        }
+
+        if (features.HistoricalGamesAvailable >= 200)
+        {
+            confidence += 0.10m;
+        }
+
+        return Math.Min(confidence, 0.90m);
+    }
+
+    private enum PredictionGenerationScope
+    {
+        FullMlb,
+        TheOdds
+    }
+
+    private sealed record PredictionCandidateProp(
+        Guid Id,
+        Guid PlayerId,
+        Guid PropTypeId,
+        string PropTypeName,
+        DateTimeOffset StartsAt,
+        decimal? SportsbookLine);
+
+    private sealed record TheOddsCandidatePlatformProp(
+        Guid PlatformPropId,
+        Guid PropId,
+        decimal CurrentLine,
+        DateTimeOffset ObservedAt,
+        JsonDocument? Metadata,
+        Guid PlayerId,
+        Guid PropTypeId,
+        string PropTypeName,
+        DateTimeOffset StartsAt);
+}

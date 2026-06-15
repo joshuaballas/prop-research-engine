@@ -1,0 +1,43 @@
+namespace SportsBetting.Api.Integrations.Underdog;
+
+public sealed record UnderdogProjectionRecord(
+    string LineId,
+    string? StableKey,
+    string? OverUnderId,
+    string? EntryStableId,
+    string? PlayerId,
+    string PlayerName,
+    string? FirstName,
+    string? LastName,
+    string? TeamId,
+    string? League,
+    string? SportId,
+    string? Position,
+    decimal? Line,
+    decimal? NonDiscountedLine,
+    string StatType,
+    string? StatDisplayName,
+    string? Title,
+    string? Status,
+    string? LineType,
+    string? ProviderId,
+    bool OverAvailable,
+    bool UnderAvailable,
+    UnderdogOptionRecord? HigherOption,
+    UnderdogOptionRecord? LowerOption,
+    string? GameId,
+    string? GameTitle,
+    DateTimeOffset? StartsAt,
+    DateTimeOffset? UpdatedAt,
+    DateTimeOffset? ExpiresAt);
+
+public sealed record UnderdogOptionRecord(
+    string? OptionId,
+    string? Choice,
+    string? Status,
+    string? AmericanPrice,
+    decimal? DecimalPrice,
+    decimal? PayoutMultiplier,
+    string? SelectionHeader,
+    string? SelectionSubheader,
+    DateTimeOffset? UpdatedAt);

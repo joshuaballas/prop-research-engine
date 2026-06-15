@@ -1,0 +1,16 @@
+@SportsBetting.Api_HostAddress = http://localhost:5299
+
+GET {{SportsBetting.Api_HostAddress}}/health
+Accept: application/json
+
+###
+
+GET {{SportsBetting.Api_HostAddress}}/health/ready
+Accept: application/json
+
+###
+
+GET {{SportsBetting.Api_HostAddress}}/api/debug/underdog
+Accept: application/json
+
+###

@@ -1,0 +1,566 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>SportsBetting Research Dashboard</title>
+    <link rel="stylesheet" href="/research/styles.css">
+</head>
+<body>
+    <header class="app-header">
+        <div>
+            <p class="eyebrow">SportsBetting Internal</p>
+            <h1>SportsBetting Research Dashboard</h1>
+        </div>
+        <button id="refreshButton" class="primary-button" type="button">Refresh</button>
+    </header>
+
+    <main>
+        <section class="warning-band">
+            <strong>Research only — not betting recommendations.</strong>
+            <span>EV is not currently profitable in backtest. No normal recommendation-eligible markets are currently available. Underdog markets are promotional/balanced and may use non-standard payout semantics.</span>
+        </section>
+
+        <section class="section" aria-label="System health">
+            <div class="section-header">
+                <div>
+                    <h2>System Health</h2>
+                    <p>Source freshness, background import status, and research readiness.</p>
+                </div>
+                <div id="systemHealthBadge" class="chip">Loading</div>
+            </div>
+            <div class="section-grid system-health-grid">
+                <div class="metric">
+                    <span>Errors Last 24h</span>
+                    <strong id="systemErrorsLast24h">-</strong>
+                </div>
+                <div class="metric">
+                    <span>Underdog</span>
+                    <strong id="underdogHealth">-</strong>
+                </div>
+                <div class="metric">
+                    <span>PrizePicks</span>
+                    <strong id="prizePicksHealth">-</strong>
+                </div>
+                <div class="metric">
+                    <span>MLB Import</span>
+                    <strong id="mlbImportHealth">-</strong>
+                </div>
+                <div class="metric">
+                    <span>Prediction Research</span>
+                    <strong id="predictionResearchHealth">-</strong>
+                </div>
+            </div>
+            <div id="systemRecommendedActions" class="metric-list"></div>
+        </section>
+
+        <section class="section" aria-label="Application status">
+            <div class="section-header">
+                <div>
+                    <h2>Application Status</h2>
+                    <p>Persistent API and worker error log.</p>
+                </div>
+                <div id="appHealthBadge" class="chip">Loading</div>
+            </div>
+            <div class="section-grid status-grid">
+                <div class="metric">
+                    <span>Total Errors</span>
+                    <strong id="totalErrors">-</strong>
+                </div>
+                <div class="metric">
+                    <span>Last 24h</span>
+                    <strong id="errorsLast24h">-</strong>
+                </div>
+                <div class="metric">
+                    <span>Most Recent</span>
+                    <strong id="mostRecentError">-</strong>
+                </div>
+            </div>
+            <div class="two-column status-breakdown">
+                <div>
+                    <h3>By Source</h3>
+                    <div id="errorsBySource" class="metric-list"></div>
+                </div>
+                <div>
+                    <h3>By Component</h3>
+                    <div id="errorsByComponent" class="metric-list"></div>
+                </div>
+            </div>
+            <div class="section-header compact recent-errors-header">
+                <div>
+                    <h3>Recent Errors</h3>
+                    <p>Stack traces are not shown here.</p>
+                </div>
+                <button id="copyErrorsButton" class="secondary-button" type="button">Copy error details</button>
+            </div>
+            <div class="table-wrap compact-table">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Occurred</th>
+                            <th>Severity</th>
+                            <th>Source</th>
+                            <th>Component</th>
+                            <th>Operation</th>
+                            <th>Message</th>
+                            <th>Correlation</th>
+                        </tr>
+                    </thead>
+                    <tbody id="recentErrorRows"></tbody>
+                </table>
+            </div>
+        </section>
+
+        <section class="section-label">
+            <h2>MLB Research</h2>
+        </section>
+
+        <section class="section-grid summary-grid" aria-label="Freshness summary">
+            <div class="metric">
+                <span>Total Ranked</span>
+                <strong id="totalRankedMarkets">-</strong>
+            </div>
+            <div class="metric">
+                <span>Visible</span>
+                <strong id="visibleMarkets">-</strong>
+            </div>
+            <div class="metric">
+                <span>Hidden</span>
+                <strong id="hiddenMarkets">-</strong>
+            </div>
+            <div class="metric">
+                <span>Stale</span>
+                <strong id="staleMarkets">-</strong>
+            </div>
+            <div class="metric">
+                <span>Eligible</span>
+                <strong id="eligibleMarkets">-</strong>
+            </div>
+        </section>
+
+        <section class="section">
+            <div class="section-header">
+                <div>
+                    <h2>The Odds MLB Event Workflow</h2>
+                    <p>This section uses persisted database rows only and does not call The Odds API.</p>
+                </div>
+                <div id="theOddsWorkflowCount" class="table-count">0 events</div>
+            </div>
+
+            <section class="section-grid event-workflow-summary-grid" aria-label="The Odds event workflow summary">
+                <div class="metric">
+                    <span>Persisted Events</span>
+                    <strong id="theOddsWorkflowTotal">-</strong>
+                </div>
+                <div class="metric">
+                    <span>Line-Shopping Ready</span>
+                    <strong id="theOddsWorkflowLineShoppingReady">-</strong>
+                </div>
+                <div class="metric">
+                    <span>Awaiting Results</span>
+                    <strong id="theOddsWorkflowAwaitingResults">-</strong>
+                </div>
+                <div class="metric">
+                    <span>Completed</span>
+                    <strong id="theOddsWorkflowCompleted">-</strong>
+                </div>
+                <div class="metric">
+                    <span>Needs Attention</span>
+                    <strong id="theOddsWorkflowNeedsAttention">-</strong>
+                </div>
+                <div class="metric">
+                    <span>Candidate Ingestions</span>
+                    <strong id="theOddsWorkflowCandidateIngestion">-</strong>
+                </div>
+                <div class="metric">
+                    <span>Credit Estimate</span>
+                    <strong id="theOddsWorkflowEstimatedCredits">-</strong>
+                </div>
+                <div class="metric workflow-action-card">
+                    <span>Recommended Action</span>
+                    <strong id="theOddsWorkflowLatestObserved">-</strong>
+                </div>
+            </section>
+            <p class="warning-text" id="theOddsWorkflowRecommendedAction">This planner uses persisted database rows only and does not spend The Odds API credits.</p>
+
+            <div class="table-wrap">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Status</th>
+                            <th>Event</th>
+                            <th>Start</th>
+                            <th>Coverage</th>
+                            <th>Severity</th>
+                            <th>Needs Prediction</th>
+                            <th>Props</th>
+                            <th>Predictions</th>
+                            <th>Line Groups</th>
+                            <th>Has Results</th>
+                            <th>Backtest</th>
+                            <th>Missing Mappings</th>
+                            <th>Missing History</th>
+                            <th>Notes</th>
+                        </tr>
+                    </thead>
+                    <tbody id="theOddsWorkflowRows"></tbody>
+                </table>
+            </div>
+        </section>
+
+        <section class="section">
+            <div class="section-header">
+                <div>
+                    <h2>Platform Freshness</h2>
+                    <p>Current market supply by sportsbook.</p>
+                </div>
+            </div>
+            <div id="platformFreshness" class="platform-grid"></div>
+        </section>
+
+        <section class="section two-column">
+            <div>
+                <div class="section-header compact">
+                    <div>
+                        <h2>Underdog EV Summary</h2>
+                        <p>Decimal-price EV backtest.</p>
+                    </div>
+                </div>
+                <div class="metric-list" id="evSummary"></div>
+            </div>
+            <div>
+                <div class="section-header compact">
+                    <div>
+                        <h2>Prop EV Reliability</h2>
+                        <p>Sample-backed prop-type status.</p>
+                    </div>
+                </div>
+                <div id="propReliabilitySummary" class="metric-list"></div>
+            </div>
+        </section>
+
+        <section class="section">
+            <div class="section-header">
+                <div>
+                    <h2>Prop EV Reliability</h2>
+                    <p>Stolen Bases is highlighted as excluded for now. No prop type currently qualifies as ProfitableCandidate.</p>
+                </div>
+            </div>
+            <div class="table-wrap compact-table">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Prop Type</th>
+                            <th>Status</th>
+                            <th>Positive EV Graded</th>
+                            <th>Hit Rate</th>
+                            <th>ROI</th>
+                            <th>Profit</th>
+                        </tr>
+                    </thead>
+                    <tbody id="propReliabilityRows"></tbody>
+                </table>
+            </div>
+        </section>
+
+        <section class="section">
+            <div class="section-header">
+                <div>
+                    <h2>The Odds API Manual Ingestion</h2>
+                    <p>The Odds API credits are limited. No automatic polling is enabled. Use dry run before commit.</p>
+                </div>
+                <div id="theOddsManualStatus" class="chip warn">Manual only</div>
+            </div>
+
+            <section class="warning-band compact-warning">
+                <strong>Credit-safe workflow.</strong>
+                <span>Fetch MLB Events and ingest actions spend The Odds API credits. Dashboard line shopping uses persisted DB rows and does not spend credits.</span>
+            </section>
+
+            <div class="manual-ingestion-grid">
+                <div class="manual-panel">
+                    <div class="section-header compact">
+                        <div>
+                            <h3>Event Selection</h3>
+                            <p>No The Odds API calls are made until you click Fetch MLB Events.</p>
+                        </div>
+                        <button id="fetchTheOddsEventsButton" class="secondary-button" type="button">Fetch MLB Events</button>
+                    </div>
+                    <div class="manual-form">
+                        <label>
+                            Event
+                            <select id="theOddsEventSelect"></select>
+                        </label>
+                        <label>
+                            Event ID
+                            <input id="theOddsEventIdInput" type="text" placeholder="event id">
+                        </label>
+                        <label>
+                            Bookmakers
+                            <input id="theOddsBookmakersInput" type="text" value="draftkings,betmgm">
+                        </label>
+                        <label>
+                            Markets
+                            <input id="theOddsMarketsInput" type="text" value="batter_hits,batter_total_bases,pitcher_strikeouts">
+                        </label>
+                    </div>
+                    <div id="theOddsEventsSummary" class="metric-list manual-output"></div>
+                </div>
+
+                <div class="manual-panel">
+                    <div class="section-header compact">
+                        <div>
+                            <h3>Controlled Import</h3>
+                            <p>Dry run first. Commit writes persisted market data.</p>
+                        </div>
+                    </div>
+                    <div class="manual-actions">
+                        <button id="theOddsDryRunButton" class="secondary-button" type="button">Dry Run Ingest</button>
+                        <label class="checkbox-field confirm-label">
+                            <input id="theOddsCommitConfirm" type="checkbox">
+                            <span class="checkbox-copy">
+                                <span class="checkbox-title">I understand this will spend The Odds API credits and write persisted market data.</span>
+                                <span class="checkbox-helper">Required before Commit Ingest is enabled.</span>
+                            </span>
+                        </label>
+                        <button id="theOddsCommitButton" class="primary-button" type="button" disabled>Commit Ingest</button>
+                    </div>
+                    <div id="theOddsIngestSummary" class="metric-list manual-output"></div>
+                </div>
+
+                <div class="manual-panel">
+                    <div class="section-header compact">
+                        <div>
+                            <h3>Prediction Refresh</h3>
+                            <p>Generate a new MLB prediction run, then refresh line shopping for that run.</p>
+                        </div>
+                    </div>
+                    <div class="manual-actions inline-actions">
+                        <button id="generateMlbPredictionsButton" class="secondary-button" type="button">Generate The Odds Predictions</button>
+                        <button id="generateFullMlbPredictionsButton" class="secondary-button" type="button">Generate Full MLB Predictions</button>
+                        <button id="refreshLineShoppingButton" class="secondary-button" type="button">Refresh Line Shopping</button>
+                    </div>
+                    <div id="theOddsPredictionSummary" class="metric-list manual-output"></div>
+                </div>
+            </div>
+        </section>
+
+        <section class="section">
+            <div class="section-header">
+                <div>
+                    <h2>MLB Line Shopping</h2>
+                    <p>Line-shopping data uses persisted The Odds API rows only and does not call The Odds API from the dashboard.</p>
+                    <p class="warning-text">Best EV is model-derived and should be treated as research until validated by backtesting.</p>
+                </div>
+                <div id="lineShoppingCount" class="table-count">0 groups</div>
+            </div>
+
+            <section class="section-grid line-shopping-summary" aria-label="Line shopping summary">
+                <div class="metric">
+                    <span>Comparison Groups</span>
+                    <strong id="lineShoppingGroups">-</strong>
+                </div>
+                <div class="metric">
+                    <span>Markets Compared</span>
+                    <strong id="lineShoppingMarkets">-</strong>
+                </div>
+                <div class="metric">
+                    <span>Bookmakers</span>
+                    <strong id="lineShoppingBookmakers">-</strong>
+                </div>
+                <div class="metric">
+                    <span>Multi-Book Groups</span>
+                    <strong id="lineShoppingMultiBook">-</strong>
+                </div>
+                <div class="metric">
+                    <span>Eligible Groups</span>
+                    <strong id="lineShoppingEligible">-</strong>
+                </div>
+                <div class="metric">
+                    <span>Dashboard Ready</span>
+                    <strong id="lineShoppingReady">-</strong>
+                </div>
+            </section>
+
+            <div class="preset-bar" aria-label="Line shopping filter presets">
+                <span>Presets</span>
+                <button class="secondary-button preset-button" type="button" data-line-shopping-preset="bestResearch">Best Research</button>
+                <button class="secondary-button preset-button" type="button" data-line-shopping-preset="allEligible">All Eligible</button>
+                <button class="secondary-button preset-button" type="button" data-line-shopping-preset="strongOnly">Strong Only</button>
+                <button class="secondary-button preset-button" type="button" data-line-shopping-preset="multiBookEv">Multi-book EV</button>
+                <button class="secondary-button preset-button" type="button" data-line-shopping-preset="diagnostics">Research Only / Diagnostics</button>
+                <button class="secondary-button preset-button" type="button" data-line-shopping-preset="reset">Reset</button>
+            </div>
+
+            <form class="filters line-shopping-filters" id="lineShoppingFilters">
+                <label class="checkbox-field">
+                    <input id="lineShoppingEligibleOnlyFilter" type="checkbox" checked>
+                    <span class="checkbox-copy">
+                        <span class="checkbox-title">Eligible only</span>
+                    </span>
+                </label>
+                <label class="checkbox-field">
+                    <input id="lineShoppingMultiBookOnlyFilter" type="checkbox" checked>
+                    <span class="checkbox-copy">
+                        <span class="checkbox-title">Multi-book only</span>
+                    </span>
+                </label>
+                <label>
+                    Prop Type
+                    <select id="lineShoppingPropTypeFilter"></select>
+                </label>
+                <label>
+                    Trust
+                    <select id="lineShoppingTrustFilter"></select>
+                </label>
+                <label class="checkbox-field">
+                    <input id="lineShoppingPositiveEvOnlyFilter" type="checkbox" checked>
+                    <span class="checkbox-copy">
+                        <span class="checkbox-title">Positive best EV only</span>
+                    </span>
+                </label>
+                <label class="checkbox-field">
+                    <input id="lineShoppingActiveOnlyFilter" type="checkbox" checked>
+                    <span class="checkbox-copy">
+                        <span class="checkbox-title">Active only</span>
+                    </span>
+                </label>
+                <label class="checkbox-field">
+                    <input id="lineShoppingIncludeStaleFilter" type="checkbox">
+                    <span class="checkbox-copy">
+                        <span class="checkbox-title">Include stale</span>
+                    </span>
+                </label>
+                <label class="checkbox-field">
+                    <input id="lineShoppingIncludeExpiredFilter" type="checkbox">
+                    <span class="checkbox-copy">
+                        <span class="checkbox-title">Include started</span>
+                    </span>
+                </label>
+                <label>
+                    Min Ranking
+                    <input id="lineShoppingMinRankingFilter" type="number" min="0" step="1" placeholder="20">
+                </label>
+                <label>
+                    Min Best EV
+                    <input id="lineShoppingMinBestEvFilter" type="number" step="0.01" placeholder="0.10">
+                </label>
+                <label>
+                    Min Sample
+                    <input id="lineShoppingMinSampleFilter" type="number" min="0" step="1" placeholder="50">
+                </label>
+                <label>
+                    Min Confidence
+                    <input id="lineShoppingMinConfidenceFilter" type="number" min="0" max="1" step="0.01" placeholder="0.60">
+                </label>
+            </form>
+
+            <div class="table-wrap line-shopping-table">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Player</th>
+                            <th>Prop Type</th>
+                            <th>Line</th>
+                            <th>Event</th>
+                            <th>Lifecycle</th>
+                            <th>Best Side</th>
+                            <th>Best Book</th>
+                            <th>Best Price</th>
+                            <th>Best EV</th>
+                            <th>Best Prob</th>
+                            <th>Sample</th>
+                            <th>Confidence</th>
+                            <th>Trust</th>
+                            <th>Rank</th>
+                            <th>Eligible</th>
+                            <th>Book Prices</th>
+                        </tr>
+                    </thead>
+                    <tbody id="lineShoppingRows"></tbody>
+                </table>
+            </div>
+        </section>
+
+        <section class="section">
+            <div class="section-header">
+                <div>
+                    <h2>Market Rankings</h2>
+                    <p>Fresh MLB market research with visibility and eligibility flags.</p>
+                </div>
+                <div id="tableCount" class="table-count">0 markets</div>
+            </div>
+
+            <form class="filters" id="filters">
+                <label>
+                    Platform
+                    <select id="platformFilter"></select>
+                </label>
+                <label>
+                    Classification
+                    <select id="classificationFilter"></select>
+                </label>
+                <label>
+                    Prop Type
+                    <select id="propTypeFilter"></select>
+                </label>
+                <label>
+                    Recommendation
+                    <select id="recommendationFilter"></select>
+                </label>
+                <label class="checkbox-field">
+                    <input id="visibleOnlyFilter" type="checkbox" checked>
+                    <span class="checkbox-copy">
+                        <span class="checkbox-title">Visible only</span>
+                    </span>
+                </label>
+                <label class="checkbox-field">
+                    <input id="eligibleOnlyFilter" type="checkbox">
+                    <span class="checkbox-copy">
+                        <span class="checkbox-title">Eligible only</span>
+                    </span>
+                </label>
+                <label>
+                    Min Probability
+                    <input id="minProbabilityFilter" type="number" min="0" max="1" step="0.01" placeholder="0.60">
+                </label>
+                <label>
+                    Min Ranking
+                    <input id="minRankingFilter" type="number" min="0" step="1" placeholder="20">
+                </label>
+            </form>
+
+            <div class="table-wrap">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Player</th>
+                            <th>Platform</th>
+                            <th>Raw Label</th>
+                            <th>Prop Type</th>
+                            <th>Line</th>
+                            <th>Class</th>
+                            <th>Payout</th>
+                            <th>Over</th>
+                            <th>Under</th>
+                            <th>Rank</th>
+                            <th>Visible</th>
+                            <th>Eligible</th>
+                            <th>Warnings</th>
+                            <th>Ineligibility</th>
+                        </tr>
+                    </thead>
+                    <tbody id="marketRows"></tbody>
+                </table>
+            </div>
+        </section>
+    </main>
+
+    <div id="status" class="status" role="status" aria-live="polite">
+        <span id="statusMessage">Loading dashboard data...</span>
+        <button id="statusCloseButton" class="status-close" type="button" aria-label="Dismiss alert">x</button>
+    </div>
+
+    <script src="/research/app.js"></script>
+</body>
+</html>

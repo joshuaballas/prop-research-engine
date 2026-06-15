@@ -1,0 +1,228 @@
+# Workflows
+
+This document describes operational workflows for local development and MLB research.
+
+## Start The Local API
+
+```powershell
+cd D:\Documents\Programs\Web\SportsBetting\api
+Copy-Item .\appsettings.Local.example.json .\appsettings.Local.json
+notepad .\appsettings.Local.json
+dotnet run --project .\SportsBetting.Api.csproj --urls "http://localhost:5299"
+```
+
+Open:
+
+```text
+http://localhost:5299/research
+```
+
+Check health:
+
+```powershell
+Invoke-RestMethod -Uri "http://localhost:5299/health/ready"
+Invoke-RestMethod -Uri "http://localhost:5299/api/debug/system/health"
+```
+
+## The Odds API Manual Event Ingest
+
+Use the dashboard section "The Odds API Manual Ingestion" or call endpoints manually.
+
+Important: these calls spend The Odds API credits when they hit The Odds API.
+
+1. Fetch MLB events:
+
+```powershell
+Invoke-RestMethod -Uri "http://localhost:5299/api/debug/the-odds/mlb/player-props-spike"
+```
+
+2. Dry-run a selected event:
+
+```powershell
+Invoke-RestMethod `
+  -Method Post `
+  -Uri "http://localhost:5299/api/debug/the-odds/mlb/ingest-event?dryRun=true" `
+  -ContentType "application/json" `
+  -Body '{"eventId":"EVENT_ID","bookmakers":"draftkings,betmgm","markets":"batter_hits,batter_total_bases,pitcher_strikeouts"}'
+```
+
+3. Commit only after reviewing dry-run output:
+
+```powershell
+Invoke-RestMethod `
+  -Method Post `
+  -Uri "http://localhost:5299/api/debug/the-odds/mlb/ingest-event" `
+  -ContentType "application/json" `
+  -Body '{"eventId":"EVENT_ID","bookmakers":"draftkings,betmgm","markets":"batter_hits,batter_total_bases,pitcher_strikeouts"}'
+```
+
+## Generate Predictions
+
+For The Odds API workflow, prefer scoped generation:
+
+```powershell
+Invoke-RestMethod `
+  -Method Post `
+  -Uri "http://localhost:5299/api/debug/predictions/generate/mlb/the-odds?eventId=EVENT_ID&bookmakers=draftkings,betmgm&markets=batter_hits,batter_total_bases,pitcher_strikeouts"
+```
+
+For full MLB generation:
+
+```powershell
+Invoke-RestMethod -Method Post -Uri "http://localhost:5299/api/debug/predictions/generate/mlb"
+```
+
+Full generation is slower and includes more stale/legacy rows.
+
+## Run Line-Shopping
+
+Line-shopping uses persisted DB rows only and does not call The Odds API:
+
+```powershell
+Invoke-RestMethod -Uri "http://localhost:5299/api/debug/the-odds/mlb/line-shopping"
+```
+
+With a specific run:
+
+```powershell
+Invoke-RestMethod -Uri "http://localhost:5299/api/debug/the-odds/mlb/line-shopping?runId=RUN_ID"
+```
+
+The dashboard includes presets:
+
+- Best Research
+- All Eligible
+- Strong Only
+- Multi-book EV
+- Research Only / Diagnostics
+- Reset
+
+## Check Event Workflow And Planner
+
+Use persisted DB state only:
+
+```powershell
+Invoke-RestMethod -Uri "http://localhost:5299/api/debug/the-odds/mlb/event-workflow-status"
+Invoke-RestMethod -Uri "http://localhost:5299/api/debug/the-odds/mlb/ingestion-plan"
+Invoke-RestMethod -Uri "http://localhost:5299/api/debug/the-odds/mlb/ingestion-plan?date=2026-06-15"
+```
+
+Save larger outputs to `tmp-analysis`:
+
+```powershell
+Invoke-RestMethod -Uri "http://localhost:5299/api/debug/the-odds/mlb/ingestion-plan" |
+  ConvertTo-Json -Depth 20 |
+  Set-Content ..\tmp-analysis\the-odds-ingestion-plan.json
+```
+
+## Wait For MLB Results
+
+The MLB result import worker should run automatically every configured interval. Check status:
+
+```powershell
+Invoke-RestMethod -Uri "http://localhost:5299/api/debug/results/import/mlb/status"
+Invoke-RestMethod -Uri "http://localhost:5299/api/debug/results/import/mlb/coverage"
+```
+
+Manual one-day import:
+
+```powershell
+Invoke-RestMethod `
+  -Method Post `
+  -Uri "http://localhost:5299/api/debug/results/import/mlb" `
+  -ContentType "application/json" `
+  -Body '{"date":"2026-06-15"}'
+```
+
+Manual range import:
+
+```powershell
+Invoke-RestMethod `
+  -Method Post `
+  -Uri "http://localhost:5299/api/debug/results/import/mlb-range" `
+  -ContentType "application/json" `
+  -Body '{"startDate":"2026-06-01","endDate":"2026-06-15"}'
+```
+
+## Run Backtests
+
+Prediction backtest:
+
+```powershell
+Invoke-RestMethod -Uri "http://localhost:5299/api/debug/predictions/backtest"
+```
+
+The Odds line-shopping backtest:
+
+```powershell
+Invoke-RestMethod -Uri "http://localhost:5299/api/debug/the-odds/mlb/line-shopping-backtest"
+```
+
+Underdog EV research backtests:
+
+```powershell
+Invoke-RestMethod -Uri "http://localhost:5299/api/debug/markets/underdog-ev-backtest"
+Invoke-RestMethod -Uri "http://localhost:5299/api/debug/markets/underdog-prop-ev-reliability"
+```
+
+## Safe Alias Mapping
+
+Readiness audit:
+
+```powershell
+Invoke-RestMethod -Uri "http://localhost:5299/api/debug/the-odds/mlb/prediction-readiness-audit"
+```
+
+Bulk candidates:
+
+```powershell
+Invoke-RestMethod -Uri "http://localhost:5299/api/debug/the-odds/mlb/player-mapping-candidates/bulk"
+```
+
+Preview safe alias links:
+
+```powershell
+Invoke-RestMethod -Uri "http://localhost:5299/api/debug/the-odds/mlb/player-alias-link-preview"
+```
+
+Dry-run auto-safe links:
+
+```powershell
+Invoke-RestMethod `
+  -Method Post `
+  -Uri "http://localhost:5299/api/debug/the-odds/mlb/player-alias-link/auto-safe" `
+  -ContentType "application/json" `
+  -Body '{"dryRun":true,"approvedBy":"debug-auto-safe","reason":"Auto-safe normalized alias link for The Odds API MLB player"}'
+```
+
+Commit only after reviewing the dry-run:
+
+```powershell
+Invoke-RestMethod `
+  -Method Post `
+  -Uri "http://localhost:5299/api/debug/the-odds/mlb/player-alias-link/auto-safe" `
+  -ContentType "application/json" `
+  -Body '{"dryRun":false,"approvedBy":"debug-auto-safe","reason":"Auto-safe normalized alias link for The Odds API MLB player"}'
+```
+
+## Worker Dry-Run
+
+The Odds worker skeleton is disabled by default. To see what it would plan without API calls or writes:
+
+```powershell
+Invoke-RestMethod -Method Post -Uri "http://localhost:5299/api/debug/the-odds/mlb/worker-dry-run"
+Invoke-RestMethod -Uri "http://localhost:5299/api/debug/the-odds/mlb/worker-status"
+```
+
+## Dashboard Usage
+
+Use `/research` as the main cockpit:
+
+- Start with System Health.
+- Review Event Workflow and Ingestion Plan.
+- Use Manual Ingestion carefully.
+- Generate scoped predictions after ingest.
+- Use Line Shopping presets for active research.
+- Use Market Rankings and EV diagnostics as research, not as public recommendations.
+
+The dashboard is internal only and should not be exposed publicly.
