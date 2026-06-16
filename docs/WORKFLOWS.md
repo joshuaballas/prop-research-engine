@@ -69,12 +69,34 @@ $r.diagnostics | ConvertTo-Json -Depth 8
 
 `TheOddsApi:MaxConcurrentRequests` controls bounded parallel event-odds ingestion for live refreshes. Keep this conservative; the default is `3`.
 
+Bookmaker coverage is preset-driven:
+
+- `bookmakerPreset=default`: configured conservative sportsbook books, plus DFS only when `includeDfs=true` or local config enables it.
+- `bookmakerPreset=expanded`: expanded US sportsbook list, plus DFS only when `includeDfs=true` or local config enables it.
+- `bookmakerPreset=dfsOnly`: only DFS books through region `us_dfs`; the resulting prediction run and line-shopping output are scoped to DFS rows only.
+- `bookmakerPreset=sportsbookOnly`: only configured conservative sportsbook books.
+- `bookmakerPreset=all`: expanded US sportsbooks plus all supported DFS books.
+
+Expanded/All can spend more The Odds API credits and increase refresh time. Use dry-run first.
+
 Dry run:
 
 ```powershell
 Invoke-RestMethod `
   -Method Post `
   -Uri "http://localhost:5299/api/debug/the-odds/mlb/recommendations/refresh-current?dryRun=true"
+```
+
+Preset dry-runs:
+
+```powershell
+Invoke-RestMethod -Method Post -Uri "http://localhost:5299/api/debug/the-odds/mlb/recommendations/refresh-current?dryRun=true&bookmakerPreset=dfsOnly" |
+  Select-Object -ExpandProperty diagnostics |
+  ConvertTo-Json -Depth 8
+
+Invoke-RestMethod -Method Post -Uri "http://localhost:5299/api/debug/the-odds/mlb/recommendations/refresh-current?dryRun=true&bookmakerPreset=all" |
+  Select-Object -ExpandProperty diagnostics |
+  ConvertTo-Json -Depth 8
 ```
 
 Live refresh:
@@ -103,7 +125,7 @@ $dryRun.diagnostics | ConvertTo-Json -Depth 8
 ```powershell
 $refresh = Invoke-RestMethod `
   -Method Post `
-  -Uri "http://localhost:5299/api/debug/the-odds/mlb/recommendations/refresh-current?includeDfs=true&includeCandidates=true&includeLineShopping=true&includeFullDiagnostics=true&freshnessMinutes=30"
+  -Uri "http://localhost:5299/api/debug/the-odds/mlb/recommendations/refresh-current?bookmakerPreset=dfsOnly&includeCandidates=true&includeLineShopping=true&includeFullDiagnostics=true&freshnessMinutes=30"
 
 $refresh.diagnostics | Select-Object `
   dfsBookmakersRequested,
@@ -129,6 +151,12 @@ The bookmaker list is config-driven through `TheOddsIngestionWorker:Bookmakers`.
 
 ```json
 "Bookmakers": "draftkings,fanduel,betmgm"
+```
+
+Expanded US sportsbook preset is also config-driven but not used unless you request `bookmakerPreset=expanded` or `bookmakerPreset=all`:
+
+```json
+"ExpandedBookmakers": "draftkings,fanduel,betmgm,espnbet,betrivers,fanatics,williamhill_us,betonlineag,bovada,lowvig,mybookieag"
 ```
 
 DFS books are configured separately and are opt-in by default:

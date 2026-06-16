@@ -358,6 +358,16 @@
                         </div>
                     </div>
                     <div class="manual-actions inline-actions">
+                        <label>
+                            Bookmaker preset
+                            <select id="refreshCurrentMlbBookmakerPreset">
+                                <option value="default">Default</option>
+                                <option value="dfsOnly">DFS Only</option>
+                                <option value="sportsbookOnly">Sportsbook Only</option>
+                                <option value="expanded">Expanded</option>
+                                <option value="all">All</option>
+                            </select>
+                        </label>
                         <label class="checkbox-field">
                             <input id="refreshCurrentMlbIncludeDfs" type="checkbox">
                             <span class="checkbox-copy">
@@ -371,6 +381,7 @@
                         <button id="generateFullMlbPredictionsButton" class="secondary-button" type="button">Generate Full MLB Predictions</button>
                         <button id="refreshLineShoppingButton" class="secondary-button" type="button">Refresh Line Shopping</button>
                     </div>
+                    <p class="warning-text">Expanded/All may spend more The Odds API credits and increase refresh time.</p>
                     <div id="theOddsPredictionSummary" class="metric-list manual-output"></div>
                 </div>
             </div>

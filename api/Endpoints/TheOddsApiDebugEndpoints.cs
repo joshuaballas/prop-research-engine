@@ -19,6 +19,9 @@ public static class TheOddsApiDebugEndpoints
     private const int FreshnessWindowHours = 24;
     private const int DefaultTheOddsLineShoppingFreshnessMinutes = 30;
     private const string MlbAliasProvider = "mlb-alias";
+    private const string ExpandedTheOddsUsSportsbookBookmakers =
+        "draftkings,fanduel,betmgm,espnbet,betrivers,fanatics,williamhill_us,betonlineag,bovada,lowvig,mybookieag";
+    private const string DefaultTheOddsDfsBookmakers = "prizepicks,underdog,pick6,betr_us_dfs";
 
     public static IEndpointRouteBuilder MapTheOddsApiDebugEndpoints(this IEndpointRouteBuilder endpoints)
     {
@@ -1061,7 +1064,29 @@ public static class TheOddsApiDebugEndpoints
             var configuredBookmakers = ParseCommaSeparatedSet(workerOptions.Value.Bookmakers)
                 .Order(StringComparer.OrdinalIgnoreCase)
                 .ToArray();
+            var configuredExpandedBookmakers = ParseCommaSeparatedSet(
+                    NullIfWhiteSpace(workerOptions.Value.ExpandedBookmakers) ?? ExpandedTheOddsUsSportsbookBookmakers)
+                .Order(StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+            var configuredDfsBookmakers = ParseCommaSeparatedSet(
+                    NullIfWhiteSpace(workerOptions.Value.DfsBookmakers) ?? DefaultTheOddsDfsBookmakers)
+                .Order(StringComparer.OrdinalIgnoreCase)
+                .ToArray();
             var observedBookmakers = platformProps
+                .Select(row => NormalizeTheOddsBookmakerKey(row.BookmakerKey, row.PlatformName))
+                .Where(row => !string.IsNullOrWhiteSpace(row))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .Order(StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+            var observedSportsbookBookmakers = platformProps
+                .Where(row => string.Equals(row.ProviderCategory, "Sportsbook", StringComparison.OrdinalIgnoreCase))
+                .Select(row => NormalizeTheOddsBookmakerKey(row.BookmakerKey, row.PlatformName))
+                .Where(row => !string.IsNullOrWhiteSpace(row))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .Order(StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+            var observedDfsBookmakers = platformProps
+                .Where(row => string.Equals(row.ProviderCategory, "DFS", StringComparison.OrdinalIgnoreCase))
                 .Select(row => NormalizeTheOddsBookmakerKey(row.BookmakerKey, row.PlatformName))
                 .Where(row => !string.IsNullOrWhiteSpace(row))
                 .Distinct(StringComparer.OrdinalIgnoreCase)
@@ -1085,11 +1110,25 @@ public static class TheOddsApiDebugEndpoints
                 totalPlatformProps = platformProps.Count,
                 totalComparisonGroups = lineShoppingGroups.Count,
                 configuredBookmakers,
+                configuredSportsbookBookmakers = configuredBookmakers,
+                configuredExpandedSportsbookBookmakers = configuredExpandedBookmakers,
+                configuredDfsBookmakers,
                 observedBookmakers,
+                observedSportsbookBookmakers,
+                observedDfsBookmakers,
+                averageBooksPerComparisonGroup = lineShoppingGroups.Count == 0
+                    ? 0d
+                    : Math.Round(lineShoppingGroups.Average(group => group.BookmakerPrices.Count), 4),
+                byProviderCategory = BuildTheOddsProviderCategoryBreakdown(lineShoppingGroups),
                 byBookmaker = BuildTheOddsBookmakerCoverageRows(platformProps, lineShoppingGroups),
                 byBookmakerAndPropType = BuildTheOddsBookmakerPropTypeCoverageRows(platformProps, lineShoppingGroups),
+                bestBookmakerDistribution = BuildTheOddsBestBookmakerDistribution(lineShoppingGroups),
                 missingBookmakerCoverage = BuildMissingTheOddsBookmakerCoverageRows(
                     configuredBookmakers,
+                    expectedEvents,
+                    platformProps),
+                missingDfsBookmakerCoverage = BuildMissingTheOddsBookmakerCoverageRows(
+                    configuredDfsBookmakers,
                     expectedEvents,
                     platformProps),
                 diagnostics = new
@@ -1098,6 +1137,8 @@ public static class TheOddsApiDebugEndpoints
                     usesPersistedDatabaseRowsOnly = true,
                     freshnessMinutes = lifecycleFreshnessMinutes,
                     configuredBookmakerSource = "TheOddsIngestionWorker:Bookmakers",
+                    configuredExpandedBookmakerSource = "TheOddsIngestionWorker:ExpandedBookmakers",
+                    configuredDfsBookmakerSource = "TheOddsIngestionWorker:DfsBookmakers",
                     configuredMarkets = workerOptions.Value.Markets
                 }
             });
@@ -2630,6 +2671,7 @@ public static class TheOddsApiDebugEndpoints
         bool? includeLineShopping,
         bool? includeFullDiagnostics,
         bool? includeDfs,
+        string? bookmakerPreset,
         int? freshnessMinutes,
             IOptions<TheOddsIngestionWorkerOptions> workerOptions,
             IOptions<TheOddsApiOptions> theOddsApiOptions,
@@ -2654,15 +2696,31 @@ public static class TheOddsApiDebugEndpoints
             var slateDate = date ?? ResolveCurrentMlbSlateDate();
             var resolveSlateDateMs = stepStopwatch.ElapsedMilliseconds;
             var lifecycleFreshnessMinutes = Math.Clamp(freshnessMinutes ?? DefaultTheOddsLineShoppingFreshnessMinutes, 1, 1440);
-            var bookmakers = NullIfWhiteSpace(options.Bookmakers);
-            var includeDfsBookmakers = includeDfs ?? options.IncludeDfsBookmakers;
+            var preset = ResolveTheOddsBookmakerPreset(bookmakerPreset);
+            var configuredSportsbookBookmakers = NullIfWhiteSpace(options.Bookmakers);
+            var configuredExpandedSportsbookBookmakers = NullIfWhiteSpace(options.ExpandedBookmakers)
+                ?? ExpandedTheOddsUsSportsbookBookmakers;
+            var configuredDfsBookmakers = NullIfWhiteSpace(options.DfsBookmakers) ?? DefaultTheOddsDfsBookmakers;
+            var presetSelection = ResolveTheOddsRefreshBookmakerSelection(
+                preset,
+                configuredSportsbookBookmakers,
+                configuredExpandedSportsbookBookmakers,
+                configuredDfsBookmakers,
+                includeDfs ?? options.IncludeDfsBookmakers);
+            var bookmakers = presetSelection.SportsbookBookmakers;
+            var includeDfsBookmakers = presetSelection.IncludeDfs;
             var dfsRegion = NullIfWhiteSpace(options.DfsRegion) ?? "us_dfs";
-            var dfsBookmakers = NullIfWhiteSpace(options.DfsBookmakers);
+            var dfsBookmakers = presetSelection.DfsBookmakers;
             var markets = NullIfWhiteSpace(options.Markets);
+            var shouldFetchSportsbookBookmakers = !string.IsNullOrWhiteSpace(bookmakers);
             var requestedBookmakers = ParseCommaSeparatedSet(bookmakers);
             var requestedDfsBookmakers = includeDfsBookmakers
                 ? ParseCommaSeparatedSet(dfsBookmakers)
                 : [];
+            var providerCategoriesIncluded = BuildTheOddsProviderCategoryScope(
+                shouldFetchSportsbookBookmakers,
+                includeDfsBookmakers && !string.IsNullOrWhiteSpace(dfsBookmakers));
+            var scopedBookmakerKeys = BuildTheOddsBookmakerKeyScope(bookmakers, includeDfsBookmakers ? dfsBookmakers : null);
             var requestedMarkets = ParseCommaSeparatedSet(markets);
             var requestedPropTypes = requestedMarkets
                 .Select(NormalizeTheOddsMarketKeyToPropType)
@@ -2712,20 +2770,31 @@ public static class TheOddsApiDebugEndpoints
                         resolveSlateDateMs,
                         countExistingSlatePropsMs,
                         theOddsApiCallCount = 0,
-                        configuredBookmakers = bookmakers,
-                        configuredDfsBookmakers = dfsBookmakers,
+                        bookmakerPreset = preset,
+                        configuredBookmakers = configuredSportsbookBookmakers,
+                        configuredExpandedBookmakers = configuredExpandedSportsbookBookmakers,
+                        configuredDfsBookmakers,
+                        effectiveSportsbookBookmakers = bookmakers,
+                        effectiveDfsBookmakers = dfsBookmakers,
                         includeDfs = includeDfsBookmakers,
                         dfsRegion,
                         configuredMarkets = markets,
                         bookmakersRequested = requestedBookmakers,
-                        dfsBookmakersRequested = requestedDfsBookmakers,
                         marketsRequested = requestedMarkets,
                         propTypesRequested = requestedPropTypes,
+                        sportsbookBookmakersRequested = requestedBookmakers,
+                        dfsBookmakersRequested = requestedDfsBookmakers,
+                        totalBookmakerCount = requestedBookmakers.Count + requestedDfsBookmakers.Count,
+                        providerCategoriesIncluded,
                         maxConcurrentRequests,
                         existingPersistedTheOddsPropsForSlate = existingSlateProps,
-                        estimatedApiCalls = includeDfsBookmakers
-                            ? "Live refresh would call The Odds API once for MLB events, then once per MLB event for sportsbook books and once per MLB event for DFS books."
-                            : "Live refresh would call The Odds API once for MLB events, then once per MLB event on the slate.",
+                        estimatedApiCalls = new
+                        {
+                            events = 1,
+                            sportsbookEventOddsPerSlateEvent = shouldFetchSportsbookBookmakers ? 1 : 0,
+                            dfsEventOddsPerSlateEvent = includeDfsBookmakers ? 1 : 0,
+                            note = "Live estimate is 1 event-list request plus one event-odds request per slate event for each enabled provider region."
+                        },
                         recommendedAction = "Run without dryRun only when you want to spend The Odds API credits and refresh persisted market rows."
                     }
                 });
@@ -2757,17 +2826,19 @@ public static class TheOddsApiDebugEndpoints
                 var filterEventsMs = stepStopwatch.ElapsedMilliseconds;
 
                 stepStopwatch.Restart();
-                var ingestionResults = await IngestTheOddsSlateEventsAsync(
-                    slateEvents,
-                    bookmakers,
-                    markets,
-                    region: null,
-                    providerCategory: "Sportsbook",
-                    isActionableForUser: false,
-                    isIndicativeOdds: false,
-                    maxConcurrentRequests,
-                    scopeFactory,
-                    cancellationToken);
+                var ingestionResults = shouldFetchSportsbookBookmakers
+                    ? await IngestTheOddsSlateEventsAsync(
+                        slateEvents,
+                        bookmakers,
+                        markets,
+                        region: null,
+                        providerCategory: "Sportsbook",
+                        isActionableForUser: false,
+                        isIndicativeOdds: false,
+                        maxConcurrentRequests,
+                        scopeFactory,
+                        cancellationToken)
+                    : [];
                 var sportsbookIngestEventsWallClockMs = stepStopwatch.ElapsedMilliseconds;
 
                 stepStopwatch.Restart();
@@ -2815,6 +2886,8 @@ public static class TheOddsApiDebugEndpoints
                         lifecycleFreshnessMinutes,
                         dbContext,
                         probabilityService,
+                        providerCategoriesIncluded,
+                        scopedBookmakerKeys,
                         cancellationToken);
                 var lineShoppingMs = stepStopwatch.ElapsedMilliseconds;
 
@@ -2883,6 +2956,23 @@ public static class TheOddsApiDebugEndpoints
                         actionableCandidateGroups = lineShopping.Groups.Count(group => ClassifyTheOddsLineShoppingStrategy(group).IsCandidate && group.IsActionableForUser),
                         sportsbookContextCandidateGroups = lineShopping.Groups.Count(group => ClassifyTheOddsLineShoppingStrategy(group).IsCandidate && !group.IsActionableForUser),
                         dfsCandidateGroups = lineShopping.Groups.Count(group => ClassifyTheOddsLineShoppingStrategy(group).IsCandidate && string.Equals(group.ProviderCategory, "DFS", StringComparison.OrdinalIgnoreCase)),
+                        providerCategoryBreakdown = BuildTheOddsProviderCategoryBreakdown(lineShopping.Groups),
+                        bestBookmakerDistribution = BuildTheOddsBestBookmakerDistribution(lineShopping.Groups),
+                        providerCategoriesIncluded,
+                        predictionSourceProviderCategories = lineShopping.Rows
+                            .Select(row => row.ProviderCategory)
+                            .Where(value => !string.IsNullOrWhiteSpace(value))
+                            .Distinct(StringComparer.OrdinalIgnoreCase)
+                            .Order(StringComparer.OrdinalIgnoreCase)
+                            .ToArray(),
+                        lineShoppingProviderCategories = lineShopping.Groups
+                            .Select(group => group.ProviderCategory)
+                            .Where(value => !string.IsNullOrWhiteSpace(value))
+                            .Distinct(StringComparer.OrdinalIgnoreCase)
+                            .Order(StringComparer.OrdinalIgnoreCase)
+                            .ToArray(),
+                        sportsbookContextCandidateCount = lineShopping.Groups.Count(group => ClassifyTheOddsLineShoppingStrategy(group).IsCandidate && !group.IsActionableForUser),
+                        dfsCandidateCount = lineShopping.Groups.Count(group => ClassifyTheOddsLineShoppingStrategy(group).IsCandidate && string.Equals(group.ProviderCategory, "DFS", StringComparison.OrdinalIgnoreCase)),
                         activeGroups = activeGroups.Length,
                         staleOrExpiredGroups = lineShopping.Groups.Count(row => !IsActiveTheOddsLineShoppingGroup(row))
                     },
@@ -2938,7 +3028,24 @@ public static class TheOddsApiDebugEndpoints
                         dbRoundTripsEstimate = allIngestionResults.Sum(row => row.Timing.DbRoundTripsEstimate),
                         sportsbookBookmakersRequested = requestedBookmakers,
                         dfsBookmakersRequested = requestedDfsBookmakers,
-                        sportsbookEventsFetched = slateEvents.Length,
+                        totalBookmakerCount = requestedBookmakers.Count + requestedDfsBookmakers.Count,
+                        bookmakerPreset = preset,
+                        providerCategoriesIncluded,
+                        predictionSourceProviderCategories = lineShopping.Rows
+                            .Select(row => row.ProviderCategory)
+                            .Where(value => !string.IsNullOrWhiteSpace(value))
+                            .Distinct(StringComparer.OrdinalIgnoreCase)
+                            .Order(StringComparer.OrdinalIgnoreCase)
+                            .ToArray(),
+                        lineShoppingProviderCategories = lineShopping.Groups
+                            .Select(group => group.ProviderCategory)
+                            .Where(value => !string.IsNullOrWhiteSpace(value))
+                            .Distinct(StringComparer.OrdinalIgnoreCase)
+                            .Order(StringComparer.OrdinalIgnoreCase)
+                            .ToArray(),
+                        sportsbookContextCandidateCount = activeCandidates.Count(group => !group.IsActionableForUser),
+                        dfsCandidateCount = activeCandidates.Count(group => string.Equals(group.ProviderCategory, "DFS", StringComparison.OrdinalIgnoreCase)),
+                        sportsbookEventsFetched = shouldFetchSportsbookBookmakers ? slateEvents.Length : 0,
                         dfsEventsFetched = includeDfsBookmakers ? slateEvents.Length : 0,
                         dfsPlatformPropsCreated = dfsIngestionResults.Sum(row => row.Timing.RowsCreated),
                         dfsPlatformPropsUpdated = dfsIngestionResults.Sum(row => row.Timing.RowsUpdated),
@@ -2956,14 +3063,15 @@ public static class TheOddsApiDebugEndpoints
                         strategyClassificationMs,
                         topCandidatesMs,
                         responseBuildMs,
-                        theOddsApiCallCount = 1 + slateEvents.Length + (includeDfsBookmakers ? slateEvents.Length : 0),
+                        theOddsApiCallCount = 1 + (shouldFetchSportsbookBookmakers ? slateEvents.Length : 0) + (includeDfsBookmakers ? slateEvents.Length : 0),
                         theOddsApiCallsByType = new
                         {
                             events = 1,
-                            sportsbookEventOdds = slateEvents.Length,
+                            sportsbookEventOdds = shouldFetchSportsbookBookmakers ? slateEvents.Length : 0,
                             dfsEventOdds = includeDfsBookmakers ? slateEvents.Length : 0
                         },
-                        apiCallsMade = 1 + slateEvents.Length + (includeDfsBookmakers ? slateEvents.Length : 0),
+                        apiCallsMade = 1 + (shouldFetchSportsbookBookmakers ? slateEvents.Length : 0) + (includeDfsBookmakers ? slateEvents.Length : 0),
+                        actualApiCalls = 1 + (shouldFetchSportsbookBookmakers ? slateEvents.Length : 0) + (includeDfsBookmakers ? slateEvents.Length : 0),
                         maxConcurrentRequests,
                         eventDiscoveryCreditUsage = eventFetch.CreditUsage,
                         eventIngestionCreditUsage = shouldIncludeFullDiagnostics ? allIngestionResults.Select(row => new
@@ -2971,8 +3079,11 @@ public static class TheOddsApiDebugEndpoints
                             row.EventId,
                             row.CreditUsage
                         }).Cast<object>().ToArray() : Array.Empty<object>(),
-                        configuredBookmakers = bookmakers,
-                        configuredDfsBookmakers = dfsBookmakers,
+                        configuredBookmakers = configuredSportsbookBookmakers,
+                        configuredExpandedBookmakers = configuredExpandedSportsbookBookmakers,
+                        configuredDfsBookmakers,
+                        effectiveSportsbookBookmakers = bookmakers,
+                        effectiveDfsBookmakers = dfsBookmakers,
                         includeDfs = includeDfsBookmakers,
                         dfsRegion,
                         configuredMarkets = markets,
@@ -2984,6 +3095,8 @@ public static class TheOddsApiDebugEndpoints
                         platformPropsUpdated,
                         predictionCount = predictionResult?.PredictionsGenerated ?? 0,
                         lineShoppingGroupCount = lineShopping.Groups.Count,
+                        providerCategoryBreakdown = BuildTheOddsProviderCategoryBreakdown(lineShopping.Groups),
+                        bestBookmakerDistribution = BuildTheOddsBestBookmakerDistribution(lineShopping.Groups),
                         existingPersistedTheOddsPropsForSlate = existingSlateProps,
                         events = shouldIncludeFullDiagnostics ? slateEvents.Select(row => new
                         {
@@ -3378,10 +3491,13 @@ public static class TheOddsApiDebugEndpoints
         int freshnessMinutes,
         ApplicationDbContext dbContext,
         IPredictionProbabilityService probabilityService,
+        IReadOnlyCollection<string>? providerCategoryScope,
+        IReadOnlyCollection<string>? bookmakerKeyScope,
         CancellationToken cancellationToken)
     {
         var platformPropDataRows = await LoadTheOddsPlatformPropDataRowsAsync(dbContext, cancellationToken);
         var platformProps = ParseTheOddsPlatformProps(platformPropDataRows);
+        platformProps = ApplyTheOddsLineShoppingScope(platformProps, providerCategoryScope, bookmakerKeyScope);
         var theOddsPropIds = platformProps.Select(row => row.PropId).Distinct().ToArray();
         var probabilityAnalysis = await probabilityService.AnalyzeRunForPropsAsync(
             runId,
@@ -3528,6 +3644,7 @@ public static class TheOddsApiDebugEndpoints
             prediction.ProbabilityPush,
             prediction.RankingScore,
             platformProp.PlatformName,
+            NormalizeTheOddsBookmakerKey(platformProp.BookmakerKey, platformProp.PlatformName),
             platformProp.PlatformPropId,
             platformProp.ObservedAt,
             platformProp.OverAvailable,
@@ -3553,6 +3670,35 @@ public static class TheOddsApiDebugEndpoints
             prediction.SampleSize,
             prediction.MethodUsed,
             prediction.ConfidenceScore);
+    }
+
+    private static List<TheOddsPersistedPlatformPropRow> ApplyTheOddsLineShoppingScope(
+        IReadOnlyCollection<TheOddsPersistedPlatformPropRow> platformProps,
+        IReadOnlyCollection<string>? providerCategoryScope,
+        IReadOnlyCollection<string>? bookmakerKeyScope)
+    {
+        var rows = platformProps.AsEnumerable();
+
+        if (providerCategoryScope is { Count: > 0 })
+        {
+            var providerCategories = providerCategoryScope
+                .Where(value => !string.IsNullOrWhiteSpace(value))
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+            rows = rows.Where(row => providerCategories.Contains(row.ProviderCategory));
+        }
+
+        if (bookmakerKeyScope is { Count: > 0 })
+        {
+            var bookmakerKeys = bookmakerKeyScope
+                .Where(value => !string.IsNullOrWhiteSpace(value))
+                .Select(value => NormalizeTheOddsBookmakerKey(value, value))
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+            rows = rows.Where(row => bookmakerKeys.Contains(NormalizeTheOddsBookmakerKey(row.BookmakerKey, row.PlatformName)));
+        }
+
+        return rows.ToList();
     }
 
     private static List<TheOddsLineShoppingSourceRow> BuildTheOddsLineShoppingRows(
@@ -3680,6 +3826,8 @@ public static class TheOddsApiDebugEndpoints
                 .OrderBy(row => row.Bookmaker)
                 .Select(row => new TheOddsBookmakerPriceRow(
                     row.Bookmaker,
+                    row.BookmakerKey,
+                    row.ProviderCategory,
                     row.PlatformPropId,
                     row.ObservedAt,
                     row.OverAvailable,
@@ -4046,6 +4194,52 @@ public static class TheOddsApiDebugEndpoints
             })
             .OrderBy(row => row.classification)
             .ThenBy(row => row.tier)
+            .Cast<object>()
+            .ToArray();
+    }
+
+    private static object[] BuildTheOddsProviderCategoryBreakdown(
+        IReadOnlyCollection<TheOddsLineShoppingGroup> groups)
+    {
+        return groups
+            .GroupBy(group => group.ProviderCategory, StringComparer.OrdinalIgnoreCase)
+            .Select(group => new
+            {
+                providerCategory = group.Key,
+                comparisonGroupCount = group.Count(),
+                activeGroupCount = group.Count(IsActiveTheOddsLineShoppingGroup),
+                candidateCount = group.Count(row => ClassifyTheOddsLineShoppingStrategy(row).IsCandidate),
+                activeCandidateCount = group.Count(row => IsActiveTheOddsLineShoppingGroup(row)
+                    && ClassifyTheOddsLineShoppingStrategy(row).IsCandidate),
+                averageBestEstimatedEv = AverageNullable(group.Select(row => row.BestEstimatedEv)),
+                averageBooksPerComparisonGroup = group.Count() == 0
+                    ? 0d
+                    : Math.Round(group.Average(row => row.BookmakerPrices.Count), 4)
+            })
+            .OrderBy(row => row.providerCategory)
+            .Cast<object>()
+            .ToArray();
+    }
+
+    private static object[] BuildTheOddsBestBookmakerDistribution(
+        IReadOnlyCollection<TheOddsLineShoppingGroup> groups)
+    {
+        return groups
+            .Where(group => !string.IsNullOrWhiteSpace(group.BestBookmaker))
+            .GroupBy(group => group.BestBookmaker!, StringComparer.OrdinalIgnoreCase)
+            .Select(group => new
+            {
+                bookmaker = group.Key,
+                count = group.Count(),
+                activeCount = group.Count(IsActiveTheOddsLineShoppingGroup),
+                candidateCount = group.Count(row => ClassifyTheOddsLineShoppingStrategy(row).IsCandidate),
+                activeCandidateCount = group.Count(row => IsActiveTheOddsLineShoppingGroup(row)
+                    && ClassifyTheOddsLineShoppingStrategy(row).IsCandidate),
+                averageBestEstimatedEv = AverageNullable(group.Select(row => row.BestEstimatedEv)),
+                averageBestPrice = AverageNullable(group.Select(row => row.BestDecimalPrice))
+            })
+            .OrderByDescending(row => row.count)
+            .ThenBy(row => row.bookmaker)
             .Cast<object>()
             .ToArray();
     }
@@ -8289,6 +8483,84 @@ public static class TheOddsApiDebugEndpoints
             .ToArray();
     }
 
+    private static string ResolveTheOddsBookmakerPreset(string? bookmakerPreset)
+    {
+        var preset = string.IsNullOrWhiteSpace(bookmakerPreset)
+            ? "default"
+            : bookmakerPreset.Trim();
+
+        return preset.ToLowerInvariant() switch
+        {
+            "expanded" => "expanded",
+            "dfsonly" or "dfs-only" or "dfs_only" => "dfsOnly",
+            "sportsbookonly" or "sportsbook-only" or "sportsbook_only" => "sportsbookOnly",
+            "all" => "all",
+            _ => "default"
+        };
+    }
+
+    private static TheOddsRefreshBookmakerSelection ResolveTheOddsRefreshBookmakerSelection(
+        string preset,
+        string? configuredSportsbookBookmakers,
+        string configuredExpandedSportsbookBookmakers,
+        string configuredDfsBookmakers,
+        bool includeDfsFromConfigOrQuery)
+    {
+        return preset switch
+        {
+            "expanded" => new TheOddsRefreshBookmakerSelection(
+                configuredExpandedSportsbookBookmakers,
+                configuredDfsBookmakers,
+                includeDfsFromConfigOrQuery),
+            "dfsOnly" => new TheOddsRefreshBookmakerSelection(
+                SportsbookBookmakers: null,
+                configuredDfsBookmakers,
+                IncludeDfs: true),
+            "sportsbookOnly" => new TheOddsRefreshBookmakerSelection(
+                configuredSportsbookBookmakers,
+                configuredDfsBookmakers,
+                IncludeDfs: false),
+            "all" => new TheOddsRefreshBookmakerSelection(
+                configuredExpandedSportsbookBookmakers,
+                DefaultTheOddsDfsBookmakers,
+                IncludeDfs: true),
+            _ => new TheOddsRefreshBookmakerSelection(
+                configuredSportsbookBookmakers,
+                configuredDfsBookmakers,
+                includeDfsFromConfigOrQuery)
+        };
+    }
+
+    private static IReadOnlyList<string> BuildTheOddsProviderCategoryScope(
+        bool includeSportsbook,
+        bool includeDfs)
+    {
+        var providerCategories = new List<string>(capacity: 2);
+
+        if (includeSportsbook)
+        {
+            providerCategories.Add("Sportsbook");
+        }
+
+        if (includeDfs)
+        {
+            providerCategories.Add("DFS");
+        }
+
+        return providerCategories;
+    }
+
+    private static IReadOnlyList<string> BuildTheOddsBookmakerKeyScope(params string?[] bookmakerLists)
+    {
+        return bookmakerLists
+            .Where(value => !string.IsNullOrWhiteSpace(value))
+            .SelectMany(value => value!.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+            .Where(value => !string.IsNullOrWhiteSpace(value))
+            .Select(value => NormalizeTheOddsBookmakerKey(value, value))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+    }
+
     private static string? JoinCommaSeparatedDistinct(params string?[] values)
     {
         var items = values
@@ -8582,7 +8854,7 @@ public static class TheOddsApiDebugEndpoints
     {
         var bookmakerKeys = platformProps
             .Select(row => NormalizeTheOddsBookmakerKey(row.BookmakerKey, row.PlatformName))
-            .Concat(lineShoppingGroups.SelectMany(group => group.BookmakerPrices.Select(price => NormalizeTheOddsBookmakerKey(null, price.Bookmaker))))
+            .Concat(lineShoppingGroups.SelectMany(group => group.BookmakerPrices.Select(price => price.BookmakerKey)))
             .Where(value => !string.IsNullOrWhiteSpace(value))
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .Order(StringComparer.OrdinalIgnoreCase)
@@ -8599,15 +8871,16 @@ public static class TheOddsApiDebugEndpoints
                     .ToArray();
                 var groupsWithBookmaker = lineShoppingGroups
                     .Where(group => group.BookmakerPrices.Any(price => string.Equals(
-                        NormalizeTheOddsBookmakerKey(null, price.Bookmaker),
+                        price.BookmakerKey,
                         bookmakerKey,
                         StringComparison.OrdinalIgnoreCase)))
                     .ToArray();
                 var groupsBestAtBookmaker = lineShoppingGroups
-                    .Where(group => string.Equals(
-                        NormalizeTheOddsBookmakerKey(null, group.BestBookmaker),
-                        bookmakerKey,
-                        StringComparison.OrdinalIgnoreCase))
+                    .Where(group => group.BookmakerPrices.Any(price => string.Equals(
+                            price.BookmakerKey,
+                            bookmakerKey,
+                            StringComparison.OrdinalIgnoreCase)
+                        && string.Equals(price.Bookmaker, group.BestBookmaker, StringComparison.OrdinalIgnoreCase)))
                     .ToArray();
 
                 return new
@@ -8615,11 +8888,16 @@ public static class TheOddsApiDebugEndpoints
                     bookmaker = bookmakerProps.Select(row => row.PlatformName).FirstOrDefault(value => !string.IsNullOrWhiteSpace(value))
                         ?? groupsWithBookmaker.SelectMany(group => group.BookmakerPrices).Select(price => price.Bookmaker).FirstOrDefault(value => !string.IsNullOrWhiteSpace(value))
                         ?? bookmakerKey,
+                    providerCategory = bookmakerProps.Select(row => row.ProviderCategory).FirstOrDefault(value => !string.IsNullOrWhiteSpace(value))
+                        ?? groupsWithBookmaker.Select(group => group.ProviderCategory).FirstOrDefault(value => !string.IsNullOrWhiteSpace(value))
+                        ?? "Unknown",
                     eventCount = bookmakerProps.Select(row => row.EventId).Where(value => !string.IsNullOrWhiteSpace(value)).Distinct(StringComparer.OrdinalIgnoreCase).Count(),
                     platformPropCount = bookmakerProps.Length,
                     comparisonGroupCount = groupsWithBookmaker.Length,
                     activeGroupCount = groupsWithBookmaker.Count(IsActiveTheOddsLineShoppingGroup),
                     candidateCount = groupsBestAtBookmaker.Count(group => ClassifyTheOddsLineShoppingStrategy(group).IsCandidate),
+                    activeCandidateCount = groupsBestAtBookmaker.Count(group => IsActiveTheOddsLineShoppingGroup(group)
+                        && ClassifyTheOddsLineShoppingStrategy(group).IsCandidate),
                     watchlistCount = groupsBestAtBookmaker.Count(group => ClassifyTheOddsLineShoppingStrategy(group).IsWatchlist),
                     avoidCount = groupsBestAtBookmaker.Count(group => ClassifyTheOddsLineShoppingStrategy(group).IsAvoid),
                     averageBestPrice = AverageNullable(groupsBestAtBookmaker.Select(group => group.BestDecimalPrice)),
@@ -8648,15 +8926,16 @@ public static class TheOddsApiDebugEndpoints
                 var groupsWithBookmakerAndProp = lineShoppingGroups
                     .Where(lineShoppingGroup => string.Equals(lineShoppingGroup.NormalizedPropType, group.Key.PropType, StringComparison.OrdinalIgnoreCase)
                         && lineShoppingGroup.BookmakerPrices.Any(price => string.Equals(
-                            NormalizeTheOddsBookmakerKey(null, price.Bookmaker),
+                            price.BookmakerKey,
                             group.Key.BookmakerKey,
                             StringComparison.OrdinalIgnoreCase)))
                     .ToArray();
                 var bestAtBookmakerAndProp = groupsWithBookmakerAndProp
-                    .Where(lineShoppingGroup => string.Equals(
-                        NormalizeTheOddsBookmakerKey(null, lineShoppingGroup.BestBookmaker),
-                        group.Key.BookmakerKey,
-                        StringComparison.OrdinalIgnoreCase))
+                    .Where(lineShoppingGroup => lineShoppingGroup.BookmakerPrices.Any(price => string.Equals(
+                            price.BookmakerKey,
+                            group.Key.BookmakerKey,
+                            StringComparison.OrdinalIgnoreCase)
+                        && string.Equals(price.Bookmaker, lineShoppingGroup.BestBookmaker, StringComparison.OrdinalIgnoreCase)))
                     .ToArray();
 
                 return new
@@ -8799,7 +9078,7 @@ public static class TheOddsApiDebugEndpoints
         var lineShoppingGroups = allLineShoppingGroups
             .Where(group => string.Equals(group.EventId, eventId, StringComparison.OrdinalIgnoreCase)
                 && group.BookmakerPrices.Any(price => string.Equals(
-                    NormalizeTheOddsBookmakerKey(null, price.Bookmaker),
+                    price.BookmakerKey,
                     bookmakerKey,
                     StringComparison.OrdinalIgnoreCase)))
             .ToArray();
@@ -9676,6 +9955,7 @@ public static class TheOddsApiDebugEndpoints
         decimal? ModelProbabilityPush,
         decimal RankingScore,
         string Bookmaker,
+        string BookmakerKey,
         string PlatformPropId,
         DateTimeOffset ObservedAt,
         bool OverAvailable,
@@ -9715,6 +9995,8 @@ public static class TheOddsApiDebugEndpoints
 
     private sealed record TheOddsBookmakerPriceRow(
         string Bookmaker,
+        string BookmakerKey,
+        string ProviderCategory,
         string PlatformPropId,
         DateTimeOffset ObservedAt,
         bool OverAvailable,
@@ -9997,6 +10279,11 @@ public static class TheOddsApiDebugEndpoints
         IReadOnlyList<string> IssueFlags);
 
     private sealed record ExpectedBookmaker(string Key, string Name);
+
+    private sealed record TheOddsRefreshBookmakerSelection(
+        string? SportsbookBookmakers,
+        string DfsBookmakers,
+        bool IncludeDfs);
 }
 
 public sealed record TheOddsApiMlbIngestEventRequest(

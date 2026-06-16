@@ -115,6 +115,7 @@ const els = {
     theOddsIngestSummary: document.getElementById("theOddsIngestSummary"),
     refreshCurrentMlbDryRunButton: document.getElementById("refreshCurrentMlbDryRunButton"),
     refreshCurrentMlbRecommendationsButton: document.getElementById("refreshCurrentMlbRecommendationsButton"),
+    refreshCurrentMlbBookmakerPreset: document.getElementById("refreshCurrentMlbBookmakerPreset"),
     refreshCurrentMlbIncludeDfs: document.getElementById("refreshCurrentMlbIncludeDfs"),
     generateMlbPredictionsButton: document.getElementById("generateMlbPredictionsButton"),
     generateFullMlbPredictionsButton: document.getElementById("generateFullMlbPredictionsButton"),
@@ -506,6 +507,7 @@ async function refreshCurrentMlbRecommendations(dryRun) {
     params.set("includeCandidates", "true");
     params.set("freshnessMinutes", "30");
     params.set("includeDfs", els.refreshCurrentMlbIncludeDfs.checked ? "true" : "false");
+    params.set("bookmakerPreset", els.refreshCurrentMlbBookmakerPreset.value || "default");
 
     setTheOddsManualStatus(dryRun ? "Planning refresh" : "Refreshing current slate", "warn");
     els.theOddsPredictionSummary.innerHTML = metricRow(
@@ -551,6 +553,8 @@ function renderCurrentRecommendationRefreshResult(result) {
         metricRow("Run ID", result.predictionRunId ? `<code>${escapeHtml(result.predictionRunId)}</code>` : "-"),
         metricRow("Odds events fetched", formatNumber(result.oddsEventsFetched)),
         metricRow("API calls", formatNumber(diagnostics.apiCallsMade)),
+        metricRow("Bookmaker preset", escapeHtml(diagnostics.bookmakerPreset || "default")),
+        metricRow("Sportsbook books", formatPlainList(diagnostics.sportsbookBookmakersRequested || diagnostics.bookmakersRequested || [])),
         metricRow("Include DFS", diagnostics.includeDfs ? "true" : "false"),
         metricRow("DFS books", formatPlainList(diagnostics.dfsBookmakersRequested || [])),
         metricRow("DFS created/updated", `${formatNumber(diagnostics.dfsPlatformPropsCreated)} / ${formatNumber(diagnostics.dfsPlatformPropsUpdated)}`),

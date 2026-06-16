@@ -68,7 +68,7 @@ Key config sections:
 - `UnderdogIngestion`: controls Underdog worker.
 - `MlbResultImportWorker`: controls MLB result import worker.
 - `TheOddsApi`: API key, base URL, sport key, regions, odds format, markets, and `MaxConcurrentRequests` for bounded parallel event-odds requests during explicit current-slate refreshes.
-- `TheOddsIngestionWorker`: disabled, dry-run-first worker skeleton. Its `Bookmakers` value is the sportsbook context list used by manual/current The Odds MLB refresh workflows. `DfsRegion`, `DfsBookmakers`, and `IncludeDfsBookmakers` control optional DFS/pick'em rows through The Odds API `us_dfs`.
+- `TheOddsIngestionWorker`: disabled, dry-run-first worker skeleton. Its `Bookmakers` value is the conservative sportsbook context list used by manual/current The Odds MLB refresh workflows. `ExpandedBookmakers` is an opt-in expanded US sportsbook preset used only by `bookmakerPreset=expanded` or `bookmakerPreset=all`. `DfsRegion`, `DfsBookmakers`, and `IncludeDfsBookmakers` control optional DFS/pick'em rows through The Odds API `us_dfs`.
 - `PredictionGeneration`: recommendation thresholds and enabled prop types.
 
 ## Major Workflows
@@ -113,6 +113,7 @@ Disabled by default:
 - Outside Development, debug/admin routes are blocked unless `DebugAdmin.Enabled=true` and the correct `X-Debug-Admin-Key` header is supplied.
 - The Odds API calls spend credits. The dashboard must not call The Odds API on page load.
 - Use dry-run before committing The Odds API ingestion.
+- Expanded and All bookmaker presets are opt-in because they can spend more credits and increase refresh time.
 - DFS rows from The Odds API use indicative odds and may vary based on user selections. Treat sportsbook rows as market context for a DFS-only user.
 - Generated endpoint outputs go under `tmp-analysis`; logs go under `logs`; temporary build outputs go under `tmp-build`.
 - Do not bypass DataDome or revive PrizePicks scraping experiments.

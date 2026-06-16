@@ -11,6 +11,7 @@ public sealed class TheOddsIngestionWorkerOptions
     public int MaxEstimatedCreditsPerRun { get; set; } = 5;
     public int MaxEstimatedCreditsPerDay { get; set; } = 20;
     public string Bookmakers { get; set; } = "draftkings,fanduel,betmgm";
+    public string ExpandedBookmakers { get; set; } = "draftkings,fanduel,betmgm,espnbet,betrivers,fanatics,williamhill_us,betonlineag,bovada,lowvig,mybookieag";
     public bool IncludeDfsBookmakers { get; set; } = false;
     public string DfsRegion { get; set; } = "us_dfs";
     public string DfsBookmakers { get; set; } = "prizepicks,underdog,pick6,betr_us_dfs";
