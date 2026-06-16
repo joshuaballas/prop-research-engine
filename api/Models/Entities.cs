@@ -324,6 +324,34 @@ public sealed class PredictionRunSkipCount
     public PredictionRun? PredictionRun { get; set; }
 }
 
+public sealed class LineShoppingStrategyBacktestSnapshot
+{
+    public Guid Id { get; set; }
+    public Guid RunId { get; set; }
+    public string Sport { get; set; } = "MLB";
+    public DateOnly? SlateDate { get; set; }
+    public string StrategyName { get; set; } = string.Empty;
+    public string Description { get; set; } = string.Empty;
+    public int TotalGroups { get; set; }
+    public int GradedGroups { get; set; }
+    public int Wins { get; set; }
+    public int Losses { get; set; }
+    public int Pushes { get; set; }
+    public decimal HitRate { get; set; }
+    public decimal SimulatedProfit { get; set; }
+    public decimal SimulatedRoi { get; set; }
+    public decimal? AverageBestEstimatedEv { get; set; }
+    public decimal? AverageBestProbability { get; set; }
+    public decimal? AverageBestImpliedProbability { get; set; }
+    public decimal? AverageProbabilityEdge { get; set; }
+    public decimal AverageHistoricalSampleSize { get; set; }
+    public decimal? AverageBestPrice { get; set; }
+    public DateTimeOffset GeneratedAt { get; set; } = DateTimeOffset.UtcNow;
+    public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
+
+    public PredictionRun? PredictionRun { get; set; }
+}
+
 public sealed class IngestionRun
 {
     public Guid Id { get; set; }

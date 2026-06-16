@@ -163,6 +163,20 @@ public static class TheOddsApiDebugEndpoints
 
         endpoints.MapGet("/api/debug/the-odds/mlb/line-shopping-backtest", async (
             Guid? runId,
+            int? sampleTake,
+            bool? includeSamples,
+            bool? strategyOnly,
+            int? minSampleSize,
+            string? bookmaker,
+            string? propType,
+            string? trustLevel,
+            decimal? minBestProbability,
+            decimal? maxBestProbability,
+            decimal? minEstimatedEv,
+            decimal? maxEstimatedEv,
+            decimal? minBestPrice,
+            decimal? maxBestPrice,
+            decimal? line,
             ApplicationDbContext dbContext,
             IPredictionProbabilityService probabilityService,
             IPlayerIdentityAliasService playerIdentityAliasService,
@@ -188,6 +202,8 @@ public static class TheOddsApiDebugEndpoints
             var equivalentPropTypeIdsById = await LoadTheOddsEquivalentPropTypeIdsByIdAsync(dbContext, cancellationToken);
             var playerAliasCache = new Dictionary<Guid, Guid[]>();
             var backtestRows = new List<TheOddsLineShoppingBacktestRow>(groups.Count);
+            var requestedSampleTake = Math.Clamp(sampleTake ?? 25, 0, 250);
+            var shouldIncludeSamples = includeSamples ?? true;
 
             foreach (var group in groups)
             {
@@ -212,11 +228,18 @@ public static class TheOddsApiDebugEndpoints
                 backtestRows.Add(new TheOddsLineShoppingBacktestRow(
                     group.Player,
                     group.NormalizedPropType,
+                    group.MarketClassification,
                     group.Line,
                     group.EventId,
                     group.EventStartTime,
                     group.HomeTeam,
                     group.AwayTeam,
+                    BuildTheOddsEventName(group.HomeTeam, group.AwayTeam),
+                    group.EventStartTimeUtc,
+                    group.ExpectedResultDate,
+                    group.ResultDateSource,
+                    group.UtcDate,
+                    group.ResolvedMlbDate,
                     group.BestSide,
                     group.BestBookmaker,
                     group.BestAmericanPrice,
@@ -226,17 +249,38 @@ public static class TheOddsApiDebugEndpoints
                     group.BestImpliedProbability,
                     group.BestProbabilityEdge,
                     group.TrustLevel,
+                    group.SampleWarning,
+                    group.LifecycleStatus,
                     group.HistoricalSampleSize,
                     group.ConfidenceScore,
                     group.RankingScore,
                     actualResult,
                     outcome,
-                    profit));
+                    profit,
+                    BuildTheOddsUngradedReason(group, actualResult, outcome)));
             }
 
             var gradedRows = backtestRows
                 .Where(row => row.Outcome is "Win" or "Loss" or "Push")
                 .ToArray();
+            var ungradedRows = backtestRows
+                .Where(row => !IsTheOddsGraded(row))
+                .ToArray();
+            var strategyRows = BuildTheOddsStrategySimulations(backtestRows);
+            var queryFilteredStrategy = BuildTheOddsQueryFilteredStrategy(
+                backtestRows,
+                minSampleSize,
+                bookmaker,
+                propType,
+                trustLevel,
+                minBestProbability,
+                maxBestProbability,
+                minEstimatedEv,
+                maxEstimatedEv,
+                minBestPrice,
+                maxBestPrice,
+                line);
+            var shouldReturnStrategyOnly = strategyOnly ?? false;
 
             return Results.Ok(new
             {
@@ -250,21 +294,64 @@ public static class TheOddsApiDebugEndpoints
                     probabilityAnalysis.PredictionCount
                 },
                 summary = BuildTheOddsLineShoppingBacktestSummary(backtestRows),
-                byTrustLevel = BuildTheOddsLineShoppingBacktestBreakdown(backtestRows, row => row.TrustLevel, "trustLevel"),
-                byPropType = BuildTheOddsLineShoppingBacktestBreakdown(backtestRows, row => row.PropType, "propType"),
-                byBestSide = BuildTheOddsLineShoppingBacktestBreakdown(backtestRows, row => row.BestSide, "bestSide"),
-                byBestBookmaker = BuildTheOddsLineShoppingBacktestBreakdown(backtestRows, row => row.BestBookmaker ?? "Unknown", "bestBookmaker"),
-                byBestEstimatedEvBucket = BuildTheOddsLineShoppingBacktestBreakdown(backtestRows, row => BestEvBucket(row.BestEstimatedEv), "bestEstimatedEvBucket"),
-                byConfidenceBucket = BuildTheOddsLineShoppingBacktestBreakdown(backtestRows, row => ConfidenceBucket(row.ConfidenceScore), "confidenceBucket"),
-                bySampleSizeBucket = BuildTheOddsLineShoppingBacktestBreakdown(backtestRows, row => SampleSizeBucket(row.HistoricalSampleSize), "sampleSizeBucket"),
-                topGradedWins = gradedRows
+                strategySimulations = strategyRows,
+                queryFilteredStrategy,
+                byTrustLevel = shouldReturnStrategyOnly ? [] : BuildTheOddsLineShoppingBacktestBreakdown(backtestRows, row => row.TrustLevel, "trustLevel"),
+                byPropType = shouldReturnStrategyOnly ? [] : BuildTheOddsLineShoppingBacktestBreakdown(backtestRows, row => row.PropType, "propType"),
+                byBookmaker = shouldReturnStrategyOnly ? [] : BuildTheOddsLineShoppingBacktestBreakdown(backtestRows, row => row.BestBookmaker ?? "Unknown", "bookmaker"),
+                byBestSide = shouldReturnStrategyOnly ? [] : BuildTheOddsLineShoppingBacktestBreakdown(backtestRows, row => row.BestSide, "bestSide"),
+                byBestBookmaker = shouldReturnStrategyOnly ? [] : BuildTheOddsLineShoppingBacktestBreakdown(backtestRows, row => row.BestBookmaker ?? "Unknown", "bestBookmaker"),
+                byEvent = shouldReturnStrategyOnly ? [] : BuildTheOddsLineShoppingBacktestBreakdown(backtestRows, row => row.EventName, "event"),
+                byMarketClassification = shouldReturnStrategyOnly ? [] : BuildTheOddsLineShoppingBacktestBreakdown(backtestRows, row => row.MarketClassification, "marketClassification"),
+                bySampleWarning = shouldReturnStrategyOnly ? [] : BuildTheOddsLineShoppingBacktestBreakdown(backtestRows, row => row.SampleWarning, "sampleWarning"),
+                byBestEstimatedEvBucket = shouldReturnStrategyOnly ? [] : BuildTheOddsLineShoppingBacktestBreakdown(backtestRows, row => BestEvBucket(row.BestEstimatedEv), "bestEstimatedEvBucket"),
+                byEstimatedEvBucket = shouldReturnStrategyOnly ? [] : BuildTheOddsLineShoppingBacktestBreakdown(backtestRows, row => BestEvBucket(row.BestEstimatedEv), "estimatedEvBucket"),
+                byConfidenceBucket = shouldReturnStrategyOnly ? [] : BuildTheOddsLineShoppingBacktestBreakdown(backtestRows, row => ConfidenceBucket(row.ConfidenceScore), "confidenceBucket"),
+                bySampleSizeBucket = shouldReturnStrategyOnly ? [] : BuildTheOddsLineShoppingBacktestBreakdown(backtestRows, row => SampleSizeBucket(row.HistoricalSampleSize), "sampleSizeBucket"),
+                byLifecycleStatus = shouldReturnStrategyOnly ? [] : BuildTheOddsLineShoppingBacktestBreakdown(backtestRows, row => row.LifecycleStatus, "lifecycleStatus"),
+                byModelProbabilityBucket = shouldReturnStrategyOnly ? [] : BuildTheOddsLineShoppingBacktestBreakdown(backtestRows, row => ProbabilityBucket(row.BestProbability), "modelProbabilityBucket"),
+                byImpliedProbabilityBucket = shouldReturnStrategyOnly ? [] : BuildTheOddsLineShoppingBacktestBreakdown(backtestRows, row => ProbabilityBucket(row.BestImpliedProbability), "impliedProbabilityBucket"),
+                byProbabilityEdgeBucket = shouldReturnStrategyOnly ? [] : BuildTheOddsLineShoppingBacktestBreakdown(backtestRows, row => ProbabilityEdgeBucket(row.BestProbabilityEdge), "probabilityEdgeBucket"),
+                byHistoricalSampleSizeBucket = shouldReturnStrategyOnly ? [] : BuildTheOddsLineShoppingBacktestBreakdown(backtestRows, row => HistoricalSampleSizeBucket(row.HistoricalSampleSize), "historicalSampleSizeBucket"),
+                byBestPriceBucket = shouldReturnStrategyOnly ? [] : BuildTheOddsLineShoppingBacktestBreakdown(backtestRows, row => DecimalPriceBucket(row.BestDecimalPrice), "bestPriceBucket"),
+                byRecommendationStrength = shouldReturnStrategyOnly ? [] : BuildTheOddsLineShoppingBacktestBreakdown(backtestRows, row => RecommendationStrengthBucket(row), "recommendationStrength"),
+                byLineValue = shouldReturnStrategyOnly ? [] : BuildTheOddsLineShoppingBacktestBreakdown(backtestRows, row => LineValueBucket(row.Line), "lineValue"),
+                byEventAndPropType = shouldReturnStrategyOnly ? [] : BuildTheOddsLineShoppingBacktestBreakdown(backtestRows, row => $"{row.EventName} | {row.PropType}", "eventAndPropType"),
+                byBookmakerAndPropType = shouldReturnStrategyOnly ? [] : BuildTheOddsLineShoppingBacktestBreakdown(backtestRows, row => $"{row.BestBookmaker ?? "Unknown"} | {row.PropType}", "bookmakerAndPropType"),
+                byTrustLevelAndPropType = shouldReturnStrategyOnly ? [] : BuildTheOddsLineShoppingBacktestBreakdown(backtestRows, row => $"{row.TrustLevel} | {row.PropType}", "trustLevelAndPropType"),
+                byTrustLevelAndEvBucket = shouldReturnStrategyOnly ? [] : BuildTheOddsLineShoppingBacktestBreakdown(backtestRows, row => $"{row.TrustLevel} | {BestEvBucket(row.BestEstimatedEv)}", "trustLevelAndEvBucket"),
+                modelProbabilityCalibration = shouldReturnStrategyOnly ? [] : BuildTheOddsModelProbabilityCalibrationTable(backtestRows),
+                topUngradedReasons = shouldReturnStrategyOnly ? [] : BuildTheOddsTopUngradedReasons(ungradedRows),
+                gradedSamples = !shouldReturnStrategyOnly && shouldIncludeSamples
+                    ? gradedRows
+                        .OrderBy(row => row.EventStartTime ?? DateTimeOffset.MaxValue)
+                        .ThenBy(row => row.EventName)
+                        .ThenBy(row => row.Player)
+                        .Take(requestedSampleTake)
+                        .Select(ToTheOddsLineShoppingGradedBacktestSample)
+                        .ToArray()
+                    : [],
+                ungradedSamples = !shouldReturnStrategyOnly && shouldIncludeSamples
+                    ? ungradedRows
+                        .OrderBy(row => row.EventStartTime ?? DateTimeOffset.MaxValue)
+                        .ThenBy(row => row.EventName)
+                        .ThenBy(row => row.Player)
+                        .Take(requestedSampleTake)
+                        .Select(ToTheOddsLineShoppingUngradedBacktestSample)
+                        .ToArray()
+                    : [],
+                topGradedWins = shouldReturnStrategyOnly
+                    ? []
+                    : gradedRows
                     .Where(row => row.Outcome == "Win")
                     .OrderByDescending(row => row.Profit)
                     .ThenByDescending(row => row.BestEstimatedEv ?? decimal.MinValue)
                     .Take(100)
                     .Select(ToTheOddsLineShoppingBacktestSample)
                     .ToArray(),
-                topGradedLosses = gradedRows
+                topGradedLosses = shouldReturnStrategyOnly
+                    ? []
+                    : gradedRows
                     .Where(row => row.Outcome == "Loss")
                     .OrderBy(row => row.Profit)
                     .ThenByDescending(row => row.BestEstimatedEv ?? decimal.MinValue)
@@ -276,6 +363,173 @@ public static class TheOddsApiDebugEndpoints
         })
         .WithName("TheOddsApiMlbLineShoppingBacktestDebug")
         .WithSummary("Read-only backtest for persisted The Odds API MLB line-shopping best-side selections.");
+
+        endpoints.MapPost("/api/debug/the-odds/mlb/line-shopping-backtest/strategy-snapshot", async (
+            Guid runId,
+            ApplicationDbContext dbContext,
+            IPredictionProbabilityService probabilityService,
+            IPlayerIdentityAliasService playerIdentityAliasService,
+            CancellationToken cancellationToken) =>
+        {
+            var generatedAtUtc = DateTimeOffset.UtcNow;
+            var computation = await BuildTheOddsLineShoppingBacktestComputationAsync(
+                runId,
+                dbContext,
+                probabilityService,
+                playerIdentityAliasService,
+                cancellationToken);
+
+            if (computation is null)
+            {
+                return Results.NotFound(new { error = $"Prediction run '{runId}' was not found." });
+            }
+
+            var slateDates = computation.BacktestRows
+                .Select(row => row.ExpectedResultDate)
+                .Distinct()
+                .Order()
+                .ToArray();
+            var slateDate = slateDates.Length == 1 ? slateDates[0] : (DateOnly?)null;
+            var strategyRows = BuildTheOddsStrategySimulations(computation.BacktestRows);
+            var snapshots = strategyRows.Select(strategy => new LineShoppingStrategyBacktestSnapshot
+            {
+                Id = Guid.NewGuid(),
+                RunId = computation.ProbabilityAnalysis.RunId,
+                Sport = "MLB",
+                SlateDate = slateDate,
+                StrategyName = strategy.strategyName,
+                Description = strategy.description,
+                TotalGroups = strategy.totalGroups,
+                GradedGroups = strategy.gradedGroups,
+                Wins = strategy.wins,
+                Losses = strategy.losses,
+                Pushes = strategy.pushes,
+                HitRate = strategy.hitRate,
+                SimulatedProfit = strategy.simulatedProfit,
+                SimulatedRoi = strategy.simulatedRoi,
+                AverageBestEstimatedEv = strategy.averageBestEstimatedEv,
+                AverageBestProbability = strategy.averageBestProbability,
+                AverageBestImpliedProbability = strategy.averageBestImpliedProbability,
+                AverageProbabilityEdge = strategy.averageProbabilityEdge,
+                AverageHistoricalSampleSize = strategy.averageHistoricalSampleSize,
+                AverageBestPrice = strategy.averageBestPrice,
+                GeneratedAt = generatedAtUtc,
+                CreatedAt = generatedAtUtc
+            }).ToArray();
+
+            dbContext.LineShoppingStrategyBacktestSnapshots.AddRange(snapshots);
+            await dbContext.SaveChangesAsync(cancellationToken);
+
+            return Results.Ok(new
+            {
+                runId = computation.ProbabilityAnalysis.RunId,
+                sport = "MLB",
+                slateDate,
+                generatedAtUtc,
+                snapshotCount = snapshots.Length,
+                strategies = snapshots
+                    .OrderByDescending(snapshot => snapshot.SimulatedRoi)
+                    .ThenByDescending(snapshot => snapshot.GradedGroups)
+                    .Select(ToTheOddsStrategySnapshotResponse)
+                    .ToArray()
+            });
+        })
+        .WithName("TheOddsApiMlbLineShoppingStrategySnapshotDebug")
+        .WithSummary("Persists one strategy backtest snapshot set for a The Odds API MLB prediction run.");
+
+        endpoints.MapGet("/api/debug/the-odds/mlb/line-shopping-backtest/strategy-snapshots", async (
+            Guid? runId,
+            string? strategyName,
+            DateOnly? fromDate,
+            DateOnly? toDate,
+            ApplicationDbContext dbContext,
+            CancellationToken cancellationToken) =>
+        {
+            var query = dbContext.LineShoppingStrategyBacktestSnapshots.AsNoTracking();
+            if (runId.HasValue)
+            {
+                query = query.Where(snapshot => snapshot.RunId == runId.Value);
+            }
+
+            if (!string.IsNullOrWhiteSpace(strategyName))
+            {
+                query = query.Where(snapshot => snapshot.StrategyName == strategyName);
+            }
+
+            if (fromDate.HasValue)
+            {
+                query = query.Where(snapshot => snapshot.SlateDate.HasValue && snapshot.SlateDate.Value >= fromDate.Value);
+            }
+
+            if (toDate.HasValue)
+            {
+                query = query.Where(snapshot => snapshot.SlateDate.HasValue && snapshot.SlateDate.Value <= toDate.Value);
+            }
+
+            var snapshots = await query
+                .OrderByDescending(snapshot => snapshot.GeneratedAt)
+                .ThenBy(snapshot => snapshot.StrategyName)
+                .Take(1000)
+                .ToListAsync(cancellationToken);
+
+            return Results.Ok(new
+            {
+                count = snapshots.Count,
+                snapshots = snapshots.Select(ToTheOddsStrategySnapshotResponse).ToArray()
+            });
+        })
+        .WithName("TheOddsApiMlbLineShoppingStrategySnapshotsDebug")
+        .WithSummary("Reads persisted The Odds API MLB line-shopping strategy backtest snapshots.");
+
+        endpoints.MapGet("/api/debug/the-odds/mlb/line-shopping-backtest/strategy-performance-summary", async (
+            ApplicationDbContext dbContext,
+            CancellationToken cancellationToken) =>
+        {
+            var snapshots = await dbContext.LineShoppingStrategyBacktestSnapshots
+                .AsNoTracking()
+                .Where(snapshot => snapshot.Sport == "MLB")
+                .ToListAsync(cancellationToken);
+
+            var rows = snapshots
+                .GroupBy(snapshot => snapshot.StrategyName, StringComparer.OrdinalIgnoreCase)
+                .Select(group =>
+                {
+                    var groupRows = group.ToArray();
+                    var totalWins = groupRows.Sum(snapshot => snapshot.Wins);
+                    var totalLosses = groupRows.Sum(snapshot => snapshot.Losses);
+                    var totalPushes = groupRows.Sum(snapshot => snapshot.Pushes);
+                    var totalGraded = groupRows.Sum(snapshot => snapshot.GradedGroups);
+                    var decisions = totalWins + totalLosses;
+                    var aggregateProfit = Math.Round(groupRows.Sum(snapshot => snapshot.SimulatedProfit), 4);
+
+                    return new
+                    {
+                        strategyName = group.Key,
+                        snapshotCount = groupRows.Length,
+                        totalGradedGroups = totalGraded,
+                        totalWins,
+                        totalLosses,
+                        totalPushes,
+                        aggregateHitRate = decisions == 0 ? 0m : Math.Round(totalWins / (decimal)decisions, 4),
+                        aggregateProfit,
+                        aggregateRoi = totalGraded == 0 ? 0m : Math.Round(aggregateProfit / totalGraded, 4),
+                        averageDailyRoi = Math.Round(groupRows.Average(snapshot => snapshot.SimulatedRoi), 4),
+                        bestSnapshotRoi = groupRows.Max(snapshot => snapshot.SimulatedRoi),
+                        worstSnapshotRoi = groupRows.Min(snapshot => snapshot.SimulatedRoi)
+                    };
+                })
+                .OrderByDescending(row => row.aggregateRoi)
+                .ThenByDescending(row => row.totalGradedGroups)
+                .ToArray();
+
+            return Results.Ok(new
+            {
+                strategyCount = rows.Length,
+                rows
+            });
+        })
+        .WithName("TheOddsApiMlbLineShoppingStrategyPerformanceSummaryDebug")
+        .WithSummary("Summarizes persisted The Odds API MLB line-shopping strategy backtest snapshots by strategy.");
 
         endpoints.MapGet("/api/debug/the-odds/mlb/event-workflow-status", async (
             ApplicationDbContext dbContext,
@@ -2412,6 +2666,7 @@ public static class TheOddsApiDebugEndpoints
                 ExtractAmericanPrice(row.Metadata, "lower"),
                 ExtractDecimalPrice(row.Metadata, "higher"),
                 ExtractDecimalPrice(row.Metadata, "lower"),
+                ResolveMlbResultDateForBacktest(row.Metadata, ExtractEventStartTime(row.Metadata), row.ObservedAt),
                 HasDataProvider(row.Metadata)))
             .ToList();
     }
@@ -2464,7 +2719,12 @@ public static class TheOddsApiDebugEndpoints
             underEstimatedEv,
             prediction.PlayerId,
             prediction.PropTypeId,
-            prediction.EventDate,
+            platformProp.BacktestResultDate.ExpectedResultDate,
+            platformProp.BacktestResultDate.EventStartTimeUtc,
+            platformProp.BacktestResultDate.ExpectedResultDate,
+            platformProp.BacktestResultDate.ResultDateSource,
+            platformProp.BacktestResultDate.UtcDate,
+            platformProp.BacktestResultDate.ResolvedMlbDate,
             prediction.SampleSize,
             prediction.MethodUsed,
             prediction.ConfidenceScore);
@@ -2571,6 +2831,11 @@ public static class TheOddsApiDebugEndpoints
             first.PlayerId,
             first.PropTypeId,
             first.EventDate,
+            first.EventStartTimeUtc,
+            first.ExpectedResultDate,
+            first.ResultDateSource,
+            first.UtcDate,
+            first.ResolvedMlbDate,
             rows.Any(row => row.IsEligibleAsNormalRecommendation),
             first.ModelProbabilityOver,
             first.ModelProbabilityUnder,
@@ -2623,6 +2888,11 @@ public static class TheOddsApiDebugEndpoints
         {
             group.EventId,
             eventStartTime = group.EventStartTime,
+            group.EventStartTimeUtc,
+            group.ExpectedResultDate,
+            group.ResultDateSource,
+            group.UtcDate,
+            group.ResolvedMlbDate,
             group.LastObservedAt,
             group.MinutesSinceObserved,
             group.MinutesUntilStart,
@@ -2958,6 +3228,137 @@ public static class TheOddsApiDebugEndpoints
         return null;
     }
 
+    private static TheOddsMlbBacktestResultDate ResolveMlbResultDateForBacktest(
+        JsonDocument? metadata,
+        DateTimeOffset? eventStartTime,
+        DateTimeOffset observedAt)
+    {
+        var eventStartTimeUtc = eventStartTime?.ToUniversalTime();
+        var utcDate = eventStartTimeUtc.HasValue
+            ? DateOnly.FromDateTime(eventStartTimeUtc.Value.UtcDateTime)
+            : (DateOnly?)null;
+
+        if (TryExtractMlbProviderEventDate(metadata, out var providerDate, out var providerDateSource))
+        {
+            return new TheOddsMlbBacktestResultDate(
+                eventStartTimeUtc,
+                providerDate,
+                providerDateSource,
+                utcDate,
+                providerDate);
+        }
+
+        if (eventStartTimeUtc.HasValue)
+        {
+            var mlbDate = DateOnly.FromDateTime(ConvertUtcToMlbLocalTime(eventStartTimeUtc.Value).Date);
+            return new TheOddsMlbBacktestResultDate(
+                eventStartTimeUtc,
+                mlbDate,
+                "MlbEasternDateFromEventStartTimeUtc",
+                utcDate,
+                mlbDate);
+        }
+
+        var observedUtc = observedAt.ToUniversalTime();
+        var observedMlbDate = DateOnly.FromDateTime(ConvertUtcToMlbLocalTime(observedUtc).Date);
+        return new TheOddsMlbBacktestResultDate(
+            null,
+            observedMlbDate,
+            "MlbEasternDateFromObservedAtUtc",
+            DateOnly.FromDateTime(observedUtc.UtcDateTime),
+            observedMlbDate);
+    }
+
+    private static bool TryExtractMlbProviderEventDate(
+        JsonDocument? metadata,
+        out DateOnly eventDate,
+        out string source)
+    {
+        eventDate = default;
+        source = string.Empty;
+
+        if (metadata?.RootElement.ValueKind != JsonValueKind.Object
+            || !metadata.RootElement.TryGetProperty("eventInfo", out var eventInfo)
+            || eventInfo.ValueKind != JsonValueKind.Object)
+        {
+            return false;
+        }
+
+        var dateFieldNames = new[]
+        {
+            "eventDate",
+            "providerEventDate",
+            "sportEventDate",
+            "resultDate",
+            "scheduleDate",
+            "gameDate",
+            "localDate"
+        };
+
+        foreach (var fieldName in dateFieldNames)
+        {
+            if (!eventInfo.TryGetProperty(fieldName, out var property))
+            {
+                continue;
+            }
+
+            if (TryReadDateOnly(property, out eventDate))
+            {
+                source = $"Metadata:eventInfo.{fieldName}";
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool TryReadDateOnly(JsonElement property, out DateOnly eventDate)
+    {
+        eventDate = default;
+
+        if (property.ValueKind != JsonValueKind.String)
+        {
+            return false;
+        }
+
+        var value = property.GetString();
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return false;
+        }
+
+        if (DateOnly.TryParse(value, out eventDate))
+        {
+            return true;
+        }
+
+        if (DateTimeOffset.TryParse(value, out var parsedDateTime))
+        {
+            eventDate = DateOnly.FromDateTime(parsedDateTime.Date);
+            return true;
+        }
+
+        return false;
+    }
+
+    private static DateTime ConvertUtcToMlbLocalTime(DateTimeOffset utcDateTime)
+    {
+        var timeZone = GetMlbScheduleTimeZone();
+        return TimeZoneInfo.ConvertTime(utcDateTime, timeZone).DateTime;
+    }
+
+    private static TimeZoneInfo GetMlbScheduleTimeZone()
+    {
+        try
+        {
+            return TimeZoneInfo.FindSystemTimeZoneById("Eastern Standard Time");
+        }
+        catch (TimeZoneNotFoundException)
+        {
+            return TimeZoneInfo.FindSystemTimeZoneById("America/New_York");
+        }
+    }
+
     private static decimal? CalculateImpliedProbability(decimal? decimalPrice)
     {
         return decimalPrice.HasValue && decimalPrice.Value > 0
@@ -3191,7 +3592,9 @@ public static class TheOddsApiDebugEndpoints
             averageBestEstimatedEv = AverageNullable(rows.Select(row => row.BestEstimatedEv)),
             averageBestProbability = AverageNullable(rows.Select(row => row.BestProbability)),
             averageBestImpliedProbability = AverageNullable(rows.Select(row => row.BestImpliedProbability)),
-            averageProbabilityEdge = AverageNullable(rows.Select(row => row.BestProbabilityEdge))
+            averageProbabilityEdge = AverageNullable(rows.Select(row => row.BestProbabilityEdge)),
+            averageHistoricalSampleSize = AverageInt(rows.Select(row => row.HistoricalSampleSize)),
+            averageBestPrice = AverageNullable(rows.Select(row => row.BestDecimalPrice))
         };
     }
 
@@ -3215,12 +3618,17 @@ public static class TheOddsApiDebugEndpoints
         IReadOnlyCollection<TheOddsLineShoppingBacktestRow> rows)
     {
         var gradedRows = rows.Where(IsTheOddsGraded).ToArray();
+        var ungradedRows = rows.Count - gradedRows.Length;
 
         return new TheOddsBacktestGroupSummary(
             dimension,
             group,
+            group,
+            rows.Count,
             rows.Count,
             gradedRows.Length,
+            gradedRows.Length,
+            ungradedRows,
             gradedRows.Count(row => row.Outcome == "Win"),
             gradedRows.Count(row => row.Outcome == "Loss"),
             gradedRows.Count(row => row.Outcome == "Push"),
@@ -3229,13 +3637,252 @@ public static class TheOddsApiDebugEndpoints
             TheOddsRoi(gradedRows),
             AverageNullable(rows.Select(row => row.BestEstimatedEv)),
             AverageNullable(rows.Select(row => row.BestProbability)),
+            AverageNullable(rows.Select(row => row.BestImpliedProbability)),
+            AverageNullable(rows.Select(row => row.BestProbabilityEdge)),
+            AverageInt(rows.Select(row => row.HistoricalSampleSize)),
             AverageNullable(rows.Select(row => row.BestDecimalPrice)));
+    }
+
+    private static object[] BuildTheOddsModelProbabilityCalibrationTable(
+        IReadOnlyCollection<TheOddsLineShoppingBacktestRow> rows)
+    {
+        return rows
+            .Where(row => IsTheOddsGraded(row) && row.BestProbability.HasValue)
+            .GroupBy(row => ProbabilityBucket(row.BestProbability), StringComparer.OrdinalIgnoreCase)
+            .Select(group =>
+            {
+                var groupRows = group.ToArray();
+                var averagePredictedProbability = AverageNullable(groupRows.Select(row => row.BestProbability)) ?? 0m;
+                var actualHitRate = TheOddsHitRate(groupRows);
+
+                return new
+                {
+                    predictedProbabilityBucket = group.Key,
+                    gradedGroups = groupRows.Length,
+                    averagePredictedProbability,
+                    actualHitRate,
+                    calibrationError = Math.Round(actualHitRate - averagePredictedProbability, 6),
+                    simulatedRoi = TheOddsRoi(groupRows)
+                };
+            })
+            .OrderBy(row => ProbabilityBucketSortKey(row.predictedProbabilityBucket))
+            .Cast<object>()
+            .ToArray();
+    }
+
+    private static TheOddsStrategySimulationSummary[] BuildTheOddsStrategySimulations(
+        IReadOnlyCollection<TheOddsLineShoppingBacktestRow> rows)
+    {
+        var gradedRows = rows.Where(IsTheOddsGraded).ToArray();
+        var strategies = new (string Name, string Description, Func<TheOddsLineShoppingBacktestRow, bool> Filter)[]
+        {
+            ("All Graded", "Every graded line-shopping group.", _ => true),
+            ("Exclude Line 0.5", "All graded groups except line 0.5.", row => row.Line != 0.5m),
+            ("Line 1.5 Only", "Only line 1.5 groups.", row => row.Line == 1.5m),
+            ("Pitcher Strikeouts Only", "Only Pitcher Strikeouts groups.", row => IsTheOddsPropType(row, "Pitcher Strikeouts")),
+            ("Total Bases Only", "Only Total Bases groups.", row => IsTheOddsPropType(row, "Total Bases")),
+            ("Hits Only", "Only Hits groups.", row => IsTheOddsPropType(row, "Hits")),
+            ("Medium Trust Only", "Only Medium trust groups.", row => IsTheOddsTrustLevel(row, "Medium")),
+            ("Strong Trust Only", "Only Strong trust groups.", row => IsTheOddsTrustLevel(row, "Strong")),
+            ("Medium Total Bases", "Medium trust Total Bases groups.", row => IsTheOddsTrustLevel(row, "Medium") && IsTheOddsPropType(row, "Total Bases")),
+            ("DraftKings Only", "Only groups where the best price is from DraftKings.", row => IsTheOddsBookmaker(row, "DraftKings")),
+            ("BetMGM Only", "Only groups where the best price is from BetMGM.", row => IsTheOddsBookmaker(row, "BetMGM")),
+            ("DraftKings Total Bases", "DraftKings best-price Total Bases groups.", row => IsTheOddsBookmaker(row, "DraftKings") && IsTheOddsPropType(row, "Total Bases")),
+            ("Exclude BetMGM Batter Props", "All graded groups except BetMGM best-price batter props.", row => !(IsTheOddsBookmaker(row, "BetMGM") && IsTheOddsBatterProp(row))),
+            ("Exclude BestPrice >= 2.00 Batter Props", "All graded groups except batter props with best decimal price at least 2.00.", row => !(IsTheOddsBatterProp(row) && row.BestDecimalPrice >= 2.00m)),
+            ("BestPrice 1.75 to 1.99", "Only groups with best decimal price from 1.75 through 1.99.", row => row.BestDecimalPrice >= 1.75m && row.BestDecimalPrice < 2.00m),
+            ("Positive EV Only", "Only groups with positive best estimated EV.", row => row.BestEstimatedEv > 0m),
+            ("Positive Edge Only", "Only groups with positive best probability edge.", row => row.BestProbabilityEdge > 0m),
+            ("EV 0.10 to 0.20 Only", "Only groups with best estimated EV from 0.10 through below 0.20.", row => row.BestEstimatedEv >= 0.10m && row.BestEstimatedEv < 0.20m),
+            ("Exclude EV 0.20+", "All graded groups except best estimated EV of 0.20 or higher.", row => row.BestEstimatedEv < 0.20m || !row.BestEstimatedEv.HasValue),
+            ("Conservative Candidate Strategy", "Exclude line 0.5 batter props, exclude best price >= 2.00 batter props, include Pitcher Strikeouts or Total Bases, and exclude ResearchOnly.", row =>
+                !(IsTheOddsBatterProp(row) && row.Line == 0.5m)
+                && !(IsTheOddsBatterProp(row) && row.BestDecimalPrice >= 2.00m)
+                && (IsTheOddsPropType(row, "Pitcher Strikeouts") || IsTheOddsPropType(row, "Total Bases"))
+                && !IsTheOddsTrustLevel(row, "ResearchOnly")),
+            ("Experimental Plus-Money Fade Diagnostic", "Line 0.5 batter props with best decimal price at least 2.00.", row =>
+                IsTheOddsBatterProp(row)
+                && row.Line == 0.5m
+                && row.BestDecimalPrice >= 2.00m)
+        };
+
+        return strategies
+            .Select(strategy => BuildTheOddsStrategySimulation(strategy.Name, strategy.Description, gradedRows.Where(strategy.Filter).ToArray()))
+            .ToArray();
+    }
+
+    private static TheOddsStrategySimulationSummary? BuildTheOddsQueryFilteredStrategy(
+        IReadOnlyCollection<TheOddsLineShoppingBacktestRow> rows,
+        int? minSampleSize,
+        string? bookmaker,
+        string? propType,
+        string? trustLevel,
+        decimal? minBestProbability,
+        decimal? maxBestProbability,
+        decimal? minEstimatedEv,
+        decimal? maxEstimatedEv,
+        decimal? minBestPrice,
+        decimal? maxBestPrice,
+        decimal? line)
+    {
+        var hasAnyFilter = minSampleSize.HasValue
+            || !string.IsNullOrWhiteSpace(bookmaker)
+            || !string.IsNullOrWhiteSpace(propType)
+            || !string.IsNullOrWhiteSpace(trustLevel)
+            || minBestProbability.HasValue
+            || maxBestProbability.HasValue
+            || minEstimatedEv.HasValue
+            || maxEstimatedEv.HasValue
+            || minBestPrice.HasValue
+            || maxBestPrice.HasValue
+            || line.HasValue;
+
+        if (!hasAnyFilter)
+        {
+            return null;
+        }
+
+        var filteredRows = rows
+            .Where(IsTheOddsGraded)
+            .Where(row => !minSampleSize.HasValue || row.HistoricalSampleSize >= minSampleSize.Value)
+            .Where(row => string.IsNullOrWhiteSpace(bookmaker) || IsTheOddsBookmaker(row, bookmaker))
+            .Where(row => string.IsNullOrWhiteSpace(propType) || IsTheOddsPropType(row, propType))
+            .Where(row => string.IsNullOrWhiteSpace(trustLevel) || IsTheOddsTrustLevel(row, trustLevel))
+            .Where(row => !minBestProbability.HasValue || row.BestProbability >= minBestProbability.Value)
+            .Where(row => !maxBestProbability.HasValue || row.BestProbability <= maxBestProbability.Value)
+            .Where(row => !minEstimatedEv.HasValue || row.BestEstimatedEv >= minEstimatedEv.Value)
+            .Where(row => !maxEstimatedEv.HasValue || row.BestEstimatedEv <= maxEstimatedEv.Value)
+            .Where(row => !minBestPrice.HasValue || row.BestDecimalPrice >= minBestPrice.Value)
+            .Where(row => !maxBestPrice.HasValue || row.BestDecimalPrice <= maxBestPrice.Value)
+            .Where(row => !line.HasValue || row.Line == line.Value)
+            .ToArray();
+
+        return BuildTheOddsStrategySimulation(
+            "Query Filtered Strategy",
+            "Ad hoc strategy created from line-shopping-backtest query parameters.",
+            filteredRows);
+    }
+
+    private static TheOddsStrategySimulationSummary BuildTheOddsStrategySimulation(
+        string strategyName,
+        string description,
+        IReadOnlyCollection<TheOddsLineShoppingBacktestRow> rows)
+    {
+        return new TheOddsStrategySimulationSummary(
+            strategyName,
+            description,
+            rows.Count,
+            rows.Count,
+            rows.Count(row => row.Outcome == "Win"),
+            rows.Count(row => row.Outcome == "Loss"),
+            rows.Count(row => row.Outcome == "Push"),
+            TheOddsHitRate(rows),
+            TheOddsProfit(rows),
+            TheOddsRoi(rows),
+            AverageNullable(rows.Select(row => row.BestEstimatedEv)),
+            AverageNullable(rows.Select(row => row.BestProbability)),
+            AverageNullable(rows.Select(row => row.BestImpliedProbability)),
+            AverageNullable(rows.Select(row => row.BestProbabilityEdge)),
+            AverageInt(rows.Select(row => row.HistoricalSampleSize)),
+            AverageNullable(rows.Select(row => row.BestDecimalPrice)));
+    }
+
+    private static async Task<TheOddsStrategyBacktestComputation?> BuildTheOddsLineShoppingBacktestComputationAsync(
+        Guid runId,
+        ApplicationDbContext dbContext,
+        IPredictionProbabilityService probabilityService,
+        IPlayerIdentityAliasService playerIdentityAliasService,
+        CancellationToken cancellationToken)
+    {
+        var platformPropDataRows = await LoadTheOddsPlatformPropDataRowsAsync(dbContext, cancellationToken);
+        var platformProps = ParseTheOddsPlatformProps(platformPropDataRows);
+        var theOddsPropIds = platformProps.Select(row => row.PropId).Distinct().ToArray();
+        var probabilityAnalysis = await probabilityService.AnalyzeRunForPropsAsync(runId, theOddsPropIds, cancellationToken);
+        if (probabilityAnalysis is null)
+        {
+            return null;
+        }
+
+        var lineShoppingRows = BuildTheOddsLineShoppingRows(
+            platformProps,
+            probabilityAnalysis,
+            DateTimeOffset.UtcNow.AddHours(-FreshnessWindowHours));
+        var lineShoppingGroups = BuildTheOddsLineShoppingGroups(lineShoppingRows);
+        var actualResults = await LoadTheOddsMlbActualResultsAsync(dbContext, cancellationToken);
+        var equivalentPropTypeIdsById = await LoadTheOddsEquivalentPropTypeIdsByIdAsync(dbContext, cancellationToken);
+        var playerAliasCache = new Dictionary<Guid, Guid[]>();
+        var backtestRows = await BuildTheOddsBacktestRowsAsync(
+            lineShoppingGroups,
+            actualResults,
+            equivalentPropTypeIdsById,
+            playerIdentityAliasService,
+            playerAliasCache,
+            cancellationToken);
+
+        return new TheOddsStrategyBacktestComputation(probabilityAnalysis, backtestRows);
+    }
+
+    private static object ToTheOddsStrategySnapshotResponse(LineShoppingStrategyBacktestSnapshot snapshot)
+    {
+        return new
+        {
+            snapshot.Id,
+            snapshot.RunId,
+            snapshot.Sport,
+            snapshot.SlateDate,
+            snapshot.StrategyName,
+            snapshot.Description,
+            snapshot.TotalGroups,
+            snapshot.GradedGroups,
+            snapshot.Wins,
+            snapshot.Losses,
+            snapshot.Pushes,
+            snapshot.HitRate,
+            snapshot.SimulatedProfit,
+            snapshot.SimulatedRoi,
+            snapshot.AverageBestEstimatedEv,
+            snapshot.AverageBestProbability,
+            snapshot.AverageBestImpliedProbability,
+            snapshot.AverageProbabilityEdge,
+            snapshot.AverageHistoricalSampleSize,
+            snapshot.AverageBestPrice,
+            snapshot.GeneratedAt,
+            snapshot.CreatedAt
+        };
+    }
+
+    private static bool IsTheOddsPropType(TheOddsLineShoppingBacktestRow row, string propType)
+    {
+        return string.Equals(row.PropType, propType, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsTheOddsBookmaker(TheOddsLineShoppingBacktestRow row, string bookmaker)
+    {
+        return string.Equals(row.BestBookmaker, bookmaker, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsTheOddsTrustLevel(TheOddsLineShoppingBacktestRow row, string trustLevel)
+    {
+        return string.Equals(row.TrustLevel, trustLevel, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsTheOddsBatterProp(TheOddsLineShoppingBacktestRow row)
+    {
+        return !row.PropType.Contains("Pitcher", StringComparison.OrdinalIgnoreCase);
     }
 
     private static object ToTheOddsLineShoppingBacktestSample(TheOddsLineShoppingBacktestRow row)
     {
         return new
         {
+            eventName = row.EventName,
+            row.EventId,
+            row.EventStartTime,
+            row.EventStartTimeUtc,
+            row.ExpectedResultDate,
+            row.ResultDateSource,
+            row.UtcDate,
+            row.ResolvedMlbDate,
             player = row.Player,
             propType = row.PropType,
             line = row.Line,
@@ -3249,6 +3896,7 @@ public static class TheOddsApiDebugEndpoints
             row.BestSide,
             row.BestBookmaker,
             row.BestAmericanPrice,
+            row.BestDecimalPrice,
             row.BestEstimatedEv,
             row.BestProbability,
             row.TrustLevel,
@@ -3258,6 +3906,109 @@ public static class TheOddsApiDebugEndpoints
             row.Outcome,
             profit = row.Profit
         };
+    }
+
+    private static object ToTheOddsLineShoppingGradedBacktestSample(TheOddsLineShoppingBacktestRow row)
+    {
+        return new
+        {
+            row.EventName,
+            row.EventId,
+            row.EventStartTime,
+            row.EventStartTimeUtc,
+            row.ExpectedResultDate,
+            row.ResultDateSource,
+            row.UtcDate,
+            row.ResolvedMlbDate,
+            player = row.Player,
+            propType = row.PropType,
+            line = row.Line,
+            row.BestSide,
+            row.BestBookmaker,
+            row.BestAmericanPrice,
+            row.BestDecimalPrice,
+            row.BestProbability,
+            row.BestEstimatedEv,
+            row.TrustLevel,
+            historicalSampleSize = row.HistoricalSampleSize,
+            resultValue = row.ActualResult,
+            row.Outcome,
+            profit = row.Profit
+        };
+    }
+
+    private static object ToTheOddsLineShoppingUngradedBacktestSample(TheOddsLineShoppingBacktestRow row)
+    {
+        return new
+        {
+            row.EventName,
+            row.EventId,
+            row.EventStartTime,
+            row.EventStartTimeUtc,
+            row.ExpectedResultDate,
+            row.ResultDateSource,
+            row.UtcDate,
+            row.ResolvedMlbDate,
+            player = row.Player,
+            propType = row.PropType,
+            line = row.Line,
+            row.BestSide,
+            row.BestBookmaker,
+            row.TrustLevel,
+            historicalSampleSize = row.HistoricalSampleSize,
+            ungradedReason = row.UngradedReason ?? "Unknown",
+            playerMappingStatus = row.HistoricalSampleSize > 0 ? "Resolved" : "Unknown",
+            propTypeMappingStatus = string.IsNullOrWhiteSpace(row.PropType) ? "Unknown" : "Resolved"
+        };
+    }
+
+    private static object[] BuildTheOddsTopUngradedReasons(
+        IReadOnlyCollection<TheOddsLineShoppingBacktestRow> ungradedRows)
+    {
+        return ungradedRows
+            .GroupBy(row => row.UngradedReason ?? "Unknown", StringComparer.OrdinalIgnoreCase)
+            .Select(group => new
+            {
+                reason = group.Key,
+                count = group.Count()
+            })
+            .OrderByDescending(row => row.count)
+            .ThenBy(row => row.reason)
+            .Cast<object>()
+            .ToArray();
+    }
+
+    private static string BuildTheOddsUngradedReason(
+        TheOddsLineShoppingGroup group,
+        decimal? actualResult,
+        string? outcome)
+    {
+        if (outcome is "Win" or "Loss" or "Push")
+        {
+            return "Graded";
+        }
+
+        if (group.BestSide == "None")
+        {
+            return "NoBestSide";
+        }
+
+        if (!group.BestDecimalPrice.HasValue)
+        {
+            return "MissingBestPrice";
+        }
+
+        if (actualResult.HasValue)
+        {
+            return "UnableToGrade";
+        }
+
+        if (group.EventStartTime.HasValue && group.EventStartTime.Value > DateTimeOffset.UtcNow)
+        {
+            return "EventNotStarted";
+        }
+
+        return "NoMatchingPropResult";
     }
 
     private static object BuildTheOddsLineShoppingBacktestDiagnosis(
@@ -5941,11 +6692,18 @@ public static class TheOddsApiDebugEndpoints
             rows.Add(new TheOddsLineShoppingBacktestRow(
                 group.Player,
                 group.NormalizedPropType,
+                group.MarketClassification,
                 group.Line,
                 group.EventId,
                 group.EventStartTime,
                 group.HomeTeam,
                 group.AwayTeam,
+                BuildTheOddsEventName(group.HomeTeam, group.AwayTeam),
+                group.EventStartTimeUtc,
+                group.ExpectedResultDate,
+                group.ResultDateSource,
+                group.UtcDate,
+                group.ResolvedMlbDate,
                 group.BestSide,
                 group.BestBookmaker,
                 group.BestAmericanPrice,
@@ -5955,12 +6713,15 @@ public static class TheOddsApiDebugEndpoints
                 group.BestImpliedProbability,
                 group.BestProbabilityEdge,
                 group.TrustLevel,
+                group.SampleWarning,
+                group.LifecycleStatus,
                 group.HistoricalSampleSize,
                 group.ConfidenceScore,
                 group.RankingScore,
                 actualResult,
                 outcome,
-                profit));
+                profit,
+                BuildTheOddsUngradedReason(group, actualResult, outcome)));
         }
 
         return rows;
@@ -6887,6 +7648,12 @@ public static class TheOddsApiDebugEndpoints
         return presentValues.Length == 0 ? null : Math.Round(presentValues.Average(), 6);
     }
 
+    private static decimal AverageInt(IEnumerable<int> values)
+    {
+        var presentValues = values.ToArray();
+        return presentValues.Length == 0 ? 0m : Math.Round((decimal)presentValues.Average(), 2);
+    }
+
     private static string BestEvBucket(decimal? bestEstimatedEv)
     {
         if (!bestEstimatedEv.HasValue)
@@ -6923,6 +7690,139 @@ public static class TheOddsApiDebugEndpoints
             < 100 => "50-100",
             < 250 => "100-250",
             _ => "250+"
+        };
+    }
+
+    private static string HistoricalSampleSizeBucket(int sampleSize)
+    {
+        return sampleSize switch
+        {
+            < 25 => "<25",
+            < 50 => "25-49",
+            < 100 => "50-99",
+            < 250 => "100-249",
+            < 500 => "250-499",
+            _ => "500+"
+        };
+    }
+
+    private static string ProbabilityBucket(decimal? probability)
+    {
+        if (!probability.HasValue)
+        {
+            return "Unknown";
+        }
+
+        return probability.Value switch
+        {
+            < 0.50m => "<50%",
+            < 0.55m => "50-55%",
+            < 0.60m => "55-60%",
+            < 0.65m => "60-65%",
+            < 0.70m => "65-70%",
+            < 0.75m => "70-75%",
+            < 0.80m => "75-80%",
+            < 0.85m => "80-85%",
+            < 0.90m => "85-90%",
+            _ => "90%+"
+        };
+    }
+
+    private static int ProbabilityBucketSortKey(string bucket)
+    {
+        return bucket switch
+        {
+            "<50%" => 0,
+            "50-55%" => 1,
+            "55-60%" => 2,
+            "60-65%" => 3,
+            "65-70%" => 4,
+            "70-75%" => 5,
+            "75-80%" => 6,
+            "80-85%" => 7,
+            "85-90%" => 8,
+            "90%+" => 9,
+            _ => 99
+        };
+    }
+
+    private static string ProbabilityEdgeBucket(decimal? probabilityEdge)
+    {
+        if (!probabilityEdge.HasValue)
+        {
+            return "Unknown";
+        }
+
+        return probabilityEdge.Value switch
+        {
+            < -0.20m => "<-20%",
+            < -0.10m => "-20% to -10%",
+            < -0.05m => "-10% to -5%",
+            < 0m => "-5% to 0%",
+            < 0.05m => "0% to 5%",
+            < 0.10m => "5% to 10%",
+            < 0.20m => "10% to 20%",
+            _ => "20%+"
+        };
+    }
+
+    private static string DecimalPriceBucket(decimal? decimalPrice)
+    {
+        if (!decimalPrice.HasValue)
+        {
+            return "Unknown";
+        }
+
+        return decimalPrice.Value switch
+        {
+            < 1.50m => "<1.50",
+            < 1.75m => "1.50-1.74",
+            < 2.00m => "1.75-1.99",
+            < 2.50m => "2.00-2.49",
+            < 3.00m => "2.50-2.99",
+            _ => "3.00+"
+        };
+    }
+
+    private static string RecommendationStrengthBucket(TheOddsLineShoppingBacktestRow row)
+    {
+        if (!row.BestEstimatedEv.HasValue || !row.BestProbabilityEdge.HasValue)
+        {
+            return "Unknown";
+        }
+
+        if (row.BestEstimatedEv.Value >= 0.20m && row.BestProbabilityEdge.Value >= 0.10m)
+        {
+            return "High";
+        }
+
+        if (row.BestEstimatedEv.Value >= 0.10m && row.BestProbabilityEdge.Value >= 0.05m)
+        {
+            return "Medium";
+        }
+
+        if (row.BestEstimatedEv.Value > 0m)
+        {
+            return "Low";
+        }
+
+        return "NegativeOrNoEdge";
+    }
+
+    private static string LineValueBucket(decimal line)
+    {
+        return line switch
+        {
+            0.5m => "0.5",
+            1.0m => "1.0",
+            1.5m => "1.5",
+            2.0m => "2.0",
+            2.5m => "2.5",
+            3.0m => "3.0",
+            3.5m => "3.5",
+            4.5m => "4.5",
+            5.5m => "5.5",
+            _ => line.ToString("0.####", CultureInfo.InvariantCulture)
         };
     }
 
@@ -6999,7 +7899,15 @@ public static class TheOddsApiDebugEndpoints
         int? PriceUnder,
         decimal? PriceOverDecimal,
         decimal? PriceUnderDecimal,
+        TheOddsMlbBacktestResultDate BacktestResultDate,
         bool HasTheOddsDataProvider);
+
+    private sealed record TheOddsMlbBacktestResultDate(
+        DateTimeOffset? EventStartTimeUtc,
+        DateOnly ExpectedResultDate,
+        string ResultDateSource,
+        DateOnly? UtcDate,
+        DateOnly? ResolvedMlbDate);
 
     private sealed record TheOddsPredictionRunContext(
         Guid RunId,
@@ -7358,6 +8266,11 @@ public static class TheOddsApiDebugEndpoints
         Guid PlayerId,
         Guid PropTypeId,
         DateOnly EventDate,
+        DateTimeOffset? EventStartTimeUtc,
+        DateOnly ExpectedResultDate,
+        string ResultDateSource,
+        DateOnly? UtcDate,
+        DateOnly? ResolvedMlbDate,
         int HistoricalSampleSize,
         string ProbabilityMethod,
         decimal ConfidenceScore);
@@ -7428,6 +8341,11 @@ public static class TheOddsApiDebugEndpoints
         Guid PlayerId,
         Guid PropTypeId,
         DateOnly EventDate,
+        DateTimeOffset? EventStartTimeUtc,
+        DateOnly ExpectedResultDate,
+        string ResultDateSource,
+        DateOnly? UtcDate,
+        DateOnly? ResolvedMlbDate,
         bool IsEligibleAsNormalRecommendation,
         decimal? ModelProbabilityOver,
         decimal? ModelProbabilityUnder,
@@ -7463,11 +8381,18 @@ public static class TheOddsApiDebugEndpoints
     private sealed record TheOddsLineShoppingBacktestRow(
         string Player,
         string PropType,
+        string MarketClassification,
         decimal Line,
         string? EventId,
         DateTimeOffset? EventStartTime,
         string? HomeTeam,
         string? AwayTeam,
+        string EventName,
+        DateTimeOffset? EventStartTimeUtc,
+        DateOnly ExpectedResultDate,
+        string ResultDateSource,
+        DateOnly? UtcDate,
+        DateOnly? ResolvedMlbDate,
         string BestSide,
         string? BestBookmaker,
         int? BestAmericanPrice,
@@ -7477,18 +8402,25 @@ public static class TheOddsApiDebugEndpoints
         decimal? BestImpliedProbability,
         decimal? BestProbabilityEdge,
         string TrustLevel,
+        string SampleWarning,
+        string LifecycleStatus,
         int HistoricalSampleSize,
         decimal ConfidenceScore,
         decimal RankingScore,
         decimal? ActualResult,
         string? Outcome,
-        decimal? Profit);
+        decimal? Profit,
+        string UngradedReason);
 
     private sealed record TheOddsBacktestGroupSummary(
         string dimension,
+        string key,
         string group,
+        int totalGroups,
         int count,
+        int gradedGroups,
         int gradedCount,
+        int ungradedGroups,
         int wins,
         int losses,
         int pushes,
@@ -7497,7 +8429,32 @@ public static class TheOddsApiDebugEndpoints
         decimal simulatedRoi,
         decimal? averageBestEstimatedEv,
         decimal? averageBestProbability,
+        decimal? averageBestImpliedProbability,
+        decimal? averageProbabilityEdge,
+        decimal averageHistoricalSampleSize,
         decimal? averageBestPrice);
+
+    private sealed record TheOddsStrategySimulationSummary(
+        string strategyName,
+        string description,
+        int totalGroups,
+        int gradedGroups,
+        int wins,
+        int losses,
+        int pushes,
+        decimal hitRate,
+        decimal simulatedProfit,
+        decimal simulatedRoi,
+        decimal? averageBestEstimatedEv,
+        decimal? averageBestProbability,
+        decimal? averageBestImpliedProbability,
+        decimal? averageProbabilityEdge,
+        decimal averageHistoricalSampleSize,
+        decimal? averageBestPrice);
+
+    private sealed record TheOddsStrategyBacktestComputation(
+        PredictionProbabilityRunAnalysis ProbabilityAnalysis,
+        IReadOnlyList<TheOddsLineShoppingBacktestRow> BacktestRows);
 
     private sealed record TheOddsEventPredictionWorkflowRow(
         Guid PropId,

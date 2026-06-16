@@ -155,7 +155,22 @@ Invoke-RestMethod -Uri "http://localhost:5299/api/debug/predictions/backtest"
 The Odds line-shopping backtest:
 
 ```powershell
-Invoke-RestMethod -Uri "http://localhost:5299/api/debug/the-odds/mlb/line-shopping-backtest"
+$runId = "PREDICTION_RUN_ID"
+$r = Invoke-RestMethod -Uri "http://localhost:5299/api/debug/the-odds/mlb/line-shopping-backtest?runId=$runId&sampleTake=25&includeSamples=true"
+$r | ConvertTo-Json -Depth 12 | Set-Content ".\tmp-analysis\the-odds-line-shopping-backtest-$runId.json"
+```
+
+The Odds line-shopping backtest resolves MLB result dates from persisted provider event-date metadata when available, otherwise it uses an MLB Eastern-date fallback so late UTC starts can still match the correct MLB slate date.
+Use the calibration fields such as `byModelProbabilityBucket`, `byProbabilityEdgeBucket`, `byTrustLevelAndPropType`, and `modelProbabilityCalibration` to review whether model probability, edge, and trust labels are ranking outcomes correctly before changing recommendation rules.
+Use `strategySimulations` to compare read-only candidate filters. Add `strategyOnly=true` for a smaller payload, or pass filters such as `bookmaker=DraftKings`, `propType=Total%20Bases`, `line=1.5`, and `minBestPrice=1.75` to produce the `queryFilteredStrategy` row.
+
+Persist strategy simulation snapshots after a slate is graded:
+
+```powershell
+$runId = "PREDICTION_RUN_ID"
+Invoke-RestMethod -Method Post -Uri "http://localhost:5299/api/debug/the-odds/mlb/line-shopping-backtest/strategy-snapshot?runId=$runId"
+Invoke-RestMethod -Uri "http://localhost:5299/api/debug/the-odds/mlb/line-shopping-backtest/strategy-snapshots?runId=$runId"
+Invoke-RestMethod -Uri "http://localhost:5299/api/debug/the-odds/mlb/line-shopping-backtest/strategy-performance-summary"
 ```
 
 Underdog EV research backtests:

@@ -26,6 +26,7 @@ public sealed class ApplicationDbContext(DbContextOptions<ApplicationDbContext> 
     public DbSet<PredictionRun> PredictionRuns => Set<PredictionRun>();
     public DbSet<Prediction> Predictions => Set<Prediction>();
     public DbSet<PredictionRunSkipCount> PredictionRunSkipCounts => Set<PredictionRunSkipCount>();
+    public DbSet<LineShoppingStrategyBacktestSnapshot> LineShoppingStrategyBacktestSnapshots => Set<LineShoppingStrategyBacktestSnapshot>();
     public DbSet<IngestionRun> IngestionRuns => Set<IngestionRun>();
     public DbSet<RawIngestionPayload> RawIngestionPayloads => Set<RawIngestionPayload>();
     public DbSet<CorrelationPair> CorrelationPairs => Set<CorrelationPair>();
@@ -373,6 +374,29 @@ public sealed class ApplicationDbContext(DbContextOptions<ApplicationDbContext> 
             entity.Property(x => x.Reason).HasMaxLength(100).IsRequired();
             entity.HasOne(x => x.PredictionRun).WithMany(x => x.SkipCounts).HasForeignKey(x => x.PredictionRunId);
             entity.HasIndex(x => new { x.PredictionRunId, x.Reason }).IsUnique();
+        });
+
+        modelBuilder.Entity<LineShoppingStrategyBacktestSnapshot>(entity =>
+        {
+            entity.ToTable("line_shopping_strategy_backtest_snapshots");
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.Sport).HasMaxLength(50).IsRequired();
+            entity.Property(x => x.StrategyName).HasMaxLength(200).IsRequired();
+            entity.Property(x => x.Description).HasMaxLength(1000).IsRequired();
+            entity.Property(x => x.HitRate).HasPrecision(8, 6);
+            entity.Property(x => x.SimulatedProfit).HasPrecision(18, 4);
+            entity.Property(x => x.SimulatedRoi).HasPrecision(8, 6);
+            entity.Property(x => x.AverageBestEstimatedEv).HasPrecision(18, 6);
+            entity.Property(x => x.AverageBestProbability).HasPrecision(8, 6);
+            entity.Property(x => x.AverageBestImpliedProbability).HasPrecision(8, 6);
+            entity.Property(x => x.AverageProbabilityEdge).HasPrecision(8, 6);
+            entity.Property(x => x.AverageHistoricalSampleSize).HasPrecision(18, 2);
+            entity.Property(x => x.AverageBestPrice).HasPrecision(18, 6);
+            entity.HasOne(x => x.PredictionRun).WithMany().HasForeignKey(x => x.RunId);
+            entity.HasIndex(x => new { x.RunId, x.StrategyName, x.GeneratedAt }).IsUnique();
+            entity.HasIndex(x => new { x.Sport, x.SlateDate });
+            entity.HasIndex(x => x.StrategyName);
+            entity.HasIndex(x => x.CreatedAt);
         });
     }
 

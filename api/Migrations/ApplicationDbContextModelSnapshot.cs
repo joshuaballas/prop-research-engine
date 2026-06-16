@@ -590,6 +590,261 @@ namespace SportsBetting.Api.Migrations
                     b.ToTable("line_movements", (string)null);
                 });
 
+            modelBuilder.Entity("SportsBetting.Api.Models.LineShoppingStrategyBacktestSnapshot", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<decimal?>("AverageBestEstimatedEv")
+                        .HasPrecision(18, 6)
+                        .HasColumnType("numeric(18,6)")
+                        .HasColumnName("average_best_estimated_ev");
+
+                    b.Property<decimal?>("AverageBestImpliedProbability")
+                        .HasPrecision(8, 6)
+                        .HasColumnType("numeric(8,6)")
+                        .HasColumnName("average_best_implied_probability");
+
+                    b.Property<decimal?>("AverageBestPrice")
+                        .HasPrecision(18, 6)
+                        .HasColumnType("numeric(18,6)")
+                        .HasColumnName("average_best_price");
+
+                    b.Property<decimal?>("AverageBestProbability")
+                        .HasPrecision(8, 6)
+                        .HasColumnType("numeric(8,6)")
+                        .HasColumnName("average_best_probability");
+
+                    b.Property<decimal>("AverageHistoricalSampleSize")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("numeric(18,2)")
+                        .HasColumnName("average_historical_sample_size");
+
+                    b.Property<decimal?>("AverageProbabilityEdge")
+                        .HasPrecision(8, 6)
+                        .HasColumnType("numeric(8,6)")
+                        .HasColumnName("average_probability_edge");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<string>("Description")
+                        .IsRequired()
+                        .HasMaxLength(1000)
+                        .HasColumnType("character varying(1000)")
+                        .HasColumnName("description");
+
+                    b.Property<DateTimeOffset>("GeneratedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("generated_at");
+
+                    b.Property<int>("GradedGroups")
+                        .HasColumnType("integer")
+                        .HasColumnName("graded_groups");
+
+                    b.Property<decimal>("HitRate")
+                        .HasPrecision(8, 6)
+                        .HasColumnType("numeric(8,6)")
+                        .HasColumnName("hit_rate");
+
+                    b.Property<int>("Losses")
+                        .HasColumnType("integer")
+                        .HasColumnName("losses");
+
+                    b.Property<int>("Pushes")
+                        .HasColumnType("integer")
+                        .HasColumnName("pushes");
+
+                    b.Property<Guid>("RunId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("run_id");
+
+                    b.Property<decimal>("SimulatedProfit")
+                        .HasPrecision(18, 4)
+                        .HasColumnType("numeric(18,4)")
+                        .HasColumnName("simulated_profit");
+
+                    b.Property<decimal>("SimulatedRoi")
+                        .HasPrecision(8, 6)
+                        .HasColumnType("numeric(8,6)")
+                        .HasColumnName("simulated_roi");
+
+                    b.Property<DateOnly?>("SlateDate")
+                        .HasColumnType("date")
+                        .HasColumnName("slate_date");
+
+                    b.Property<string>("Sport")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("character varying(50)")
+                        .HasColumnName("sport");
+
+                    b.Property<string>("StrategyName")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("strategy_name");
+
+                    b.Property<int>("TotalGroups")
+                        .HasColumnType("integer")
+                        .HasColumnName("total_groups");
+
+                    b.Property<int>("Wins")
+                        .HasColumnType("integer")
+                        .HasColumnName("wins");
+
+                    b.HasKey("Id")
+                        .HasName("pk_line_shopping_strategy_backtest_snapshots");
+
+                    b.HasIndex("CreatedAt")
+                        .HasDatabaseName("ix_line_shopping_strategy_backtest_snapshots_created_at");
+
+                    b.HasIndex("StrategyName")
+                        .HasDatabaseName("ix_line_shopping_strategy_backtest_snapshots_strategy_name");
+
+                    b.HasIndex("Sport", "SlateDate")
+                        .HasDatabaseName("ix_line_shopping_strategy_backtest_snapshots_sport_slate_date");
+
+                    b.HasIndex("RunId", "StrategyName", "GeneratedAt")
+                        .IsUnique()
+                        .HasDatabaseName("ix_line_shopping_strategy_backtest_snapshots_run_id_strategy_n");
+
+                    b.ToTable("line_shopping_strategy_backtest_snapshots", (string)null);
+                });
+
+            modelBuilder.Entity("SportsBetting.Api.Models.MlbResultImportDateState", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<int>("Attempts")
+                        .HasColumnType("integer")
+                        .HasColumnName("attempts");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<DateOnly>("EventDate")
+                        .HasColumnType("date")
+                        .HasColumnName("event_date");
+
+                    b.Property<DateTimeOffset?>("LastAttemptedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("last_attempted_at");
+
+                    b.Property<string>("LastErrorMessage")
+                        .HasColumnType("text")
+                        .HasColumnName("last_error_message");
+
+                    b.Property<DateTimeOffset?>("LastSuccessfulAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("last_successful_at");
+
+                    b.Property<int>("RecordsFound")
+                        .HasColumnType("integer")
+                        .HasColumnName("records_found");
+
+                    b.Property<int>("RecordsInserted")
+                        .HasColumnType("integer")
+                        .HasColumnName("records_inserted");
+
+                    b.Property<int>("RecordsMapped")
+                        .HasColumnType("integer")
+                        .HasColumnName("records_mapped");
+
+                    b.Property<int>("RecordsUpdated")
+                        .HasColumnType("integer")
+                        .HasColumnName("records_updated");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("character varying(50)")
+                        .HasColumnName("status");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at");
+
+                    b.HasKey("Id")
+                        .HasName("pk_mlb_result_import_date_states");
+
+                    b.HasIndex("EventDate")
+                        .IsUnique()
+                        .HasDatabaseName("ix_mlb_result_import_date_states_event_date");
+
+                    b.HasIndex("Status", "EventDate")
+                        .HasDatabaseName("ix_mlb_result_import_date_states_status_event_date");
+
+                    b.ToTable("mlb_result_import_date_states", (string)null);
+                });
+
+            modelBuilder.Entity("SportsBetting.Api.Models.MlbResultImportState", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<DateTimeOffset?>("LastCompletedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("last_completed_at");
+
+                    b.Property<string>("LastErrorMessage")
+                        .HasColumnType("text")
+                        .HasColumnName("last_error_message");
+
+                    b.Property<DateTimeOffset?>("LastStartedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("last_started_at");
+
+                    b.Property<string>("LastStatus")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("character varying(50)")
+                        .HasColumnName("last_status");
+
+                    b.Property<DateOnly?>("LastSuccessfulImportDate")
+                        .HasColumnType("date")
+                        .HasColumnName("last_successful_import_date");
+
+                    b.Property<DateTimeOffset?>("LastSuccessfulRunAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("last_successful_run_at");
+
+                    b.Property<string>("Source")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("character varying(50)")
+                        .HasColumnName("source");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at");
+
+                    b.HasKey("Id")
+                        .HasName("pk_mlb_result_import_states");
+
+                    b.HasIndex("LastSuccessfulImportDate")
+                        .HasDatabaseName("ix_mlb_result_import_states_last_successful_import_date");
+
+                    b.HasIndex("Source")
+                        .IsUnique()
+                        .HasDatabaseName("ix_mlb_result_import_states_source");
+
+                    b.ToTable("mlb_result_import_states", (string)null);
+                });
+
             modelBuilder.Entity("SportsBetting.Api.Models.OptimizedEntry", b =>
                 {
                     b.Property<Guid>("Id")
@@ -841,136 +1096,6 @@ namespace SportsBetting.Api.Migrations
                         .HasDatabaseName("ix_platform_props_platform_id_platform_prop_id");
 
                     b.ToTable("platform_props", (string)null);
-                });
-
-            modelBuilder.Entity("SportsBetting.Api.Models.MlbResultImportDateState", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("uuid")
-                        .HasColumnName("id");
-
-                    b.Property<int>("Attempts")
-                        .HasColumnType("integer")
-                        .HasColumnName("attempts");
-
-                    b.Property<DateTimeOffset>("CreatedAt")
-                        .HasColumnType("timestamp with time zone")
-                        .HasColumnName("created_at");
-
-                    b.Property<DateOnly>("EventDate")
-                        .HasColumnType("date")
-                        .HasColumnName("event_date");
-
-                    b.Property<DateTimeOffset?>("LastAttemptedAt")
-                        .HasColumnType("timestamp with time zone")
-                        .HasColumnName("last_attempted_at");
-
-                    b.Property<string>("LastErrorMessage")
-                        .HasColumnType("text")
-                        .HasColumnName("last_error_message");
-
-                    b.Property<DateTimeOffset?>("LastSuccessfulAt")
-                        .HasColumnType("timestamp with time zone")
-                        .HasColumnName("last_successful_at");
-
-                    b.Property<int>("RecordsFound")
-                        .HasColumnType("integer")
-                        .HasColumnName("records_found");
-
-                    b.Property<int>("RecordsInserted")
-                        .HasColumnType("integer")
-                        .HasColumnName("records_inserted");
-
-                    b.Property<int>("RecordsMapped")
-                        .HasColumnType("integer")
-                        .HasColumnName("records_mapped");
-
-                    b.Property<int>("RecordsUpdated")
-                        .HasColumnType("integer")
-                        .HasColumnName("records_updated");
-
-                    b.Property<string>("Status")
-                        .IsRequired()
-                        .HasMaxLength(50)
-                        .HasColumnType("character varying(50)")
-                        .HasColumnName("status");
-
-                    b.Property<DateTimeOffset>("UpdatedAt")
-                        .HasColumnType("timestamp with time zone")
-                        .HasColumnName("updated_at");
-
-                    b.HasKey("Id")
-                        .HasName("pk_mlb_result_import_date_states");
-
-                    b.HasIndex("EventDate")
-                        .IsUnique()
-                        .HasDatabaseName("ix_mlb_result_import_date_states_event_date");
-
-                    b.HasIndex("Status", "EventDate")
-                        .HasDatabaseName("ix_mlb_result_import_date_states_status_event_date");
-
-                    b.ToTable("mlb_result_import_date_states", (string)null);
-                });
-
-            modelBuilder.Entity("SportsBetting.Api.Models.MlbResultImportState", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("uuid")
-                        .HasColumnName("id");
-
-                    b.Property<DateTimeOffset>("CreatedAt")
-                        .HasColumnType("timestamp with time zone")
-                        .HasColumnName("created_at");
-
-                    b.Property<DateTimeOffset?>("LastCompletedAt")
-                        .HasColumnType("timestamp with time zone")
-                        .HasColumnName("last_completed_at");
-
-                    b.Property<string>("LastErrorMessage")
-                        .HasColumnType("text")
-                        .HasColumnName("last_error_message");
-
-                    b.Property<DateOnly?>("LastSuccessfulImportDate")
-                        .HasColumnType("date")
-                        .HasColumnName("last_successful_import_date");
-
-                    b.Property<DateTimeOffset?>("LastSuccessfulRunAt")
-                        .HasColumnType("timestamp with time zone")
-                        .HasColumnName("last_successful_run_at");
-
-                    b.Property<DateTimeOffset?>("LastStartedAt")
-                        .HasColumnType("timestamp with time zone")
-                        .HasColumnName("last_started_at");
-
-                    b.Property<string>("LastStatus")
-                        .IsRequired()
-                        .HasMaxLength(50)
-                        .HasColumnType("character varying(50)")
-                        .HasColumnName("last_status");
-
-                    b.Property<string>("Source")
-                        .IsRequired()
-                        .HasMaxLength(50)
-                        .HasColumnType("character varying(50)")
-                        .HasColumnName("source");
-
-                    b.Property<DateTimeOffset>("UpdatedAt")
-                        .HasColumnType("timestamp with time zone")
-                        .HasColumnName("updated_at");
-
-                    b.HasKey("Id")
-                        .HasName("pk_mlb_result_import_states");
-
-                    b.HasIndex("LastSuccessfulImportDate")
-                        .HasDatabaseName("ix_mlb_result_import_states_last_successful_import_date");
-
-                    b.HasIndex("Source")
-                        .IsUnique()
-                        .HasDatabaseName("ix_mlb_result_import_states_source");
-
-                    b.ToTable("mlb_result_import_states", (string)null);
                 });
 
             modelBuilder.Entity("SportsBetting.Api.Models.Player", b =>
@@ -1843,6 +1968,18 @@ namespace SportsBetting.Api.Migrations
                     b.Navigation("PlatformProp");
                 });
 
+            modelBuilder.Entity("SportsBetting.Api.Models.LineShoppingStrategyBacktestSnapshot", b =>
+                {
+                    b.HasOne("SportsBetting.Api.Models.PredictionRun", "PredictionRun")
+                        .WithMany()
+                        .HasForeignKey("RunId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
+                        .HasConstraintName("fk_line_shopping_strategy_backtest_snapshots_prediction_runs_r");
+
+                    b.Navigation("PredictionRun");
+                });
+
             modelBuilder.Entity("SportsBetting.Api.Models.OptimizedEntry", b =>
                 {
                     b.HasOne("SportsBetting.Api.Models.Platform", "Platform")
@@ -2167,18 +2304,18 @@ namespace SportsBetting.Api.Migrations
                     b.Navigation("Props");
                 });
 
-            modelBuilder.Entity("SportsBetting.Api.Models.Prop", b =>
-                {
-                    b.Navigation("PlatformProps");
-
-                    b.Navigation("Predictions");
-                });
-
             modelBuilder.Entity("SportsBetting.Api.Models.PredictionRun", b =>
                 {
                     b.Navigation("Predictions");
 
                     b.Navigation("SkipCounts");
+                });
+
+            modelBuilder.Entity("SportsBetting.Api.Models.Prop", b =>
+                {
+                    b.Navigation("PlatformProps");
+
+                    b.Navigation("Predictions");
                 });
 
             modelBuilder.Entity("SportsBetting.Api.Models.PropType", b =>
