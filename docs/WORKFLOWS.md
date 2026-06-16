@@ -60,6 +60,8 @@ Invoke-RestMethod `
 
 Use this when you want the dashboard to produce active strategy-aware candidates for the current MLB slate. The dry-run form does not call The Odds API and does not write rows. Live refresh spends The Odds API credits, persists/refreshes The Odds market rows, generates a scoped prediction run, and returns line-shopping strategy summaries for that run. Live refresh requires `forceLive=true`; calls without it are blocked before any provider request.
 
+This is a debug/admin workflow. A production frontend should not call this endpoint. Production users should read latest persisted odds, predictions, line-shopping groups, top picks, and freshness metadata from read-only endpoints populated by a scheduled backend refresh process.
+
 The current refresh endpoint supports profiling options:
 
 ```powershell

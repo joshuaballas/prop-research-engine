@@ -4,27 +4,31 @@ This backlog is intentionally practical and ordered around current MLB research 
 
 ## Near-Term
 
-1. Backtest The Odds line-shopping after the 2026-06-15 results import.
+1. Implement scheduled The Odds refresh worker and production read-only endpoints.
+   - Impact: prevents frontend users from spending The Odds API credits and gives all users the same latest persisted odds, predictions, line-shopping groups, top picks, and freshness metadata.
+   - Dependency: current debug refresh workflow, force-live safety gate, lifecycle metadata, and agreed refresh cadence/provider preset.
+
+2. Backtest The Odds line-shopping after the 2026-06-15 results import.
    - Impact: validates the first persisted standard bookmaker line-shopping loop.
    - Dependency: MLB result import for completed games.
 
-2. Verify lifecycle behavior after the first ingested game starts.
+3. Verify lifecycle behavior after the first ingested game starts.
    - Impact: ensures stale/game-started rows leave the default active recommendation view.
    - Dependency: persisted The Odds event with start time and snapshots.
 
-3. Add a "Model Performance / If You Followed Picks" research page.
+4. Add a "Model Performance / If You Followed Picks" research page.
    - Impact: makes backtests understandable without raw JSON.
    - Dependency: stable line-shopping backtest output.
 
-4. Start paper bet tracking.
+5. Start paper bet tracking.
    - Impact: validates recommendations prospectively, not just retrospectively.
    - Dependency: clear lifecycle state and selected recommendation rules.
 
-5. Harden line lifecycle rules.
+6. Harden line lifecycle rules.
    - Impact: prevents stale or expired lines from being treated as active.
    - Dependency: observed timestamps and event start times.
 
-6. Continue The Odds player mapping cleanup for remaining safe cases.
+7. Continue The Odds player mapping cleanup for remaining safe cases.
    - Impact: improves prediction coverage.
    - Dependency: candidate endpoints and manual review.
 
@@ -79,6 +83,7 @@ This backlog is intentionally practical and ordered around current MLB research 
 ## Do Not Do Yet
 
 - Do not add direct PrizePicks scraping, browser automation, or provider-specific bypass work.
+- Do not let public frontend routes trigger The Odds API provider refreshes.
 - Do not enable The Odds worker live polling without explicit credit/ops readiness.
 - Do not present EV as proven profitable.
 - Do not auto-merge ambiguous players.

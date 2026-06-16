@@ -179,6 +179,23 @@ Retired:
 
 Workers should log caught exceptions to `application_errors` and continue or fail according to their existing behavior.
 
+## Production Data Delivery Direction
+
+The production architecture should use scheduled backend refreshes plus read-only frontend endpoints.
+
+Frontend users should not trigger The Odds API provider refreshes. Provider refreshes spend credits and should not happen per user, page load, filter change, or button click in a public product UI.
+
+Target flow:
+
+1. A scheduled backend worker or admin process refreshes The Odds API data on a controlled cadence.
+2. The worker uses configurable interval, bookmaker/provider preset, markets, concurrency, and credit caps.
+3. The worker fetches provider odds once per interval, persists normalized platform props and snapshots, generates scoped predictions, builds line-shopping/top-pick outputs, and records freshness metadata.
+4. All users read the same latest persisted odds, predictions, line-shopping groups, and top picks.
+5. Frontend product routes call only read-only internal endpoints.
+6. UI displays `lastRefreshedAt`, line freshness, stale-data warnings, and game-started/expired lifecycle state.
+
+The existing `refresh-current` debug/admin endpoint remains useful for manual controlled refreshes and requires `forceLive=true` for live provider calls. It is not the target frontend data path.
+
 ## Error Logging
 
 Unhandled API exceptions pass through global middleware and are persisted to `application_errors` with a correlation id. Normal client request cancellations are not treated as application failures. Background workers also log caught exceptions.

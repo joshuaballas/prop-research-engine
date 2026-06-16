@@ -32,6 +32,7 @@ Provider notes:
 
 - PrizePicks support comes only through The Odds API `us_dfs` feed when configured.
 - The Odds API automated ingestion worker exists only as a guarded skeleton and is disabled by default.
+- Production direction is scheduled backend The Odds refreshes plus read-only frontend endpoints. Public frontend users should not trigger provider refreshes or spend provider credits.
 - EV persistence is not implemented. EV diagnostics are research-only.
 
 ## How To Run Locally
@@ -85,6 +86,14 @@ The normal MLB research loop is:
 8. Run line-shopping/backtest diagnostics.
 
 See [WORKFLOWS.md](WORKFLOWS.md) for command-level details.
+
+## Production Direction
+
+For a real product, The Odds API refreshes should run from a scheduled backend worker or admin process on a controlled cadence. The worker should refresh provider data once per interval, persist normalized rows, generate predictions, build line-shopping/top-pick outputs, and update freshness metadata.
+
+Frontend users should only call read-only endpoints that return the latest persisted odds, predictions, line-shopping groups, top picks, and freshness state. All users should see the same latest persisted data. The UI should show last refreshed time, stale-data warnings, and game-started/expired lifecycle labels.
+
+The existing debug/admin `refresh-current` endpoint remains for manual controlled refreshes and requires `forceLive=true` for live provider calls. It should not be called by a public frontend.
 
 ## Automatic Vs Manual
 
