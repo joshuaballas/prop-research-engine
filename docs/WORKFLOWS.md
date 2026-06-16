@@ -58,12 +58,12 @@ Invoke-RestMethod `
 
 ## Refresh Current MLB Recommendations
 
-Use this when you want the dashboard to produce active strategy-aware candidates for the current MLB slate. The dry-run form does not call The Odds API and does not write rows. The live form spends The Odds API credits, persists/refreshes The Odds market rows, generates a scoped prediction run, and returns line-shopping strategy summaries for that run.
+Use this when you want the dashboard to produce active strategy-aware candidates for the current MLB slate. The dry-run form does not call The Odds API and does not write rows. Live refresh spends The Odds API credits, persists/refreshes The Odds market rows, generates a scoped prediction run, and returns line-shopping strategy summaries for that run. Live refresh requires `forceLive=true`; calls without it are blocked before any provider request.
 
 The current refresh endpoint supports profiling options:
 
 ```powershell
-$r = Invoke-RestMethod -Method Post -Uri "http://localhost:5299/api/debug/the-odds/mlb/recommendations/refresh-current?includeCandidates=true&includeLineShopping=true&includeFullDiagnostics=true&freshnessMinutes=30"
+$r = Invoke-RestMethod -Method Post -Uri "http://localhost:5299/api/debug/the-odds/mlb/recommendations/refresh-current?forceLive=true&includeCandidates=true&includeLineShopping=true&includeFullDiagnostics=true&freshnessMinutes=30"
 $r.diagnostics | ConvertTo-Json -Depth 8
 ```
 
@@ -104,7 +104,7 @@ Live refresh:
 ```powershell
 $refresh = Invoke-RestMethod `
   -Method Post `
-  -Uri "http://localhost:5299/api/debug/the-odds/mlb/recommendations/refresh-current?includeCandidates=true&freshnessMinutes=30"
+  -Uri "http://localhost:5299/api/debug/the-odds/mlb/recommendations/refresh-current?forceLive=true&includeCandidates=true&freshnessMinutes=30"
 
 $refresh.predictionRunId
 $refresh.strategyClassificationSummary
@@ -125,7 +125,7 @@ $dryRun.diagnostics | ConvertTo-Json -Depth 8
 ```powershell
 $refresh = Invoke-RestMethod `
   -Method Post `
-  -Uri "http://localhost:5299/api/debug/the-odds/mlb/recommendations/refresh-current?bookmakerPreset=dfsOnly&includeCandidates=true&includeLineShopping=true&includeFullDiagnostics=true&freshnessMinutes=30"
+  -Uri "http://localhost:5299/api/debug/the-odds/mlb/recommendations/refresh-current?forceLive=true&bookmakerPreset=dfsOnly&includeCandidates=true&includeLineShopping=true&includeFullDiagnostics=true&freshnessMinutes=30"
 
 $refresh.diagnostics | Select-Object `
   dfsBookmakersRequested,
@@ -143,7 +143,7 @@ $refresh.topActiveCandidates |
 $refresh | ConvertTo-Json -Depth 20 | Set-Content ".\tmp-analysis\current-mlb-dfs-refresh.json"
 ```
 
-Old PrizePicks direct scraping remains retired. PrizePicks DFS support should come from The Odds API region `us_dfs` with bookmaker key `prizepicks`. DFS odds are indicative and can vary based on user selections.
+Old PrizePicks direct scraping is deprecated and scheduled for complete removal. PrizePicks DFS support should come from The Odds API region `us_dfs` with bookmaker key `prizepicks`. DFS odds are indicative and can vary based on user selections.
 
 ## Expand The Odds Bookmaker Coverage Safely
 

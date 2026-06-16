@@ -103,14 +103,14 @@ http://localhost:5299/research
 
 `/research` and `/api/debug/*` are internal/admin surfaces. Outside Development they are blocked unless `DebugAdmin` is explicitly enabled and the correct admin key is provided.
 
-Retired PrizePicks direct ingestion endpoints:
+Deprecated PrizePicks direct ingestion endpoints scheduled for removal:
 
 - `GET /api/debug/prizepicks`
 - `POST /api/debug/prizepicks/ingest`
 
-PrizePicks direct ingestion is disabled. These endpoints return a disabled response and do not call PrizePicks.
+PrizePicks direct ingestion is deprecated and scheduled for complete removal. These endpoints return a disabled response and do not call PrizePicks.
 
-PrizePicks background ingestion is not configured through committed appsettings. Do not add active PrizePicks config unless an official or otherwise allowed stable data source is available.
+PrizePicks background ingestion is not configured through committed appsettings. Do not add active PrizePicks config or new dependencies on the old direct ingestion path. PrizePicks support should come through The Odds API `us_dfs`.
 
 ## Underdog Background Ingestion Worker
 

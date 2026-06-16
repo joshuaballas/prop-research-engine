@@ -2672,6 +2672,7 @@ public static class TheOddsApiDebugEndpoints
         bool? includeFullDiagnostics,
         bool? includeDfs,
         string? bookmakerPreset,
+        bool? forceLive,
         int? freshnessMinutes,
             IOptions<TheOddsIngestionWorkerOptions> workerOptions,
             IOptions<TheOddsApiOptions> theOddsApiOptions,
@@ -2721,6 +2722,10 @@ public static class TheOddsApiDebugEndpoints
                 shouldFetchSportsbookBookmakers,
                 includeDfsBookmakers && !string.IsNullOrWhiteSpace(dfsBookmakers));
             var scopedBookmakerKeys = BuildTheOddsBookmakerKeyScope(bookmakers, includeDfsBookmakers ? dfsBookmakers : null);
+            var providerRegionsEnabled = BuildTheOddsProviderRegionsEnabled(
+                shouldFetchSportsbookBookmakers,
+                includeDfsBookmakers && !string.IsNullOrWhiteSpace(dfsBookmakers),
+                dfsRegion);
             var requestedMarkets = ParseCommaSeparatedSet(markets);
             var requestedPropTypes = requestedMarkets
                 .Select(NormalizeTheOddsMarketKeyToPropType)
@@ -2732,7 +2737,16 @@ public static class TheOddsApiDebugEndpoints
                 : bookmakers;
             stepStopwatch.Restart();
             var existingSlateProps = await CountPersistedTheOddsPropsForSlateAsync(dbContext, slateDate, cancellationToken);
+            var estimatedSlateEvents = await CountPersistedTheOddsEventsForSlateAsync(dbContext, slateDate, cancellationToken);
             var countExistingSlatePropsMs = stepStopwatch.ElapsedMilliseconds;
+            var estimatedApiCallShape = new
+            {
+                events = 1,
+                sportsbookEventOddsPerSlateEvent = shouldFetchSportsbookBookmakers ? 1 : 0,
+                dfsEventOddsPerSlateEvent = includeDfsBookmakers ? 1 : 0,
+                note = "Live estimate is 1 event-list request plus one event-odds request per slate event for each enabled provider region. Slate event count is estimated from persisted The Odds rows when blocking before provider calls."
+            };
+            var estimatedApiCalls = 1 + (estimatedSlateEvents * ((shouldFetchSportsbookBookmakers ? 1 : 0) + (includeDfsBookmakers ? 1 : 0)));
 
             if (isDryRun)
             {
@@ -2778,6 +2792,7 @@ public static class TheOddsApiDebugEndpoints
                         effectiveDfsBookmakers = dfsBookmakers,
                         includeDfs = includeDfsBookmakers,
                         dfsRegion,
+                        providerRegionsEnabled,
                         configuredMarkets = markets,
                         bookmakersRequested = requestedBookmakers,
                         marketsRequested = requestedMarkets,
@@ -2788,14 +2803,42 @@ public static class TheOddsApiDebugEndpoints
                         providerCategoriesIncluded,
                         maxConcurrentRequests,
                         existingPersistedTheOddsPropsForSlate = existingSlateProps,
-                        estimatedApiCalls = new
-                        {
-                            events = 1,
-                            sportsbookEventOddsPerSlateEvent = shouldFetchSportsbookBookmakers ? 1 : 0,
-                            dfsEventOddsPerSlateEvent = includeDfsBookmakers ? 1 : 0,
-                            note = "Live estimate is 1 event-list request plus one event-odds request per slate event for each enabled provider region."
-                        },
+                        estimatedSlateEvents,
+                        estimatedApiCalls,
+                        estimatedApiCallShape,
                         recommendedAction = "Run without dryRun only when you want to spend The Odds API credits and refresh persisted market rows."
+                    }
+                });
+            }
+
+            if (forceLive != true)
+            {
+                totalStopwatch.Stop();
+                return Results.Conflict(new
+                {
+                    success = false,
+                    blocked = true,
+                    blockReason = "Live The Odds API refresh requires forceLive=true because it spends provider credits and writes refreshed market rows.",
+                    wouldCallTheOddsApi = true,
+                    requiresForceLive = true,
+                    forceLive = forceLive == true,
+                    dryRun = false,
+                    bookmakerPreset = preset,
+                    providerRegionsEnabled,
+                    estimatedApiCalls,
+                    estimatedApiCallShape,
+                    estimatedSlateEvents,
+                    sportsbookBookmakersRequested = requestedBookmakers,
+                    dfsBookmakersRequested = requestedDfsBookmakers,
+                    diagnostics = new
+                    {
+                        callsTheOddsApi = false,
+                        wouldWriteRows = true,
+                        totalDurationMs = totalStopwatch.ElapsedMilliseconds,
+                        resolveSlateDateMs,
+                        countExistingSlatePropsMs,
+                        existingPersistedTheOddsPropsForSlate = existingSlateProps,
+                        message = "Request was blocked before any The Odds API calls. Re-run with dryRun=true for planning or forceLive=true for an explicit live refresh."
                     }
                 });
             }
@@ -3483,6 +3526,20 @@ public static class TheOddsApiDebugEndpoints
         var rows = await LoadTheOddsPlatformPropDataRowsAsync(dbContext, cancellationToken);
         return ParseTheOddsPlatformProps(rows)
             .Count(row => ResolveMlbSlateDate(row.EventStartTime) == slateDate);
+    }
+
+    private static async Task<int> CountPersistedTheOddsEventsForSlateAsync(
+        ApplicationDbContext dbContext,
+        DateOnly slateDate,
+        CancellationToken cancellationToken)
+    {
+        var rows = await LoadTheOddsPlatformPropDataRowsAsync(dbContext, cancellationToken);
+        return ParseTheOddsPlatformProps(rows)
+            .Where(row => ResolveMlbSlateDate(row.EventStartTime) == slateDate)
+            .Select(row => row.EventId)
+            .Where(value => !string.IsNullOrWhiteSpace(value))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Count();
     }
 
     private static async Task<TheOddsCurrentRecommendationLineShoppingResult> BuildCurrentRecommendationLineShoppingResultAsync(
@@ -8630,6 +8687,34 @@ public static class TheOddsApiDebugEndpoints
         }
 
         return providerCategories;
+    }
+
+    private static object[] BuildTheOddsProviderRegionsEnabled(
+        bool includeSportsbook,
+        bool includeDfs,
+        string dfsRegion)
+    {
+        var regions = new List<object>(capacity: 2);
+
+        if (includeSportsbook)
+        {
+            regions.Add(new
+            {
+                providerCategory = "Sportsbook",
+                region = "us"
+            });
+        }
+
+        if (includeDfs)
+        {
+            regions.Add(new
+            {
+                providerCategory = "DFS",
+                region = dfsRegion
+            });
+        }
+
+        return regions.ToArray();
     }
 
     private static IReadOnlyList<string> BuildTheOddsBookmakerKeyScope(params string?[] bookmakerLists)

@@ -508,6 +508,9 @@ async function refreshCurrentMlbRecommendations(dryRun) {
     params.set("freshnessMinutes", "30");
     params.set("includeDfs", els.refreshCurrentMlbIncludeDfs.checked ? "true" : "false");
     params.set("bookmakerPreset", els.refreshCurrentMlbBookmakerPreset.value || "default");
+    if (!dryRun) {
+        params.set("forceLive", "true");
+    }
 
     setTheOddsManualStatus(dryRun ? "Planning refresh" : "Refreshing current slate", "warn");
     els.theOddsPredictionSummary.innerHTML = metricRow(

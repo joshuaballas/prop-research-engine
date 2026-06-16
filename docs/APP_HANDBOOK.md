@@ -30,7 +30,7 @@ Working today:
 
 Disabled or retired:
 
-- PrizePicks direct ingestion is disabled and retired because of DataDome blocking. Do not attempt bypass work. PrizePicks support should use The Odds API `us_dfs` feed when configured.
+- PrizePicks direct ingestion is deprecated and scheduled for complete removal because of DataDome blocking. Do not attempt bypass work. PrizePicks support should use The Odds API `us_dfs` feed when configured.
 - The Odds API automated ingestion worker exists only as a guarded skeleton and is disabled by default.
 - EV persistence is not implemented. EV diagnostics are research-only.
 
@@ -113,11 +113,12 @@ Disabled by default:
 - Outside Development, debug/admin routes are blocked unless `DebugAdmin.Enabled=true` and the correct `X-Debug-Admin-Key` header is supplied.
 - The Odds API calls spend credits. The dashboard must not call The Odds API on page load.
 - Use dry-run before committing The Odds API ingestion.
+- Live `refresh-current` calls require `forceLive=true`; calls without it are blocked before provider requests to avoid accidental credit spend.
 - Expanded and All bookmaker presets are opt-in because they can spend more credits and increase refresh time.
 - DFS rows from The Odds API use indicative odds and may vary based on user selections. Treat sportsbook rows as market context for a DFS-only user.
 - DFS entries are provider-scoped. Do not mix PrizePicks, Underdog, DraftKings Pick6, Betr Picks, or sportsbook-context legs in one future entry builder. Entry rules marked `NeedsVerification` must be confirmed before production use.
 - Generated endpoint outputs go under `tmp-analysis`; logs go under `logs`; temporary build outputs go under `tmp-build`.
-- Do not bypass DataDome or revive PrizePicks scraping experiments.
+- Do not bypass DataDome, revive PrizePicks scraping experiments, or add new dependencies on the old direct PrizePicks path.
 - Do not treat EV outputs as production recommendations until backtests support them.
 - Non-standard market types should be visible as research rows, but not mislabeled as normal recommendations.
 
