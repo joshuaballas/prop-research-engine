@@ -116,6 +116,25 @@ Captured source payloads for ingestion runs. Useful for audit/debug, not a subst
 
 Tracks source ingestion runs and links raw payloads to platform/provider runs.
 
+### `the_odds_refresh_runs`
+
+Durable metadata for live The Odds MLB refresh attempts after they pass the `forceLive=true` gate. Dry-runs and blocked live-shaped calls do not write rows.
+
+Important fields include:
+
+- provider and sport,
+- slate date,
+- started/completed timestamps,
+- succeeded/failed/blocked flags,
+- bookmaker preset and requested sportsbook/DFS books,
+- requested markets,
+- estimated and actual API-call counts,
+- platform prop, prediction, line-shopping, and active candidate/watchlist/avoid counts,
+- error message,
+- diagnostics JSON.
+
+This table powers refresh/freshness status for production-style read-only frontend endpoints.
+
 ## Results
 
 ### `prop_results`

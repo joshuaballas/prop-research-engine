@@ -1837,6 +1837,156 @@ namespace SportsBetting.Api.Migrations
                     b.ToTable("teams", (string)null);
                 });
 
+            modelBuilder.Entity("SportsBetting.Api.Models.TheOddsRefreshRun", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<int>("ActiveAvoidCount")
+                        .HasColumnType("integer")
+                        .HasColumnName("active_avoid_count");
+
+                    b.Property<int>("ActiveCandidateCount")
+                        .HasColumnType("integer")
+                        .HasColumnName("active_candidate_count");
+
+                    b.Property<int>("ActiveWatchlistCount")
+                        .HasColumnType("integer")
+                        .HasColumnName("active_watchlist_count");
+
+                    b.Property<int>("ActualApiCalls")
+                        .HasColumnType("integer")
+                        .HasColumnName("actual_api_calls");
+
+                    b.Property<bool>("Blocked")
+                        .HasColumnType("boolean")
+                        .HasColumnName("blocked");
+
+                    b.Property<string>("BookmakerPreset")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)")
+                        .HasColumnName("bookmaker_preset");
+
+                    b.Property<DateTimeOffset?>("CompletedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("completed_at_utc");
+
+                    b.Property<string>("DfsBookmakersRequested")
+                        .IsRequired()
+                        .HasMaxLength(1000)
+                        .HasColumnType("character varying(1000)")
+                        .HasColumnName("dfs_bookmakers_requested");
+
+                    b.Property<JsonDocument>("DiagnosticsJson")
+                        .HasColumnType("jsonb")
+                        .HasColumnName("diagnostics_json");
+
+                    b.Property<bool>("DryRun")
+                        .HasColumnType("boolean")
+                        .HasColumnName("dry_run");
+
+                    b.Property<string>("ErrorMessage")
+                        .HasColumnType("text")
+                        .HasColumnName("error_message");
+
+                    b.Property<int>("EstimatedApiCalls")
+                        .HasColumnType("integer")
+                        .HasColumnName("estimated_api_calls");
+
+                    b.Property<bool>("Failed")
+                        .HasColumnType("boolean")
+                        .HasColumnName("failed");
+
+                    b.Property<bool>("ForceLive")
+                        .HasColumnType("boolean")
+                        .HasColumnName("force_live");
+
+                    b.Property<int>("LineShoppingGroupCount")
+                        .HasColumnType("integer")
+                        .HasColumnName("line_shopping_group_count");
+
+                    b.Property<string>("MarketsRequested")
+                        .IsRequired()
+                        .HasMaxLength(2000)
+                        .HasColumnType("character varying(2000)")
+                        .HasColumnName("markets_requested");
+
+                    b.Property<int>("PlatformPropsCreated")
+                        .HasColumnType("integer")
+                        .HasColumnName("platform_props_created");
+
+                    b.Property<int>("PlatformPropsUpdated")
+                        .HasColumnType("integer")
+                        .HasColumnName("platform_props_updated");
+
+                    b.Property<int>("PlatformPropsUpserted")
+                        .HasColumnType("integer")
+                        .HasColumnName("platform_props_upserted");
+
+                    b.Property<int>("PredictionCount")
+                        .HasColumnType("integer")
+                        .HasColumnName("prediction_count");
+
+                    b.Property<string>("Provider")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)")
+                        .HasColumnName("provider");
+
+                    b.Property<string>("ProviderCategoriesIncluded")
+                        .IsRequired()
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)")
+                        .HasColumnName("provider_categories_included");
+
+                    b.Property<DateOnly>("SlateDate")
+                        .HasColumnType("date")
+                        .HasColumnName("slate_date");
+
+                    b.Property<string>("Sport")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("character varying(50)")
+                        .HasColumnName("sport");
+
+                    b.Property<string>("SportsbookBookmakersRequested")
+                        .IsRequired()
+                        .HasMaxLength(1000)
+                        .HasColumnType("character varying(1000)")
+                        .HasColumnName("sportsbook_bookmakers_requested");
+
+                    b.Property<DateTimeOffset>("StartedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("started_at_utc");
+
+                    b.Property<bool>("Succeeded")
+                        .HasColumnType("boolean")
+                        .HasColumnName("succeeded");
+
+                    b.HasKey("Id")
+                        .HasName("pk_the_odds_refresh_runs");
+
+                    b.HasIndex("CompletedAtUtc")
+                        .HasDatabaseName("ix_the_odds_refresh_runs_completed_at_utc");
+
+                    b.HasIndex("StartedAtUtc")
+                        .HasDatabaseName("ix_the_odds_refresh_runs_started_at_utc");
+
+                    b.HasIndex("BookmakerPreset", "StartedAtUtc")
+                        .HasDatabaseName("ix_the_odds_refresh_runs_bookmaker_preset_started_at_utc");
+
+                    b.HasIndex("Sport", "SlateDate")
+                        .HasDatabaseName("ix_the_odds_refresh_runs_sport_slate_date");
+
+                    b.HasIndex("Succeeded", "CompletedAtUtc")
+                        .HasDatabaseName("ix_the_odds_refresh_runs_succeeded_completed_at_utc");
+
+                    b.ToTable("the_odds_refresh_runs", (string)null);
+                });
+
             modelBuilder.Entity("SportsBetting.Api.Models.CorrelationPair", b =>
                 {
                     b.HasOne("SportsBetting.Api.Models.Prop", "PropA")

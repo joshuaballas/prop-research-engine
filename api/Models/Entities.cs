@@ -352,6 +352,38 @@ public sealed class LineShoppingStrategyBacktestSnapshot
     public PredictionRun? PredictionRun { get; set; }
 }
 
+public sealed class TheOddsRefreshRun
+{
+    public Guid Id { get; set; }
+    public string Provider { get; set; } = "The Odds API";
+    public string Sport { get; set; } = "MLB";
+    public DateOnly SlateDate { get; set; }
+    public DateTimeOffset StartedAtUtc { get; set; }
+    public DateTimeOffset? CompletedAtUtc { get; set; }
+    public bool Succeeded { get; set; }
+    public bool Failed { get; set; }
+    public bool Blocked { get; set; }
+    public bool DryRun { get; set; }
+    public bool ForceLive { get; set; }
+    public string BookmakerPreset { get; set; } = string.Empty;
+    public string ProviderCategoriesIncluded { get; set; } = string.Empty;
+    public string SportsbookBookmakersRequested { get; set; } = string.Empty;
+    public string DfsBookmakersRequested { get; set; } = string.Empty;
+    public string MarketsRequested { get; set; } = string.Empty;
+    public int EstimatedApiCalls { get; set; }
+    public int ActualApiCalls { get; set; }
+    public int PlatformPropsCreated { get; set; }
+    public int PlatformPropsUpdated { get; set; }
+    public int PlatformPropsUpserted { get; set; }
+    public int PredictionCount { get; set; }
+    public int LineShoppingGroupCount { get; set; }
+    public int ActiveCandidateCount { get; set; }
+    public int ActiveWatchlistCount { get; set; }
+    public int ActiveAvoidCount { get; set; }
+    public string? ErrorMessage { get; set; }
+    public JsonDocument? DiagnosticsJson { get; set; }
+}
+
 public sealed class IngestionRun
 {
     public Guid Id { get; set; }

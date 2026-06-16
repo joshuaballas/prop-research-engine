@@ -116,6 +116,15 @@ $refresh.topActiveCandidates | Select-Object -First 10
 $refresh | ConvertTo-Json -Depth 20 | Set-Content ".\tmp-analysis\current-mlb-recommendations-refresh.json"
 ```
 
+Check persisted refresh freshness without provider calls:
+
+```powershell
+Invoke-RestMethod -Uri "http://localhost:5299/api/debug/the-odds/mlb/refresh-freshness?freshnessMinutes=30" |
+  ConvertTo-Json -Depth 20
+```
+
+Only live refresh attempts that pass the `forceLive=true` gate write `the_odds_refresh_runs` rows. Dry-runs and blocked live-shaped calls remain no-write.
+
 DFS/pick'em refresh through The Odds API:
 
 ```powershell

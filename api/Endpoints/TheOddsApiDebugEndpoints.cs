@@ -996,6 +996,93 @@ public static partial class TheOddsApiDebugEndpoints
         .WithName("TheOddsApiMlbScheduledRefreshStatusDebug")
         .WithSummary("Read-only scheduled The Odds MLB refresh worker status. Does not call external APIs.");
 
+        endpoints.MapGet("/api/debug/the-odds/mlb/refresh-freshness", async (
+            DateOnly? slateDate,
+            string? bookmakerPreset,
+            int? freshnessMinutes,
+            ApplicationDbContext dbContext,
+            CancellationToken cancellationToken) =>
+        {
+            var generatedAtUtc = DateTimeOffset.UtcNow;
+            var thresholdMinutes = Math.Clamp(freshnessMinutes ?? DefaultTheOddsLineShoppingFreshnessMinutes, 1, 1440);
+            var query = dbContext.TheOddsRefreshRuns
+                .AsNoTracking()
+                .Where(row => row.Provider == "The Odds API" && row.Sport == "MLB");
+
+            if (slateDate.HasValue)
+            {
+                query = query.Where(row => row.SlateDate == slateDate.Value);
+            }
+
+            if (!string.IsNullOrWhiteSpace(bookmakerPreset))
+            {
+                query = query.Where(row => row.BookmakerPreset == bookmakerPreset);
+            }
+
+            var latestRun = await query
+                .OrderByDescending(row => row.StartedAtUtc)
+                .ThenByDescending(row => row.CompletedAtUtc)
+                .FirstOrDefaultAsync(cancellationToken);
+            var latestSuccessfulRun = await query
+                .Where(row => row.Succeeded)
+                .OrderByDescending(row => row.CompletedAtUtc)
+                .ThenByDescending(row => row.StartedAtUtc)
+                .FirstOrDefaultAsync(cancellationToken);
+            var latestFailedRun = await query
+                .Where(row => row.Failed)
+                .OrderByDescending(row => row.CompletedAtUtc)
+                .ThenByDescending(row => row.StartedAtUtc)
+                .FirstOrDefaultAsync(cancellationToken);
+
+            var latestSuccessfulAt = latestSuccessfulRun?.CompletedAtUtc ?? latestSuccessfulRun?.StartedAtUtc;
+            var minutesSinceLatestSuccessfulRefresh = latestSuccessfulAt.HasValue
+                ? Math.Round((generatedAtUtc - latestSuccessfulAt.Value).TotalMinutes, 2)
+                : (double?)null;
+            var isFresh = minutesSinceLatestSuccessfulRefresh.HasValue &&
+                minutesSinceLatestSuccessfulRefresh.Value <= thresholdMinutes;
+            var staleReason = latestSuccessfulRun is null
+                ? "No successful The Odds MLB refresh run has been recorded."
+                : isFresh
+                    ? null
+                    : $"Latest successful refresh is older than {thresholdMinutes} minutes.";
+
+            return Results.Ok(new
+            {
+                generatedAtUtc,
+                callsExternalApis = false,
+                readOnly = true,
+                filters = new
+                {
+                    slateDate,
+                    bookmakerPreset,
+                    freshnessMinutes = thresholdMinutes
+                },
+                latestRun = ToTheOddsRefreshRunSummary(latestRun),
+                latestSuccessfulRun = ToTheOddsRefreshRunSummary(latestSuccessfulRun),
+                latestFailedRun = ToTheOddsRefreshRunSummary(latestFailedRun),
+                minutesSinceLatestSuccessfulRefresh,
+                isFresh,
+                isStale = !isFresh,
+                staleReason,
+                freshnessThresholdMinutes = thresholdMinutes,
+                latestCounts = latestSuccessfulRun is null ? null : new
+                {
+                    latestSuccessfulRun.PlatformPropsCreated,
+                    latestSuccessfulRun.PlatformPropsUpdated,
+                    latestSuccessfulRun.PlatformPropsUpserted,
+                    latestSuccessfulRun.PredictionCount,
+                    latestSuccessfulRun.LineShoppingGroupCount,
+                    latestSuccessfulRun.ActiveCandidateCount,
+                    latestSuccessfulRun.ActiveWatchlistCount,
+                    latestSuccessfulRun.ActiveAvoidCount,
+                    latestSuccessfulRun.EstimatedApiCalls,
+                    latestSuccessfulRun.ActualApiCalls
+                }
+            });
+        })
+        .WithName("TheOddsApiMlbRefreshFreshnessDebug")
+        .WithSummary("Read-only persisted freshness metadata for The Odds MLB refresh runs.");
+
         endpoints.MapPost("/api/debug/the-odds/mlb/worker-dry-run", async (
             IOptions<TheOddsIngestionWorkerOptions> options,
             ITheOddsMlbIngestionPlanner planner,
@@ -2964,6 +3051,46 @@ public static partial class TheOddsApiDebugEndpoints
                     request = requestMetadata
                 }),
             cancellationToken);
+    }
+
+    private static object? ToTheOddsRefreshRunSummary(TheOddsRefreshRun? run)
+    {
+        if (run is null)
+        {
+            return null;
+        }
+
+        return new
+        {
+            run.Id,
+            run.Provider,
+            run.Sport,
+            run.SlateDate,
+            run.StartedAtUtc,
+            run.CompletedAtUtc,
+            run.Succeeded,
+            run.Failed,
+            run.Blocked,
+            run.DryRun,
+            run.ForceLive,
+            run.BookmakerPreset,
+            providerCategoriesIncluded = ParseCommaSeparatedSet(run.ProviderCategoriesIncluded),
+            sportsbookBookmakersRequested = ParseCommaSeparatedSet(run.SportsbookBookmakersRequested),
+            dfsBookmakersRequested = ParseCommaSeparatedSet(run.DfsBookmakersRequested),
+            marketsRequested = ParseCommaSeparatedSet(run.MarketsRequested),
+            run.EstimatedApiCalls,
+            run.ActualApiCalls,
+            run.PlatformPropsCreated,
+            run.PlatformPropsUpdated,
+            run.PlatformPropsUpserted,
+            run.PredictionCount,
+            run.LineShoppingGroupCount,
+            run.ActiveCandidateCount,
+            run.ActiveWatchlistCount,
+            run.ActiveAvoidCount,
+            run.ErrorMessage,
+            diagnostics = run.DiagnosticsJson
+        };
     }
 
     private static object BuildTheOddsProviderFailureResponse(TheOddsApiProviderException exception)

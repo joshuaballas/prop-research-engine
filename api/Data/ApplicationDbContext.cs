@@ -27,6 +27,7 @@ public sealed class ApplicationDbContext(DbContextOptions<ApplicationDbContext> 
     public DbSet<Prediction> Predictions => Set<Prediction>();
     public DbSet<PredictionRunSkipCount> PredictionRunSkipCounts => Set<PredictionRunSkipCount>();
     public DbSet<LineShoppingStrategyBacktestSnapshot> LineShoppingStrategyBacktestSnapshots => Set<LineShoppingStrategyBacktestSnapshot>();
+    public DbSet<TheOddsRefreshRun> TheOddsRefreshRuns => Set<TheOddsRefreshRun>();
     public DbSet<IngestionRun> IngestionRuns => Set<IngestionRun>();
     public DbSet<RawIngestionPayload> RawIngestionPayloads => Set<RawIngestionPayload>();
     public DbSet<CorrelationPair> CorrelationPairs => Set<CorrelationPair>();
@@ -397,6 +398,26 @@ public sealed class ApplicationDbContext(DbContextOptions<ApplicationDbContext> 
             entity.HasIndex(x => new { x.Sport, x.SlateDate });
             entity.HasIndex(x => x.StrategyName);
             entity.HasIndex(x => x.CreatedAt);
+        });
+
+        modelBuilder.Entity<TheOddsRefreshRun>(entity =>
+        {
+            entity.ToTable("the_odds_refresh_runs");
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.Provider).HasMaxLength(100).IsRequired();
+            entity.Property(x => x.Sport).HasMaxLength(50).IsRequired();
+            entity.Property(x => x.BookmakerPreset).HasMaxLength(100).IsRequired();
+            entity.Property(x => x.ProviderCategoriesIncluded).HasMaxLength(500).IsRequired();
+            entity.Property(x => x.SportsbookBookmakersRequested).HasMaxLength(1000).IsRequired();
+            entity.Property(x => x.DfsBookmakersRequested).HasMaxLength(1000).IsRequired();
+            entity.Property(x => x.MarketsRequested).HasMaxLength(2000).IsRequired();
+            entity.Property(x => x.ErrorMessage);
+            entity.Property(x => x.DiagnosticsJson).HasColumnType("jsonb");
+            entity.HasIndex(x => x.StartedAtUtc);
+            entity.HasIndex(x => x.CompletedAtUtc);
+            entity.HasIndex(x => new { x.Sport, x.SlateDate });
+            entity.HasIndex(x => new { x.BookmakerPreset, x.StartedAtUtc });
+            entity.HasIndex(x => new { x.Succeeded, x.CompletedAtUtc });
         });
     }
 
