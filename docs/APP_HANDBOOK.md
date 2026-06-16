@@ -73,6 +73,7 @@ Key config sections:
 - `MlbResultImportWorker`: controls MLB result import worker.
 - `TheOddsApi`: API key, base URL, sport key, regions, odds format, markets, and `MaxConcurrentRequests` for bounded parallel event-odds requests during explicit current-slate refreshes.
 - `TheOddsIngestionWorker`: disabled, dry-run-first worker skeleton. Its `Bookmakers` value is the conservative sportsbook context list used by manual/current The Odds MLB refresh workflows. `ExpandedBookmakers` is an opt-in expanded US sportsbook preset used only by `bookmakerPreset=expanded` or `bookmakerPreset=all`. `DfsRegion`, `DfsBookmakers`, and `IncludeDfsBookmakers` control optional DFS/pick'em rows through The Odds API `us_dfs`.
+- `TheOddsScheduledRefresh`: disabled-by-default scheduled refresh worker foundation. Defaults to `Enabled=false`, `BookmakerPreset=dfsOnly`, and `RequireForceLive=true`; the status endpoint is read-only and does not call external APIs.
 - `PredictionGeneration`: recommendation thresholds and enabled prop types.
 
 ## Major Workflows
@@ -121,6 +122,7 @@ Manual:
 Disabled by default:
 
 - The Odds API automated ingestion worker.
+- The Odds API scheduled refresh worker foundation.
 
 Not present:
 

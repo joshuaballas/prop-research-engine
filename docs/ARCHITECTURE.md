@@ -180,6 +180,7 @@ Hosted workers:
 - `UnderdogIngestionWorker`: enabled by default.
 - `MlbResultImportWorker`: enabled by default.
 - `TheOddsMlbIngestionWorker`: registered but disabled by default, dry-run-first skeleton.
+- `TheOddsMlbScheduledRefreshWorker`: registered but disabled by default. It is the foundation for production scheduled The Odds refreshes and exposes read-only status at `/api/debug/the-odds/mlb/scheduled-refresh/status`. It will not call The Odds API unless explicitly enabled and live execution is unblocked in local/ops config.
 
 Retired:
 
@@ -203,6 +204,8 @@ Target flow:
 6. UI displays `lastRefreshedAt`, line freshness, stale-data warnings, and game-started/expired lifecycle state.
 
 The existing `refresh-current` debug/admin endpoint remains useful for manual controlled refreshes and requires `forceLive=true` for live provider calls. It is not the target frontend data path.
+
+The scheduled refresh worker foundation is disabled in committed config and guarded by `TheOddsScheduledRefresh:RequireForceLive=true`. If enabled without explicit live unblocking, it logs a warning and marks the cycle blocked. The final live implementation should reuse the existing `refresh-current` workflow through an injectable service rather than duplicating ingestion, prediction, line-shopping, or classification logic.
 
 The Underdog source coverage audit is cadence-sensitive. Direct Underdog currently has more persisted coverage partly because it runs continuously, while The Odds API Underdog DFS rows may only be refreshed manually. Do not interpret a one-off audit as proof that The Odds API coverage is worse unless both sources are refreshed on comparable intervals and markets.
 

@@ -29,6 +29,7 @@ builder.Services.Configure<UnderdogOptions>(builder.Configuration.GetSection(Und
 builder.Services.Configure<MlbResultsOptions>(builder.Configuration.GetSection(MlbResultsOptions.SectionName));
 builder.Services.Configure<TheOddsApiOptions>(builder.Configuration.GetSection(TheOddsApiOptions.SectionName));
 builder.Services.Configure<TheOddsIngestionWorkerOptions>(builder.Configuration.GetSection(TheOddsIngestionWorkerOptions.SectionName));
+builder.Services.Configure<TheOddsScheduledRefreshOptions>(builder.Configuration.GetSection(TheOddsScheduledRefreshOptions.SectionName));
 builder.Services.Configure<MlbResultImportWorkerOptions>(builder.Configuration.GetSection(MlbResultImportWorkerOptions.SectionName));
 builder.Services.Configure<PredictionGenerationOptions>(builder.Configuration.GetSection(PredictionGenerationOptions.SectionName));
 builder.Services.AddHttpClient<IUnderdogAdapter, UnderdogAdapter>(client =>
@@ -67,9 +68,11 @@ builder.Services.AddSingleton<IPlayerResolutionStats, PlayerResolutionStats>();
 builder.Services.AddSingleton<IPlayerMergeExecutionState, PlayerMergeExecutionState>();
 builder.Services.AddSingleton<IUnderdogIngestionWorkerState, UnderdogIngestionWorkerState>();
 builder.Services.AddSingleton<ITheOddsMlbIngestionWorkerState, TheOddsMlbIngestionWorkerState>();
+builder.Services.AddSingleton<ITheOddsScheduledRefreshState, TheOddsScheduledRefreshState>();
 builder.Services.AddHostedService<UnderdogIngestionWorker>();
 builder.Services.AddHostedService<MlbResultImportWorker>();
 builder.Services.AddHostedService<TheOddsMlbIngestionWorker>();
+builder.Services.AddHostedService<TheOddsMlbScheduledRefreshWorker>();
 
 var connectionString = builder.Configuration.GetConnectionString("SportsBettingDb")
     ?? throw new InvalidOperationException("Connection string 'SportsBettingDb' is not configured.");

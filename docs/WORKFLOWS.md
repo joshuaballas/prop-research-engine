@@ -397,6 +397,15 @@ Invoke-RestMethod -Method Post -Uri "http://localhost:5299/api/debug/the-odds/ml
 Invoke-RestMethod -Uri "http://localhost:5299/api/debug/the-odds/mlb/worker-status"
 ```
 
+The scheduled refresh worker foundation is also disabled by default. Its status endpoint is read-only and does not call The Odds API:
+
+```powershell
+Invoke-RestMethod -Uri "http://localhost:5299/api/debug/the-odds/mlb/scheduled-refresh/status" |
+  ConvertTo-Json -Depth 20
+```
+
+Do not enable scheduled live refreshes until the existing `refresh-current` workflow has been extracted into an injectable service and credit/ops policy is approved. If enabled while `RequireForceLive=true`, the worker logs a warning and marks the cycle blocked instead of calling The Odds API.
+
 ## Dashboard Usage
 
 Use `/research` as the main cockpit:

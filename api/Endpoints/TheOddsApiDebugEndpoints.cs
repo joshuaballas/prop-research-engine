@@ -950,6 +950,52 @@ public static class TheOddsApiDebugEndpoints
         .WithName("TheOddsApiMlbIngestionWorkerStatusDebug")
         .WithSummary("Read-only The Odds API MLB ingestion worker status and safety configuration.");
 
+        endpoints.MapGet("/api/debug/the-odds/mlb/scheduled-refresh/status", (
+            IOptions<TheOddsScheduledRefreshOptions> options,
+            ITheOddsScheduledRefreshState state) =>
+        {
+            var scheduledOptions = options.Value;
+            var snapshot = state.GetSnapshot();
+            var interval = scheduledOptions.GetInterval();
+            var nextRunEstimateUtc = scheduledOptions.Enabled
+                ? snapshot.LastRunCompletedAtUtc?.Add(interval)
+                    ?? snapshot.LastRunStartedAtUtc?.Add(interval)
+                    ?? DateTimeOffset.UtcNow.Add(interval)
+                : (DateTimeOffset?)null;
+
+            return Results.Ok(new
+            {
+                enabled = scheduledOptions.Enabled,
+                intervalMinutes = scheduledOptions.IntervalMinutes,
+                bookmakerPreset = scheduledOptions.BookmakerPreset,
+                includeCandidates = scheduledOptions.IncludeCandidates,
+                includeLineShopping = scheduledOptions.IncludeLineShopping,
+                includeFullDiagnostics = scheduledOptions.IncludeFullDiagnostics,
+                freshnessMinutes = scheduledOptions.FreshnessMinutes,
+                requireForceLive = scheduledOptions.RequireForceLive,
+                snapshot.LastRunStartedAtUtc,
+                snapshot.LastRunCompletedAtUtc,
+                snapshot.LastRunSucceeded,
+                snapshot.LastRunBlocked,
+                snapshot.LastRunError,
+                nextRunEstimateUtc,
+                callsExternalApis = false,
+                readOnly = true,
+                status = snapshot.Status,
+                safety = new
+                {
+                    disabledByDefault = true,
+                    callsTheOddsApiWhenDisabled = false,
+                    statusEndpointCallsExternalApis = false,
+                    requiresExplicitLocalEnablement = true,
+                    liveExecutionBlockedWhenRequireForceLive = true,
+                    refreshLogicSource = "Existing refresh-current workflow; automatic live execution remains guarded until service-wired."
+                }
+            });
+        })
+        .WithName("TheOddsApiMlbScheduledRefreshStatusDebug")
+        .WithSummary("Read-only scheduled The Odds MLB refresh worker status. Does not call external APIs.");
+
         endpoints.MapPost("/api/debug/the-odds/mlb/worker-dry-run", async (
             IOptions<TheOddsIngestionWorkerOptions> options,
             ITheOddsMlbIngestionPlanner planner,
