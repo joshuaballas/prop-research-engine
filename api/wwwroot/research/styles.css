@@ -138,6 +138,14 @@ main {
     margin-bottom: 14px;
 }
 
+.section-actions {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    flex-wrap: wrap;
+    gap: 10px;
+}
+
 .section-header.compact {
     margin-bottom: 10px;
 }

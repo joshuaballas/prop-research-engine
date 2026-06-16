@@ -9,6 +9,7 @@ public sealed class TheOddsApiOptions
     public string SportKey { get; set; } = "baseball_mlb";
     public string Regions { get; set; } = "us";
     public string OddsFormat { get; set; } = "american";
+    public int MaxConcurrentRequests { get; set; } = 3;
     public string Markets { get; set; } = string.Join(
         ',',
         "batter_hits",

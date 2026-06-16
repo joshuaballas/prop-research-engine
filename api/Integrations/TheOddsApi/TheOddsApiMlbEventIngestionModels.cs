@@ -24,4 +24,20 @@ public sealed record TheOddsApiMlbEventIngestionResult(
     int PropTypesResolved,
     IReadOnlyList<string> Warnings,
     IReadOnlyList<string> Errors,
-    TheOddsApiCreditUsage CreditUsage);
+    TheOddsApiCreditUsage CreditUsage,
+    TheOddsApiMlbEventIngestionTiming Timing);
+
+public sealed record TheOddsApiMlbEventIngestionTiming(
+    long TotalMs,
+    long FetchMarketsMs,
+    long NormalizeMs,
+    long PersistPlatformPropsMs,
+    int NormalizedPropsCount,
+    long ExistingLookupMs,
+    int ExistingRowsMatched,
+    int RowsUnchanged,
+    int RowsCreated,
+    int RowsUpdated,
+    int RowsSkipped,
+    long SaveChangesMs,
+    int DbRoundTripsEstimate);

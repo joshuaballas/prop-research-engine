@@ -5,6 +5,8 @@ const endpoints = {
     freshness: "/api/debug/markets/freshness-summary",
     rankings: "/api/debug/predictions/market-rankings",
     lineShopping: "/api/debug/the-odds/mlb/line-shopping",
+    lineShoppingTopPicks: "/api/debug/the-odds/mlb/line-shopping?topOnly=true&take=10&includeBookmakerPrices=false",
+    topPicks: "/api/debug/the-odds/mlb/top-picks?take=10&freshnessMinutes=30",
     theOddsEventWorkflow: "/api/debug/the-odds/mlb/event-workflow-status",
     theOddsIngestionPlan: "/api/debug/the-odds/mlb/ingestion-plan",
     theOddsEvents: "/api/debug/the-odds/mlb/player-props-spike",
@@ -58,6 +60,7 @@ const els = {
     recentErrorRows: document.getElementById("recentErrorRows"),
     copyErrorsButton: document.getElementById("copyErrorsButton"),
     platformFreshness: document.getElementById("platformFreshness"),
+    loadFreshnessButton: document.getElementById("loadFreshnessButton"),
     evSummary: document.getElementById("evSummary"),
     propReliabilitySummary: document.getElementById("propReliabilitySummary"),
     propReliabilityRows: document.getElementById("propReliabilityRows"),
@@ -95,6 +98,7 @@ const els = {
     theOddsWorkflowEstimatedCredits: document.getElementById("theOddsWorkflowEstimatedCredits"),
     theOddsWorkflowRecommendedAction: document.getElementById("theOddsWorkflowRecommendedAction"),
     theOddsWorkflowRows: document.getElementById("theOddsWorkflowRows"),
+    loadTheOddsWorkflowButton: document.getElementById("loadTheOddsWorkflowButton"),
     theOddsManualStatus: document.getElementById("theOddsManualStatus"),
     fetchTheOddsEventsButton: document.getElementById("fetchTheOddsEventsButton"),
     theOddsEventSelect: document.getElementById("theOddsEventSelect"),
@@ -111,7 +115,12 @@ const els = {
     generateMlbPredictionsButton: document.getElementById("generateMlbPredictionsButton"),
     generateFullMlbPredictionsButton: document.getElementById("generateFullMlbPredictionsButton"),
     refreshLineShoppingButton: document.getElementById("refreshLineShoppingButton"),
+    loadFullLineShoppingButton: document.getElementById("loadFullLineShoppingButton"),
     theOddsPredictionSummary: document.getElementById("theOddsPredictionSummary"),
+    loadMarketRankingsButton: document.getElementById("loadMarketRankingsButton"),
+    loadEvBacktestButton: document.getElementById("loadEvBacktestButton"),
+    loadPropReliabilityButton: document.getElementById("loadPropReliabilityButton"),
+    loadPropReliabilityTableButton: document.getElementById("loadPropReliabilityTableButton"),
     marketRows: document.getElementById("marketRows"),
     tableCount: document.getElementById("tableCount"),
     platformFilter: document.getElementById("platformFilter"),
@@ -128,6 +137,8 @@ document.addEventListener("DOMContentLoaded", () => {
     els.refreshButton.addEventListener("click", loadDashboard);
     els.statusCloseButton.addEventListener("click", dismissStatus);
     els.copyErrorsButton.addEventListener("click", copyRecentErrors);
+    els.loadFreshnessButton.addEventListener("click", loadFreshness);
+    els.loadTheOddsWorkflowButton.addEventListener("click", loadTheOddsEventWorkflow);
     document.getElementById("filters").addEventListener("input", applyFilters);
     document.getElementById("lineShoppingFilters").addEventListener("input", applyLineShoppingFilters);
     els.fetchTheOddsEventsButton.addEventListener("click", fetchTheOddsEvents);
@@ -142,6 +153,11 @@ document.addEventListener("DOMContentLoaded", () => {
     els.generateMlbPredictionsButton.addEventListener("click", () => generateMlbPredictions(true));
     els.generateFullMlbPredictionsButton.addEventListener("click", () => generateMlbPredictions(false));
     els.refreshLineShoppingButton.addEventListener("click", refreshLineShoppingForLatestRun);
+    els.loadFullLineShoppingButton.addEventListener("click", refreshLineShoppingForLatestRun);
+    els.loadMarketRankingsButton.addEventListener("click", loadMarketRankings);
+    els.loadEvBacktestButton.addEventListener("click", loadEvBacktest);
+    els.loadPropReliabilityButton.addEventListener("click", loadPropReliability);
+    els.loadPropReliabilityTableButton.addEventListener("click", loadPropReliability);
     document.querySelectorAll("[data-line-shopping-preset]").forEach(button => {
         button.addEventListener("click", () => applyLineShoppingPreset(button.dataset.lineShoppingPreset));
     });
@@ -159,45 +175,114 @@ document.addEventListener("DOMContentLoaded", () => {
 });
 
 async function loadDashboard() {
-    setStatus("Loading dashboard data...");
+    setStatus("Loading dashboard shell...");
+    showDeferredSectionPlaceholders();
 
     try {
-        const [systemHealth, errorSummary, recentErrors, freshness, rankings, lineShopping, theOddsEventWorkflow, evBacktest, propReliability] = await Promise.all([
-            fetchJson(endpoints.systemHealth),
-            fetchJson(endpoints.errorSummary),
-            fetchJson(endpoints.recentErrors),
-            fetchJson(endpoints.freshness),
-            fetchJson(endpoints.rankings),
-            fetchJson(endpoints.lineShopping),
-            fetchJson(endpoints.theOddsIngestionPlan),
-            fetchJson(endpoints.evBacktest),
-            fetchJson(endpoints.propReliability)
+        const [systemHealth, errorSummary, recentErrors, lineShopping] = await Promise.all([
+            timedFetchJson("dashboard:system-health", endpoints.systemHealth),
+            timedFetchJson("dashboard:error-summary", endpoints.errorSummary),
+            timedFetchJson("dashboard:recent-errors", endpoints.recentErrors),
+            timedFetchJson("dashboard:top-picks", endpoints.topPicks)
         ]);
 
         state.systemHealth = systemHealth;
         state.errorSummary = errorSummary;
         state.recentErrors = recentErrors;
-        state.freshness = freshness;
-        state.rankings = rankings;
+        state.freshness = null;
+        state.rankings = null;
         state.lineShopping = lineShopping;
-        state.theOddsEventWorkflow = theOddsEventWorkflow;
-        state.evBacktest = evBacktest;
-        state.propReliability = propReliability;
+        state.theOddsEventWorkflow = null;
+        state.evBacktest = null;
+        state.propReliability = null;
 
         renderSystemHealth();
         renderApplicationStatus();
-        renderFreshness();
-        renderEvSummary();
-        renderPropReliability();
-        renderTheOddsEventWorkflow();
         renderLineShoppingSummary();
         populateLineShoppingFilters(lineShopping.topGroupsByBestEstimatedEv || []);
-        applyLineShoppingFilters();
+        renderLineShoppingDeferredRows();
+        populateFilters([]);
+        setStatus("Dashboard shell loaded. Heavy diagnostics are deferred until requested.");
+    } catch (error) {
+        setStatus(`Failed to load dashboard: ${error.message}`, true);
+    }
+}
+
+async function loadFreshness() {
+    setStatus("Loading freshness summary...");
+    els.platformFreshness.innerHTML = `<div class="empty-state">Loading platform freshness...</div>`;
+
+    try {
+        state.freshness = await timedFetchJson("dashboard:freshness", endpoints.freshness);
+        renderFreshness();
+        setStatus("Freshness summary loaded.");
+    } catch (error) {
+        els.platformFreshness.innerHTML = `<div class="empty-state">Freshness summary failed to load.</div>`;
+        setStatus(`Freshness summary failed: ${error.message}`, true);
+    }
+}
+
+async function loadTheOddsEventWorkflow() {
+    setStatus("Loading The Odds ingestion planner...");
+    els.theOddsWorkflowRows.innerHTML = `<tr><td colspan="14" class="muted">Loading The Odds ingestion planner...</td></tr>`;
+    els.theOddsWorkflowCount.textContent = "Loading";
+
+    try {
+        state.theOddsEventWorkflow = await timedFetchJson("dashboard:the-odds-ingestion-plan", endpoints.theOddsIngestionPlan);
+        renderTheOddsEventWorkflow();
+        setStatus("The Odds ingestion planner loaded.");
+    } catch (error) {
+        els.theOddsWorkflowRows.innerHTML = `<tr><td colspan="14" class="muted">The Odds ingestion planner failed to load.</td></tr>`;
+        els.theOddsWorkflowCount.textContent = "Not loaded";
+        setStatus(`The Odds ingestion planner failed: ${error.message}`, true);
+    }
+}
+
+async function loadMarketRankings() {
+    setStatus("Loading market rankings...");
+    els.tableCount.textContent = "Loading";
+    els.marketRows.innerHTML = `<tr><td colspan="14" class="muted">Loading market rankings...</td></tr>`;
+
+    try {
+        const rankings = await timedFetchJson("dashboard:market-rankings", endpoints.rankings);
+        state.rankings = rankings;
         populateFilters(rankings.results || []);
         applyFilters();
         setStatus(`Loaded ${formatNumber(rankings.totalRankedMarkets)} ranked markets.`);
     } catch (error) {
-        setStatus(`Failed to load dashboard: ${error.message}`, true);
+        els.tableCount.textContent = "Not loaded";
+        els.marketRows.innerHTML = `<tr><td colspan="14" class="muted">Market rankings failed to load.</td></tr>`;
+        setStatus(`Market rankings failed: ${error.message}`, true);
+    }
+}
+
+async function loadEvBacktest() {
+    els.evSummary.innerHTML = [metricRow("Status", "Loading Underdog EV backtest...")].join("");
+    setStatus("Loading Underdog EV backtest...");
+
+    try {
+        state.evBacktest = await timedFetchJson("dashboard:underdog-ev-backtest", endpoints.evBacktest);
+        renderEvSummary();
+        setStatus("Underdog EV backtest loaded.");
+    } catch (error) {
+        els.evSummary.innerHTML = [metricRow("Status", "Failed to load")].join("");
+        setStatus(`Underdog EV backtest failed: ${error.message}`, true);
+    }
+}
+
+async function loadPropReliability() {
+    els.propReliabilitySummary.innerHTML = [metricRow("Status", "Loading prop reliability...")].join("");
+    els.propReliabilityRows.innerHTML = `<tr><td colspan="6" class="muted">Loading prop reliability...</td></tr>`;
+    setStatus("Loading prop reliability...");
+
+    try {
+        state.propReliability = await timedFetchJson("dashboard:prop-reliability", endpoints.propReliability);
+        renderPropReliability();
+        setStatus("Prop EV reliability loaded.");
+    } catch (error) {
+        els.propReliabilitySummary.innerHTML = [metricRow("Status", "Failed to load")].join("");
+        els.propReliabilityRows.innerHTML = `<tr><td colspan="6" class="muted">Prop reliability failed to load.</td></tr>`;
+        setStatus(`Prop EV reliability failed: ${error.message}`, true);
     }
 }
 
@@ -320,9 +405,11 @@ async function refreshLineShoppingForLatestRun() {
         : endpoints.lineShopping;
 
     setTheOddsManualStatus("Refreshing line shopping", "warn");
+    els.lineShoppingRows.innerHTML = `<tr><td colspan="18" class="muted">Loading full line-shopping table...</td></tr>`;
+    els.lineShoppingCount.textContent = "Loading";
 
     try {
-        const result = await fetchJson(url);
+        const result = await timedFetchJson("dashboard:full-line-shopping", url);
         state.lineShopping = result;
         renderLineShoppingSummary();
         populateLineShoppingFilters(result.topGroupsByBestEstimatedEv || []);
@@ -457,9 +544,10 @@ function setTheOddsManualStatus(label, tone) {
 
 function renderLineShoppingSummary() {
     const summary = state.lineShopping?.summary || {};
-    const ready = state.lineShopping?.findings?.appearsReadyForDashboardDisplay;
+    const ready = state.lineShopping?.findings?.appearsReadyForDashboardDisplay
+        ?? ((summary.activeCandidateCount || summary.returnedTopPicks || 0) > 0);
 
-    els.lineShoppingGroups.textContent = formatNumber(summary.totalComparisonGroups);
+    els.lineShoppingGroups.textContent = formatNumber(summary.totalComparisonGroups ?? summary.totalActiveComparisonGroups);
     els.lineShoppingMarkets.textContent = formatNumber(summary.totalMarketsCompared);
     els.lineShoppingBookmakers.textContent = formatNumber(summary.totalBookmakers);
     els.lineShoppingMultiBook.textContent = formatNumber(summary.groupsWithMultipleBookmakers);
@@ -595,6 +683,15 @@ async function fetchJson(url) {
     return response.json();
 }
 
+async function timedFetchJson(label, url) {
+    console.time(label);
+    try {
+        return await fetchJson(url);
+    } finally {
+        console.timeEnd(label);
+    }
+}
+
 async function postJson(url, payload) {
     const response = await fetch(url, {
         method: "POST",
@@ -611,6 +708,37 @@ async function postJson(url, payload) {
     }
 
     return response.json();
+}
+
+function showDeferredSectionPlaceholders() {
+    els.totalRankedMarkets.textContent = "-";
+    els.visibleMarkets.textContent = "-";
+    els.hiddenMarkets.textContent = "-";
+    els.staleMarkets.textContent = "-";
+    els.eligibleMarkets.textContent = "-";
+    els.platformFreshness.innerHTML = `<div class="empty-state">Not loaded yet. Use Load Freshness.</div>`;
+    els.theOddsWorkflowCount.textContent = "Not loaded";
+    els.theOddsWorkflowTotal.textContent = "-";
+    els.theOddsWorkflowLineShoppingReady.textContent = "-";
+    els.theOddsWorkflowAwaitingResults.textContent = "-";
+    els.theOddsWorkflowCompleted.textContent = "-";
+    els.theOddsWorkflowNeedsAttention.textContent = "-";
+    els.theOddsWorkflowCandidateIngestion.textContent = "-";
+    els.theOddsWorkflowEstimatedCredits.textContent = "-";
+    els.theOddsWorkflowLatestObserved.textContent = "-";
+    els.theOddsWorkflowRecommendedAction.textContent = "Not loaded yet. Use Load Planner. This does not spend The Odds API credits.";
+    els.theOddsWorkflowRows.innerHTML = `<tr><td colspan="14" class="muted">Not loaded yet. Use Load Planner.</td></tr>`;
+    els.evSummary.innerHTML = [metricRow("Status", "Not loaded yet. Use Load Backtest.")].join("");
+    els.propReliabilitySummary.innerHTML = [metricRow("Status", "Not loaded yet. Use Load Reliability.")].join("");
+    els.propReliabilityRows.innerHTML = `<tr><td colspan="6" class="muted">Not loaded yet. Use Load Table.</td></tr>`;
+    els.marketRows.innerHTML = `<tr><td colspan="14" class="muted">Not loaded yet. Use Refresh Market Rankings.</td></tr>`;
+    els.tableCount.textContent = "Not loaded";
+    renderLineShoppingDeferredRows();
+}
+
+function renderLineShoppingDeferredRows() {
+    els.lineShoppingRows.innerHTML = `<tr><td colspan="18" class="muted">Full line-shopping table not loaded yet. Use Refresh Line Shopping Table.</td></tr>`;
+    els.lineShoppingCount.textContent = "Not loaded";
 }
 
 function renderFreshness() {
@@ -832,6 +960,14 @@ function applyLineShoppingPreset(preset) {
 }
 
 function applyLineShoppingFilters() {
+    if (state.lineShopping?.diagnostics?.topOnly
+        || state.lineShopping?.diagnostics?.topPicksOnly
+        || state.lineShopping?.diagnostics?.summaryOnly) {
+        state.filteredLineShoppingGroups = [];
+        renderLineShoppingDeferredRows();
+        return;
+    }
+
     const groups = state.lineShopping?.topGroupsByBestEstimatedEv || [];
     const propType = els.lineShoppingPropTypeFilter.value;
     const trustLevel = els.lineShoppingTrustFilter.value;

@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Security.Cryptography;
+using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
@@ -32,6 +33,8 @@ public sealed class TheOddsApiMlbEventIngestionService(
             return Failed(request.EventId, dryRun, "eventId is required.");
         }
 
+        var totalStopwatch = Stopwatch.StartNew();
+        var stepStopwatch = Stopwatch.StartNew();
         var fetched = await adapter.FetchSpikeAsync(
             request.EventId,
             request.Markets,
@@ -39,7 +42,9 @@ public sealed class TheOddsApiMlbEventIngestionService(
             regions: null,
             oddsFormat: null,
             cancellationToken);
+        var fetchMarketsMs = stepStopwatch.ElapsedMilliseconds;
 
+        stepStopwatch.Restart();
         var eventRecord = fetched.Events.FirstOrDefault();
         var warnings = new List<string>();
         var errors = new List<string>();
@@ -66,36 +71,31 @@ public sealed class TheOddsApiMlbEventIngestionService(
                 MarketGroupKeyComparer.Instance)
             .Select(group => new MarketGroup(group.Key, group.ToList()))
             .ToList();
+        var normalizeMs = stepStopwatch.ElapsedMilliseconds;
 
+        stepStopwatch.Restart();
         await using var transaction = await dbContext.Database.BeginTransactionAsync(cancellationToken);
 
         var observedAt = DateTimeOffset.UtcNow;
+        var lookupStopwatch = Stopwatch.StartNew();
         var sports = await dbContext.Sports.ToDictionaryAsync(x => x.Code, StringComparer.OrdinalIgnoreCase, cancellationToken);
         var sport = GetOrCreateSport(sports);
         var leagues = await dbContext.Leagues.ToDictionaryAsync(x => $"{x.SportId:N}:{x.Code}", StringComparer.OrdinalIgnoreCase, cancellationToken);
         var league = GetOrCreateLeague(leagues, sport);
         var propTypes = await dbContext.PropTypes.ToDictionaryAsync(x => $"{x.SportId:N}:{x.StatKey}", StringComparer.OrdinalIgnoreCase, cancellationToken);
-        var props = await dbContext.Props.ToDictionaryAsync(x => x.NormalizedKey, StringComparer.OrdinalIgnoreCase, cancellationToken);
-        var playerResolutionCache = await playerResolutionService.LoadCacheAsync(cancellationToken);
-        var platformCache = await dbContext.Platforms.ToDictionaryAsync(x => x.Slug, StringComparer.OrdinalIgnoreCase, cancellationToken);
+        var playerResolutionCache = await playerResolutionService.LoadCacheForLeagueNamesAsync(
+            LeagueCode,
+            marketGroups.Select(group => group.Key.PlayerName).Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
+            cancellationToken);
+        var requestedPlatformSlugs = marketGroups
+            .Select(group => BuildTheOddsPlatformSlug(group.Key.BookmakerKey))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        var platformCache = await dbContext.Platforms
+            .Where(x => requestedPlatformSlugs.Contains(x.Slug))
+            .ToDictionaryAsync(x => x.Slug, StringComparer.OrdinalIgnoreCase, cancellationToken);
         var rawPayloadCache = new Dictionary<Guid, RawIngestionPayload>();
-        var platformProps = await dbContext.PlatformProps
-            .Include(x => x.Platform)
-            .Where(x => x.Platform != null)
-            .ToDictionaryAsync(x => $"{x.Platform!.Slug}:{x.PlatformPropId}", StringComparer.OrdinalIgnoreCase, cancellationToken);
-        var latestSnapshots = await dbContext.PropLineSnapshots
-            .Where(x => x.PlatformProp != null)
-            .GroupBy(x => x.PlatformPropId)
-            .Select(group => group.OrderByDescending(x => x.ObservedAt).First())
-            .ToDictionaryAsync(x => x.PlatformPropId, cancellationToken);
-
-        var propsUpserted = 0;
-        var platformPropsUpserted = 0;
-        var snapshotsCreated = 0;
-        var snapshotsUnchanged = 0;
-        var playersResolved = 0;
-        var playersCreated = 0;
-        var propTypesResolved = 0;
+        var workItems = new List<MarketIngestionWorkItem>(marketGroups.Count);
 
         foreach (var group in marketGroups)
         {
@@ -103,9 +103,7 @@ public sealed class TheOddsApiMlbEventIngestionService(
 
             var sample = group.Records[0];
             var platform = GetOrCreatePlatform(platformCache, group.Key.BookmakerKey, group.Key.BookmakerTitle, observedAt);
-            var rawPayload = GetOrCreateRawPayload(rawPayloadCache, platform, fetched, observedAt);
             var propType = GetOrCreatePropType(propTypes, sport, sample.NormalizedPropTypeCandidate);
-            propTypesResolved++;
 
             var playerResult = playerResolutionService.ResolveOrCreate(
                 playerResolutionCache,
@@ -119,24 +117,109 @@ public sealed class TheOddsApiMlbEventIngestionService(
                     league,
                     LegacyExternalRefs: null,
                     observedAt));
-            playersResolved++;
-            playersCreated += playerResult.Created ? 1 : 0;
+            var propNormalizedKey = BuildPropNormalizedKey(league, propType, playerResult.Player, group);
+            var platformPropId = BuildPlatformPropIdCandidate(group.Key);
 
-            var propResult = GetOrCreateProp(props, league, propType, playerResult.Player, group, eventRecord, observedAt);
+            workItems.Add(new MarketIngestionWorkItem(
+                group,
+                platform,
+                propType,
+                playerResult.Player,
+                playerResult.Created,
+                propNormalizedKey,
+                platformPropId,
+                BuildPlatformPropDictionaryKey(platform, platformPropId)));
+        }
+
+        var propKeys = workItems
+            .Select(item => item.PropNormalizedKey)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        var props = propKeys.Length == 0
+            ? new Dictionary<string, Prop>(StringComparer.OrdinalIgnoreCase)
+            : await dbContext.Props
+                .Where(x => propKeys.Contains(x.NormalizedKey))
+                .ToDictionaryAsync(x => x.NormalizedKey, StringComparer.OrdinalIgnoreCase, cancellationToken);
+        var platformIds = workItems
+            .Select(item => item.Platform.Id)
+            .Distinct()
+            .ToArray();
+        var platformPropIds = workItems
+            .Select(item => item.PlatformPropId)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        var platformProps = platformIds.Length == 0 || platformPropIds.Length == 0
+            ? new Dictionary<string, PlatformProp>(StringComparer.OrdinalIgnoreCase)
+            : await dbContext.PlatformProps
+                .Where(x => platformIds.Contains(x.PlatformId)
+                    && platformPropIds.Contains(x.PlatformPropId))
+                .ToDictionaryAsync(x => BuildPlatformPropDictionaryKey(x.PlatformId, x.PlatformPropId), StringComparer.OrdinalIgnoreCase, cancellationToken);
+        var existingPlatformPropIds = platformProps.Values
+            .Select(x => x.Id)
+            .Distinct()
+            .ToArray();
+        var latestSnapshots = existingPlatformPropIds.Length == 0
+            ? new Dictionary<Guid, PropLineSnapshot>()
+            : await dbContext.PropLineSnapshots
+                .Where(x => existingPlatformPropIds.Contains(x.PlatformPropId))
+                .GroupBy(x => x.PlatformPropId)
+                .Select(group => group.OrderByDescending(x => x.ObservedAt).First())
+                .ToDictionaryAsync(x => x.PlatformPropId, cancellationToken);
+        lookupStopwatch.Stop();
+
+        var existingLookupMs = lookupStopwatch.ElapsedMilliseconds;
+        var existingRowsMatched = platformProps.Count;
+        var propsUpserted = 0;
+        var platformPropsUpserted = 0;
+        var snapshotsCreated = 0;
+        var snapshotsUnchanged = 0;
+        var playersResolved = workItems.Count;
+        var playersCreated = workItems.Count(item => item.PlayerCreated);
+        var propTypesResolved = workItems.Count;
+        var rowsCreated = 0;
+        var rowsUpdated = 0;
+        var rowsUnchanged = 0;
+        var rowsSkipped = 0;
+
+        foreach (var item in workItems)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var propResult = GetOrCreateProp(
+                props,
+                league,
+                item.PropType,
+                item.Player,
+                item.Group,
+                eventRecord,
+                observedAt);
             propsUpserted += propResult.Created || propResult.Updated ? 1 : 0;
 
             var platformPropResult = GetOrCreatePlatformProp(
                 platformProps,
-                platform,
+                item.Platform,
                 propResult.Prop,
-                rawPayload,
-                group,
+                () => GetOrCreateRawPayload(rawPayloadCache, item.Platform, fetched, observedAt),
+                item.Group,
                 eventRecord,
                 observedAt);
             platformPropsUpserted += platformPropResult.Created || platformPropResult.Updated ? 1 : 0;
+            rowsCreated += platformPropResult.Created ? 1 : 0;
+            rowsUpdated += !platformPropResult.Created && platformPropResult.Updated ? 1 : 0;
+            rowsUnchanged += !platformPropResult.Created && !platformPropResult.Updated ? 1 : 0;
 
             if (ShouldCreateSnapshot(platformPropResult, latestSnapshots))
             {
+                if (!platformPropResult.Created)
+                {
+                    ApplyPlatformPropSourceMetadata(
+                        platformPropResult.PlatformProp,
+                        item.Platform,
+                        GetOrCreateRawPayload(rawPayloadCache, item.Platform, fetched, observedAt),
+                        item.Group,
+                        eventRecord);
+                }
+
                 var snapshot = new PropLineSnapshot
                 {
                     Id = Guid.NewGuid(),
@@ -147,7 +230,7 @@ public sealed class TheOddsApiMlbEventIngestionService(
                     Status = platformPropResult.Status,
                     ObservedAt = observedAt,
                     SourceHash = platformPropResult.SourceHash,
-                    RawPayloadId = rawPayload.Id
+                    RawPayloadId = GetOrCreateRawPayload(rawPayloadCache, item.Platform, fetched, observedAt).Id
                 };
 
                 dbContext.PropLineSnapshots.Add(snapshot);
@@ -160,9 +243,12 @@ public sealed class TheOddsApiMlbEventIngestionService(
             }
         }
 
+        var saveChangesMs = 0L;
         if (!dryRun)
         {
+            var saveStopwatch = Stopwatch.StartNew();
             await dbContext.SaveChangesAsync(cancellationToken);
+            saveChangesMs = saveStopwatch.ElapsedMilliseconds;
             await transaction.CommitAsync(cancellationToken);
         }
         else
@@ -170,6 +256,8 @@ public sealed class TheOddsApiMlbEventIngestionService(
             await transaction.RollbackAsync(cancellationToken);
             warnings.Add("Dry run completed; no database changes were committed.");
         }
+        var persistPlatformPropsMs = stepStopwatch.ElapsedMilliseconds;
+        totalStopwatch.Stop();
 
         logger.LogInformation(
             "The Odds API MLB event ingestion spike completed. EventId: {EventId}. DryRun: {DryRun}. Groups: {GroupCount}. SnapshotsCreated: {SnapshotsCreated}.",
@@ -197,7 +285,23 @@ public sealed class TheOddsApiMlbEventIngestionService(
             propTypesResolved,
             warnings,
             errors,
-            fetched.CreditUsage);
+            fetched.CreditUsage,
+            new TheOddsApiMlbEventIngestionTiming(
+                totalStopwatch.ElapsedMilliseconds,
+                fetchMarketsMs,
+                normalizeMs,
+                persistPlatformPropsMs,
+                marketGroups.Count,
+                existingLookupMs,
+                existingRowsMatched,
+                rowsUnchanged,
+                rowsCreated,
+                rowsUpdated,
+                rowsSkipped,
+                saveChangesMs,
+                EstimateTheOddsEventIngestionDbRoundTrips(
+                    hasExistingPlatformProps: existingPlatformPropIds.Length > 0,
+                    didSaveChanges: !dryRun)));
     }
 
     private static TheOddsApiMlbEventIngestionResult Failed(string eventId, bool dryRun, string error)
@@ -221,7 +325,8 @@ public sealed class TheOddsApiMlbEventIngestionService(
             PropTypesResolved: 0,
             Warnings: [],
             Errors: [error],
-            CreditUsage: new TheOddsApiCreditUsage(null, null, null));
+            CreditUsage: new TheOddsApiCreditUsage(null, null, null),
+            Timing: new TheOddsApiMlbEventIngestionTiming(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0));
     }
 
     private Platform GetOrCreatePlatform(
@@ -230,7 +335,7 @@ public sealed class TheOddsApiMlbEventIngestionService(
         string? bookmakerTitle,
         DateTimeOffset observedAt)
     {
-        var slug = $"theodds-{NormalizeCode(bookmakerKey).ToLowerInvariant()}";
+        var slug = BuildTheOddsPlatformSlug(bookmakerKey);
         var name = string.IsNullOrWhiteSpace(bookmakerTitle)
             ? bookmakerKey
             : bookmakerTitle;
@@ -436,7 +541,7 @@ public sealed class TheOddsApiMlbEventIngestionService(
         Dictionary<string, PlatformProp> platformProps,
         Platform platform,
         Prop prop,
-        RawIngestionPayload rawPayload,
+        Func<RawIngestionPayload> rawPayloadFactory,
         MarketGroup group,
         TheOddsApiEventRecord? eventRecord,
         DateTimeOffset observedAt)
@@ -448,7 +553,7 @@ public sealed class TheOddsApiMlbEventIngestionService(
         var underAvailable = under is not null;
         var platformPropId = BuildPlatformPropIdCandidate(group.Key);
         var sourceHash = BuildSourceHash(group, status, overAvailable, underAvailable);
-        var platformPropKey = $"{platform.Slug}:{platformPropId}";
+        var platformPropKey = BuildPlatformPropDictionaryKey(platform, platformPropId);
         var line = group.Key.Line;
 
         if (platformProps.TryGetValue(platformPropKey, out var platformProp))
@@ -466,16 +571,16 @@ public sealed class TheOddsApiMlbEventIngestionService(
 
             platformProp.PropId = prop.Id;
             platformProp.Prop = prop;
-            platformProp.ExternalStableKey = group.Key.EventId;
-            platformProp.Label = $"{group.Key.PlayerName} {group.Records[0].NormalizedPropTypeCandidate}";
             platformProp.CurrentLine = line;
             platformProp.OverAvailable = overAvailable;
             platformProp.UnderAvailable = underAvailable;
-            platformProp.PayoutType = "standard";
             platformProp.Status = status;
             platformProp.ObservedAt = observedAt;
-            platformProp.RawPayloadId = rawPayload.Id;
-            platformProp.Metadata = CreatePlatformPropMetadata(group, eventRecord);
+
+            if (updated)
+            {
+                ApplyPlatformPropSourceMetadata(platformProp, platform, rawPayloadFactory(), group, eventRecord);
+            }
 
             return new PlatformPropUpsertResult(
                 platformProp,
@@ -508,7 +613,7 @@ public sealed class TheOddsApiMlbEventIngestionService(
             PayoutType = "standard",
             Status = status,
             ObservedAt = observedAt,
-            RawPayloadId = rawPayload.Id,
+            RawPayloadId = rawPayloadFactory().Id,
             Metadata = CreatePlatformPropMetadata(group, eventRecord)
         };
 
@@ -528,6 +633,21 @@ public sealed class TheOddsApiMlbEventIngestionService(
             OverAvailable: overAvailable,
             UnderAvailable: underAvailable,
             SourceHash: sourceHash);
+    }
+
+    private static void ApplyPlatformPropSourceMetadata(
+        PlatformProp platformProp,
+        Platform platform,
+        RawIngestionPayload rawPayload,
+        MarketGroup group,
+        TheOddsApiEventRecord? eventRecord)
+    {
+        platformProp.Platform = platform;
+        platformProp.ExternalStableKey = group.Key.EventId;
+        platformProp.Label = $"{group.Key.PlayerName} {group.Records[0].NormalizedPropTypeCandidate}";
+        platformProp.PayoutType = "standard";
+        platformProp.RawPayloadId = rawPayload.Id;
+        platformProp.Metadata = CreatePlatformPropMetadata(group, eventRecord);
     }
 
     private static bool ShouldCreateSnapshot(
@@ -656,6 +776,21 @@ public sealed class TheOddsApiMlbEventIngestionService(
         return string.Concat(value.AsSpan(0, 173), ":", hash);
     }
 
+    private static string BuildTheOddsPlatformSlug(string bookmakerKey)
+    {
+        return $"theodds-{NormalizeCode(bookmakerKey).ToLowerInvariant()}";
+    }
+
+    private static string BuildPlatformPropDictionaryKey(Platform platform, string platformPropId)
+    {
+        return BuildPlatformPropDictionaryKey(platform.Id, platformPropId);
+    }
+
+    private static string BuildPlatformPropDictionaryKey(Guid platformId, string platformPropId)
+    {
+        return $"{platformId:N}:{platformPropId}";
+    }
+
     private static string BuildSourceHash(
         MarketGroup group,
         string status,
@@ -708,7 +843,26 @@ public sealed class TheOddsApiMlbEventIngestionService(
         return Convert.ToHexString(bytes).ToLowerInvariant();
     }
 
+    private static int EstimateTheOddsEventIngestionDbRoundTrips(
+        bool hasExistingPlatformProps,
+        bool didSaveChanges)
+    {
+        return 7
+            + (hasExistingPlatformProps ? 1 : 0)
+            + (didSaveChanges ? 1 : 0);
+    }
+
     private sealed record MarketGroup(MarketGroupKey Key, IReadOnlyList<TheOddsApiPlayerPropSpikeRecord> Records);
+
+    private sealed record MarketIngestionWorkItem(
+        MarketGroup Group,
+        Platform Platform,
+        PropType PropType,
+        Player Player,
+        bool PlayerCreated,
+        string PropNormalizedKey,
+        string PlatformPropId,
+        string PlatformPropKey);
 
     private sealed record MarketGroupKey(
         string BookmakerKey,

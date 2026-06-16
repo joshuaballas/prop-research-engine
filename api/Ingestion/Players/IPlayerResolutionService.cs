@@ -7,6 +7,11 @@ public interface IPlayerResolutionService
 {
     Task<PlayerResolutionCache> LoadCacheAsync(CancellationToken cancellationToken);
 
+    Task<PlayerResolutionCache> LoadCacheForLeagueNamesAsync(
+        string leagueCode,
+        IReadOnlyCollection<string> displayNames,
+        CancellationToken cancellationToken);
+
     PlayerResolutionResult ResolveOrCreate(
         PlayerResolutionCache cache,
         PlayerResolutionRequest request);

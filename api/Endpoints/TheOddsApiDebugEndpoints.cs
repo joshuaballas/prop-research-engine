@@ -1,6 +1,7 @@
 using SportsBetting.Api.Integrations.TheOddsApi;
 using SportsBetting.Api.Diagnostics;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 using System.Diagnostics;
 using System.Globalization;
@@ -24,6 +25,10 @@ public static class TheOddsApiDebugEndpoints
         endpoints.MapGet("/api/debug/the-odds/mlb/line-shopping", async (
             Guid? runId,
             int? freshnessMinutes,
+            bool? summaryOnly,
+            bool? topOnly,
+            int? take,
+            bool? includeBookmakerPrices,
             ApplicationDbContext dbContext,
             IPredictionProbabilityService probabilityService,
             CancellationToken cancellationToken) =>
@@ -59,6 +64,10 @@ public static class TheOddsApiDebugEndpoints
 
             var generatedAtUtc = DateTimeOffset.UtcNow;
             var lifecycleFreshnessMinutes = Math.Clamp(freshnessMinutes ?? DefaultTheOddsLineShoppingFreshnessMinutes, 1, 1440);
+            var shouldReturnSummaryOnly = summaryOnly == true;
+            var shouldReturnTopOnly = topOnly == true;
+            var shouldIncludeBookmakerPrices = includeBookmakerPrices ?? true;
+            var requestedTake = Math.Clamp(take ?? 10, 1, 500);
             var freshnessCutoff = generatedAtUtc.AddHours(-FreshnessWindowHours);
 
             stepStopwatch.Restart();
@@ -67,28 +76,65 @@ public static class TheOddsApiDebugEndpoints
 
             stepStopwatch.Restart();
             var groups = BuildTheOddsLineShoppingGroups(rows, generatedAtUtc, lifecycleFreshnessMinutes);
-            var topByBestEv = groups
-                .OrderByDescending(group => group.BestEstimatedEv ?? decimal.MinValue)
-                .ThenByDescending(group => group.RankingScore)
-                .Take(100)
-                .ToList();
-            var topByRankingScore = groups
-                .OrderByDescending(group => group.RankingScore)
-                .ThenByDescending(group => group.BestEstimatedEv ?? decimal.MinValue)
-                .Take(100)
-                .ToList();
-            var topByPriceSpread = groups
-                .OrderByDescending(group => group.LargestPriceSpread ?? decimal.MinValue)
-                .ThenByDescending(group => group.BestEstimatedEv ?? decimal.MinValue)
-                .Take(100)
-                .ToList();
+            var topByBestEv = shouldReturnSummaryOnly
+                ? []
+                : groups
+                    .OrderByDescending(group => group.BestEstimatedEv ?? decimal.MinValue)
+                    .ThenByDescending(group => group.RankingScore)
+                    .Take(100)
+                    .ToList();
+            var topByRankingScore = shouldReturnSummaryOnly || shouldReturnTopOnly
+                ? []
+                : groups
+                    .OrderByDescending(group => group.RankingScore)
+                    .ThenByDescending(group => group.BestEstimatedEv ?? decimal.MinValue)
+                    .Take(100)
+                    .ToList();
+            var topByPriceSpread = shouldReturnSummaryOnly || shouldReturnTopOnly
+                ? []
+                : groups
+                    .OrderByDescending(group => group.LargestPriceSpread ?? decimal.MinValue)
+                    .ThenByDescending(group => group.BestEstimatedEv ?? decimal.MinValue)
+                    .Take(100)
+                    .ToList();
+            if (shouldReturnTopOnly)
+            {
+                topByBestEv = groups
+                    .Select(group => new
+                    {
+                        Group = group,
+                        Strategy = ClassifyTheOddsLineShoppingStrategy(group)
+                    })
+                    .Where(row => string.Equals(row.Group.LifecycleStatus, "Active", StringComparison.OrdinalIgnoreCase)
+                        && !row.Group.IsStale
+                        && !row.Group.IsExpired
+                        && (row.Strategy.IsCandidate
+                            || row.Strategy.IsWatchlist
+                            || string.Equals(row.Strategy.StrategyClassification, "Research", StringComparison.OrdinalIgnoreCase)))
+                    .OrderBy(row => GetLineShoppingTopOnlyStrategyRank(row.Strategy))
+                    .ThenByDescending(row => row.Group.BestEstimatedEv ?? decimal.MinValue)
+                    .ThenByDescending(row => row.Group.RankingScore)
+                    .Take(requestedTake)
+                    .Select(row => row.Group)
+                    .ToList();
+            }
             groupingMs = stepStopwatch.ElapsedMilliseconds;
 
             stepStopwatch.Restart();
-            var comparisonGroups = groups.Select(ToLineShoppingResponseGroup).ToList();
-            var topGroupsByBestEstimatedEv = topByBestEv.Select(ToLineShoppingResponseGroup).ToList();
-            var topGroupsByRankingScore = topByRankingScore.Select(ToLineShoppingResponseGroup).ToList();
-            var topGroupsByLargestPriceSpread = topByPriceSpread.Select(ToLineShoppingResponseGroup).ToList();
+            var comparisonGroups = shouldReturnSummaryOnly
+                ? []
+                : shouldReturnTopOnly
+                    ? topByBestEv.Select(group => ToLineShoppingResponseGroup(group, shouldIncludeBookmakerPrices)).ToList()
+                    : groups.Select(group => ToLineShoppingResponseGroup(group, shouldIncludeBookmakerPrices)).ToList();
+            var topGroupsByBestEstimatedEv = shouldReturnSummaryOnly
+                ? []
+                : topByBestEv.Select(group => ToLineShoppingResponseGroup(group, shouldIncludeBookmakerPrices)).ToList();
+            var topGroupsByRankingScore = shouldReturnSummaryOnly || shouldReturnTopOnly
+                ? []
+                : topByRankingScore.Select(group => ToLineShoppingResponseGroup(group, shouldIncludeBookmakerPrices)).ToList();
+            var topGroupsByLargestPriceSpread = shouldReturnSummaryOnly || shouldReturnTopOnly
+                ? []
+                : topByPriceSpread.Select(group => ToLineShoppingResponseGroup(group, shouldIncludeBookmakerPrices)).ToList();
             var strategyClassificationSummary = BuildTheOddsStrategyClassificationSummary(groups);
             var representedBookmakers = rows
                 .GroupBy(row => row.Bookmaker, StringComparer.OrdinalIgnoreCase)
@@ -116,7 +162,11 @@ public static class TheOddsApiDebugEndpoints
                     responseBuildMs,
                     persistedTheOddsPlatformPropsLoaded = platformProps.Count,
                     filteredPredictionResultsAnalyzed = probabilityAnalysis.Results.Count,
-                    lifecycleFreshnessMinutes
+                    lifecycleFreshnessMinutes,
+                    summaryOnly = shouldReturnSummaryOnly,
+                    topOnly = shouldReturnTopOnly,
+                    take = requestedTake,
+                    includeBookmakerPrices = shouldIncludeBookmakerPrices
                 },
                 run = new
                 {
@@ -162,6 +212,129 @@ public static class TheOddsApiDebugEndpoints
         })
         .WithName("TheOddsApiMlbLineShoppingDebug")
         .WithSummary("Read-only line-shopping comparison for persisted The Odds API MLB markets.");
+
+        endpoints.MapGet("/api/debug/the-odds/mlb/top-picks", async (
+            Guid? runId,
+            int? take,
+            int? freshnessMinutes,
+            ApplicationDbContext dbContext,
+            IPredictionProbabilityService probabilityService,
+            CancellationToken cancellationToken) =>
+        {
+            var totalStopwatch = Stopwatch.StartNew();
+            var stepStopwatch = Stopwatch.StartNew();
+            var requestedTake = Math.Clamp(take ?? 10, 1, 100);
+            var generatedAtUtc = DateTimeOffset.UtcNow;
+            var lifecycleFreshnessMinutes = Math.Clamp(freshnessMinutes ?? DefaultTheOddsLineShoppingFreshnessMinutes, 1, 1440);
+
+            var platformPropDataRows = await LoadTheOddsPlatformPropDataRowsAsync(dbContext, cancellationToken);
+            var loadPlatformPropsMs = stepStopwatch.ElapsedMilliseconds;
+
+            stepStopwatch.Restart();
+            var platformProps = ParseTheOddsPlatformProps(platformPropDataRows);
+            var metadataParseMs = stepStopwatch.ElapsedMilliseconds;
+
+            stepStopwatch.Restart();
+            var activePlatformProps = platformProps
+                .Where(row =>
+                {
+                    var lifecycle = BuildTheOddsLineShoppingLifecycle(
+                        row.EventStartTime,
+                        row.ObservedAt,
+                        generatedAtUtc,
+                        lifecycleFreshnessMinutes);
+                    return string.Equals(lifecycle.Status, "Active", StringComparison.OrdinalIgnoreCase)
+                        && !lifecycle.IsStale
+                        && !lifecycle.IsExpired;
+                })
+                .ToList();
+            var activeFilterMs = stepStopwatch.ElapsedMilliseconds;
+
+            var theOddsPropIds = activePlatformProps.Select(row => row.PropId).Distinct().ToArray();
+
+            stepStopwatch.Restart();
+            var probabilityAnalysis = runId.HasValue
+                ? await probabilityService.AnalyzeRunForPropsAsync(runId.Value, theOddsPropIds, cancellationToken)
+                : await probabilityService.AnalyzeLatestRunForPropsAsync(theOddsPropIds, cancellationToken);
+            var loadPredictionsMs = stepStopwatch.ElapsedMilliseconds;
+
+            if (probabilityAnalysis is null)
+            {
+                return Results.NotFound(new { error = $"Prediction run '{runId}' was not found." });
+            }
+
+            var freshnessCutoff = generatedAtUtc.AddHours(-FreshnessWindowHours);
+
+            stepStopwatch.Restart();
+            var rows = BuildTheOddsLineShoppingRows(activePlatformProps, probabilityAnalysis, freshnessCutoff);
+            var buildRowsMs = stepStopwatch.ElapsedMilliseconds;
+
+            stepStopwatch.Restart();
+            var groups = BuildTheOddsLineShoppingGroups(rows, generatedAtUtc, lifecycleFreshnessMinutes);
+            var groupingMs = stepStopwatch.ElapsedMilliseconds;
+
+            stepStopwatch.Restart();
+            var strategyClassificationSummary = BuildTheOddsStrategyClassificationSummary(groups);
+            var topPicks = groups
+                .Select(group => new
+                {
+                    Group = group,
+                    Strategy = ClassifyTheOddsLineShoppingStrategy(group)
+                })
+                .Where(row => row.Strategy.IsCandidate)
+                .OrderByDescending(row => row.Group.BestEstimatedEv ?? decimal.MinValue)
+                .ThenByDescending(row => row.Group.RankingScore)
+                .Take(requestedTake)
+                .Select(row => ToLineShoppingResponseGroup(row.Group, includeBookmakerPrices: false))
+                .ToArray();
+            var responseBuildMs = stepStopwatch.ElapsedMilliseconds;
+            totalStopwatch.Stop();
+
+            return Results.Ok(new
+            {
+                dataProvider = "The Odds API",
+                diagnostics = new
+                {
+                    callsTheOddsApi = false,
+                    usesPersistedDatabaseRowsOnly = true,
+                    totalDurationMs = totalStopwatch.ElapsedMilliseconds,
+                    loadPlatformPropsMs,
+                    metadataParseMs,
+                    activeFilterMs,
+                    loadPredictionsMs,
+                    buildRowsMs,
+                    groupingMs,
+                    responseBuildMs,
+                    persistedTheOddsPlatformPropsLoaded = platformProps.Count,
+                    activeTheOddsPlatformPropsAnalyzed = activePlatformProps.Count,
+                    filteredPredictionResultsAnalyzed = probabilityAnalysis.Results.Count,
+                    lifecycleFreshnessMinutes,
+                    take = requestedTake,
+                    topPicksOnly = true
+                },
+                run = new
+                {
+                    runId = probabilityAnalysis.RunId,
+                    probabilityAnalysis.ModelName,
+                    probabilityAnalysis.ModelVersion,
+                    probabilityAnalysis.CreatedAt,
+                    probabilityAnalysis.PredictionCount
+                },
+                summary = new
+                {
+                    totalActiveComparisonGroups = groups.Count,
+                    activeCandidateCount = groups.Count(group => ClassifyTheOddsLineShoppingStrategy(group).IsCandidate),
+                    activeWatchlistCount = groups.Count(group => ClassifyTheOddsLineShoppingStrategy(group).IsWatchlist),
+                    returnedTopPicks = topPicks.Length
+                },
+                strategyClassificationSummary,
+                topPicks,
+                topGroupsByBestEstimatedEv = topPicks,
+                comparisonGroups = topPicks
+            });
+        })
+        .WithName("TheOddsApiMlbTopPicksDebug")
+        .WithSummary("Read-only lightweight top picks for active persisted The Odds API MLB line-shopping groups.");
 
         endpoints.MapGet("/api/debug/the-odds/mlb/line-shopping-backtest", async (
             Guid? runId,
@@ -2430,28 +2603,48 @@ public static class TheOddsApiDebugEndpoints
             DateOnly? date,
             bool? dryRun,
             bool? includeCandidates,
+            bool? includeLineShopping,
+            bool? includeFullDiagnostics,
             int? freshnessMinutes,
             IOptions<TheOddsIngestionWorkerOptions> workerOptions,
+            IOptions<TheOddsApiOptions> theOddsApiOptions,
             ITheOddsApiMlbPlayerPropsAdapter adapter,
-            ITheOddsApiMlbEventIngestionService ingestionService,
             IPredictionGenerationService generationService,
             IPredictionProbabilityService probabilityService,
+            IServiceScopeFactory scopeFactory,
             ApplicationDbContext dbContext,
             IApplicationErrorLogger errorLogger,
             HttpContext httpContext,
             CancellationToken cancellationToken) =>
         {
+            var totalStopwatch = Stopwatch.StartNew();
+            var stepStopwatch = Stopwatch.StartNew();
             var isDryRun = dryRun == true;
             var shouldIncludeCandidates = includeCandidates ?? true;
+            var shouldIncludeLineShopping = includeLineShopping ?? true;
+            var shouldIncludeFullDiagnostics = includeFullDiagnostics ?? true;
             var options = workerOptions.Value;
+            var apiOptions = theOddsApiOptions.Value;
+            var maxConcurrentRequests = Math.Clamp(apiOptions.MaxConcurrentRequests, 1, 10);
             var slateDate = date ?? ResolveCurrentMlbSlateDate();
+            var resolveSlateDateMs = stepStopwatch.ElapsedMilliseconds;
             var lifecycleFreshnessMinutes = Math.Clamp(freshnessMinutes ?? DefaultTheOddsLineShoppingFreshnessMinutes, 1, 1440);
             var bookmakers = NullIfWhiteSpace(options.Bookmakers);
             var markets = NullIfWhiteSpace(options.Markets);
+            var requestedBookmakers = ParseCommaSeparatedSet(bookmakers);
+            var requestedMarkets = ParseCommaSeparatedSet(markets);
+            var requestedPropTypes = requestedMarkets
+                .Select(NormalizeTheOddsMarketKeyToPropType)
+                .Where(value => !string.IsNullOrWhiteSpace(value))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+            stepStopwatch.Restart();
             var existingSlateProps = await CountPersistedTheOddsPropsForSlateAsync(dbContext, slateDate, cancellationToken);
+            var countExistingSlatePropsMs = stepStopwatch.ElapsedMilliseconds;
 
             if (isDryRun)
             {
+                totalStopwatch.Stop();
                 return Results.Ok(new
                 {
                     success = true,
@@ -2481,8 +2674,16 @@ public static class TheOddsApiDebugEndpoints
                     {
                         wouldCallTheOddsApi = false,
                         wouldWriteRows = false,
+                        totalDurationMs = totalStopwatch.ElapsedMilliseconds,
+                        resolveSlateDateMs,
+                        countExistingSlatePropsMs,
+                        theOddsApiCallCount = 0,
                         configuredBookmakers = bookmakers,
                         configuredMarkets = markets,
+                        bookmakersRequested = requestedBookmakers,
+                        marketsRequested = requestedMarkets,
+                        propTypesRequested = requestedPropTypes,
+                        maxConcurrentRequests,
                         existingPersistedTheOddsPropsForSlate = existingSlateProps,
                         estimatedApiCalls = "Live refresh would call The Odds API once for MLB events, then once per MLB event on the slate.",
                         recommendedAction = "Run without dryRun only when you want to spend The Odds API credits and refresh persisted market rows."
@@ -2492,7 +2693,11 @@ public static class TheOddsApiDebugEndpoints
 
             try
             {
+                stepStopwatch.Restart();
                 var beforePlatformPropIds = await LoadTheOddsPlatformPropIdsAsync(dbContext, cancellationToken);
+                var loadBeforePlatformPropsMs = stepStopwatch.ElapsedMilliseconds;
+
+                stepStopwatch.Restart();
                 var eventFetch = await adapter.FetchSpikeAsync(
                     eventId: null,
                     markets: null,
@@ -2500,64 +2705,98 @@ public static class TheOddsApiDebugEndpoints
                     regions: null,
                     oddsFormat: null,
                     cancellationToken);
+                var fetchEventsMs = stepStopwatch.ElapsedMilliseconds;
+
+                stepStopwatch.Restart();
                 var slateEvents = eventFetch.Events
                     .Where(row => !string.IsNullOrWhiteSpace(row.EventId))
                     .Where(row => ResolveMlbSlateDate(row.EventStartTime) == slateDate)
                     .OrderBy(row => row.EventStartTime)
                     .ThenBy(row => row.EventId)
                     .ToArray();
-                var ingestionResults = new List<TheOddsApiMlbEventIngestionResult>(slateEvents.Length);
+                var filterEventsMs = stepStopwatch.ElapsedMilliseconds;
 
-                foreach (var slateEvent in slateEvents)
-                {
-                    cancellationToken.ThrowIfCancellationRequested();
+                stepStopwatch.Restart();
+                var ingestionResults = await IngestTheOddsSlateEventsAsync(
+                    slateEvents,
+                    bookmakers,
+                    markets,
+                    maxConcurrentRequests,
+                    scopeFactory,
+                    cancellationToken);
+                var ingestEventsWallClockMs = stepStopwatch.ElapsedMilliseconds;
 
-                    var ingestionResult = await ingestionService.IngestEventAsync(
-                        new TheOddsApiMlbEventIngestionRequest(
-                            slateEvent.EventId!,
-                            bookmakers,
-                            markets),
-                        dryRun: false,
-                        cancellationToken);
-                    ingestionResults.Add(ingestionResult);
-                }
-
+                stepStopwatch.Restart();
                 var afterPlatformPropIds = await LoadTheOddsPlatformPropIdsAsync(dbContext, cancellationToken);
                 var platformPropsCreated = afterPlatformPropIds.Except(beforePlatformPropIds).Count();
                 var platformPropsUpserted = ingestionResults.Sum(row => row.PlatformPropsUpserted);
                 var platformPropsUpdated = Math.Max(0, platformPropsUpserted - platformPropsCreated);
+                var loadAfterPlatformPropsMs = stepStopwatch.ElapsedMilliseconds;
+
+                stepStopwatch.Restart();
                 var predictionResult = slateEvents.Length == 0
                     ? null
                     : await generationService.GenerateTheOddsMlbBaselinePredictionsAsync(
                         new TheOddsMlbPredictionGenerationRequest(null, bookmakers, markets),
                         cancellationToken);
+                var generatePredictionsMs = stepStopwatch.ElapsedMilliseconds;
 
                 var generatedAtUtc = DateTimeOffset.UtcNow;
-                var lineShopping = predictionResult is null
+                var needsLineShopping = predictionResult is not null
+                    && (shouldIncludeLineShopping || shouldIncludeCandidates);
+                stepStopwatch.Restart();
+                var lineShopping = !needsLineShopping
                     ? new TheOddsCurrentRecommendationLineShoppingResult([], [], [], Array.Empty<object>())
                     : await BuildCurrentRecommendationLineShoppingResultAsync(
-                        predictionResult.RunId,
+                        predictionResult!.RunId,
                         generatedAtUtc,
                         lifecycleFreshnessMinutes,
                         dbContext,
                         probabilityService,
                         cancellationToken);
+                var lineShoppingMs = stepStopwatch.ElapsedMilliseconds;
+
+                stepStopwatch.Restart();
                 var activeGroups = lineShopping.Groups
                     .Where(IsActiveTheOddsLineShoppingGroup)
                     .ToArray();
-                var activeCandidates = activeGroups
-                    .Where(row => ClassifyTheOddsLineShoppingStrategy(row).IsCandidate)
-                    .OrderByDescending(row => row.BestEstimatedEv ?? decimal.MinValue)
-                    .ThenByDescending(row => row.RankingScore)
+                var classifiedGroups = activeGroups
+                    .Select(group => new
+                    {
+                        Group = group,
+                        Strategy = ClassifyTheOddsLineShoppingStrategy(group)
+                    })
                     .ToArray();
-                var activeWatchlist = activeGroups
-                    .Where(row => ClassifyTheOddsLineShoppingStrategy(row).IsWatchlist)
-                    .OrderByDescending(row => row.BestEstimatedEv ?? decimal.MinValue)
-                    .ThenByDescending(row => row.RankingScore)
+                var strategyClassificationMs = stepStopwatch.ElapsedMilliseconds;
+
+                stepStopwatch.Restart();
+                var activeCandidates = classifiedGroups
+                    .Where(row => row.Strategy.IsCandidate)
+                    .OrderByDescending(row => row.Group.BestEstimatedEv ?? decimal.MinValue)
+                    .ThenByDescending(row => row.Group.RankingScore)
+                    .Select(row => row.Group)
                     .ToArray();
-                var activeAvoid = activeGroups
-                    .Where(row => ClassifyTheOddsLineShoppingStrategy(row).IsAvoid)
+                var activeWatchlist = classifiedGroups
+                    .Where(row => row.Strategy.IsWatchlist)
+                    .OrderByDescending(row => row.Group.BestEstimatedEv ?? decimal.MinValue)
+                    .ThenByDescending(row => row.Group.RankingScore)
+                    .Select(row => row.Group)
                     .ToArray();
+                var activeAvoid = classifiedGroups
+                    .Where(row => row.Strategy.IsAvoid)
+                    .Select(row => row.Group)
+                    .ToArray();
+                var topCandidatesMs = stepStopwatch.ElapsedMilliseconds;
+
+                stepStopwatch.Restart();
+                var topActiveCandidates = shouldIncludeCandidates
+                    ? activeCandidates.Take(25).Select(group => ToLineShoppingResponseGroup(group, includeBookmakerPrices: false)).ToArray()
+                    : Array.Empty<object>();
+                var topWatchlist = shouldIncludeCandidates
+                    ? activeWatchlist.Take(25).Select(group => ToLineShoppingResponseGroup(group, includeBookmakerPrices: false)).ToArray()
+                    : Array.Empty<object>();
+                var responseBuildMs = stepStopwatch.ElapsedMilliseconds;
+                totalStopwatch.Stop();
 
                 return Results.Ok(new
                 {
@@ -2579,38 +2818,93 @@ public static class TheOddsApiDebugEndpoints
                         activeGroups = activeGroups.Length,
                         staleOrExpiredGroups = lineShopping.Groups.Count(row => !IsActiveTheOddsLineShoppingGroup(row))
                     },
-                    strategyClassificationSummary = lineShopping.StrategyClassificationSummary,
+                    strategyClassificationSummary = shouldIncludeLineShopping || shouldIncludeCandidates
+                        ? lineShopping.StrategyClassificationSummary
+                        : Array.Empty<object>(),
                     activeCandidateCount = activeCandidates.Length,
                     activeWatchlistCount = activeWatchlist.Length,
                     activeAvoidCount = activeAvoid.Length,
-                    topActiveCandidates = shouldIncludeCandidates
-                        ? activeCandidates.Take(25).Select(ToLineShoppingResponseGroup).ToArray()
-                        : Array.Empty<object>(),
-                    topWatchlist = shouldIncludeCandidates
-                        ? activeWatchlist.Take(25).Select(ToLineShoppingResponseGroup).ToArray()
-                        : Array.Empty<object>(),
+                    topActiveCandidates,
+                    topWatchlist,
                     diagnostics = new
                     {
                         callsTheOddsApi = true,
+                        totalDurationMs = totalStopwatch.ElapsedMilliseconds,
+                        resolveSlateDateMs,
+                        countExistingSlatePropsMs,
+                        loadBeforePlatformPropsMs,
+                        fetchEventsMs,
+                        filterEventsMs,
+                        fetchMarketsTotalMs = ingestionResults.Sum(row => row.Timing.FetchMarketsMs),
+                        fetchMarketsWallClockMs = ingestEventsWallClockMs,
+                        fetchMarketsByEventMs = ingestionResults.Select(row => new
+                        {
+                            row.EventId,
+                            row.Success,
+                            durationMs = row.Timing.TotalMs,
+                            fetchMarketsMs = row.Timing.FetchMarketsMs,
+                            persistPlatformPropsMs = row.Timing.PersistPlatformPropsMs,
+                            normalizedPropsCount = row.Timing.NormalizedPropsCount,
+                            existingRowsMatched = row.Timing.ExistingRowsMatched,
+                            rowsCreated = row.Timing.RowsCreated,
+                            rowsUpdated = row.Timing.RowsUpdated,
+                            rowsUnchanged = row.Timing.RowsUnchanged,
+                            rowsSkipped = row.Timing.RowsSkipped,
+                            saveChangesMs = row.Timing.SaveChangesMs
+                        }),
+                        fetchMarketsByBookmakerMs = Array.Empty<object>(),
+                        fetchMarketsByBookmakerTimingNote = "The Odds event odds endpoint returns all requested bookmakers for an event in one response, so per-bookmaker network timings are not available.",
+                        persistPlatformPropsMs = ingestionResults.Sum(row => row.Timing.PersistPlatformPropsMs),
+                        persistPlatformPropsWallClockMs = ingestEventsWallClockMs,
+                        normalizedPropsCount = ingestionResults.Sum(row => row.Timing.NormalizedPropsCount),
+                        existingLookupMs = ingestionResults.Sum(row => row.Timing.ExistingLookupMs),
+                        existingRowsMatched = ingestionResults.Sum(row => row.Timing.ExistingRowsMatched),
+                        rowsUnchanged = ingestionResults.Sum(row => row.Timing.RowsUnchanged),
+                        rowsCreated = ingestionResults.Sum(row => row.Timing.RowsCreated),
+                        rowsUpdated = ingestionResults.Sum(row => row.Timing.RowsUpdated),
+                        rowsSkipped = ingestionResults.Sum(row => row.Timing.RowsSkipped),
+                        saveChangesMs = ingestionResults.Sum(row => row.Timing.SaveChangesMs),
+                        dbRoundTripsEstimate = ingestionResults.Sum(row => row.Timing.DbRoundTripsEstimate),
+                        loadAfterPlatformPropsMs,
+                        generatePredictionsMs,
+                        lineShoppingMs,
+                        strategyClassificationMs,
+                        topCandidatesMs,
+                        responseBuildMs,
+                        theOddsApiCallCount = 1 + slateEvents.Length,
+                        theOddsApiCallsByType = new
+                        {
+                            events = 1,
+                            eventOdds = slateEvents.Length
+                        },
                         apiCallsMade = 1 + slateEvents.Length,
+                        maxConcurrentRequests,
                         eventDiscoveryCreditUsage = eventFetch.CreditUsage,
-                        eventIngestionCreditUsage = ingestionResults.Select(row => new
+                        eventIngestionCreditUsage = shouldIncludeFullDiagnostics ? ingestionResults.Select(row => new
                         {
                             row.EventId,
                             row.CreditUsage
-                        }),
+                        }).Cast<object>().ToArray() : Array.Empty<object>(),
                         configuredBookmakers = bookmakers,
                         configuredMarkets = markets,
+                        eventsFetched = slateEvents.Length,
+                        marketsRequested = requestedMarkets,
+                        bookmakersRequested = requestedBookmakers,
+                        propTypesRequested = requestedPropTypes,
+                        platformPropsCreated,
+                        platformPropsUpdated,
+                        predictionCount = predictionResult?.PredictionsGenerated ?? 0,
+                        lineShoppingGroupCount = lineShopping.Groups.Count,
                         existingPersistedTheOddsPropsForSlate = existingSlateProps,
-                        events = slateEvents.Select(row => new
+                        events = shouldIncludeFullDiagnostics ? slateEvents.Select(row => new
                         {
                             row.EventId,
                             row.HomeTeam,
                             row.AwayTeam,
                             row.EventStartTime,
                             slateDate = ResolveMlbSlateDate(row.EventStartTime)
-                        }),
-                        ingestion = ingestionResults.Select(row => new
+                        }).Cast<object>().ToArray() : Array.Empty<object>(),
+                        ingestion = shouldIncludeFullDiagnostics ? ingestionResults.Select(row => new
                         {
                             row.EventId,
                             row.Success,
@@ -2619,8 +2913,24 @@ public static class TheOddsApiDebugEndpoints
                             row.SnapshotsCreated,
                             row.SnapshotsUnchanged,
                             row.Warnings,
-                            row.Errors
-                        }),
+                            row.Errors,
+                            timing = new
+                            {
+                                row.Timing.TotalMs,
+                                row.Timing.FetchMarketsMs,
+                                row.Timing.NormalizeMs,
+                                row.Timing.PersistPlatformPropsMs,
+                                row.Timing.NormalizedPropsCount,
+                                row.Timing.ExistingLookupMs,
+                                row.Timing.ExistingRowsMatched,
+                                row.Timing.RowsUnchanged,
+                                row.Timing.RowsCreated,
+                                row.Timing.RowsUpdated,
+                                row.Timing.RowsSkipped,
+                                row.Timing.SaveChangesMs,
+                                row.Timing.DbRoundTripsEstimate
+                            }
+                        }).Cast<object>().ToArray() : Array.Empty<object>(),
                         prediction = predictionResult is null ? null : new
                         {
                             predictionResult.RunId,
@@ -2631,6 +2941,9 @@ public static class TheOddsApiDebugEndpoints
                             predictionResult.RecommendationsSuppressedByPropTypeFilter,
                             predictionResult.TimingDiagnostics
                         },
+                        includeLineShopping = shouldIncludeLineShopping,
+                        includeCandidates = shouldIncludeCandidates,
+                        includeFullDiagnostics = shouldIncludeFullDiagnostics,
                         freshnessMinutes = lifecycleFreshnessMinutes,
                         warning = activeGroups.Length == 0 && lineShopping.Groups.Count > 0
                             ? "All line-shopping rows are stale, expired, or game-started for the requested freshness window."
@@ -3299,6 +3612,13 @@ public static class TheOddsApiDebugEndpoints
 
     private static object ToLineShoppingResponseGroup(TheOddsLineShoppingGroup group)
     {
+        return ToLineShoppingResponseGroup(group, includeBookmakerPrices: true);
+    }
+
+    private static object ToLineShoppingResponseGroup(
+        TheOddsLineShoppingGroup group,
+        bool includeBookmakerPrices)
+    {
         var strategy = ClassifyTheOddsLineShoppingStrategy(group);
 
         return new
@@ -3334,7 +3654,7 @@ public static class TheOddsApiDebugEndpoints
             group.ConfidenceScore,
             group.SampleWarning,
             group.TrustLevel,
-            bookmakerPrices = group.BookmakerPrices,
+            bookmakerPrices = includeBookmakerPrices ? group.BookmakerPrices : Array.Empty<TheOddsBookmakerPriceRow>(),
             group.BestOverBookmaker,
             group.BestOverAmericanPrice,
             group.BestOverEstimatedEv,
@@ -3362,6 +3682,26 @@ public static class TheOddsApiDebugEndpoints
             strategy.MarketShape,
             strategy.RiskTags
         };
+    }
+
+    private static int GetLineShoppingTopOnlyStrategyRank(TheOddsLineShoppingStrategyClassification strategy)
+    {
+        if (strategy.IsCandidate)
+        {
+            return 0;
+        }
+
+        if (strategy.IsWatchlist)
+        {
+            return 1;
+        }
+
+        if (string.Equals(strategy.StrategyClassification, "Research", StringComparison.OrdinalIgnoreCase))
+        {
+            return 2;
+        }
+
+        return 3;
     }
 
     private static TheOddsLineShoppingStrategyClassification ClassifyTheOddsLineShoppingStrategy(
@@ -7795,6 +8135,112 @@ public static class TheOddsApiDebugEndpoints
             .Where(item => !string.IsNullOrWhiteSpace(item))
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToArray();
+    }
+
+    private static async Task<IReadOnlyList<TheOddsApiMlbEventIngestionResult>> IngestTheOddsSlateEventsAsync(
+        IReadOnlyCollection<TheOddsApiEventRecord> slateEvents,
+        string? bookmakers,
+        string? markets,
+        int maxConcurrentRequests,
+        IServiceScopeFactory scopeFactory,
+        CancellationToken cancellationToken)
+    {
+        if (slateEvents.Count == 0)
+        {
+            return [];
+        }
+
+        using var semaphore = new SemaphoreSlim(maxConcurrentRequests);
+        var tasks = slateEvents.Select(async slateEvent =>
+        {
+            await semaphore.WaitAsync(cancellationToken);
+            var stopwatch = Stopwatch.StartNew();
+
+            try
+            {
+                await using var scope = scopeFactory.CreateAsyncScope();
+                var ingestionService = scope.ServiceProvider.GetRequiredService<ITheOddsApiMlbEventIngestionService>();
+
+                return await ingestionService.IngestEventAsync(
+                    new TheOddsApiMlbEventIngestionRequest(
+                        slateEvent.EventId!,
+                        bookmakers,
+                        markets),
+                    dryRun: false,
+                    cancellationToken);
+            }
+            catch (Exception exception) when (exception is not OperationCanceledException)
+            {
+                stopwatch.Stop();
+                return BuildFailedTheOddsEventIngestionResult(
+                    slateEvent,
+                    exception.Message,
+                    stopwatch.ElapsedMilliseconds);
+            }
+            finally
+            {
+                semaphore.Release();
+            }
+        });
+
+        var results = await Task.WhenAll(tasks);
+
+        return results
+            .OrderBy(row => row.EventStartTime)
+            .ThenBy(row => row.EventId)
+            .ToArray();
+    }
+
+    private static TheOddsApiMlbEventIngestionResult BuildFailedTheOddsEventIngestionResult(
+        TheOddsApiEventRecord slateEvent,
+        string error,
+        long durationMs)
+    {
+        return new TheOddsApiMlbEventIngestionResult(
+            Success: false,
+            DryRun: false,
+            EventId: slateEvent.EventId ?? "unknown",
+            EventStartTime: slateEvent.EventStartTime,
+            HomeTeam: slateEvent.HomeTeam,
+            AwayTeam: slateEvent.AwayTeam,
+            BookmakersParsed: 0,
+            MarketsParsed: 0,
+            NormalizedRecords: 0,
+            PropsUpserted: 0,
+            PlatformPropsUpserted: 0,
+            SnapshotsCreated: 0,
+            SnapshotsUnchanged: 0,
+            PlayersResolved: 0,
+            PlayersCreated: 0,
+            PropTypesResolved: 0,
+            Warnings: [],
+            Errors: [error],
+            CreditUsage: new TheOddsApiCreditUsage(null, null, null),
+            Timing: new TheOddsApiMlbEventIngestionTiming(durationMs, durationMs, 0, durationMs, 0, durationMs, 0, 0, 0, 0, 0, 0, 1));
+    }
+
+    private static string NormalizeTheOddsMarketKeyToPropType(string marketKey)
+    {
+        return marketKey switch
+        {
+            "batter_hits" => "Hits",
+            "batter_runs_scored" => "Runs",
+            "batter_rbis" => "RBIs",
+            "batter_home_runs" => "Home Runs",
+            "batter_total_bases" => "Total Bases",
+            "batter_stolen_bases" => "Stolen Bases",
+            "batter_strikeouts" => "Strikeouts",
+            "pitcher_strikeouts" => "Pitcher Strikeouts",
+            "batter_walks" => "Batter Walks",
+            "batter_doubles" => "Doubles",
+            "batter_singles" => "Singles",
+            "batter_hits_runs_rbis" => "Hits + Runs + RBIs",
+            "pitcher_walks" => "Walks Allowed",
+            "pitcher_hits_allowed" => "Hits Allowed",
+            "pitcher_earned_runs" => "Earned Runs Allowed",
+            "pitcher_outs" => "Pitching Outs",
+            _ => CultureInfo.InvariantCulture.TextInfo.ToTitleCase(marketKey.Replace('_', ' '))
+        };
     }
 
     private static string DetermineTheOddsEventWorkflowStatus(

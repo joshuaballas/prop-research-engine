@@ -60,6 +60,15 @@ Invoke-RestMethod `
 
 Use this when you want the dashboard to produce active strategy-aware candidates for the current MLB slate. The dry-run form does not call The Odds API and does not write rows. The live form spends The Odds API credits, persists/refreshes The Odds market rows, generates a scoped prediction run, and returns line-shopping strategy summaries for that run.
 
+The current refresh endpoint supports profiling options:
+
+```powershell
+$r = Invoke-RestMethod -Method Post -Uri "http://localhost:5299/api/debug/the-odds/mlb/recommendations/refresh-current?includeCandidates=true&includeLineShopping=true&includeFullDiagnostics=true&freshnessMinutes=30"
+$r.diagnostics | ConvertTo-Json -Depth 8
+```
+
+`TheOddsApi:MaxConcurrentRequests` controls bounded parallel event-odds ingestion for live refreshes. Keep this conservative; the default is `3`.
+
 Dry run:
 
 ```powershell
@@ -151,6 +160,14 @@ The dashboard includes presets:
 - Reset
 
 The compact Top Picks panel uses the current line-shopping response and shows the top 10 active, non-stale, non-expired strategy candidates sorted by estimated EV.
+
+For dashboard startup performance, `/research` initially uses a lightweight Top Picks read:
+
+```powershell
+Invoke-RestMethod -Uri "http://localhost:5299/api/debug/the-odds/mlb/top-picks?take=10&freshnessMinutes=30"
+```
+
+The full line-shopping table, market rankings, freshness summary, The Odds ingestion planner, EV backtest, prop reliability, strategy snapshots, and other large diagnostics should be loaded from their section buttons only when needed.
 
 ## Check Event Workflow And Planner
 

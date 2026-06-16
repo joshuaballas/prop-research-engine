@@ -88,7 +88,21 @@ public sealed class PredictionProbabilityService(
                 []);
         }
 
-        var historicalResults = await LoadHistoricalResultsAsync(cancellationToken);
+        var predictionPropTypeIds = predictions
+            .Select(prediction => prediction.PropTypeId)
+            .Distinct()
+            .ToArray();
+        var equivalentPropTypeIds = await LoadEquivalentPropTypeIdsAsync(cancellationToken);
+        equivalentPropTypeIdsById = equivalentPropTypeIds;
+        var relevantPropTypeIds = predictionPropTypeIds
+            .SelectMany(propTypeId => equivalentPropTypeIds.TryGetValue(propTypeId, out var ids) ? ids : [propTypeId])
+            .Distinct()
+            .ToArray();
+        var maxPredictionEventDate = predictions.Max(prediction => prediction.EventDate);
+        var historicalResults = await LoadHistoricalResultsAsync(
+            relevantPropTypeIds,
+            maxPredictionEventDate,
+            cancellationToken);
         var historicalResultsByPlayerPropType = historicalResults
             .GroupBy(result => new PlayerPropTypeKey(result.PlayerId, result.PropTypeId))
             .ToDictionary(group => group.Key, group => group.OrderBy(result => result.EventDate).ToArray());
@@ -300,12 +314,23 @@ public sealed class PredictionProbabilityService(
             .ToListAsync(cancellationToken);
     }
 
-    private async Task<List<HistoricalResultRow>> LoadHistoricalResultsAsync(CancellationToken cancellationToken)
+    private async Task<List<HistoricalResultRow>> LoadHistoricalResultsAsync(
+        IReadOnlyCollection<Guid> propTypeIds,
+        DateOnly maxPredictionEventDate,
+        CancellationToken cancellationToken)
     {
+        if (propTypeIds.Count == 0)
+        {
+            return [];
+        }
+
         return await dbContext.PropResults
             .AsNoTracking()
             .Include(result => result.League)
-            .Where(result => result.League != null && result.League.Code == "MLB")
+            .Where(result => result.League != null
+                && result.League.Code == "MLB"
+                && propTypeIds.Contains(result.PropTypeId)
+                && result.EventDate < maxPredictionEventDate)
             .Select(result => new HistoricalResultRow(
                 result.PlayerId,
                 result.PropTypeId,

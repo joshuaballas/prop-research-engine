@@ -117,6 +117,10 @@
 
         <section class="section-grid summary-grid" aria-label="Freshness summary">
             <div class="metric">
+                <span>Freshness Data</span>
+                <strong><button id="loadFreshnessButton" class="secondary-button" type="button">Load Freshness</button></strong>
+            </div>
+            <div class="metric">
                 <span>Total Ranked</span>
                 <strong id="totalRankedMarkets">-</strong>
             </div>
@@ -144,7 +148,10 @@
                     <h2>The Odds MLB Event Workflow</h2>
                     <p>This section uses persisted database rows only and does not call The Odds API.</p>
                 </div>
-                <div id="theOddsWorkflowCount" class="table-count">0 events</div>
+                <div class="section-actions">
+                    <button id="loadTheOddsWorkflowButton" class="secondary-button" type="button">Load Planner</button>
+                    <div id="theOddsWorkflowCount" class="table-count">Not loaded</div>
+                </div>
             </div>
 
             <section class="section-grid event-workflow-summary-grid" aria-label="The Odds event workflow summary">
@@ -225,6 +232,7 @@
                         <h2>Underdog EV Summary</h2>
                         <p>Decimal-price EV backtest.</p>
                     </div>
+                    <button id="loadEvBacktestButton" class="secondary-button" type="button">Load Backtest</button>
                 </div>
                 <div class="metric-list" id="evSummary"></div>
             </div>
@@ -234,6 +242,7 @@
                         <h2>Prop EV Reliability</h2>
                         <p>Sample-backed prop-type status.</p>
                     </div>
+                    <button id="loadPropReliabilityButton" class="secondary-button" type="button">Load Reliability</button>
                 </div>
                 <div id="propReliabilitySummary" class="metric-list"></div>
             </div>
@@ -245,6 +254,7 @@
                     <h2>Prop EV Reliability</h2>
                     <p>Stolen Bases is highlighted as excluded for now. No prop type currently qualifies as ProfitableCandidate.</p>
                 </div>
+                <button id="loadPropReliabilityTableButton" class="secondary-button" type="button">Load Table</button>
             </div>
             <div class="table-wrap compact-table">
                 <table>
@@ -354,7 +364,10 @@
                     <p>Line-shopping data uses persisted The Odds API rows only and does not call The Odds API from the dashboard.</p>
                     <p class="warning-text">Best EV is model-derived and should be treated as research until validated by backtesting.</p>
                 </div>
-                <div id="lineShoppingCount" class="table-count">0 groups</div>
+                <div class="section-actions">
+                    <button id="loadFullLineShoppingButton" class="secondary-button" type="button">Refresh Line Shopping Table</button>
+                    <div id="lineShoppingCount" class="table-count">0 groups</div>
+                </div>
             </div>
 
             <section class="section-grid line-shopping-summary" aria-label="Line shopping summary">
@@ -509,7 +522,10 @@
                     <h2>Market Rankings</h2>
                     <p>Fresh MLB market research with visibility and eligibility flags.</p>
                 </div>
-                <div id="tableCount" class="table-count">0 markets</div>
+                <div class="section-actions">
+                    <button id="loadMarketRankingsButton" class="secondary-button" type="button">Refresh Market Rankings</button>
+                    <div id="tableCount" class="table-count">0 markets</div>
+                </div>
             </div>
 
             <form class="filters" id="filters">

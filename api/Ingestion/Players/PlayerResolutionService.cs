@@ -42,6 +42,53 @@ public sealed class PlayerResolutionService(
         return cache;
     }
 
+    public async Task<PlayerResolutionCache> LoadCacheForLeagueNamesAsync(
+        string leagueCode,
+        IReadOnlyCollection<string> displayNames,
+        CancellationToken cancellationToken)
+    {
+        var normalizedLeagueCode = CanonicalLeagueNormalizer.NormalizeCode(leagueCode);
+        var normalizedNames = displayNames
+            .Where(name => !string.IsNullOrWhiteSpace(name))
+            .Select(NormalizePlayerName)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        if (normalizedNames.Count == 0)
+        {
+            return new PlayerResolutionCache();
+        }
+
+        var cache = new PlayerResolutionCache();
+        var players = await dbContext.Players
+            .Include(player => player.League)
+            .Include(player => player.ExternalProviderRefs)
+            .Where(player => player.League != null
+                && player.League.Code == normalizedLeagueCode)
+            .ToListAsync(cancellationToken);
+
+        foreach (var player in players.Where(player => normalizedNames.Contains(NormalizePlayerName(player.DisplayName))))
+        {
+            foreach (var reference in player.ExternalProviderRefs)
+            {
+                cache.ByExternalRef[ExternalRefKey(reference.Provider, reference.ProviderPlayerId)] = player;
+            }
+
+            foreach (var legacyReference in ReadLegacyReferences(player.ExternalRefs))
+            {
+                cache.ByLegacyRef[ExternalRefKey(legacyReference.Provider, legacyReference.ProviderPlayerId)] = player;
+            }
+
+            var fallbackKey = FallbackKey(player.League?.Code, player.DisplayName);
+            if (!string.IsNullOrWhiteSpace(fallbackKey))
+            {
+                AddFallbackCandidate(cache, fallbackKey, player);
+            }
+        }
+
+        return cache;
+    }
+
     public PlayerResolutionResult ResolveOrCreate(
         PlayerResolutionCache cache,
         PlayerResolutionRequest request)

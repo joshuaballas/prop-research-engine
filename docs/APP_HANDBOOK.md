@@ -66,7 +66,7 @@ Key config sections:
 - `DebugAdmin`: protects `/research` and `/api/debug/*` outside Development.
 - `UnderdogIngestion`: controls Underdog worker.
 - `MlbResultImportWorker`: controls MLB result import worker.
-- `TheOddsApi`: API key, base URL, sport key, regions, odds format, markets.
+- `TheOddsApi`: API key, base URL, sport key, regions, odds format, markets, and `MaxConcurrentRequests` for bounded parallel event-odds requests during explicit current-slate refreshes.
 - `TheOddsIngestionWorker`: disabled, dry-run-first worker skeleton. Its `Bookmakers` value is also the config-driven list used by manual/current The Odds MLB refresh workflows.
 - `PredictionGeneration`: recommendation thresholds and enabled prop types.
 
