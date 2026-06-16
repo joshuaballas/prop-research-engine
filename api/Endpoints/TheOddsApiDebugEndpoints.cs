@@ -3180,6 +3180,24 @@ public static partial class TheOddsApiDebugEndpoints
         ApplicationDbContext dbContext,
         CancellationToken cancellationToken)
     {
+        if (!IsNpgsqlProvider(dbContext))
+        {
+            var allIds = await dbContext.PlatformProps
+                .AsNoTracking()
+                .Where(platformProp => platformProp.Metadata != null)
+                .Select(platformProp => new
+                {
+                    platformProp.Id,
+                    platformProp.Metadata
+                })
+                .ToListAsync(cancellationToken);
+
+            return allIds
+                .Where(row => IsTheOddsMetadata(row.Metadata))
+                .Select(row => row.Id)
+                .ToHashSet();
+        }
+
         using var filter = JsonSerializer.SerializeToDocument(new { dataProvider = "The Odds API" });
 
         var ids = await dbContext.PlatformProps
@@ -3269,6 +3287,37 @@ public static partial class TheOddsApiDebugEndpoints
         ApplicationDbContext dbContext,
         CancellationToken cancellationToken)
     {
+        if (!IsNpgsqlProvider(dbContext))
+        {
+            var allRows = await dbContext.PlatformProps
+                .AsNoTracking()
+                .Where(platformProp => platformProp.Metadata != null)
+                .Select(platformProp => new TheOddsPlatformPropDataRow(
+                    platformProp.Id,
+                    platformProp.PropId,
+                    platformProp.PlatformPropId,
+                    platformProp.Label,
+                    platformProp.CurrentLine,
+                    platformProp.OverAvailable,
+                    platformProp.UnderAvailable,
+                    platformProp.PayoutType,
+                    platformProp.Status,
+                    platformProp.ObservedAt,
+                    platformProp.RawPayloadId,
+                    platformProp.Platform == null ? "Unknown" : platformProp.Platform.Name,
+                    platformProp.Platform == null ? "unknown" : platformProp.Platform.Slug,
+                    platformProp.Prop == null ? Guid.Empty : platformProp.Prop.PlayerId,
+                    platformProp.Prop == null ? Guid.Empty : platformProp.Prop.PropTypeId,
+                    platformProp.Prop == null || platformProp.Prop.Player == null ? "Unknown" : platformProp.Prop.Player.DisplayName,
+                    platformProp.Prop == null || platformProp.Prop.PropType == null ? "Unknown" : platformProp.Prop.PropType.Name,
+                    platformProp.Metadata))
+                .ToListAsync(cancellationToken);
+
+            return allRows
+                .Where(row => IsTheOddsMetadata(row.Metadata))
+                .ToList();
+        }
+
         using var filter = JsonSerializer.SerializeToDocument(new { dataProvider = "The Odds API" });
 
         return await dbContext.PlatformProps
@@ -3295,6 +3344,17 @@ public static partial class TheOddsApiDebugEndpoints
                 platformProp.Prop == null || platformProp.Prop.PropType == null ? "Unknown" : platformProp.Prop.PropType.Name,
                 platformProp.Metadata))
             .ToListAsync(cancellationToken);
+    }
+
+    private static bool IsNpgsqlProvider(ApplicationDbContext dbContext)
+    {
+        return string.Equals(dbContext.Database.ProviderName, "Npgsql.EntityFrameworkCore.PostgreSQL", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsTheOddsMetadata(JsonDocument? metadata)
+    {
+        return metadata?.RootElement.TryGetProperty("dataProvider", out var dataProvider) == true
+            && string.Equals(dataProvider.GetString(), "The Odds API", StringComparison.OrdinalIgnoreCase);
     }
 
     private static List<TheOddsPersistedPlatformPropRow> ParseTheOddsPlatformProps(

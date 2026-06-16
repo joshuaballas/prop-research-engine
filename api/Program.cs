@@ -94,7 +94,10 @@ builder.Services.AddHealthChecks()
 
 var app = builder.Build();
 
-await ApplyDatabaseMigrationsAsync(app);
+if (!app.Environment.IsEnvironment("Testing"))
+{
+    await ApplyDatabaseMigrationsAsync(app);
+}
 
 if (app.Environment.IsDevelopment())
 {
@@ -102,7 +105,10 @@ if (app.Environment.IsDevelopment())
 }
 
 app.UseHttpsRedirection();
-app.UseMiddleware<ApplicationErrorMiddleware>();
+if (!app.Environment.IsEnvironment("Testing"))
+{
+    app.UseMiddleware<ApplicationErrorMiddleware>();
+}
 app.UseMiddleware<DebugAdminProtectionMiddleware>();
 app.UseStaticFiles();
 
@@ -170,4 +176,8 @@ static async Task ApplyDatabaseMigrationsAsync(WebApplication app)
     await dbContext.Database.MigrateAsync();
 
     logger.LogInformation("Database migrations applied successfully.");
+}
+
+public partial class Program
+{
 }

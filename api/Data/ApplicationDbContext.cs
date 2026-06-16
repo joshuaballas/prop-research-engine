@@ -1,4 +1,6 @@
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Metadata.Builders;
+using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using SportsBetting.Api.Models;
 using System.Text.Json;
 
@@ -42,7 +44,13 @@ public sealed class ApplicationDbContext(DbContextOptions<ApplicationDbContext> 
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
-        modelBuilder.HasPostgresExtension("uuid-ossp");
+        var isSqlite = string.Equals(Database.ProviderName, "Microsoft.EntityFrameworkCore.Sqlite", StringComparison.OrdinalIgnoreCase);
+        modelBuilder.Model.SetAnnotation("SportsBetting:JsonColumnType", isSqlite ? "TEXT" : "jsonb");
+
+        if (!isSqlite)
+        {
+            modelBuilder.HasPostgresExtension("uuid-ossp");
+        }
 
         ConfigureReferenceTables(modelBuilder);
         ConfigurePropTables(modelBuilder);
@@ -52,10 +60,76 @@ public sealed class ApplicationDbContext(DbContextOptions<ApplicationDbContext> 
         ConfigureCorrelationTables(modelBuilder);
         ConfigureOptimizationTables(modelBuilder);
         ConfigureApplicationErrorTables(modelBuilder);
+
+        if (isSqlite)
+        {
+            ConfigureSqliteCompatibility(modelBuilder);
+        }
+    }
+
+    private static string GetJsonColumnType(ModelBuilder modelBuilder)
+    {
+        return modelBuilder.Model.FindAnnotation("SportsBetting:JsonColumnType")?.Value as string ?? "jsonb";
+    }
+
+    private static PropertyBuilder<JsonDocument?> ConfigureJsonDocumentProperty(
+        PropertyBuilder<JsonDocument?> propertyBuilder,
+        string columnType)
+    {
+        propertyBuilder.HasColumnType(columnType);
+
+        if (string.Equals(columnType, "TEXT", StringComparison.OrdinalIgnoreCase))
+        {
+            propertyBuilder.HasConversion(
+                value => value == null ? null : value.RootElement.GetRawText(),
+                value => string.IsNullOrWhiteSpace(value) ? null : JsonDocument.Parse(value));
+        }
+
+        return propertyBuilder;
+    }
+
+    private static PropertyBuilder<JsonDocument> ConfigureRequiredJsonDocumentProperty(
+        PropertyBuilder<JsonDocument> propertyBuilder,
+        string columnType)
+    {
+        propertyBuilder.HasColumnType(columnType);
+
+        if (string.Equals(columnType, "TEXT", StringComparison.OrdinalIgnoreCase))
+        {
+            propertyBuilder.HasConversion(
+                value => value.RootElement.GetRawText(),
+                value => string.IsNullOrWhiteSpace(value) ? JsonDocument.Parse("{}") : JsonDocument.Parse(value));
+        }
+
+        return propertyBuilder;
+    }
+
+    private static void ConfigureSqliteCompatibility(ModelBuilder modelBuilder)
+    {
+        var dateTimeOffsetConverter = new ValueConverter<DateTimeOffset, long>(
+            value => value.UtcTicks,
+            value => new DateTimeOffset(value, TimeSpan.Zero));
+        var nullableDateTimeOffsetConverter = new ValueConverter<DateTimeOffset?, long?>(
+            value => value.HasValue ? value.Value.UtcTicks : null,
+            value => value.HasValue ? new DateTimeOffset(value.Value, TimeSpan.Zero) : null);
+
+        foreach (var property in modelBuilder.Model.GetEntityTypes().SelectMany(entityType => entityType.GetProperties()))
+        {
+            if (property.ClrType == typeof(DateTimeOffset))
+            {
+                property.SetValueConverter(dateTimeOffsetConverter);
+            }
+            else if (property.ClrType == typeof(DateTimeOffset?))
+            {
+                property.SetValueConverter(nullableDateTimeOffsetConverter);
+            }
+        }
     }
 
     private static void ConfigureReferenceTables(ModelBuilder modelBuilder)
     {
+        var jsonColumnType = GetJsonColumnType(modelBuilder);
+
         modelBuilder.Entity<Platform>(entity =>
         {
             entity.ToTable("platforms");
@@ -110,7 +184,7 @@ public sealed class ApplicationDbContext(DbContextOptions<ApplicationDbContext> 
             entity.HasKey(x => x.Id);
             entity.Property(x => x.Name).HasMaxLength(200).IsRequired();
             entity.Property(x => x.Abbreviation).HasMaxLength(25);
-            entity.Property(x => x.ExternalRefs).HasColumnType("jsonb");
+            ConfigureJsonDocumentProperty(entity.Property(x => x.ExternalRefs), jsonColumnType);
             entity.HasOne(x => x.League).WithMany(x => x.Teams).HasForeignKey(x => x.LeagueId);
             entity.HasIndex(x => new { x.LeagueId, x.Abbreviation });
         });
@@ -123,7 +197,7 @@ public sealed class ApplicationDbContext(DbContextOptions<ApplicationDbContext> 
             entity.Property(x => x.FirstName).HasMaxLength(100);
             entity.Property(x => x.LastName).HasMaxLength(100);
             entity.Property(x => x.Position).HasMaxLength(50);
-            entity.Property(x => x.ExternalRefs).HasColumnType("jsonb");
+            ConfigureJsonDocumentProperty(entity.Property(x => x.ExternalRefs), jsonColumnType);
             entity.HasOne(x => x.Team).WithMany(x => x.Players).HasForeignKey(x => x.TeamId).OnDelete(DeleteBehavior.SetNull);
             entity.HasOne(x => x.League).WithMany(x => x.Players).HasForeignKey(x => x.LeagueId);
             entity.HasIndex(x => new { x.LeagueId, x.DisplayName });
@@ -157,7 +231,7 @@ public sealed class ApplicationDbContext(DbContextOptions<ApplicationDbContext> 
             entity.ToTable("games");
             entity.HasKey(x => x.Id);
             entity.Property(x => x.Status).HasMaxLength(50).IsRequired();
-            entity.Property(x => x.ExternalRefs).HasColumnType("jsonb");
+            ConfigureJsonDocumentProperty(entity.Property(x => x.ExternalRefs), jsonColumnType);
             entity.HasOne(x => x.League).WithMany(x => x.Games).HasForeignKey(x => x.LeagueId);
             entity.HasOne(x => x.HomeTeam).WithMany().HasForeignKey(x => x.HomeTeamId).OnDelete(DeleteBehavior.Restrict);
             entity.HasOne(x => x.AwayTeam).WithMany().HasForeignKey(x => x.AwayTeamId).OnDelete(DeleteBehavior.Restrict);
@@ -183,6 +257,8 @@ public sealed class ApplicationDbContext(DbContextOptions<ApplicationDbContext> 
 
     private static void ConfigurePropTables(ModelBuilder modelBuilder)
     {
+        var jsonColumnType = GetJsonColumnType(modelBuilder);
+
         modelBuilder.Entity<PropType>(entity =>
         {
             entity.ToTable("prop_types");
@@ -218,7 +294,7 @@ public sealed class ApplicationDbContext(DbContextOptions<ApplicationDbContext> 
             entity.Property(x => x.CurrentLine).HasPrecision(12, 4);
             entity.Property(x => x.PayoutType).HasMaxLength(100).IsRequired();
             entity.Property(x => x.Status).HasMaxLength(50).IsRequired();
-            entity.Property(x => x.Metadata).HasColumnType("jsonb");
+            ConfigureJsonDocumentProperty(entity.Property(x => x.Metadata), jsonColumnType);
             entity.HasOne(x => x.Prop).WithMany(x => x.PlatformProps).HasForeignKey(x => x.PropId);
             entity.HasOne(x => x.Platform).WithMany(x => x.PlatformProps).HasForeignKey(x => x.PlatformId);
             entity.HasOne(x => x.RawPayload).WithMany().HasForeignKey(x => x.RawPayloadId).OnDelete(DeleteBehavior.SetNull);
@@ -254,7 +330,7 @@ public sealed class ApplicationDbContext(DbContextOptions<ApplicationDbContext> 
             entity.Property(x => x.LineMovementScore).HasPrecision(10, 4);
             entity.Property(x => x.PlatformEdgeScore).HasPrecision(10, 4);
             entity.Property(x => x.ModelVersion).HasMaxLength(100).IsRequired();
-            entity.Property(x => x.Explanation).HasColumnType("jsonb");
+            ConfigureJsonDocumentProperty(entity.Property(x => x.Explanation), jsonColumnType);
             entity.HasOne(x => x.PlatformProp).WithMany(x => x.Analyses).HasForeignKey(x => x.PlatformPropId);
             entity.HasIndex(x => new { x.PlatformPropId, x.Side, x.ModelVersion }).IsUnique();
         });
@@ -277,6 +353,8 @@ public sealed class ApplicationDbContext(DbContextOptions<ApplicationDbContext> 
 
     private static void ConfigureIngestionTables(ModelBuilder modelBuilder)
     {
+        var jsonColumnType = GetJsonColumnType(modelBuilder);
+
         modelBuilder.Entity<IngestionRun>(entity =>
         {
             entity.ToTable("ingestion_runs");
@@ -295,7 +373,7 @@ public sealed class ApplicationDbContext(DbContextOptions<ApplicationDbContext> 
             entity.HasKey(x => x.Id);
             entity.Property(x => x.Endpoint).HasMaxLength(1000).IsRequired();
             entity.Property(x => x.PayloadHash).HasMaxLength(128).IsRequired();
-            entity.Property(x => x.Payload).HasColumnType("jsonb").IsRequired();
+            ConfigureRequiredJsonDocumentProperty(entity.Property(x => x.Payload), jsonColumnType).IsRequired();
             entity.HasOne(x => x.IngestionRun).WithMany(x => x.RawPayloads).HasForeignKey(x => x.IngestionRunId);
             entity.HasOne(x => x.Platform).WithMany(x => x.RawPayloads).HasForeignKey(x => x.PlatformId);
             entity.HasIndex(x => x.PayloadHash);
@@ -344,6 +422,8 @@ public sealed class ApplicationDbContext(DbContextOptions<ApplicationDbContext> 
 
     private static void ConfigurePredictionTables(ModelBuilder modelBuilder)
     {
+        var jsonColumnType = GetJsonColumnType(modelBuilder);
+
         modelBuilder.Entity<PredictionRun>(entity =>
         {
             entity.ToTable("prediction_runs");
@@ -416,7 +496,7 @@ public sealed class ApplicationDbContext(DbContextOptions<ApplicationDbContext> 
             entity.Property(x => x.DfsBookmakersRequested).HasMaxLength(1000).IsRequired();
             entity.Property(x => x.MarketsRequested).HasMaxLength(2000).IsRequired();
             entity.Property(x => x.ErrorMessage);
-            entity.Property(x => x.DiagnosticsJson).HasColumnType("jsonb");
+            ConfigureJsonDocumentProperty(entity.Property(x => x.DiagnosticsJson), jsonColumnType);
             entity.HasIndex(x => x.StartedAtUtc);
             entity.HasIndex(x => x.CompletedAtUtc);
             entity.HasIndex(x => new { x.Sport, x.SlateDate });
@@ -437,7 +517,7 @@ public sealed class ApplicationDbContext(DbContextOptions<ApplicationDbContext> 
             entity.Property(x => x.MinutesUntilNextEventStart).HasPrecision(12, 2);
             entity.Property(x => x.MinutesSinceLastSuccessfulRefresh).HasPrecision(12, 2);
             entity.Property(x => x.RecommendedAction).HasMaxLength(1000).IsRequired();
-            entity.Property(x => x.DetailsJson).HasColumnType("jsonb");
+            ConfigureRequiredJsonDocumentProperty(entity.Property(x => x.DetailsJson), jsonColumnType);
             entity.HasIndex(x => x.GeneratedAtUtc);
             entity.HasIndex(x => new { x.Sport, x.GeneratedAtUtc });
             entity.HasIndex(x => new { x.Source, x.GeneratedAtUtc });
@@ -461,6 +541,8 @@ public sealed class ApplicationDbContext(DbContextOptions<ApplicationDbContext> 
         string indexPrefix)
         where TSnapshot : class
     {
+        var jsonColumnType = GetJsonColumnType(modelBuilder);
+
         modelBuilder.Entity<TSnapshot>(entity =>
         {
             entity.ToTable(tableName);
@@ -502,7 +584,7 @@ public sealed class ApplicationDbContext(DbContextOptions<ApplicationDbContext> 
             entity.Property<string>("EntryCompatibilityGroup").HasMaxLength(200).IsRequired();
             entity.Property<string>("EntryProviderCategory").HasMaxLength(50).IsRequired();
             entity.Property<bool>("EntryActionableForUser");
-            entity.Property<JsonDocument>("DetailsJson").HasColumnType("jsonb");
+            ConfigureRequiredJsonDocumentProperty(entity.Property<JsonDocument>("DetailsJson"), jsonColumnType);
             entity.HasOne(typeof(TheOddsRefreshRun), "TheOddsRefreshRun")
                 .WithMany(typeof(TSnapshot) == typeof(MarketTopPickSnapshot)
                     ? nameof(TheOddsRefreshRun.TopPickSnapshots)
@@ -588,6 +670,8 @@ public sealed class ApplicationDbContext(DbContextOptions<ApplicationDbContext> 
 
     private static void ConfigureApplicationErrorTables(ModelBuilder modelBuilder)
     {
+        var jsonColumnType = GetJsonColumnType(modelBuilder);
+
         modelBuilder.Entity<ApplicationError>(entity =>
         {
             entity.ToTable("application_errors");
@@ -601,7 +685,7 @@ public sealed class ApplicationDbContext(DbContextOptions<ApplicationDbContext> 
             entity.Property(x => x.Message).IsRequired();
             entity.Property(x => x.ExceptionType).HasMaxLength(500).IsRequired();
             entity.Property(x => x.CorrelationId).HasMaxLength(100).IsRequired();
-            entity.Property(x => x.MetadataJson).HasColumnType("jsonb");
+            ConfigureJsonDocumentProperty(entity.Property(x => x.MetadataJson), jsonColumnType);
             entity.HasIndex(x => x.OccurredAtUtc);
             entity.HasIndex(x => x.Source);
             entity.HasIndex(x => x.Component);
