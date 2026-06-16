@@ -75,7 +75,19 @@ Invoke-RestMethod -Uri "http://localhost:5299/api/dfs/entry-rules"
 
 These endpoints are read-only, use persisted database rows only, and do not call The Odds API or Underdog. The generic market routes currently support MLB only and report `supportedSports=["MLB"]`; add future sports behind `/api/markets/*` instead of duplicating endpoint trees.
 
-After a successful live The Odds refresh, the app stores stable Top Picks and line-shopping snapshots. Public market endpoints prefer those snapshots and return `snapshotBacked=true`. Before the first successful live snapshot exists, the endpoints fall back to the existing dynamic persisted-row read path and return `snapshotBacked=false` with `fallbackReason="No successful snapshot exists yet."`
+After a successful live The Odds refresh, the app stores stable Top Picks and line-shopping snapshots. Public market endpoints prefer those snapshots and return `snapshotBacked=true` only when snapshot rows exist for the requested filters/view. Before usable snapshots exist, the endpoints fall back to the existing dynamic persisted-row read path and return `snapshotBacked=false` with a clear `fallbackReason`.
+
+Freshness separates recency from usability: `isFresh=true` means a successful refresh happened within the threshold, while `hasUsableMarketData=false` means that refresh did not produce usable market snapshots/data. The freshness response includes snapshot counts, active/stale group counts, provider ingestion success/failure counts, provider rejected-key detection, and a `usabilityWarning`.
+
+Use the production-safe performance summary to inspect provider, prop-type, and strategy slices before showing recommendations confidently:
+
+```powershell
+Invoke-RestMethod -Uri "http://localhost:5299/api/markets/performance-summary?sport=MLB&candidateOnly=true"
+Invoke-RestMethod -Uri "http://localhost:5299/api/markets/performance-summary?sport=MLB&providerCategory=DFS&candidateOnly=true"
+Invoke-RestMethod -Uri "http://localhost:5299/api/markets/performance-summary?sport=MLB&propType=Total%20Bases&candidateOnly=true"
+```
+
+The summary is read-only and currently uses MLB snapshot rows plus `prop_results`. If snapshots or graded result matches are missing, the response reports that limitation instead of implying confidence.
 
 The current refresh endpoint supports profiling options:
 

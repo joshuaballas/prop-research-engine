@@ -102,9 +102,10 @@ Current limitation: only MLB persisted market read models are implemented. When 
 
 | Method | Path | Purpose | Writes | External API | Credits |
 | --- | --- | --- | --- | --- | --- |
-| GET | `/api/markets/freshness` | Preferred production-safe freshness metadata route. Supports optional `sport`, `freshnessMinutes`, `slateDate`, and `bookmakerPreset`. Returns supported/effective sport metadata, latest successful refresh, stale flags, stale reason, and threshold. | No | No | No |
-| GET | `/api/markets/top-picks` | Preferred production-safe persisted Top Picks route. Supports optional `sport`, `take`, `freshnessMinutes`, optional `runId`, optional `providerCategory`, and optional `bookmakerPreset` for freshness filtering. Prefers latest successful snapshot rows when available and returns `snapshotBacked=true`; otherwise falls back to dynamic persisted-row calculation with `snapshotBacked=false` and `fallbackReason`. | No | No | No |
-| GET | `/api/markets/line-shopping` | Preferred production-safe persisted line-shopping route. Supports optional `sport`, `runId`, `take`, `topOnly`, `freshnessMinutes`, `providerCategory`, and `bookmakerPreset`. Defaults to `topOnly=true`, `take=25`, and `includeBookmakerPrices=false`. Prefers latest successful snapshot rows when available and falls back to dynamic persisted-row calculation when no snapshot exists. | No | No | No |
+| GET | `/api/markets/freshness` | Preferred production-safe freshness metadata route. Supports optional `sport`, `freshnessMinutes`, `slateDate`, and `bookmakerPreset`. Returns supported/effective sport metadata, latest successful refresh, stale flags, `hasUsableMarketData`, snapshot counts, active/stale group counts, provider ingestion success/failure counts, provider rejected-key detection, usability warning, and threshold. `isFresh` means a successful refresh is recent; `hasUsableMarketData` says whether it produced usable market snapshots/data. | No | No | No |
+| GET | `/api/markets/top-picks` | Preferred production-safe persisted Top Picks route. Supports optional `sport`, `take`, `freshnessMinutes`, optional `runId`, optional `providerCategory`, and optional `bookmakerPreset` for freshness filtering. Returns `snapshotBacked=true` only when snapshot rows exist for the requested filters; otherwise falls back to dynamic persisted-row calculation with `snapshotBacked=false` and `fallbackReason`. | No | No | No |
+| GET | `/api/markets/line-shopping` | Preferred production-safe persisted line-shopping route. Supports optional `sport`, `runId`, `take`, `topOnly`, `freshnessMinutes`, `providerCategory`, and `bookmakerPreset`. Defaults to `topOnly=true`, `take=25`, and `includeBookmakerPrices=false`. Returns `snapshotBacked=true` only when snapshot rows exist for the requested filters/view; otherwise falls back dynamically with a clear reason. | No | No | No |
+| GET | `/api/markets/performance-summary` | Production-safe read-only strategy/provider performance summary from persisted line-shopping snapshots and MLB `prop_results`. Supports `sport`, `providerCategory`, `provider`, `bookmaker`, `propType`, `strategyClassification`, `strategyTier`, `candidateOnly`, `fromDate`, `toDate`, and `minSampleSize`. Current implementation supports MLB snapshots only and grades conservatively by normalized player name, prop type, and slate date until snapshot rows persist canonical ids. If the latest refresh produced no line-shopping snapshots, the response reports that directly. | No | No | No |
 | GET | `/api/mlb/freshness` | Compatibility wrapper for `/api/markets/freshness?sport=MLB`. | No | No | No |
 | GET | `/api/mlb/top-picks` | Compatibility wrapper for `/api/markets/top-picks?sport=MLB`. | No | No | No |
 | GET | `/api/mlb/line-shopping` | Compatibility wrapper for `/api/markets/line-shopping?sport=MLB`. | No | No | No |
@@ -122,6 +123,9 @@ Invoke-RestMethod "http://localhost:5299/api/markets/top-picks?sport=MLB&take=10
   ConvertTo-Json -Depth 20
 
 Invoke-RestMethod "http://localhost:5299/api/markets/line-shopping?sport=MLB&take=10&freshnessMinutes=30&includeBookmakerPrices=false" |
+  ConvertTo-Json -Depth 20
+
+Invoke-RestMethod "http://localhost:5299/api/markets/performance-summary?sport=MLB&candidateOnly=true" |
   ConvertTo-Json -Depth 20
 ```
 

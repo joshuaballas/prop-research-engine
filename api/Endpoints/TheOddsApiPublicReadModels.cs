@@ -22,6 +22,15 @@ public static partial class TheOddsApiDebugEndpoints
         bool IsStale,
         string? StaleReason,
         int FreshnessThresholdMinutes,
+        bool HasUsableMarketData,
+        int LineShoppingSnapshotCount,
+        int TopPickSnapshotCount,
+        int ActiveGroupCount,
+        int StaleOrExpiredGroupCount,
+        int ProviderIngestionFailureCount,
+        int ProviderIngestionSuccessCount,
+        bool ProviderRejectedKeyDetected,
+        string? UsabilityWarning,
         object? LatestCounts);
 
     internal sealed record MlbLineShoppingReadResponse(
@@ -95,6 +104,39 @@ public static partial class TheOddsApiDebugEndpoints
             : isFresh
                 ? null
                 : $"Latest successful refresh is older than {thresholdMinutes} minutes.";
+        var lineShoppingSnapshotCount = latestSuccessfulRun is null
+            ? 0
+            : await dbContext.MarketLineShoppingSnapshots
+                .AsNoTracking()
+                .CountAsync(row => row.TheOddsRefreshRunId == latestSuccessfulRun.Id, cancellationToken);
+        var topPickSnapshotCount = latestSuccessfulRun is null
+            ? 0
+            : await dbContext.MarketTopPickSnapshots
+                .AsNoTracking()
+                .CountAsync(row => row.TheOddsRefreshRunId == latestSuccessfulRun.Id, cancellationToken);
+        var activeLineShoppingSnapshotCount = latestSuccessfulRun is null
+            ? 0
+            : await dbContext.MarketLineShoppingSnapshots
+                .AsNoTracking()
+                .CountAsync(row => row.TheOddsRefreshRunId == latestSuccessfulRun.Id
+                    && row.LifecycleStatus == "Active"
+                    && !row.IsStale
+                    && !row.IsExpired, cancellationToken);
+        var staleOrExpiredSnapshotCount = Math.Max(0, lineShoppingSnapshotCount - activeLineShoppingSnapshotCount);
+        var diagnostics = ExtractRefreshDiagnostics(latestSuccessfulRun?.DiagnosticsJson);
+        var activeGroupCount = lineShoppingSnapshotCount > 0
+            ? activeLineShoppingSnapshotCount
+            : diagnostics.ActiveGroupCount;
+        var staleOrExpiredGroupCount = lineShoppingSnapshotCount > 0
+            ? staleOrExpiredSnapshotCount
+            : diagnostics.StaleOrExpiredGroupCount;
+        var hasUsableMarketData = topPickSnapshotCount > 0 || activeGroupCount > 0;
+        var usabilityWarning = BuildRefreshUsabilityWarning(
+            latestSuccessfulRun,
+            hasUsableMarketData,
+            lineShoppingSnapshotCount,
+            topPickSnapshotCount,
+            diagnostics);
 
         return new MlbRefreshFreshnessResponse(
             generatedAtUtc,
@@ -108,6 +150,15 @@ public static partial class TheOddsApiDebugEndpoints
             IsStale: !isFresh,
             staleReason,
             thresholdMinutes,
+            hasUsableMarketData,
+            lineShoppingSnapshotCount,
+            topPickSnapshotCount,
+            activeGroupCount,
+            staleOrExpiredGroupCount,
+            diagnostics.ProviderIngestionFailureCount,
+            diagnostics.ProviderIngestionSuccessCount,
+            diagnostics.ProviderRejectedKeyDetected,
+            usabilityWarning,
             latestSuccessfulRun is null ? null : new
             {
                 latestSuccessfulRun.PlatformPropsCreated,
@@ -146,6 +197,11 @@ public static partial class TheOddsApiDebugEndpoints
         }
 
         var totalStopwatch = Stopwatch.StartNew();
+        var fallbackReason = await BuildSnapshotFallbackReasonAsync(
+            topPickSnapshots: true,
+            providerCategory,
+            dbContext,
+            cancellationToken);
         var requestedTake = Math.Clamp(take ?? 10, 1, 100);
         var generatedAtUtc = DateTimeOffset.UtcNow;
         var lifecycleFreshnessMinutes = Math.Clamp(freshnessMinutes ?? DefaultTheOddsLineShoppingFreshnessMinutes, 1, 1440);
@@ -198,7 +254,7 @@ public static partial class TheOddsApiDebugEndpoints
             generatedAtUtc,
             SnapshotBacked: false,
             RefreshRunId: null,
-            FallbackReason: "No successful snapshot exists yet.",
+            FallbackReason: fallbackReason,
             Diagnostics: new
             {
                 callsTheOddsApi = false,
@@ -253,6 +309,11 @@ public static partial class TheOddsApiDebugEndpoints
         }
 
         var totalStopwatch = Stopwatch.StartNew();
+        var fallbackReason = await BuildSnapshotFallbackReasonAsync(
+            topPickSnapshots: false,
+            providerCategory,
+            dbContext,
+            cancellationToken);
         var generatedAtUtc = DateTimeOffset.UtcNow;
         var lifecycleFreshnessMinutes = Math.Clamp(freshnessMinutes ?? DefaultTheOddsLineShoppingFreshnessMinutes, 1, 1440);
         var requestedTake = Math.Clamp(take, 1, 500);
@@ -276,7 +337,7 @@ public static partial class TheOddsApiDebugEndpoints
             generatedAtUtc,
             SnapshotBacked: false,
             RefreshRunId: null,
-            FallbackReason: "No successful snapshot exists yet.",
+            FallbackReason: fallbackReason,
             Diagnostics: new
             {
                 callsTheOddsApi = false,
@@ -476,6 +537,11 @@ public static partial class TheOddsApiDebugEndpoints
             .ThenBy(row => row.EntryActionableForUser ? 0 : 1)
             .Take(requestedTake)
             .ToListAsync(cancellationToken);
+        if (rows.Count == 0)
+        {
+            return null;
+        }
+
         var refreshRun = await dbContext.TheOddsRefreshRuns
             .AsNoTracking()
             .FirstAsync(row => row.Id == refreshRunId.Value, cancellationToken);
@@ -532,6 +598,11 @@ public static partial class TheOddsApiDebugEndpoints
             .ThenByDescending(row => row.BestEstimatedEv)
             .Take(requestedTake)
             .ToListAsync(cancellationToken);
+        if (rows.Count == 0)
+        {
+            return null;
+        }
+
         var refreshRun = await dbContext.TheOddsRefreshRuns
             .AsNoTracking()
             .FirstAsync(row => row.Id == refreshRunId.Value, cancellationToken);
@@ -576,6 +647,41 @@ public static partial class TheOddsApiDebugEndpoints
             .ThenByDescending(row => row.snapshot.GeneratedAtUtc)
             .Select(row => (Guid?)row.refreshRun.Id)
             .FirstOrDefaultAsync(cancellationToken);
+    }
+
+    private static async Task<string> BuildSnapshotFallbackReasonAsync(
+        bool topPickSnapshots,
+        string? providerCategory,
+        ApplicationDbContext dbContext,
+        CancellationToken cancellationToken)
+    {
+        var latestSuccessfulRun = await dbContext.TheOddsRefreshRuns
+            .AsNoTracking()
+            .Where(row => row.Provider == "The Odds API" && row.Sport == "MLB" && row.Succeeded)
+            .OrderByDescending(row => row.CompletedAtUtc)
+            .ThenByDescending(row => row.StartedAtUtc)
+            .FirstOrDefaultAsync(cancellationToken);
+
+        if (latestSuccessfulRun is null)
+        {
+            return "No successful snapshot exists yet.";
+        }
+
+        var count = topPickSnapshots
+            ? await dbContext.MarketTopPickSnapshots
+                .AsNoTracking()
+                .Where(row => row.TheOddsRefreshRunId == latestSuccessfulRun.Id)
+                .Where(row => string.IsNullOrWhiteSpace(providerCategory) || row.ProviderCategory == providerCategory)
+                .CountAsync(cancellationToken)
+            : await dbContext.MarketLineShoppingSnapshots
+                .AsNoTracking()
+                .Where(row => row.TheOddsRefreshRunId == latestSuccessfulRun.Id)
+                .Where(row => string.IsNullOrWhiteSpace(providerCategory) || row.ProviderCategory == providerCategory)
+                .CountAsync(cancellationToken);
+
+        return count == 0
+            ? "Latest refresh produced no persisted market snapshots for the requested filters."
+            : "Latest refresh produced snapshots, but none matched the requested active/top-only view.";
     }
 
     private static async Task<Guid?> FindLatestLineShoppingSnapshotRefreshRunIdAsync(
@@ -715,6 +821,118 @@ public static partial class TheOddsApiDebugEndpoints
         using var document = JsonSerializer.SerializeToDocument(node);
         return document.RootElement.Clone();
     }
+
+    private static RefreshDiagnosticsSummary ExtractRefreshDiagnostics(JsonDocument? diagnosticsJson)
+    {
+        if (diagnosticsJson is null)
+        {
+            return new RefreshDiagnosticsSummary(0, 0, 0, 0, ProviderRejectedKeyDetected: false);
+        }
+
+        var root = diagnosticsJson.RootElement;
+        var activeGroupCount = TryGetInt32(root, "lineShoppingSummary", "activeGroups") ?? 0;
+        var staleOrExpiredGroupCount = TryGetInt32(root, "lineShoppingSummary", "staleOrExpiredGroups") ?? 0;
+        var providerSuccessCount = 0;
+        var providerFailureCount = 0;
+        var providerRejectedKeyDetected = false;
+
+        if (root.TryGetProperty("ingestion", out var ingestion) &&
+            ingestion.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var item in ingestion.EnumerateArray())
+            {
+                var success = item.TryGetProperty("success", out var successElement) &&
+                    successElement.ValueKind is JsonValueKind.True or JsonValueKind.False &&
+                    successElement.GetBoolean();
+                if (success)
+                {
+                    providerSuccessCount++;
+                }
+                else
+                {
+                    providerFailureCount++;
+                }
+
+                providerRejectedKeyDetected = providerRejectedKeyDetected ||
+                    ContainsText(item, "rejected the configured API key") ||
+                    ContainsText(item, "INVALID_KEY");
+            }
+        }
+
+        return new RefreshDiagnosticsSummary(
+            activeGroupCount,
+            staleOrExpiredGroupCount,
+            providerFailureCount,
+            providerSuccessCount,
+            providerRejectedKeyDetected);
+    }
+
+    private static string? BuildRefreshUsabilityWarning(
+        TheOddsRefreshRun? latestSuccessfulRun,
+        bool hasUsableMarketData,
+        int lineShoppingSnapshotCount,
+        int topPickSnapshotCount,
+        RefreshDiagnosticsSummary diagnostics)
+    {
+        if (latestSuccessfulRun is null)
+        {
+            return "No successful The Odds MLB refresh metadata exists yet.";
+        }
+
+        if (hasUsableMarketData)
+        {
+            return null;
+        }
+
+        if (diagnostics.ProviderRejectedKeyDetected)
+        {
+            return "Latest refresh was recent but provider ingestion appears to have failed because The Odds API rejected the configured API key.";
+        }
+
+        if (diagnostics.ProviderIngestionFailureCount > 0 && diagnostics.ProviderIngestionSuccessCount == 0)
+        {
+            return "Latest refresh was recent but all provider event-odds ingestion attempts failed, so no usable market snapshots were produced.";
+        }
+
+        if (lineShoppingSnapshotCount == 0 && topPickSnapshotCount == 0)
+        {
+            return "Latest refresh produced no persisted market snapshots.";
+        }
+
+        return "Latest refresh exists but no usable active market data was found.";
+    }
+
+    private static int? TryGetInt32(JsonElement root, string parent, string property)
+    {
+        if (!root.TryGetProperty(parent, out var parentElement) ||
+            parentElement.ValueKind != JsonValueKind.Object ||
+            !parentElement.TryGetProperty(property, out var value))
+        {
+            return null;
+        }
+
+        return value.ValueKind == JsonValueKind.Number && value.TryGetInt32(out var number)
+            ? number
+            : null;
+    }
+
+    private static bool ContainsText(JsonElement element, string text)
+    {
+        return element.ValueKind switch
+        {
+            JsonValueKind.String => element.GetString()?.Contains(text, StringComparison.OrdinalIgnoreCase) == true,
+            JsonValueKind.Object => element.EnumerateObject().Any(property => ContainsText(property.Value, text)),
+            JsonValueKind.Array => element.EnumerateArray().Any(item => ContainsText(item, text)),
+            _ => false
+        };
+    }
+
+    private sealed record RefreshDiagnosticsSummary(
+        int ActiveGroupCount,
+        int StaleOrExpiredGroupCount,
+        int ProviderIngestionFailureCount,
+        int ProviderIngestionSuccessCount,
+        bool ProviderRejectedKeyDetected);
 
     private static async Task<List<TheOddsPersistedPlatformPropRow>> LoadScopedTheOddsPlatformPropsAsync(
         ApplicationDbContext dbContext,
