@@ -16,8 +16,11 @@ obj/
 
 # Visual Studio / IDE local state.
 .vs/
+.vscode/
 *.suo
 *.rsuser
+.DS_Store
+Thumbs.db
 
 # Local secrets and machine-specific configuration.
 .env
@@ -54,3 +57,17 @@ secrets.json
 /mapping-coverage-after-autoapprove*.json
 /research-*.json
 /system-health*.json
+
+# Frontend prototype dependencies, builds, caches, and local env.
+/frontend/node_modules/
+/frontend/dist/
+/frontend/.vite/
+/frontend/.cache/
+/frontend/coverage/
+/frontend/.env
+/frontend/.env.*
+!/frontend/.env.example
+/frontend/npm-debug.log*
+/frontend/yarn-debug.log*
+/frontend/yarn-error.log*
+/frontend/pnpm-debug.log*

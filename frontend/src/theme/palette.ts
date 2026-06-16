@@ -1,0 +1,19 @@
+export const palette = {
+  bg: '#070B14',
+  bgSoft: '#0A1020',
+  surface: '#0F172A',
+  surfaceRaised: '#111C31',
+  surfaceGlow: '#10243B',
+  border: 'rgba(148, 163, 184, 0.18)',
+  borderStrong: 'rgba(125, 211, 252, 0.28)',
+  text: '#F8FAFC',
+  textMuted: '#94A3B8',
+  textSubtle: '#64748B',
+  primary: '#22D3EE',
+  primaryDark: '#0891B2',
+  secondary: '#818CF8',
+  success: '#22C55E',
+  warning: '#F59E0B',
+  danger: '#F43F5E',
+  info: '#38BDF8'
+};
