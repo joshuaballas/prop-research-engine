@@ -57,15 +57,90 @@ public static class PublicMlbDfsEndpoints
         .WithSummary("Production-safe provider/API-key/credit status from persisted refresh metadata.");
 
         endpoints.MapGet("/api/markets/refresh-plan", async (
+            bool? persistDecision,
             ITheOddsRefreshPlannerService planner,
             CancellationToken cancellationToken) =>
         {
             return Results.Ok(await BuildMarketRefreshPlanResponseAsync(
+                persistDecision ?? false,
                 planner,
                 cancellationToken));
         })
         .WithName("MarketsRefreshPlan")
         .WithSummary("Production-safe read-only The Odds refresh planner and credit budget estimator.");
+
+        endpoints.MapGet("/api/markets/refresh-plan/history", async (
+            int? take,
+            string? sport,
+            bool? skipped,
+            string? source,
+            ApplicationDbContext dbContext,
+            CancellationToken cancellationToken) =>
+        {
+            var query = dbContext.TheOddsRefreshPlannerDecisions
+                .AsNoTracking()
+                .AsQueryable();
+
+            if (!string.IsNullOrWhiteSpace(sport))
+            {
+                query = query.Where(row => row.Sport == sport);
+            }
+
+            if (skipped.HasValue)
+            {
+                query = query.Where(row => row.Skipped == skipped.Value);
+            }
+
+            if (!string.IsNullOrWhiteSpace(source))
+            {
+                query = query.Where(row => row.Source == source);
+            }
+
+            var rows = await query
+                .OrderByDescending(row => row.GeneratedAtUtc)
+                .Take(Math.Clamp(take ?? 50, 1, 500))
+                .Select(row => new
+                {
+                    row.Id,
+                    row.GeneratedAtUtc,
+                    row.Source,
+                    row.Sport,
+                    row.SlateDate,
+                    row.BookmakerPreset,
+                    row.ShouldRefresh,
+                    row.Skipped,
+                    row.SkipReason,
+                    row.ProviderStatus,
+                    row.ProviderAvailable,
+                    row.ProviderRejectedKeyDetected,
+                    row.RequestsUsed,
+                    row.RequestsRemaining,
+                    row.EstimatedApiCalls,
+                    row.DailyCreditsUsed,
+                    row.MonthlyCreditsUsed,
+                    row.DailyCreditLimit,
+                    row.MonthlyCreditLimit,
+                    row.BudgetAllowed,
+                    row.CadenceRule,
+                    row.MinutesUntilNextEventStart,
+                    row.MinutesSinceLastSuccessfulRefresh,
+                    row.NextEligibleRefreshUtc,
+                    row.RecommendedAction,
+                    row.DetailsJson
+                })
+                .ToArrayAsync(cancellationToken);
+
+            return Results.Ok(new
+            {
+                generatedAtUtc = DateTimeOffset.UtcNow,
+                callsExternalApis = false,
+                readOnly = true,
+                filters = new { take = Math.Clamp(take ?? 50, 1, 500), sport, skipped, source },
+                decisions = rows
+            });
+        })
+        .WithName("MarketsRefreshPlanHistory")
+        .WithSummary("Production-safe read-only refresh planner decision history.");
 
         endpoints.MapGet("/api/mlb/freshness", async (
             DateOnly? slateDate,
@@ -339,16 +414,24 @@ public static class PublicMlbDfsEndpoints
     }
 
     private static async Task<object> BuildMarketRefreshPlanResponseAsync(
+        bool persistDecision,
         ITheOddsRefreshPlannerService planner,
         CancellationToken cancellationToken)
     {
         var plan = await planner.BuildPlanAsync(cancellationToken);
+        TheOddsRefreshPlannerDecision? persistedDecision = null;
+        if (persistDecision)
+        {
+            persistedDecision = await planner.PersistDecisionAsync(plan, "ManualPlan", cancellationToken);
+        }
 
         return new
         {
             generatedAtUtc = plan.GeneratedAtUtc,
             callsExternalApis = false,
-            readOnly = true,
+            readOnly = !persistDecision,
+            decisionPersisted = persistedDecision is not null,
+            decisionId = persistedDecision?.Id,
             providerStatus = new
             {
                 provider = "The Odds API",

@@ -29,6 +29,7 @@ public sealed class ApplicationDbContext(DbContextOptions<ApplicationDbContext> 
     public DbSet<PredictionRunSkipCount> PredictionRunSkipCounts => Set<PredictionRunSkipCount>();
     public DbSet<LineShoppingStrategyBacktestSnapshot> LineShoppingStrategyBacktestSnapshots => Set<LineShoppingStrategyBacktestSnapshot>();
     public DbSet<TheOddsRefreshRun> TheOddsRefreshRuns => Set<TheOddsRefreshRun>();
+    public DbSet<TheOddsRefreshPlannerDecision> TheOddsRefreshPlannerDecisions => Set<TheOddsRefreshPlannerDecision>();
     public DbSet<MarketTopPickSnapshot> MarketTopPickSnapshots => Set<MarketTopPickSnapshot>();
     public DbSet<MarketLineShoppingSnapshot> MarketLineShoppingSnapshots => Set<MarketLineShoppingSnapshot>();
     public DbSet<IngestionRun> IngestionRuns => Set<IngestionRun>();
@@ -421,6 +422,26 @@ public sealed class ApplicationDbContext(DbContextOptions<ApplicationDbContext> 
             entity.HasIndex(x => new { x.Sport, x.SlateDate });
             entity.HasIndex(x => new { x.BookmakerPreset, x.StartedAtUtc });
             entity.HasIndex(x => new { x.Succeeded, x.CompletedAtUtc });
+        });
+
+        modelBuilder.Entity<TheOddsRefreshPlannerDecision>(entity =>
+        {
+            entity.ToTable("the_odds_refresh_planner_decisions");
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.Source).HasMaxLength(50).IsRequired();
+            entity.Property(x => x.Sport).HasMaxLength(50).IsRequired();
+            entity.Property(x => x.BookmakerPreset).HasMaxLength(100).IsRequired();
+            entity.Property(x => x.SkipReason).HasMaxLength(200);
+            entity.Property(x => x.ProviderStatus).HasMaxLength(50).IsRequired();
+            entity.Property(x => x.CadenceRule).HasMaxLength(100).IsRequired();
+            entity.Property(x => x.MinutesUntilNextEventStart).HasPrecision(12, 2);
+            entity.Property(x => x.MinutesSinceLastSuccessfulRefresh).HasPrecision(12, 2);
+            entity.Property(x => x.RecommendedAction).HasMaxLength(1000).IsRequired();
+            entity.Property(x => x.DetailsJson).HasColumnType("jsonb");
+            entity.HasIndex(x => x.GeneratedAtUtc);
+            entity.HasIndex(x => new { x.Sport, x.GeneratedAtUtc });
+            entity.HasIndex(x => new { x.Source, x.GeneratedAtUtc });
+            entity.HasIndex(x => new { x.Skipped, x.GeneratedAtUtc });
         });
 
         ConfigureMarketSnapshot<MarketTopPickSnapshot>(

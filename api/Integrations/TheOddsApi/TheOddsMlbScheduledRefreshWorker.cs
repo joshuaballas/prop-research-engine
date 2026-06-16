@@ -50,6 +50,7 @@ public sealed class TheOddsMlbScheduledRefreshWorker(
         await using var scope = scopeFactory.CreateAsyncScope();
         var planner = scope.ServiceProvider.GetRequiredService<ITheOddsRefreshPlannerService>();
         var plan = await planner.BuildPlanAsync(cancellationToken);
+        await planner.PersistDecisionAsync(plan, "ScheduledWorker", cancellationToken);
         state.MarkPlan(plan);
 
         if (!plan.ShouldRefresh)

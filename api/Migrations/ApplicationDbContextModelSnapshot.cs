@@ -2267,6 +2267,147 @@ namespace SportsBetting.Api.Migrations
                     b.ToTable("teams", (string)null);
                 });
 
+            modelBuilder.Entity("SportsBetting.Api.Models.TheOddsRefreshPlannerDecision", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<string>("BookmakerPreset")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)")
+                        .HasColumnName("bookmaker_preset");
+
+                    b.Property<bool>("BudgetAllowed")
+                        .HasColumnType("boolean")
+                        .HasColumnName("budget_allowed");
+
+                    b.Property<string>("CadenceRule")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)")
+                        .HasColumnName("cadence_rule");
+
+                    b.Property<int>("DailyCreditLimit")
+                        .HasColumnType("integer")
+                        .HasColumnName("daily_credit_limit");
+
+                    b.Property<int>("DailyCreditsUsed")
+                        .HasColumnType("integer")
+                        .HasColumnName("daily_credits_used");
+
+                    b.Property<JsonDocument>("DetailsJson")
+                        .IsRequired()
+                        .HasColumnType("jsonb")
+                        .HasColumnName("details_json");
+
+                    b.Property<int>("EstimatedApiCalls")
+                        .HasColumnType("integer")
+                        .HasColumnName("estimated_api_calls");
+
+                    b.Property<DateTimeOffset>("GeneratedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("generated_at_utc");
+
+                    b.Property<decimal?>("MinutesSinceLastSuccessfulRefresh")
+                        .HasPrecision(12, 2)
+                        .HasColumnType("numeric(12,2)")
+                        .HasColumnName("minutes_since_last_successful_refresh");
+
+                    b.Property<decimal?>("MinutesUntilNextEventStart")
+                        .HasPrecision(12, 2)
+                        .HasColumnType("numeric(12,2)")
+                        .HasColumnName("minutes_until_next_event_start");
+
+                    b.Property<int>("MonthlyCreditLimit")
+                        .HasColumnType("integer")
+                        .HasColumnName("monthly_credit_limit");
+
+                    b.Property<int>("MonthlyCreditsUsed")
+                        .HasColumnType("integer")
+                        .HasColumnName("monthly_credits_used");
+
+                    b.Property<DateTimeOffset>("NextEligibleRefreshUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("next_eligible_refresh_utc");
+
+                    b.Property<bool>("ProviderAvailable")
+                        .HasColumnType("boolean")
+                        .HasColumnName("provider_available");
+
+                    b.Property<bool>("ProviderRejectedKeyDetected")
+                        .HasColumnType("boolean")
+                        .HasColumnName("provider_rejected_key_detected");
+
+                    b.Property<string>("ProviderStatus")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("character varying(50)")
+                        .HasColumnName("provider_status");
+
+                    b.Property<string>("RecommendedAction")
+                        .IsRequired()
+                        .HasMaxLength(1000)
+                        .HasColumnType("character varying(1000)")
+                        .HasColumnName("recommended_action");
+
+                    b.Property<int?>("RequestsRemaining")
+                        .HasColumnType("integer")
+                        .HasColumnName("requests_remaining");
+
+                    b.Property<int?>("RequestsUsed")
+                        .HasColumnType("integer")
+                        .HasColumnName("requests_used");
+
+                    b.Property<bool>("ShouldRefresh")
+                        .HasColumnType("boolean")
+                        .HasColumnName("should_refresh");
+
+                    b.Property<string>("SkipReason")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("skip_reason");
+
+                    b.Property<bool>("Skipped")
+                        .HasColumnType("boolean")
+                        .HasColumnName("skipped");
+
+                    b.Property<DateOnly>("SlateDate")
+                        .HasColumnType("date")
+                        .HasColumnName("slate_date");
+
+                    b.Property<string>("Source")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("character varying(50)")
+                        .HasColumnName("source");
+
+                    b.Property<string>("Sport")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("character varying(50)")
+                        .HasColumnName("sport");
+
+                    b.HasKey("Id")
+                        .HasName("pk_the_odds_refresh_planner_decisions");
+
+                    b.HasIndex("GeneratedAtUtc")
+                        .HasDatabaseName("ix_the_odds_refresh_planner_decisions_generated_at_utc");
+
+                    b.HasIndex("Skipped", "GeneratedAtUtc")
+                        .HasDatabaseName("ix_the_odds_refresh_planner_decisions_skipped_generated_at_utc");
+
+                    b.HasIndex("Source", "GeneratedAtUtc")
+                        .HasDatabaseName("ix_the_odds_refresh_planner_decisions_source_generated_at_utc");
+
+                    b.HasIndex("Sport", "GeneratedAtUtc")
+                        .HasDatabaseName("ix_the_odds_refresh_planner_decisions_sport_generated_at_utc");
+
+                    b.ToTable("the_odds_refresh_planner_decisions", (string)null);
+                });
+
             modelBuilder.Entity("SportsBetting.Api.Models.TheOddsRefreshRun", b =>
                 {
                     b.Property<Guid>("Id")

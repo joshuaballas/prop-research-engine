@@ -2,12 +2,17 @@ using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using SportsBetting.Api.Data;
+using SportsBetting.Api.Models;
 
 namespace SportsBetting.Api.Integrations.TheOddsApi;
 
 public interface ITheOddsRefreshPlannerService
 {
     Task<TheOddsRefreshPlanResult> BuildPlanAsync(CancellationToken cancellationToken);
+    Task<TheOddsRefreshPlannerDecision> PersistDecisionAsync(
+        TheOddsRefreshPlanResult plan,
+        string source,
+        CancellationToken cancellationToken);
 }
 
 public sealed class TheOddsRefreshPlannerService(
@@ -135,7 +140,8 @@ public sealed class TheOddsRefreshPlannerService(
         var dailyHardStop = dailyPercentAfterEstimate >= plannerOptions.HardStopAtDailyPercent;
         var monthlyHardStop = monthlyPercentAfterEstimate >= plannerOptions.HardStopAtMonthlyPercent;
         var providerRemainingHardStop = diagnostics.RequestsRemaining.HasValue &&
-            diagnostics.RequestsRemaining.Value < estimatedApiCalls;
+            (diagnostics.RequestsRemaining.Value <= plannerOptions.ProviderRemainingHardStopCredits ||
+                diagnostics.RequestsRemaining.Value < estimatedApiCalls);
 
         return new TheOddsRefreshBudgetSummary(
             dailyUsedCredits,
@@ -154,6 +160,76 @@ public sealed class TheOddsRefreshPlannerService(
             monthlyHardStop,
             providerRemainingHardStop,
             !dailyHardStop && !monthlyHardStop && !providerRemainingHardStop);
+    }
+
+    public async Task<TheOddsRefreshPlannerDecision> PersistDecisionAsync(
+        TheOddsRefreshPlanResult plan,
+        string source,
+        CancellationToken cancellationToken)
+    {
+        var plannerOptions = options.Value;
+        var decision = new TheOddsRefreshPlannerDecision
+        {
+            Id = Guid.NewGuid(),
+            GeneratedAtUtc = plan.GeneratedAtUtc,
+            Source = string.IsNullOrWhiteSpace(source) ? "Unknown" : source,
+            Sport = "MLB",
+            SlateDate = plan.SlateDate,
+            BookmakerPreset = plan.BookmakerPreset,
+            ShouldRefresh = plan.ShouldRefresh,
+            Skipped = !plan.ShouldRefresh,
+            SkipReason = plan.SkipReason,
+            ProviderStatus = plan.ProviderStatus,
+            ProviderAvailable = plan.ProviderAvailable,
+            ProviderRejectedKeyDetected = plan.ProviderRejectedKeyDetected,
+            RequestsUsed = plan.RequestsUsed,
+            RequestsRemaining = plan.RequestsRemaining,
+            EstimatedApiCalls = plan.EstimatedApiCalls,
+            DailyCreditsUsed = plan.Budget.DailyUsedCredits,
+            MonthlyCreditsUsed = plan.Budget.MonthlyUsedCredits,
+            DailyCreditLimit = plannerOptions.MaxDailyCredits,
+            MonthlyCreditLimit = plannerOptions.MaxMonthlyCredits,
+            BudgetAllowed = plan.Budget.BudgetAllowed,
+            CadenceRule = plan.CadenceRule.Name,
+            MinutesUntilNextEventStart = plan.MinutesUntilNextEventStart,
+            MinutesSinceLastSuccessfulRefresh = plan.MinutesSinceLastSuccessfulRefresh,
+            NextEligibleRefreshUtc = plan.NextEligibleRefreshUtc,
+            RecommendedAction = plan.RecommendedAction,
+            DetailsJson = JsonSerializer.SerializeToDocument(new
+            {
+                plan.ProviderStatus,
+                plan.ProviderAvailable,
+                plan.ProviderRejectedKeyDetected,
+                plan.RequestsUsed,
+                plan.RequestsRemaining,
+                plan.EstimatedSlateEvents,
+                plan.EstimatedApiCalls,
+                plan.CadenceRule,
+                plan.Budget,
+                plan.HasUsableMarketData,
+                plan.ShouldRefresh,
+                plan.SkipReason,
+                plan.RecommendedAction,
+                plannerOptions = new
+                {
+                    plannerOptions.Enabled,
+                    plannerOptions.DefaultBookmakerPreset,
+                    plannerOptions.PlannerIntervalSeconds,
+                    plannerOptions.MaxDailyCredits,
+                    plannerOptions.MaxMonthlyCredits,
+                    plannerOptions.WarnAtDailyPercent,
+                    plannerOptions.WarnAtMonthlyPercent,
+                    plannerOptions.HardStopAtDailyPercent,
+                    plannerOptions.HardStopAtMonthlyPercent,
+                    plannerOptions.ProviderRemainingHardStopCredits,
+                    plannerOptions.StopAfterEventStart
+                }
+            })
+        };
+
+        dbContext.TheOddsRefreshPlannerDecisions.Add(decision);
+        await dbContext.SaveChangesAsync(cancellationToken);
+        return decision;
     }
 
     private static string ResolveProviderStatus(
@@ -393,6 +469,7 @@ public sealed class TheOddsRefreshPlannerOptions
     public decimal WarnAtMonthlyPercent { get; set; } = 80m;
     public decimal HardStopAtDailyPercent { get; set; } = 100m;
     public decimal HardStopAtMonthlyPercent { get; set; } = 100m;
+    public int ProviderRemainingHardStopCredits { get; set; } = 5;
     public int FarOutRefreshMinutes { get; set; } = 60;
     public int SameDayMaxMinutes { get; set; } = 720;
     public int SameDayRefreshMinutes { get; set; } = 30;

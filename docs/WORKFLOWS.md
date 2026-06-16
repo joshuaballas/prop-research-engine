@@ -87,6 +87,8 @@ Refresh planning is exposed at `/api/markets/refresh-plan`. It is also read-only
 
 The scheduled The Odds refresh worker is planner-gated. Even if `TheOddsScheduledRefresh:Enabled=true` is set in local/ops config, each tick first reads the same planner decision. The worker skips without provider calls when the planner says `shouldRefresh=false`, when `budgetAllowed=false`, when provider status is unavailable/rejected-key, or when `AllowScheduledLiveRefresh=false`. Committed config keeps `AllowScheduledLiveRefresh=false`.
 
+Planner decisions can be persisted for audit. The scheduled worker writes a planner decision row each time it runs a planning cycle. Manual reads remain read-only unless `/api/markets/refresh-plan?persistDecision=true` is explicitly used. Read history with `/api/markets/refresh-plan/history?take=20`.
+
 Use the production-safe performance summary to inspect provider, prop-type, and strategy slices before showing recommendations confidently:
 
 ```powershell

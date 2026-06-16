@@ -387,6 +387,36 @@ public sealed class TheOddsRefreshRun
     public ICollection<MarketLineShoppingSnapshot> LineShoppingSnapshots { get; set; } = [];
 }
 
+public sealed class TheOddsRefreshPlannerDecision
+{
+    public Guid Id { get; set; }
+    public DateTimeOffset GeneratedAtUtc { get; set; }
+    public string Source { get; set; } = string.Empty;
+    public string Sport { get; set; } = "MLB";
+    public DateOnly SlateDate { get; set; }
+    public string BookmakerPreset { get; set; } = string.Empty;
+    public bool ShouldRefresh { get; set; }
+    public bool Skipped { get; set; }
+    public string? SkipReason { get; set; }
+    public string ProviderStatus { get; set; } = string.Empty;
+    public bool ProviderAvailable { get; set; }
+    public bool ProviderRejectedKeyDetected { get; set; }
+    public int? RequestsUsed { get; set; }
+    public int? RequestsRemaining { get; set; }
+    public int EstimatedApiCalls { get; set; }
+    public int DailyCreditsUsed { get; set; }
+    public int MonthlyCreditsUsed { get; set; }
+    public int DailyCreditLimit { get; set; }
+    public int MonthlyCreditLimit { get; set; }
+    public bool BudgetAllowed { get; set; }
+    public string CadenceRule { get; set; } = string.Empty;
+    public decimal? MinutesUntilNextEventStart { get; set; }
+    public decimal? MinutesSinceLastSuccessfulRefresh { get; set; }
+    public DateTimeOffset NextEligibleRefreshUtc { get; set; }
+    public string RecommendedAction { get; set; } = string.Empty;
+    public JsonDocument DetailsJson { get; set; } = JsonDocument.Parse("{}");
+}
+
 public sealed class MarketTopPickSnapshot
 {
     public Guid Id { get; set; }
