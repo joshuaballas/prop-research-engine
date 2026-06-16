@@ -61,6 +61,7 @@ Useful URLs:
 - DB readiness: `http://localhost:5299/health/ready`
 - Internal dashboard: `http://localhost:5299/research`
 - Production-safe market freshness: `http://localhost:5299/api/markets/freshness`
+- Production-safe provider status: `http://localhost:5299/api/markets/provider-status`
 - Production-safe market top picks: `http://localhost:5299/api/markets/top-picks`
 - Production-safe market line-shopping: `http://localhost:5299/api/markets/line-shopping`
 - Production-safe market performance: `http://localhost:5299/api/markets/performance-summary`

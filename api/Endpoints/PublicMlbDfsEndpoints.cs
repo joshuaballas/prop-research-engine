@@ -1,7 +1,9 @@
 using SportsBetting.Api.Data;
+using SportsBetting.Api.Models;
 using SportsBetting.Api.Predictions;
 using Microsoft.EntityFrameworkCore;
 using System.Text;
+using System.Text.Json;
 
 namespace SportsBetting.Api.Endpoints;
 
@@ -39,6 +41,19 @@ public static class PublicMlbDfsEndpoints
         })
         .WithName("MarketsFreshness")
         .WithSummary("Production-safe persisted market freshness metadata.");
+
+        endpoints.MapGet("/api/markets/provider-status", async (
+            int? freshnessMinutes,
+            ApplicationDbContext dbContext,
+            CancellationToken cancellationToken) =>
+        {
+            return Results.Ok(await BuildMarketProviderStatusResponseAsync(
+                freshnessMinutes,
+                dbContext,
+                cancellationToken));
+        })
+        .WithName("MarketsProviderStatus")
+        .WithSummary("Production-safe provider/API-key/credit status from persisted refresh metadata.");
 
         endpoints.MapGet("/api/mlb/freshness", async (
             DateOnly? slateDate,
@@ -247,6 +262,10 @@ public static class PublicMlbDfsEndpoints
             freshnessMinutes,
             dbContext,
             cancellationToken);
+        var providerStatus = await BuildTheOddsProviderStatusAsync(
+            freshnessMinutes,
+            dbContext,
+            cancellationToken);
 
         return new
         {
@@ -271,8 +290,147 @@ public static class PublicMlbDfsEndpoints
             response.ProviderIngestionSuccessCount,
             response.ProviderRejectedKeyDetected,
             response.UsabilityWarning,
+            providerStatus = new
+            {
+                providerStatus.provider,
+                providerStatus.status,
+                providerStatus.latestRefreshRunId,
+                providerStatus.latestRefreshHadUsableMarketData,
+                providerStatus.requestsUsed,
+                providerStatus.requestsRemaining,
+                providerStatus.providerRejectedKeyDetected,
+                providerStatus.creditExhaustionLikely,
+                providerStatus.statusReason,
+                providerStatus.recommendedAction
+            },
             freshnessMinutesThreshold = response.FreshnessThresholdMinutes
         };
+    }
+
+    private static async Task<object> BuildMarketProviderStatusResponseAsync(
+        int? freshnessMinutes,
+        ApplicationDbContext dbContext,
+        CancellationToken cancellationToken)
+    {
+        var providerStatus = await BuildTheOddsProviderStatusAsync(
+            freshnessMinutes,
+            dbContext,
+            cancellationToken);
+
+        return new
+        {
+            generatedAtUtc = DateTimeOffset.UtcNow,
+            callsExternalApis = false,
+            readOnly = true,
+            providers = new object[] { providerStatus }
+        };
+    }
+
+    private static async Task<TheOddsProviderStatusReadModel> BuildTheOddsProviderStatusAsync(
+        int? freshnessMinutes,
+        ApplicationDbContext dbContext,
+        CancellationToken cancellationToken)
+    {
+        var thresholdMinutes = Math.Clamp(freshnessMinutes ?? 30, 1, 1440);
+        var generatedAtUtc = DateTimeOffset.UtcNow;
+        var latestRun = await dbContext.TheOddsRefreshRuns
+            .AsNoTracking()
+            .Where(row => row.Provider == "The Odds API" && row.Sport == "MLB")
+            .OrderByDescending(row => row.StartedAtUtc)
+            .ThenByDescending(row => row.CompletedAtUtc)
+            .FirstOrDefaultAsync(cancellationToken);
+
+        if (latestRun is null)
+        {
+            return new TheOddsProviderStatusReadModel(
+                provider: "The Odds API",
+                status: "Unknown",
+                hasRecentRefresh: false,
+                latestRefreshRunId: null,
+                latestRefreshStartedAtUtc: null,
+                latestRefreshCompletedAtUtc: null,
+                latestRefreshSucceeded: false,
+                latestRefreshFailed: false,
+                latestRefreshHadUsableMarketData: false,
+                latestBookmakerPreset: null,
+                latestProviderCategoriesIncluded: [],
+                actualApiCalls: 0,
+                estimatedApiCalls: 0,
+                requestsUsed: null,
+                requestsRemaining: null,
+                requestsLast: null,
+                providerRejectedKeyDetected: false,
+                creditExhaustionLikely: false,
+                providerIngestionSuccessCount: 0,
+                providerIngestionFailureCount: 0,
+                lastErrorMessage: null,
+                statusReason: "No The Odds API refresh metadata exists yet.",
+                recommendedAction: "Run a dry-run refresh to inspect the planned provider call shape before any live refresh.",
+                lineShoppingSnapshotCount: 0,
+                topPickSnapshotCount: 0,
+                activeGroupCount: 0,
+                staleOrExpiredGroupCount: 0);
+        }
+
+        var lineShoppingSnapshotCount = await dbContext.MarketLineShoppingSnapshots
+            .AsNoTracking()
+            .CountAsync(row => row.TheOddsRefreshRunId == latestRun.Id, cancellationToken);
+        var topPickSnapshotCount = await dbContext.MarketTopPickSnapshots
+            .AsNoTracking()
+            .CountAsync(row => row.TheOddsRefreshRunId == latestRun.Id, cancellationToken);
+        var activeGroupCount = await dbContext.MarketLineShoppingSnapshots
+            .AsNoTracking()
+            .CountAsync(row => row.TheOddsRefreshRunId == latestRun.Id
+                && row.LifecycleStatus == "Active"
+                && !row.IsStale
+                && !row.IsExpired, cancellationToken);
+        var staleOrExpiredGroupCount = await dbContext.MarketLineShoppingSnapshots
+            .AsNoTracking()
+            .CountAsync(row => row.TheOddsRefreshRunId == latestRun.Id
+                && (row.IsStale || row.IsExpired || row.LifecycleStatus != "Active"), cancellationToken);
+
+        var diagnostics = ExtractProviderStatusDiagnostics(latestRun.DiagnosticsJson);
+        var latestCompletedOrStarted = latestRun.CompletedAtUtc ?? latestRun.StartedAtUtc;
+        var hasRecentRefresh = generatedAtUtc - latestCompletedOrStarted <= TimeSpan.FromMinutes(thresholdMinutes);
+        var latestRefreshHadUsableMarketData = topPickSnapshotCount > 0 || activeGroupCount > 0;
+        var creditExhaustionLikely = diagnostics.RequestsRemaining.HasValue && diagnostics.RequestsRemaining.Value <= 0;
+        var creditLow = diagnostics.RequestsRemaining.HasValue && diagnostics.RequestsRemaining.Value <= 5;
+
+        var (status, statusReason, recommendedAction) = BuildTheOddsProviderStatusDecision(
+            latestRun,
+            latestRefreshHadUsableMarketData,
+            diagnostics.ProviderRejectedKeyDetected,
+            creditExhaustionLikely,
+            creditLow);
+
+        return new TheOddsProviderStatusReadModel(
+            provider: "The Odds API",
+            status,
+            hasRecentRefresh,
+            latestRefreshRunId: latestRun.Id,
+            latestRefreshStartedAtUtc: latestRun.StartedAtUtc,
+            latestRefreshCompletedAtUtc: latestRun.CompletedAtUtc,
+            latestRefreshSucceeded: latestRun.Succeeded,
+            latestRefreshFailed: latestRun.Failed,
+            latestRefreshHadUsableMarketData,
+            latestBookmakerPreset: latestRun.BookmakerPreset,
+            latestProviderCategoriesIncluded: SplitCsv(latestRun.ProviderCategoriesIncluded),
+            actualApiCalls: latestRun.ActualApiCalls,
+            estimatedApiCalls: latestRun.EstimatedApiCalls,
+            requestsUsed: diagnostics.RequestsUsed,
+            requestsRemaining: diagnostics.RequestsRemaining,
+            requestsLast: diagnostics.RequestsLast,
+            providerRejectedKeyDetected: diagnostics.ProviderRejectedKeyDetected,
+            creditExhaustionLikely,
+            providerIngestionSuccessCount: diagnostics.ProviderIngestionSuccessCount,
+            providerIngestionFailureCount: diagnostics.ProviderIngestionFailureCount,
+            lastErrorMessage: latestRun.ErrorMessage,
+            statusReason,
+            recommendedAction,
+            lineShoppingSnapshotCount,
+            topPickSnapshotCount,
+            activeGroupCount,
+            staleOrExpiredGroupCount);
     }
 
     private static async Task<object> BuildMarketTopPicksResponseAsync(
@@ -740,6 +898,213 @@ public static class PublicMlbDfsEndpoints
         return builder.ToString();
     }
 
+    private static (string Status, string StatusReason, string RecommendedAction) BuildTheOddsProviderStatusDecision(
+        TheOddsRefreshRun latestRun,
+        bool latestRefreshHadUsableMarketData,
+        bool providerRejectedKeyDetected,
+        bool creditExhaustionLikely,
+        bool creditLow)
+    {
+        if (providerRejectedKeyDetected)
+        {
+            return (
+                "Unavailable",
+                "The latest refresh diagnostics indicate The Odds API rejected the configured API key.",
+                "Check TheOddsApi:ApiKey and account credit status before running another live refresh.");
+        }
+
+        if (creditExhaustionLikely)
+        {
+            return (
+                "Unavailable",
+                "The latest persisted credit metadata indicates The Odds API credits are exhausted.",
+                "Wait for credit reset or increase the credit plan before running another live refresh.");
+        }
+
+        if (creditLow)
+        {
+            return (
+                "Degraded",
+                "The latest persisted credit metadata indicates The Odds API credits are very low.",
+                "Use dry-run planning and avoid live refreshes unless the remaining credit budget is intentional.");
+        }
+
+        if (latestRun.Succeeded && latestRefreshHadUsableMarketData)
+        {
+            return (
+                "Healthy",
+                "The latest refresh succeeded and produced usable market data.",
+                "Continue serving persisted read endpoints; use dry-run before any manual live refresh.");
+        }
+
+        if (latestRun.Succeeded)
+        {
+            return (
+                "Degraded",
+                "The latest refresh succeeded but produced no usable active market snapshots for the current read model.",
+                "Inspect freshness, line-shopping snapshots, and provider diagnostics before trusting public market output.");
+        }
+
+        if (latestRun.Failed)
+        {
+            return (
+                "Unavailable",
+                string.IsNullOrWhiteSpace(latestRun.ErrorMessage)
+                    ? "The latest The Odds refresh failed."
+                    : $"The latest The Odds refresh failed: {latestRun.ErrorMessage}",
+                "Review the latest refresh diagnostics, API key, and credit balance before running another live refresh.");
+        }
+
+        return (
+            "Unknown",
+            "The latest The Odds refresh metadata is incomplete.",
+            "Run a dry-run refresh to inspect the planned provider call shape before any live refresh.");
+    }
+
+    private static ProviderStatusDiagnostics ExtractProviderStatusDiagnostics(JsonDocument? diagnosticsJson)
+    {
+        if (diagnosticsJson is null)
+        {
+            return new ProviderStatusDiagnostics(null, null, null, 0, 0, ProviderRejectedKeyDetected: false);
+        }
+
+        var root = diagnosticsJson.RootElement;
+        var providerSuccessCount = 0;
+        var providerFailureCount = 0;
+        var providerRejectedKeyDetected = ContainsPersistedText(root, "rejected the configured API key") ||
+            ContainsPersistedText(root, "INVALID_KEY");
+
+        if (TryGetPropertyIgnoreCase(root, "ingestion", out var ingestion) &&
+            ingestion.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var item in ingestion.EnumerateArray())
+            {
+                var success = TryGetBoolProperty(item, "success");
+                if (success == true)
+                {
+                    providerSuccessCount++;
+                }
+                else
+                {
+                    providerFailureCount++;
+                }
+            }
+        }
+
+        return new ProviderStatusDiagnostics(
+            RequestsUsed: FindFirstIntProperty(root, "requestsUsed", "RequestsUsed", "requests_used"),
+            RequestsRemaining: FindFirstIntProperty(root, "requestsRemaining", "RequestsRemaining", "requests_remaining"),
+            RequestsLast: FindFirstIntProperty(root, "requestsLast", "RequestsLast", "requests_last"),
+            providerFailureCount,
+            providerSuccessCount,
+            providerRejectedKeyDetected);
+    }
+
+    private static int? FindFirstIntProperty(JsonElement element, params string[] names)
+    {
+        switch (element.ValueKind)
+        {
+            case JsonValueKind.Object:
+                foreach (var property in element.EnumerateObject())
+                {
+                    if (names.Any(name => string.Equals(property.Name, name, StringComparison.OrdinalIgnoreCase)))
+                    {
+                        if (property.Value.ValueKind == JsonValueKind.Number &&
+                            property.Value.TryGetInt32(out var intValue))
+                        {
+                            return intValue;
+                        }
+
+                        if (property.Value.ValueKind == JsonValueKind.String &&
+                            int.TryParse(property.Value.GetString(), out var stringValue))
+                        {
+                            return stringValue;
+                        }
+                    }
+
+                    var nested = FindFirstIntProperty(property.Value, names);
+                    if (nested.HasValue)
+                    {
+                        return nested;
+                    }
+                }
+
+                return null;
+
+            case JsonValueKind.Array:
+                foreach (var item in element.EnumerateArray())
+                {
+                    var nested = FindFirstIntProperty(item, names);
+                    if (nested.HasValue)
+                    {
+                        return nested;
+                    }
+                }
+
+                return null;
+
+            default:
+                return null;
+        }
+    }
+
+    private static bool ContainsPersistedText(JsonElement element, string text)
+    {
+        return element.ValueKind switch
+        {
+            JsonValueKind.String => element.GetString()?.Contains(text, StringComparison.OrdinalIgnoreCase) == true,
+            JsonValueKind.Object => element.EnumerateObject().Any(property => ContainsPersistedText(property.Value, text)),
+            JsonValueKind.Array => element.EnumerateArray().Any(item => ContainsPersistedText(item, text)),
+            _ => false
+        };
+    }
+
+    private static bool TryGetPropertyIgnoreCase(JsonElement element, string propertyName, out JsonElement value)
+    {
+        if (element.ValueKind != JsonValueKind.Object)
+        {
+            value = default;
+            return false;
+        }
+
+        foreach (var property in element.EnumerateObject())
+        {
+            if (string.Equals(property.Name, propertyName, StringComparison.OrdinalIgnoreCase))
+            {
+                value = property.Value;
+                return true;
+            }
+        }
+
+        value = default;
+        return false;
+    }
+
+    private static bool? TryGetBoolProperty(JsonElement element, string propertyName)
+    {
+        if (!TryGetPropertyIgnoreCase(element, propertyName, out var value))
+        {
+            return null;
+        }
+
+        return value.ValueKind switch
+        {
+            JsonValueKind.True => true,
+            JsonValueKind.False => false,
+            JsonValueKind.String when bool.TryParse(value.GetString(), out var parsed) => parsed,
+            _ => null
+        };
+    }
+
+    private static string[] SplitCsv(string? value)
+    {
+        return string.IsNullOrWhiteSpace(value)
+            ? []
+            : value.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+    }
+
     private static object ToPublicFreshnessSummary(TheOddsApiDebugEndpoints.MlbRefreshFreshnessResponse response)
     {
         return new
@@ -760,6 +1125,43 @@ public static class PublicMlbDfsEndpoints
         string? RequestedSport,
         string? EffectiveSport,
         IResult? UnsupportedResponse);
+
+    private sealed record TheOddsProviderStatusReadModel(
+        string provider,
+        string status,
+        bool hasRecentRefresh,
+        Guid? latestRefreshRunId,
+        DateTimeOffset? latestRefreshStartedAtUtc,
+        DateTimeOffset? latestRefreshCompletedAtUtc,
+        bool latestRefreshSucceeded,
+        bool latestRefreshFailed,
+        bool latestRefreshHadUsableMarketData,
+        string? latestBookmakerPreset,
+        string[] latestProviderCategoriesIncluded,
+        int actualApiCalls,
+        int estimatedApiCalls,
+        int? requestsUsed,
+        int? requestsRemaining,
+        int? requestsLast,
+        bool providerRejectedKeyDetected,
+        bool creditExhaustionLikely,
+        int providerIngestionSuccessCount,
+        int providerIngestionFailureCount,
+        string? lastErrorMessage,
+        string statusReason,
+        string recommendedAction,
+        int lineShoppingSnapshotCount,
+        int topPickSnapshotCount,
+        int activeGroupCount,
+        int staleOrExpiredGroupCount);
+
+    private sealed record ProviderStatusDiagnostics(
+        int? RequestsUsed,
+        int? RequestsRemaining,
+        int? RequestsLast,
+        int ProviderIngestionFailureCount,
+        int ProviderIngestionSuccessCount,
+        bool ProviderRejectedKeyDetected);
 
     private sealed record PerformancePickRow(
         Models.MarketLineShoppingSnapshot Snapshot,

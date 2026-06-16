@@ -68,6 +68,7 @@ Production-style frontend reads should use the non-debug persisted-data endpoint
 
 ```powershell
 Invoke-RestMethod -Uri "http://localhost:5299/api/markets/freshness?freshnessMinutes=30"
+Invoke-RestMethod -Uri "http://localhost:5299/api/markets/provider-status"
 Invoke-RestMethod -Uri "http://localhost:5299/api/markets/top-picks?sport=MLB&take=10&freshnessMinutes=30"
 Invoke-RestMethod -Uri "http://localhost:5299/api/markets/line-shopping?sport=MLB&take=25&freshnessMinutes=30&includeBookmakerPrices=false"
 Invoke-RestMethod -Uri "http://localhost:5299/api/dfs/entry-rules"
@@ -78,6 +79,8 @@ These endpoints are read-only, use persisted database rows only, and do not call
 After a successful live The Odds refresh, the app stores stable Top Picks and line-shopping snapshots. Public market endpoints prefer those snapshots and return `snapshotBacked=true` only when snapshot rows exist for the requested filters/view. Before usable snapshots exist, the endpoints fall back to the existing dynamic persisted-row read path and return `snapshotBacked=false` with a clear `fallbackReason`.
 
 Freshness separates recency from usability: `isFresh=true` means a successful refresh happened within the threshold, while `hasUsableMarketData=false` means that refresh did not produce usable market snapshots/data. The freshness response includes snapshot counts, active/stale group counts, provider ingestion success/failure counts, provider rejected-key detection, and a `usabilityWarning`.
+
+Provider status is exposed separately at `/api/markets/provider-status`. It reads persisted refresh metadata only and surfaces The Odds API key/credit/provider availability, including rejected-key detection, low/exhausted credit warnings, latest refresh usability, and a recommended action. Use it in frontend health banners before implying current market data is actionable.
 
 Use the production-safe performance summary to inspect provider, prop-type, and strategy slices before showing recommendations confidently:
 
