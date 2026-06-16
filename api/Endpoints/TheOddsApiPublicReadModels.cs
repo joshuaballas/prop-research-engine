@@ -1,6 +1,9 @@
 using System.Diagnostics;
+using System.Text.Json;
+using System.Text.Json.Nodes;
 using Microsoft.EntityFrameworkCore;
 using SportsBetting.Api.Data;
+using SportsBetting.Api.Models;
 using SportsBetting.Api.Predictions;
 
 namespace SportsBetting.Api.Endpoints;
@@ -23,6 +26,9 @@ public static partial class TheOddsApiDebugEndpoints
 
     internal sealed record MlbLineShoppingReadResponse(
         DateTimeOffset GeneratedAtUtc,
+        bool SnapshotBacked,
+        Guid? RefreshRunId,
+        string? FallbackReason,
         object Diagnostics,
         object Run,
         object Summary,
@@ -31,6 +37,9 @@ public static partial class TheOddsApiDebugEndpoints
 
     internal sealed record MlbTopPicksReadResponse(
         DateTimeOffset GeneratedAtUtc,
+        bool SnapshotBacked,
+        Guid? RefreshRunId,
+        string? FallbackReason,
         object Diagnostics,
         object Run,
         object Summary,
@@ -123,6 +132,19 @@ public static partial class TheOddsApiDebugEndpoints
         IPredictionProbabilityService probabilityService,
         CancellationToken cancellationToken)
     {
+        if (!runId.HasValue)
+        {
+            var snapshot = await TryBuildTopPicksSnapshotResponseAsync(
+                take,
+                providerCategory,
+                dbContext,
+                cancellationToken);
+            if (snapshot is not null)
+            {
+                return snapshot;
+            }
+        }
+
         var totalStopwatch = Stopwatch.StartNew();
         var requestedTake = Math.Clamp(take ?? 10, 1, 100);
         var generatedAtUtc = DateTimeOffset.UtcNow;
@@ -174,6 +196,9 @@ public static partial class TheOddsApiDebugEndpoints
 
         return new MlbTopPicksReadResponse(
             generatedAtUtc,
+            SnapshotBacked: false,
+            RefreshRunId: null,
+            FallbackReason: "No successful snapshot exists yet.",
             Diagnostics: new
             {
                 callsTheOddsApi = false,
@@ -212,6 +237,21 @@ public static partial class TheOddsApiDebugEndpoints
         IPredictionProbabilityService probabilityService,
         CancellationToken cancellationToken)
     {
+        if (!runId.HasValue && !summaryOnly)
+        {
+            var snapshot = await TryBuildLineShoppingSnapshotResponseAsync(
+                topOnly,
+                take,
+                includeBookmakerPrices,
+                providerCategory,
+                dbContext,
+                cancellationToken);
+            if (snapshot is not null)
+            {
+                return snapshot;
+            }
+        }
+
         var totalStopwatch = Stopwatch.StartNew();
         var generatedAtUtc = DateTimeOffset.UtcNow;
         var lifecycleFreshnessMinutes = Math.Clamp(freshnessMinutes ?? DefaultTheOddsLineShoppingFreshnessMinutes, 1, 1440);
@@ -234,6 +274,9 @@ public static partial class TheOddsApiDebugEndpoints
 
         return new MlbLineShoppingReadResponse(
             generatedAtUtc,
+            SnapshotBacked: false,
+            RefreshRunId: null,
+            FallbackReason: "No successful snapshot exists yet.",
             Diagnostics: new
             {
                 callsTheOddsApi = false,
@@ -273,6 +316,404 @@ public static partial class TheOddsApiDebugEndpoints
             },
             strategyClassificationSummary,
             comparisonGroups);
+    }
+
+    private static async Task PersistTheOddsMarketSnapshotsAsync(
+        TheOddsRefreshRun refreshRun,
+        Guid? predictionRunId,
+        DateTimeOffset generatedAtUtc,
+        IReadOnlyCollection<TheOddsLineShoppingGroup> lineShoppingGroups,
+        IReadOnlyCollection<TheOddsLineShoppingGroup> topPickGroups,
+        ApplicationDbContext dbContext,
+        CancellationToken cancellationToken)
+    {
+        var existingTopPicks = await dbContext.MarketTopPickSnapshots
+            .Where(row => row.TheOddsRefreshRunId == refreshRun.Id)
+            .ToListAsync(cancellationToken);
+        var existingLineShopping = await dbContext.MarketLineShoppingSnapshots
+            .Where(row => row.TheOddsRefreshRunId == refreshRun.Id)
+            .ToListAsync(cancellationToken);
+
+        dbContext.MarketTopPickSnapshots.RemoveRange(existingTopPicks);
+        dbContext.MarketLineShoppingSnapshots.RemoveRange(existingLineShopping);
+
+        dbContext.MarketLineShoppingSnapshots.AddRange(lineShoppingGroups.Select(group =>
+            BuildLineShoppingSnapshot(refreshRun, predictionRunId, generatedAtUtc, group)));
+        dbContext.MarketTopPickSnapshots.AddRange(topPickGroups.Select(group =>
+            BuildTopPickSnapshot(refreshRun, predictionRunId, generatedAtUtc, group)));
+    }
+
+    private static MarketTopPickSnapshot BuildTopPickSnapshot(
+        TheOddsRefreshRun refreshRun,
+        Guid? predictionRunId,
+        DateTimeOffset generatedAtUtc,
+        TheOddsLineShoppingGroup group)
+    {
+        var strategy = ClassifyTheOddsLineShoppingStrategy(group);
+        var entry = BuildTheOddsEntryCompatibility(group);
+
+        return new MarketTopPickSnapshot
+        {
+            Id = Guid.NewGuid(),
+            TheOddsRefreshRunId = refreshRun.Id,
+            PredictionRunId = predictionRunId,
+            Sport = refreshRun.Sport,
+            SlateDate = refreshRun.SlateDate,
+            GeneratedAtUtc = generatedAtUtc,
+            BookmakerPreset = refreshRun.BookmakerPreset,
+            ProviderCategory = group.ProviderCategory,
+            Provider = entry.EntryProvider,
+            Bookmaker = group.BestBookmaker,
+            Player = group.Player,
+            EventId = group.EventId,
+            EventName = BuildSnapshotEventName(group),
+            EventStartTime = group.EventStartTime,
+            LifecycleStatus = group.LifecycleStatus,
+            IsStale = group.IsStale,
+            IsExpired = group.IsExpired,
+            PropType = group.NormalizedPropType,
+            Line = group.Line,
+            BestSide = group.BestSide,
+            BestBookmaker = group.BestBookmaker,
+            BestAmericanPrice = group.BestAmericanPrice,
+            BestDecimalPrice = group.BestDecimalPrice,
+            BestProbability = group.BestProbability,
+            BestImpliedProbability = group.BestImpliedProbability,
+            BestProbabilityEdge = group.BestProbabilityEdge,
+            BestEstimatedEv = group.BestEstimatedEv,
+            StrategyClassification = strategy.StrategyClassification,
+            StrategyTier = strategy.StrategyTier,
+            IsCandidate = strategy.IsCandidate,
+            IsWatchlist = strategy.IsWatchlist,
+            IsAvoid = strategy.IsAvoid,
+            IsResearchOnly = strategy.IsResearchOnly,
+            EntryProvider = entry.EntryProvider,
+            EntryCompatibilityGroup = entry.EntryCompatibilityGroup,
+            EntryProviderCategory = entry.EntryProviderCategory,
+            EntryActionableForUser = entry.EntryActionableForUser,
+            DetailsJson = JsonSerializer.SerializeToDocument(ToLineShoppingResponseGroup(group, includeBookmakerPrices: false))
+        };
+    }
+
+    private static MarketLineShoppingSnapshot BuildLineShoppingSnapshot(
+        TheOddsRefreshRun refreshRun,
+        Guid? predictionRunId,
+        DateTimeOffset generatedAtUtc,
+        TheOddsLineShoppingGroup group)
+    {
+        var strategy = ClassifyTheOddsLineShoppingStrategy(group);
+        var entry = BuildTheOddsEntryCompatibility(group);
+
+        return new MarketLineShoppingSnapshot
+        {
+            Id = Guid.NewGuid(),
+            TheOddsRefreshRunId = refreshRun.Id,
+            PredictionRunId = predictionRunId,
+            Sport = refreshRun.Sport,
+            SlateDate = refreshRun.SlateDate,
+            GeneratedAtUtc = generatedAtUtc,
+            BookmakerPreset = refreshRun.BookmakerPreset,
+            ProviderCategory = group.ProviderCategory,
+            Provider = entry.EntryProvider,
+            Bookmaker = group.BestBookmaker,
+            Player = group.Player,
+            EventId = group.EventId,
+            EventName = BuildSnapshotEventName(group),
+            EventStartTime = group.EventStartTime,
+            LifecycleStatus = group.LifecycleStatus,
+            IsStale = group.IsStale,
+            IsExpired = group.IsExpired,
+            PropType = group.NormalizedPropType,
+            Line = group.Line,
+            BestSide = group.BestSide,
+            BestBookmaker = group.BestBookmaker,
+            BestAmericanPrice = group.BestAmericanPrice,
+            BestDecimalPrice = group.BestDecimalPrice,
+            BestProbability = group.BestProbability,
+            BestImpliedProbability = group.BestImpliedProbability,
+            BestProbabilityEdge = group.BestProbabilityEdge,
+            BestEstimatedEv = group.BestEstimatedEv,
+            StrategyClassification = strategy.StrategyClassification,
+            StrategyTier = strategy.StrategyTier,
+            IsCandidate = strategy.IsCandidate,
+            IsWatchlist = strategy.IsWatchlist,
+            IsAvoid = strategy.IsAvoid,
+            IsResearchOnly = strategy.IsResearchOnly,
+            EntryProvider = entry.EntryProvider,
+            EntryCompatibilityGroup = entry.EntryCompatibilityGroup,
+            EntryProviderCategory = entry.EntryProviderCategory,
+            EntryActionableForUser = entry.EntryActionableForUser,
+            DetailsJson = JsonSerializer.SerializeToDocument(ToLineShoppingResponseGroup(group, includeBookmakerPrices: true))
+        };
+    }
+
+    private static async Task<MlbTopPicksReadResponse?> TryBuildTopPicksSnapshotResponseAsync(
+        int? take,
+        string? providerCategory,
+        ApplicationDbContext dbContext,
+        CancellationToken cancellationToken)
+    {
+        var refreshRunId = await FindLatestTopPickSnapshotRefreshRunIdAsync(
+            dbContext,
+            providerCategory,
+            cancellationToken);
+        if (!refreshRunId.HasValue)
+        {
+            return null;
+        }
+
+        var requestedTake = Math.Clamp(take ?? 10, 1, 100);
+        var query = dbContext.MarketTopPickSnapshots
+            .AsNoTracking()
+            .Where(row => row.TheOddsRefreshRunId == refreshRunId.Value);
+        if (!string.IsNullOrWhiteSpace(providerCategory))
+        {
+            query = query.Where(row => row.ProviderCategory == providerCategory);
+        }
+
+        var rows = await query
+            .OrderByDescending(row => row.BestEstimatedEv)
+            .ThenBy(row => row.EntryActionableForUser ? 0 : 1)
+            .Take(requestedTake)
+            .ToListAsync(cancellationToken);
+        var refreshRun = await dbContext.TheOddsRefreshRuns
+            .AsNoTracking()
+            .FirstAsync(row => row.Id == refreshRunId.Value, cancellationToken);
+
+        return new MlbTopPicksReadResponse(
+            rows.FirstOrDefault()?.GeneratedAtUtc ?? refreshRun.CompletedAtUtc ?? refreshRun.StartedAtUtc,
+            SnapshotBacked: true,
+            RefreshRunId: refreshRun.Id,
+            FallbackReason: null,
+            Diagnostics: BuildSnapshotDiagnostics(rows.Count, providerCategory),
+            Run: new { runId = rows.FirstOrDefault()?.PredictionRunId, predictionCount = refreshRun.PredictionCount },
+            Summary: BuildSnapshotSummary(rows),
+            StrategyClassificationSummary: BuildSnapshotStrategySummary(rows),
+            TopPicks: rows.Select(row => (object)row.DetailsJson.RootElement.Clone()).ToArray());
+    }
+
+    private static async Task<MlbLineShoppingReadResponse?> TryBuildLineShoppingSnapshotResponseAsync(
+        bool topOnly,
+        int take,
+        bool includeBookmakerPrices,
+        string? providerCategory,
+        ApplicationDbContext dbContext,
+        CancellationToken cancellationToken)
+    {
+        var refreshRunId = await FindLatestLineShoppingSnapshotRefreshRunIdAsync(
+            dbContext,
+            providerCategory,
+            cancellationToken);
+        if (!refreshRunId.HasValue)
+        {
+            return null;
+        }
+
+        var requestedTake = Math.Clamp(take, 1, 500);
+        var query = dbContext.MarketLineShoppingSnapshots
+            .AsNoTracking()
+            .Where(row => row.TheOddsRefreshRunId == refreshRunId.Value);
+        if (!string.IsNullOrWhiteSpace(providerCategory))
+        {
+            query = query.Where(row => row.ProviderCategory == providerCategory);
+        }
+
+        if (topOnly)
+        {
+            query = query.Where(row => row.LifecycleStatus == "Active"
+                && !row.IsStale
+                && !row.IsExpired
+                && (row.IsCandidate || row.IsWatchlist || row.StrategyClassification == "Research"));
+        }
+
+        var rows = await query
+            .OrderBy(row => row.IsCandidate ? 0 : row.IsWatchlist ? 1 : 2)
+            .ThenBy(row => row.EntryActionableForUser ? 0 : 1)
+            .ThenByDescending(row => row.BestEstimatedEv)
+            .Take(requestedTake)
+            .ToListAsync(cancellationToken);
+        var refreshRun = await dbContext.TheOddsRefreshRuns
+            .AsNoTracking()
+            .FirstAsync(row => row.Id == refreshRunId.Value, cancellationToken);
+
+        return new MlbLineShoppingReadResponse(
+            rows.FirstOrDefault()?.GeneratedAtUtc ?? refreshRun.CompletedAtUtc ?? refreshRun.StartedAtUtc,
+            SnapshotBacked: true,
+            RefreshRunId: refreshRun.Id,
+            FallbackReason: null,
+            Diagnostics: BuildSnapshotDiagnostics(rows.Count, providerCategory, includeBookmakerPrices),
+            Run: new { runId = rows.FirstOrDefault()?.PredictionRunId, predictionCount = refreshRun.PredictionCount },
+            Summary: BuildSnapshotSummary(rows),
+            StrategyClassificationSummary: BuildSnapshotStrategySummary(rows),
+            ComparisonGroups: rows
+                .Select(row => (object)(includeBookmakerPrices
+                    ? row.DetailsJson.RootElement.Clone()
+                    : StripBookmakerPrices(row.DetailsJson)))
+                .ToArray());
+    }
+
+    private static async Task<Guid?> FindLatestTopPickSnapshotRefreshRunIdAsync(
+        ApplicationDbContext dbContext,
+        string? providerCategory,
+        CancellationToken cancellationToken)
+    {
+        var query = dbContext.MarketTopPickSnapshots
+            .AsNoTracking()
+            .Where(row => row.Sport == "MLB")
+            .Join(
+                dbContext.TheOddsRefreshRuns.AsNoTracking().Where(row => row.Succeeded),
+                snapshot => snapshot.TheOddsRefreshRunId,
+                refreshRun => refreshRun.Id,
+                (snapshot, refreshRun) => new { snapshot, refreshRun });
+
+        if (!string.IsNullOrWhiteSpace(providerCategory))
+        {
+            query = query.Where(row => row.snapshot.ProviderCategory == providerCategory);
+        }
+
+        return await query
+            .OrderByDescending(row => row.refreshRun.CompletedAtUtc)
+            .ThenByDescending(row => row.snapshot.GeneratedAtUtc)
+            .Select(row => (Guid?)row.refreshRun.Id)
+            .FirstOrDefaultAsync(cancellationToken);
+    }
+
+    private static async Task<Guid?> FindLatestLineShoppingSnapshotRefreshRunIdAsync(
+        ApplicationDbContext dbContext,
+        string? providerCategory,
+        CancellationToken cancellationToken)
+    {
+        var query = dbContext.MarketLineShoppingSnapshots
+            .AsNoTracking()
+            .Where(row => row.Sport == "MLB")
+            .Join(
+                dbContext.TheOddsRefreshRuns.AsNoTracking().Where(row => row.Succeeded),
+                snapshot => snapshot.TheOddsRefreshRunId,
+                refreshRun => refreshRun.Id,
+                (snapshot, refreshRun) => new { snapshot, refreshRun });
+
+        if (!string.IsNullOrWhiteSpace(providerCategory))
+        {
+            query = query.Where(row => row.snapshot.ProviderCategory == providerCategory);
+        }
+
+        return await query
+            .OrderByDescending(row => row.refreshRun.CompletedAtUtc)
+            .ThenByDescending(row => row.snapshot.GeneratedAtUtc)
+            .Select(row => (Guid?)row.refreshRun.Id)
+            .FirstOrDefaultAsync(cancellationToken);
+    }
+
+    private static string? BuildSnapshotEventName(TheOddsLineShoppingGroup group)
+    {
+        if (!string.IsNullOrWhiteSpace(group.AwayTeam) && !string.IsNullOrWhiteSpace(group.HomeTeam))
+        {
+            return $"{group.AwayTeam} @ {group.HomeTeam}";
+        }
+
+        return group.EventId;
+    }
+
+    private static object BuildSnapshotDiagnostics(
+        int returnedRows,
+        string? providerCategory,
+        bool includeBookmakerPrices = false)
+    {
+        return new
+        {
+            callsTheOddsApi = false,
+            usesPersistedDatabaseRowsOnly = true,
+            snapshotBacked = true,
+            returnedRows,
+            providerCategory,
+            includeBookmakerPrices
+        };
+    }
+
+    private static object BuildSnapshotSummary(IReadOnlyCollection<MarketTopPickSnapshot> rows)
+    {
+        return new
+        {
+            totalSnapshotRowsReturned = rows.Count,
+            returnedTopPicks = rows.Count,
+            activeCandidateCount = rows.Count(row => row.IsCandidate),
+            actionableCandidateCount = rows.Count(row => row.IsCandidate && row.EntryActionableForUser),
+            sportsbookContextCandidateCount = rows.Count(row => row.IsCandidate && !row.EntryActionableForUser),
+            dfsCandidateCount = rows.Count(row => row.IsCandidate && string.Equals(row.ProviderCategory, "DFS", StringComparison.OrdinalIgnoreCase))
+        };
+    }
+
+    private static object BuildSnapshotSummary(IReadOnlyCollection<MarketLineShoppingSnapshot> rows)
+    {
+        return new
+        {
+            totalSnapshotRowsReturned = rows.Count,
+            returnedComparisonGroups = rows.Count,
+            activeCandidateCount = rows.Count(row => row.IsCandidate),
+            actionableCandidateCount = rows.Count(row => row.IsCandidate && row.EntryActionableForUser),
+            sportsbookContextCandidateCount = rows.Count(row => row.IsCandidate && !row.EntryActionableForUser),
+            dfsCandidateCount = rows.Count(row => row.IsCandidate && string.Equals(row.ProviderCategory, "DFS", StringComparison.OrdinalIgnoreCase)),
+            providerCategoryBreakdown = rows
+                .GroupBy(row => row.ProviderCategory, StringComparer.OrdinalIgnoreCase)
+                .Select(group => new
+                {
+                    providerCategory = group.Key,
+                    count = group.Count(),
+                    candidateCount = group.Count(row => row.IsCandidate),
+                    watchlistCount = group.Count(row => row.IsWatchlist),
+                    avoidCount = group.Count(row => row.IsAvoid)
+                })
+                .OrderBy(row => row.providerCategory)
+                .ToArray()
+        };
+    }
+
+    private static object[] BuildSnapshotStrategySummary(IReadOnlyCollection<MarketTopPickSnapshot> rows)
+    {
+        return rows
+            .GroupBy(row => new { row.StrategyClassification, row.StrategyTier })
+            .Select(group => new
+            {
+                classification = group.Key.StrategyClassification,
+                tier = group.Key.StrategyTier,
+                count = group.Count(),
+                averageBestEstimatedEv = group.Where(row => row.BestEstimatedEv.HasValue).Select(row => row.BestEstimatedEv!.Value).DefaultIfEmpty().Average(),
+                averageBestProbability = group.Where(row => row.BestProbability.HasValue).Select(row => row.BestProbability!.Value).DefaultIfEmpty().Average(),
+                averageBestPrice = group.Where(row => row.BestDecimalPrice.HasValue).Select(row => row.BestDecimalPrice!.Value).DefaultIfEmpty().Average()
+            })
+            .OrderByDescending(row => row.count)
+            .Cast<object>()
+            .ToArray();
+    }
+
+    private static object[] BuildSnapshotStrategySummary(IReadOnlyCollection<MarketLineShoppingSnapshot> rows)
+    {
+        return rows
+            .GroupBy(row => new { row.StrategyClassification, row.StrategyTier })
+            .Select(group => new
+            {
+                classification = group.Key.StrategyClassification,
+                tier = group.Key.StrategyTier,
+                count = group.Count(),
+                averageBestEstimatedEv = group.Where(row => row.BestEstimatedEv.HasValue).Select(row => row.BestEstimatedEv!.Value).DefaultIfEmpty().Average(),
+                averageBestProbability = group.Where(row => row.BestProbability.HasValue).Select(row => row.BestProbability!.Value).DefaultIfEmpty().Average(),
+                averageBestPrice = group.Where(row => row.BestDecimalPrice.HasValue).Select(row => row.BestDecimalPrice!.Value).DefaultIfEmpty().Average()
+            })
+            .OrderByDescending(row => row.count)
+            .Cast<object>()
+            .ToArray();
+    }
+
+    private static JsonElement StripBookmakerPrices(JsonDocument detailsJson)
+    {
+        var node = JsonSerializer.SerializeToNode(detailsJson.RootElement);
+        if (node is JsonObject obj)
+        {
+            obj["bookmakerPrices"] = new JsonArray();
+        }
+
+        using var document = JsonSerializer.SerializeToDocument(node);
+        return document.RootElement.Clone();
     }
 
     private static async Task<List<TheOddsPersistedPlatformPropRow>> LoadScopedTheOddsPlatformPropsAsync(

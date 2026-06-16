@@ -135,6 +135,29 @@ Important fields include:
 
 This table powers refresh/freshness status for production-style read-only frontend endpoints.
 
+### `market_top_pick_snapshots`
+
+Stable Top Picks output captured after a successful live The Odds MLB refresh. Each row links to:
+
+- `the_odds_refresh_run_id`,
+- optional `prediction_run_id`,
+- sport and slate date,
+- generated timestamp,
+- bookmaker preset,
+- provider/category/bookmaker,
+- player, event, prop type, line, side, odds/probability/EV fields,
+- strategy classification/tier and candidate/watchlist/avoid flags,
+- provider-scoped entry metadata,
+- details JSON for the full row payload.
+
+Dry-runs and blocked live-shaped refresh calls do not write these rows. Failed refreshes should not expose partial snapshots.
+
+### `market_line_shopping_snapshots`
+
+Stable line-shopping comparison output captured after a successful live The Odds MLB refresh. This lets production read endpoints show the same computed market set to every user for a refresh run instead of recomputing from changing underlying rows on each request.
+
+The public `/api/markets/top-picks` and `/api/markets/line-shopping` routes prefer the latest successful snapshots when available. If no snapshot exists yet, they fall back to the dynamic persisted-row read path and return `snapshotBacked=false`.
+
 ## Results
 
 ### `prop_results`

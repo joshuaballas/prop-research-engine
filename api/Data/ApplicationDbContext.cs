@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using SportsBetting.Api.Models;
+using System.Text.Json;
 
 namespace SportsBetting.Api.Data;
 
@@ -28,6 +29,8 @@ public sealed class ApplicationDbContext(DbContextOptions<ApplicationDbContext> 
     public DbSet<PredictionRunSkipCount> PredictionRunSkipCounts => Set<PredictionRunSkipCount>();
     public DbSet<LineShoppingStrategyBacktestSnapshot> LineShoppingStrategyBacktestSnapshots => Set<LineShoppingStrategyBacktestSnapshot>();
     public DbSet<TheOddsRefreshRun> TheOddsRefreshRuns => Set<TheOddsRefreshRun>();
+    public DbSet<MarketTopPickSnapshot> MarketTopPickSnapshots => Set<MarketTopPickSnapshot>();
+    public DbSet<MarketLineShoppingSnapshot> MarketLineShoppingSnapshots => Set<MarketLineShoppingSnapshot>();
     public DbSet<IngestionRun> IngestionRuns => Set<IngestionRun>();
     public DbSet<RawIngestionPayload> RawIngestionPayloads => Set<RawIngestionPayload>();
     public DbSet<CorrelationPair> CorrelationPairs => Set<CorrelationPair>();
@@ -418,6 +421,83 @@ public sealed class ApplicationDbContext(DbContextOptions<ApplicationDbContext> 
             entity.HasIndex(x => new { x.Sport, x.SlateDate });
             entity.HasIndex(x => new { x.BookmakerPreset, x.StartedAtUtc });
             entity.HasIndex(x => new { x.Succeeded, x.CompletedAtUtc });
+        });
+
+        ConfigureMarketSnapshot<MarketTopPickSnapshot>(
+            modelBuilder,
+            "market_top_pick_snapshots",
+            "ix_market_top_pick_snapshots");
+
+        ConfigureMarketSnapshot<MarketLineShoppingSnapshot>(
+            modelBuilder,
+            "market_line_shopping_snapshots",
+            "ix_market_line_shopping_snapshots");
+    }
+
+    private static void ConfigureMarketSnapshot<TSnapshot>(
+        ModelBuilder modelBuilder,
+        string tableName,
+        string indexPrefix)
+        where TSnapshot : class
+    {
+        modelBuilder.Entity<TSnapshot>(entity =>
+        {
+            entity.ToTable(tableName);
+            entity.HasKey("Id");
+            entity.Property<Guid>("Id");
+            entity.Property<Guid>("TheOddsRefreshRunId");
+            entity.Property<Guid?>("PredictionRunId");
+            entity.Property<string>("Sport").HasMaxLength(50).IsRequired();
+            entity.Property<DateOnly>("SlateDate");
+            entity.Property<DateTimeOffset>("GeneratedAtUtc");
+            entity.Property<string>("BookmakerPreset").HasMaxLength(100).IsRequired();
+            entity.Property<string>("ProviderCategory").HasMaxLength(50).IsRequired();
+            entity.Property<string?>("Provider").HasMaxLength(200);
+            entity.Property<string?>("Bookmaker").HasMaxLength(200);
+            entity.Property<string>("Player").HasMaxLength(300).IsRequired();
+            entity.Property<string?>("EventId").HasMaxLength(200);
+            entity.Property<string?>("EventName").HasMaxLength(500);
+            entity.Property<DateTimeOffset?>("EventStartTime");
+            entity.Property<string>("LifecycleStatus").HasMaxLength(50).IsRequired();
+            entity.Property<bool>("IsStale");
+            entity.Property<bool>("IsExpired");
+            entity.Property<string>("PropType").HasMaxLength(200).IsRequired();
+            entity.Property<decimal>("Line").HasPrecision(12, 4);
+            entity.Property<string>("BestSide").HasMaxLength(20).IsRequired();
+            entity.Property<string?>("BestBookmaker").HasMaxLength(200);
+            entity.Property<int?>("BestAmericanPrice");
+            entity.Property<decimal?>("BestDecimalPrice").HasPrecision(12, 6);
+            entity.Property<decimal?>("BestProbability").HasPrecision(8, 6);
+            entity.Property<decimal?>("BestImpliedProbability").HasPrecision(8, 6);
+            entity.Property<decimal?>("BestProbabilityEdge").HasPrecision(8, 6);
+            entity.Property<decimal?>("BestEstimatedEv").HasPrecision(12, 6);
+            entity.Property<string>("StrategyClassification").HasMaxLength(50).IsRequired();
+            entity.Property<string>("StrategyTier").HasMaxLength(100).IsRequired();
+            entity.Property<bool>("IsCandidate");
+            entity.Property<bool>("IsWatchlist");
+            entity.Property<bool>("IsAvoid");
+            entity.Property<bool>("IsResearchOnly");
+            entity.Property<string>("EntryProvider").HasMaxLength(200).IsRequired();
+            entity.Property<string>("EntryCompatibilityGroup").HasMaxLength(200).IsRequired();
+            entity.Property<string>("EntryProviderCategory").HasMaxLength(50).IsRequired();
+            entity.Property<bool>("EntryActionableForUser");
+            entity.Property<JsonDocument>("DetailsJson").HasColumnType("jsonb");
+            entity.HasOne(typeof(TheOddsRefreshRun), "TheOddsRefreshRun")
+                .WithMany(typeof(TSnapshot) == typeof(MarketTopPickSnapshot)
+                    ? nameof(TheOddsRefreshRun.TopPickSnapshots)
+                    : nameof(TheOddsRefreshRun.LineShoppingSnapshots))
+                .HasForeignKey("TheOddsRefreshRunId")
+                .OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne(typeof(PredictionRun), "PredictionRun")
+                .WithMany()
+                .HasForeignKey("PredictionRunId")
+                .OnDelete(DeleteBehavior.SetNull);
+            entity.HasIndex("TheOddsRefreshRunId").HasDatabaseName($"{indexPrefix}_refresh_run_id");
+            entity.HasIndex("PredictionRunId").HasDatabaseName($"{indexPrefix}_prediction_run_id");
+            entity.HasIndex("Sport", "SlateDate").HasDatabaseName($"{indexPrefix}_sport_slate_date");
+            entity.HasIndex("GeneratedAtUtc").HasDatabaseName($"{indexPrefix}_generated_at_utc");
+            entity.HasIndex("ProviderCategory", "IsCandidate").HasDatabaseName($"{indexPrefix}_provider_category_candidate");
+            entity.HasIndex("BestEstimatedEv").HasDatabaseName($"{indexPrefix}_best_estimated_ev");
         });
     }
 

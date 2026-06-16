@@ -382,6 +382,99 @@ public sealed class TheOddsRefreshRun
     public int ActiveAvoidCount { get; set; }
     public string? ErrorMessage { get; set; }
     public JsonDocument? DiagnosticsJson { get; set; }
+
+    public ICollection<MarketTopPickSnapshot> TopPickSnapshots { get; set; } = [];
+    public ICollection<MarketLineShoppingSnapshot> LineShoppingSnapshots { get; set; } = [];
+}
+
+public sealed class MarketTopPickSnapshot
+{
+    public Guid Id { get; set; }
+    public Guid TheOddsRefreshRunId { get; set; }
+    public Guid? PredictionRunId { get; set; }
+    public string Sport { get; set; } = "MLB";
+    public DateOnly SlateDate { get; set; }
+    public DateTimeOffset GeneratedAtUtc { get; set; }
+    public string BookmakerPreset { get; set; } = string.Empty;
+    public string ProviderCategory { get; set; } = string.Empty;
+    public string? Provider { get; set; }
+    public string? Bookmaker { get; set; }
+    public string Player { get; set; } = string.Empty;
+    public string? EventId { get; set; }
+    public string? EventName { get; set; }
+    public DateTimeOffset? EventStartTime { get; set; }
+    public string LifecycleStatus { get; set; } = string.Empty;
+    public bool IsStale { get; set; }
+    public bool IsExpired { get; set; }
+    public string PropType { get; set; } = string.Empty;
+    public decimal Line { get; set; }
+    public string BestSide { get; set; } = string.Empty;
+    public string? BestBookmaker { get; set; }
+    public int? BestAmericanPrice { get; set; }
+    public decimal? BestDecimalPrice { get; set; }
+    public decimal? BestProbability { get; set; }
+    public decimal? BestImpliedProbability { get; set; }
+    public decimal? BestProbabilityEdge { get; set; }
+    public decimal? BestEstimatedEv { get; set; }
+    public string StrategyClassification { get; set; } = string.Empty;
+    public string StrategyTier { get; set; } = string.Empty;
+    public bool IsCandidate { get; set; }
+    public bool IsWatchlist { get; set; }
+    public bool IsAvoid { get; set; }
+    public bool IsResearchOnly { get; set; }
+    public string EntryProvider { get; set; } = string.Empty;
+    public string EntryCompatibilityGroup { get; set; } = string.Empty;
+    public string EntryProviderCategory { get; set; } = string.Empty;
+    public bool EntryActionableForUser { get; set; }
+    public JsonDocument DetailsJson { get; set; } = JsonDocument.Parse("{}");
+
+    public TheOddsRefreshRun? TheOddsRefreshRun { get; set; }
+    public PredictionRun? PredictionRun { get; set; }
+}
+
+public sealed class MarketLineShoppingSnapshot
+{
+    public Guid Id { get; set; }
+    public Guid TheOddsRefreshRunId { get; set; }
+    public Guid? PredictionRunId { get; set; }
+    public string Sport { get; set; } = "MLB";
+    public DateOnly SlateDate { get; set; }
+    public DateTimeOffset GeneratedAtUtc { get; set; }
+    public string BookmakerPreset { get; set; } = string.Empty;
+    public string ProviderCategory { get; set; } = string.Empty;
+    public string? Provider { get; set; }
+    public string? Bookmaker { get; set; }
+    public string Player { get; set; } = string.Empty;
+    public string? EventId { get; set; }
+    public string? EventName { get; set; }
+    public DateTimeOffset? EventStartTime { get; set; }
+    public string LifecycleStatus { get; set; } = string.Empty;
+    public bool IsStale { get; set; }
+    public bool IsExpired { get; set; }
+    public string PropType { get; set; } = string.Empty;
+    public decimal Line { get; set; }
+    public string BestSide { get; set; } = string.Empty;
+    public string? BestBookmaker { get; set; }
+    public int? BestAmericanPrice { get; set; }
+    public decimal? BestDecimalPrice { get; set; }
+    public decimal? BestProbability { get; set; }
+    public decimal? BestImpliedProbability { get; set; }
+    public decimal? BestProbabilityEdge { get; set; }
+    public decimal? BestEstimatedEv { get; set; }
+    public string StrategyClassification { get; set; } = string.Empty;
+    public string StrategyTier { get; set; } = string.Empty;
+    public bool IsCandidate { get; set; }
+    public bool IsWatchlist { get; set; }
+    public bool IsAvoid { get; set; }
+    public bool IsResearchOnly { get; set; }
+    public string EntryProvider { get; set; } = string.Empty;
+    public string EntryCompatibilityGroup { get; set; } = string.Empty;
+    public string EntryProviderCategory { get; set; } = string.Empty;
+    public bool EntryActionableForUser { get; set; }
+    public JsonDocument DetailsJson { get; set; } = JsonDocument.Parse("{}");
+
+    public TheOddsRefreshRun? TheOddsRefreshRun { get; set; }
+    public PredictionRun? PredictionRun { get; set; }
 }
 
 public sealed class IngestionRun

@@ -1,4 +1,5 @@
 using SportsBetting.Api.Diagnostics;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 using System.Diagnostics;
@@ -578,6 +579,14 @@ public static partial class TheOddsApiDebugEndpoints
                 refreshRun.ActiveWatchlistCount = activeWatchlist.Length;
                 refreshRun.ActiveAvoidCount = activeAvoid.Length;
                 refreshRun.DiagnosticsJson = JsonSerializer.SerializeToDocument(diagnostics);
+                await PersistTheOddsMarketSnapshotsAsync(
+                    refreshRun,
+                    predictionResult?.RunId,
+                    generatedAtUtc,
+                    lineShopping.Groups,
+                    preferredActiveCandidates.Take(25).ToArray(),
+                    dbContext,
+                    cancellationToken);
                 await dbContext.SaveChangesAsync(cancellationToken);
 
                 return Results.Ok(new
@@ -608,6 +617,7 @@ public static partial class TheOddsApiDebugEndpoints
             }
             catch (TheOddsApiProviderException exception)
             {
+                DetachPendingMarketSnapshots(dbContext);
                 refreshRun.CompletedAtUtc = DateTimeOffset.UtcNow;
                 refreshRun.Succeeded = false;
                 refreshRun.Failed = true;
@@ -648,6 +658,7 @@ public static partial class TheOddsApiDebugEndpoints
             }
             catch (Exception exception)
             {
+                DetachPendingMarketSnapshots(dbContext);
                 refreshRun.CompletedAtUtc = DateTimeOffset.UtcNow;
                 refreshRun.Succeeded = false;
                 refreshRun.Failed = true;
@@ -660,6 +671,16 @@ public static partial class TheOddsApiDebugEndpoints
                 });
                 await dbContext.SaveChangesAsync(CancellationToken.None);
                 throw;
+            }
+        }
+
+        private static void DetachPendingMarketSnapshots(ApplicationDbContext dbContext)
+        {
+            foreach (var entry in dbContext.ChangeTracker.Entries()
+                .Where(entry => entry.Entity is MarketTopPickSnapshot or MarketLineShoppingSnapshot)
+                .ToArray())
+            {
+                entry.State = EntityState.Detached;
             }
         }
     }

@@ -75,6 +75,8 @@ Invoke-RestMethod -Uri "http://localhost:5299/api/dfs/entry-rules"
 
 These endpoints are read-only, use persisted database rows only, and do not call The Odds API or Underdog. The generic market routes currently support MLB only and report `supportedSports=["MLB"]`; add future sports behind `/api/markets/*` instead of duplicating endpoint trees.
 
+After a successful live The Odds refresh, the app stores stable Top Picks and line-shopping snapshots. Public market endpoints prefer those snapshots and return `snapshotBacked=true`. Before the first successful live snapshot exists, the endpoints fall back to the existing dynamic persisted-row read path and return `snapshotBacked=false` with `fallbackReason="No successful snapshot exists yet."`
+
 The current refresh endpoint supports profiling options:
 
 ```powershell

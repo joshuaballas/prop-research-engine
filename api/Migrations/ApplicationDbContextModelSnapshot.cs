@@ -715,6 +715,436 @@ namespace SportsBetting.Api.Migrations
                     b.ToTable("line_shopping_strategy_backtest_snapshots", (string)null);
                 });
 
+            modelBuilder.Entity("SportsBetting.Api.Models.MarketLineShoppingSnapshot", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<int?>("BestAmericanPrice")
+                        .HasColumnType("integer")
+                        .HasColumnName("best_american_price");
+
+                    b.Property<string>("BestBookmaker")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("best_bookmaker");
+
+                    b.Property<decimal?>("BestDecimalPrice")
+                        .HasPrecision(12, 6)
+                        .HasColumnType("numeric(12,6)")
+                        .HasColumnName("best_decimal_price");
+
+                    b.Property<decimal?>("BestEstimatedEv")
+                        .HasPrecision(12, 6)
+                        .HasColumnType("numeric(12,6)")
+                        .HasColumnName("best_estimated_ev");
+
+                    b.Property<decimal?>("BestImpliedProbability")
+                        .HasPrecision(8, 6)
+                        .HasColumnType("numeric(8,6)")
+                        .HasColumnName("best_implied_probability");
+
+                    b.Property<decimal?>("BestProbability")
+                        .HasPrecision(8, 6)
+                        .HasColumnType("numeric(8,6)")
+                        .HasColumnName("best_probability");
+
+                    b.Property<decimal?>("BestProbabilityEdge")
+                        .HasPrecision(8, 6)
+                        .HasColumnType("numeric(8,6)")
+                        .HasColumnName("best_probability_edge");
+
+                    b.Property<string>("BestSide")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)")
+                        .HasColumnName("best_side");
+
+                    b.Property<string>("Bookmaker")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("bookmaker");
+
+                    b.Property<string>("BookmakerPreset")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)")
+                        .HasColumnName("bookmaker_preset");
+
+                    b.Property<JsonDocument>("DetailsJson")
+                        .IsRequired()
+                        .HasColumnType("jsonb")
+                        .HasColumnName("details_json");
+
+                    b.Property<bool>("EntryActionableForUser")
+                        .HasColumnType("boolean")
+                        .HasColumnName("entry_actionable_for_user");
+
+                    b.Property<string>("EntryCompatibilityGroup")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("entry_compatibility_group");
+
+                    b.Property<string>("EntryProvider")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("entry_provider");
+
+                    b.Property<string>("EntryProviderCategory")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("character varying(50)")
+                        .HasColumnName("entry_provider_category");
+
+                    b.Property<string>("EventId")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("event_id");
+
+                    b.Property<string>("EventName")
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)")
+                        .HasColumnName("event_name");
+
+                    b.Property<DateTimeOffset?>("EventStartTime")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("event_start_time");
+
+                    b.Property<DateTimeOffset>("GeneratedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("generated_at_utc");
+
+                    b.Property<bool>("IsAvoid")
+                        .HasColumnType("boolean")
+                        .HasColumnName("is_avoid");
+
+                    b.Property<bool>("IsCandidate")
+                        .HasColumnType("boolean")
+                        .HasColumnName("is_candidate");
+
+                    b.Property<bool>("IsExpired")
+                        .HasColumnType("boolean")
+                        .HasColumnName("is_expired");
+
+                    b.Property<bool>("IsResearchOnly")
+                        .HasColumnType("boolean")
+                        .HasColumnName("is_research_only");
+
+                    b.Property<bool>("IsStale")
+                        .HasColumnType("boolean")
+                        .HasColumnName("is_stale");
+
+                    b.Property<bool>("IsWatchlist")
+                        .HasColumnType("boolean")
+                        .HasColumnName("is_watchlist");
+
+                    b.Property<string>("LifecycleStatus")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("character varying(50)")
+                        .HasColumnName("lifecycle_status");
+
+                    b.Property<decimal>("Line")
+                        .HasPrecision(12, 4)
+                        .HasColumnType("numeric(12,4)")
+                        .HasColumnName("line");
+
+                    b.Property<string>("Player")
+                        .IsRequired()
+                        .HasMaxLength(300)
+                        .HasColumnType("character varying(300)")
+                        .HasColumnName("player");
+
+                    b.Property<Guid?>("PredictionRunId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("prediction_run_id");
+
+                    b.Property<string>("PropType")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("prop_type");
+
+                    b.Property<string>("Provider")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("provider");
+
+                    b.Property<string>("ProviderCategory")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("character varying(50)")
+                        .HasColumnName("provider_category");
+
+                    b.Property<DateOnly>("SlateDate")
+                        .HasColumnType("date")
+                        .HasColumnName("slate_date");
+
+                    b.Property<string>("Sport")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("character varying(50)")
+                        .HasColumnName("sport");
+
+                    b.Property<string>("StrategyClassification")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("character varying(50)")
+                        .HasColumnName("strategy_classification");
+
+                    b.Property<string>("StrategyTier")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)")
+                        .HasColumnName("strategy_tier");
+
+                    b.Property<Guid>("TheOddsRefreshRunId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("the_odds_refresh_run_id");
+
+                    b.HasKey("Id")
+                        .HasName("pk_market_line_shopping_snapshots");
+
+                    b.HasIndex("BestEstimatedEv")
+                        .HasDatabaseName("ix_market_line_shopping_snapshots_best_estimated_ev");
+
+                    b.HasIndex("GeneratedAtUtc")
+                        .HasDatabaseName("ix_market_line_shopping_snapshots_generated_at_utc");
+
+                    b.HasIndex("PredictionRunId")
+                        .HasDatabaseName("ix_market_line_shopping_snapshots_prediction_run_id");
+
+                    b.HasIndex("TheOddsRefreshRunId")
+                        .HasDatabaseName("ix_market_line_shopping_snapshots_refresh_run_id");
+
+                    b.HasIndex("ProviderCategory", "IsCandidate")
+                        .HasDatabaseName("ix_market_line_shopping_snapshots_provider_category_candidate");
+
+                    b.HasIndex("Sport", "SlateDate")
+                        .HasDatabaseName("ix_market_line_shopping_snapshots_sport_slate_date");
+
+                    b.ToTable("market_line_shopping_snapshots", (string)null);
+                });
+
+            modelBuilder.Entity("SportsBetting.Api.Models.MarketTopPickSnapshot", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<int?>("BestAmericanPrice")
+                        .HasColumnType("integer")
+                        .HasColumnName("best_american_price");
+
+                    b.Property<string>("BestBookmaker")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("best_bookmaker");
+
+                    b.Property<decimal?>("BestDecimalPrice")
+                        .HasPrecision(12, 6)
+                        .HasColumnType("numeric(12,6)")
+                        .HasColumnName("best_decimal_price");
+
+                    b.Property<decimal?>("BestEstimatedEv")
+                        .HasPrecision(12, 6)
+                        .HasColumnType("numeric(12,6)")
+                        .HasColumnName("best_estimated_ev");
+
+                    b.Property<decimal?>("BestImpliedProbability")
+                        .HasPrecision(8, 6)
+                        .HasColumnType("numeric(8,6)")
+                        .HasColumnName("best_implied_probability");
+
+                    b.Property<decimal?>("BestProbability")
+                        .HasPrecision(8, 6)
+                        .HasColumnType("numeric(8,6)")
+                        .HasColumnName("best_probability");
+
+                    b.Property<decimal?>("BestProbabilityEdge")
+                        .HasPrecision(8, 6)
+                        .HasColumnType("numeric(8,6)")
+                        .HasColumnName("best_probability_edge");
+
+                    b.Property<string>("BestSide")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)")
+                        .HasColumnName("best_side");
+
+                    b.Property<string>("Bookmaker")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("bookmaker");
+
+                    b.Property<string>("BookmakerPreset")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)")
+                        .HasColumnName("bookmaker_preset");
+
+                    b.Property<JsonDocument>("DetailsJson")
+                        .IsRequired()
+                        .HasColumnType("jsonb")
+                        .HasColumnName("details_json");
+
+                    b.Property<bool>("EntryActionableForUser")
+                        .HasColumnType("boolean")
+                        .HasColumnName("entry_actionable_for_user");
+
+                    b.Property<string>("EntryCompatibilityGroup")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("entry_compatibility_group");
+
+                    b.Property<string>("EntryProvider")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("entry_provider");
+
+                    b.Property<string>("EntryProviderCategory")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("character varying(50)")
+                        .HasColumnName("entry_provider_category");
+
+                    b.Property<string>("EventId")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("event_id");
+
+                    b.Property<string>("EventName")
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)")
+                        .HasColumnName("event_name");
+
+                    b.Property<DateTimeOffset?>("EventStartTime")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("event_start_time");
+
+                    b.Property<DateTimeOffset>("GeneratedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("generated_at_utc");
+
+                    b.Property<bool>("IsAvoid")
+                        .HasColumnType("boolean")
+                        .HasColumnName("is_avoid");
+
+                    b.Property<bool>("IsCandidate")
+                        .HasColumnType("boolean")
+                        .HasColumnName("is_candidate");
+
+                    b.Property<bool>("IsExpired")
+                        .HasColumnType("boolean")
+                        .HasColumnName("is_expired");
+
+                    b.Property<bool>("IsResearchOnly")
+                        .HasColumnType("boolean")
+                        .HasColumnName("is_research_only");
+
+                    b.Property<bool>("IsStale")
+                        .HasColumnType("boolean")
+                        .HasColumnName("is_stale");
+
+                    b.Property<bool>("IsWatchlist")
+                        .HasColumnType("boolean")
+                        .HasColumnName("is_watchlist");
+
+                    b.Property<string>("LifecycleStatus")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("character varying(50)")
+                        .HasColumnName("lifecycle_status");
+
+                    b.Property<decimal>("Line")
+                        .HasPrecision(12, 4)
+                        .HasColumnType("numeric(12,4)")
+                        .HasColumnName("line");
+
+                    b.Property<string>("Player")
+                        .IsRequired()
+                        .HasMaxLength(300)
+                        .HasColumnType("character varying(300)")
+                        .HasColumnName("player");
+
+                    b.Property<Guid?>("PredictionRunId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("prediction_run_id");
+
+                    b.Property<string>("PropType")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("prop_type");
+
+                    b.Property<string>("Provider")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("provider");
+
+                    b.Property<string>("ProviderCategory")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("character varying(50)")
+                        .HasColumnName("provider_category");
+
+                    b.Property<DateOnly>("SlateDate")
+                        .HasColumnType("date")
+                        .HasColumnName("slate_date");
+
+                    b.Property<string>("Sport")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("character varying(50)")
+                        .HasColumnName("sport");
+
+                    b.Property<string>("StrategyClassification")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("character varying(50)")
+                        .HasColumnName("strategy_classification");
+
+                    b.Property<string>("StrategyTier")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)")
+                        .HasColumnName("strategy_tier");
+
+                    b.Property<Guid>("TheOddsRefreshRunId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("the_odds_refresh_run_id");
+
+                    b.HasKey("Id")
+                        .HasName("pk_market_top_pick_snapshots");
+
+                    b.HasIndex("BestEstimatedEv")
+                        .HasDatabaseName("ix_market_top_pick_snapshots_best_estimated_ev");
+
+                    b.HasIndex("GeneratedAtUtc")
+                        .HasDatabaseName("ix_market_top_pick_snapshots_generated_at_utc");
+
+                    b.HasIndex("PredictionRunId")
+                        .HasDatabaseName("ix_market_top_pick_snapshots_prediction_run_id");
+
+                    b.HasIndex("TheOddsRefreshRunId")
+                        .HasDatabaseName("ix_market_top_pick_snapshots_refresh_run_id");
+
+                    b.HasIndex("ProviderCategory", "IsCandidate")
+                        .HasDatabaseName("ix_market_top_pick_snapshots_provider_category_candidate");
+
+                    b.HasIndex("Sport", "SlateDate")
+                        .HasDatabaseName("ix_market_top_pick_snapshots_sport_slate_date");
+
+                    b.ToTable("market_top_pick_snapshots", (string)null);
+                });
+
             modelBuilder.Entity("SportsBetting.Api.Models.MlbResultImportDateState", b =>
                 {
                     b.Property<Guid>("Id")
@@ -2130,6 +2560,46 @@ namespace SportsBetting.Api.Migrations
                     b.Navigation("PredictionRun");
                 });
 
+            modelBuilder.Entity("SportsBetting.Api.Models.MarketLineShoppingSnapshot", b =>
+                {
+                    b.HasOne("SportsBetting.Api.Models.PredictionRun", "PredictionRun")
+                        .WithMany()
+                        .HasForeignKey("PredictionRunId")
+                        .OnDelete(DeleteBehavior.SetNull)
+                        .HasConstraintName("fk_market_line_shopping_snapshots_prediction_runs_prediction_r");
+
+                    b.HasOne("SportsBetting.Api.Models.TheOddsRefreshRun", "TheOddsRefreshRun")
+                        .WithMany("LineShoppingSnapshots")
+                        .HasForeignKey("TheOddsRefreshRunId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
+                        .HasConstraintName("fk_market_line_shopping_snapshots_the_odds_refresh_runs_the_od");
+
+                    b.Navigation("PredictionRun");
+
+                    b.Navigation("TheOddsRefreshRun");
+                });
+
+            modelBuilder.Entity("SportsBetting.Api.Models.MarketTopPickSnapshot", b =>
+                {
+                    b.HasOne("SportsBetting.Api.Models.PredictionRun", "PredictionRun")
+                        .WithMany()
+                        .HasForeignKey("PredictionRunId")
+                        .OnDelete(DeleteBehavior.SetNull)
+                        .HasConstraintName("fk_market_top_pick_snapshots_prediction_runs_prediction_run_id");
+
+                    b.HasOne("SportsBetting.Api.Models.TheOddsRefreshRun", "TheOddsRefreshRun")
+                        .WithMany("TopPickSnapshots")
+                        .HasForeignKey("TheOddsRefreshRunId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
+                        .HasConstraintName("fk_market_top_pick_snapshots_the_odds_refresh_runs_the_odds_re");
+
+                    b.Navigation("PredictionRun");
+
+                    b.Navigation("TheOddsRefreshRun");
+                });
+
             modelBuilder.Entity("SportsBetting.Api.Models.OptimizedEntry", b =>
                 {
                     b.HasOne("SportsBetting.Api.Models.Platform", "Platform")
@@ -2485,6 +2955,13 @@ namespace SportsBetting.Api.Migrations
             modelBuilder.Entity("SportsBetting.Api.Models.Team", b =>
                 {
                     b.Navigation("Players");
+                });
+
+            modelBuilder.Entity("SportsBetting.Api.Models.TheOddsRefreshRun", b =>
+                {
+                    b.Navigation("LineShoppingSnapshots");
+
+                    b.Navigation("TopPickSnapshots");
                 });
 #pragma warning restore 612, 618
         }
