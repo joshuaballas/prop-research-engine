@@ -62,6 +62,8 @@ Use this when you want the dashboard to produce active strategy-aware candidates
 
 This is a debug/admin workflow. A production frontend should not call this endpoint. Production users should read latest persisted odds, predictions, line-shopping groups, top picks, and freshness metadata from read-only endpoints populated by a scheduled backend refresh process.
 
+The target production cadence for The Odds API refreshes is roughly every 1-5 minutes, configurable by credit budget, slate timing, and freshness needs. Public/frontend users must not trigger provider refreshes.
+
 The current refresh endpoint supports profiling options:
 
 ```powershell
@@ -147,6 +149,23 @@ $refresh | ConvertTo-Json -Depth 20 | Set-Content ".\tmp-analysis\current-mlb-df
 
 PrizePicks DFS support comes from The Odds API region `us_dfs` with bookmaker key `prizepicks`. DFS odds are indicative and can vary based on user selections.
 
+## Compare Direct Underdog Versus The Odds Underdog DFS
+
+Direct Underdog ingestion is still useful unless persisted data proves it is redundant or worse. It does not spend The Odds API credits, while The Odds API `us_dfs` Underdog rows do depend on the provider feed. Treat direct Underdog as temporary/supplemental coverage, not the final production architecture.
+
+Use the read-only coverage audit before making any removal decision:
+
+```powershell
+$base = "http://localhost:5299"
+
+Invoke-RestMethod "$base/api/debug/underdog/source-coverage-audit" |
+  ConvertTo-Json -Depth 20
+```
+
+The audit uses persisted DB rows only. It compares normalized player, sport/league, prop type, line, side availability, and event/date context, then returns overlap, unique rows, freshness, breakdowns, match samples, failed-match samples, and a recommendation.
+
+Important: the audit is cadence-sensitive. Direct Underdog currently runs continuously, while The Odds API Underdog DFS rows may only be refreshed manually/debug-style. Do not interpret a one-off coverage audit as proof that The Odds API is worse unless both sources are refreshed on comparable intervals and markets.
+
 ## Expand The Odds Bookmaker Coverage Safely
 
 The bookmaker list is config-driven through `TheOddsIngestionWorker:Bookmakers`. Current committed defaults are intentionally narrow:
@@ -170,6 +189,8 @@ DFS books are configured separately and are opt-in by default:
 ```
 
 To test broader coverage, override this value only in ignored local config (`api/appsettings.Local.json`) or environment variables. Add one or two keys at a time, then dry-run the current refresh before live refresh. Candidate opt-in keys depend on The Odds API plan/provider availability; common US keys to verify manually include `bovada`, `espnbet`, `williamhill_us`, and `betrivers`.
+
+Do not build direct scrapers for additional DFS providers. The production path is The Odds API or another paid/allowed provider feed, not custom scraping for each app.
 
 Coverage diagnostic uses persisted rows only and does not spend credits:
 

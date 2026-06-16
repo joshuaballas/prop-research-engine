@@ -51,9 +51,17 @@ Invoke-RestMethod -Uri "http://localhost:5299/api/debug/errors/recent?take=5"
 | --- | --- | --- | --- | --- | --- |
 | GET | `/api/debug/underdog` | Fetch and normalize current Underdog lines for inspection. | No | Yes, Underdog | No |
 | POST | `/api/debug/underdog/ingest` | Manual Underdog ingestion. | Yes | Yes, Underdog | No |
+| GET | `/api/debug/underdog/source-coverage-audit` | Read-only persisted-row audit comparing direct Underdog coverage with The Odds API `us_dfs` Underdog rows. Returns overlap, unique rows, freshness, sport/prop/event breakdowns, match/failure samples, and a keep/remove/more-data recommendation. | No | No | No |
 | GET | `/api/health/underdog-ingestion` | Underdog worker status. | No | No | No |
 
 Underdog ingestion worker is enabled by default.
+
+Example:
+
+```powershell
+Invoke-RestMethod "http://localhost:5299/api/debug/underdog/source-coverage-audit" |
+  ConvertTo-Json -Depth 20
+```
 
 ## DFS Provider Planning
 

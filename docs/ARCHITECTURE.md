@@ -15,8 +15,8 @@ ASP.NET Core API
   -> provider HTTP clients
 
 External providers
-  -> Underdog Fantasy
   -> The Odds API
+  -> Underdog Fantasy
   -> MLB Stats API
 ```
 
@@ -91,13 +91,19 @@ Normal public/future API routes are not meant to be protected by this middleware
 
 ### Underdog
 
-Underdog is a direct source and currently has an enabled ingestion worker. It fetches over/under lines, resolves players and prop types, persists platform props, and stores line snapshots.
+Underdog is currently supported as a direct source and has an enabled ingestion worker. It fetches over/under lines, resolves players and prop types, persists platform props, and stores line snapshots.
+
+This is useful free development and supplemental coverage, but it is not the desired long-term production dependency. The production strategy is provider-feed-first: The Odds API or another paid/allowed provider feed should be the source of truth once scheduled refreshes are implemented and coverage is proven adequate.
+
+Keep direct Underdog configurable. In production it should eventually be disabled by default, then removed if The Odds API scheduled coverage is sufficient. Do not describe it as "retired but still present"; if direct Underdog becomes fully deprecated, remove it rather than keeping a stale fallback path.
 
 ### The Odds API
 
 The Odds API is a provider/aggregator, not a sportsbook. The system persists actual bookmaker/platform names from the payload, such as DraftKings or BetMGM, and stores The Odds API provider context in metadata.
 
-The current integration is manual/debug-first:
+The Odds API is the desired production source of truth for odds and DFS pick'em provider rows. It can provide sportsbook market context and DFS rows through region `us_dfs`, including PrizePicks, Underdog, DraftKings Pick6, and Betr Picks when configured.
+
+The current integration is still manual/debug-first:
 
 - fetch events/player props,
 - dry-run or commit one selected event,
@@ -106,6 +112,8 @@ The current integration is manual/debug-first:
 - run backtests later after results import.
 
 The worker skeleton is disabled by default and dry-run-first. It should not poll The Odds API automatically until explicitly enabled and hardened.
+
+Long-term, The Odds API calls should run through a scheduled backend worker/admin process on a controlled cadence, roughly every 1-5 minutes depending on credit budget, slate timing, and freshness needs. Frontend users should never trigger provider refreshes.
 
 ### MLB Stats API
 
@@ -181,13 +189,13 @@ Workers should log caught exceptions to `application_errors` and continue or fai
 
 ## Production Data Delivery Direction
 
-The production architecture should use scheduled backend refreshes plus read-only frontend endpoints.
+The production architecture should be provider-feed-first, not scraper-first. The Odds API or another paid/allowed feed should provide production odds and DFS pick'em rows. Custom direct scrapers do not scale across PrizePicks, Pick6, Betr, Sleeper, ParlayPlay, and other DFS apps, and they can break when platforms change payloads or add anti-bot protections.
 
-Frontend users should not trigger The Odds API provider refreshes. Provider refreshes spend credits and should not happen per user, page load, filter change, or button click in a public product UI.
+The production architecture should use scheduled backend refreshes plus read-only frontend endpoints. Frontend users should not trigger The Odds API provider refreshes. Provider refreshes spend credits and should not happen per user, page load, filter change, or button click in a public product UI.
 
 Target flow:
 
-1. A scheduled backend worker or admin process refreshes The Odds API data on a controlled cadence.
+1. A scheduled backend worker or admin process refreshes The Odds API data on a controlled cadence, roughly every 1-5 minutes depending on credit budget and slate state.
 2. The worker uses configurable interval, bookmaker/provider preset, markets, concurrency, and credit caps.
 3. The worker fetches provider odds once per interval, persists normalized platform props and snapshots, generates scoped predictions, builds line-shopping/top-pick outputs, and records freshness metadata.
 4. All users read the same latest persisted odds, predictions, line-shopping groups, and top picks.
@@ -195,6 +203,8 @@ Target flow:
 6. UI displays `lastRefreshedAt`, line freshness, stale-data warnings, and game-started/expired lifecycle state.
 
 The existing `refresh-current` debug/admin endpoint remains useful for manual controlled refreshes and requires `forceLive=true` for live provider calls. It is not the target frontend data path.
+
+The Underdog source coverage audit is cadence-sensitive. Direct Underdog currently has more persisted coverage partly because it runs continuously, while The Odds API Underdog DFS rows may only be refreshed manually. Do not interpret a one-off audit as proof that The Odds API coverage is worse unless both sources are refreshed on comparable intervals and markets.
 
 ## Error Logging
 

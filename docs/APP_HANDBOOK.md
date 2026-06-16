@@ -31,6 +31,9 @@ Working today:
 Provider notes:
 
 - PrizePicks support comes only through The Odds API `us_dfs` feed when configured.
+- The Odds API is the desired production source of truth for odds and DFS pick'em rows.
+- Direct Underdog remains supported because it works and does not spend The Odds API credits, but it is temporary/supplemental coverage, not the desired long-term production dependency.
+- Use the Underdog source coverage audit to compare direct Underdog against The Odds API `us_dfs` Underdog rows, but remember the audit is cadence-sensitive. It is not an apples-to-apples comparison unless both sources run on comparable refresh intervals.
 - The Odds API automated ingestion worker exists only as a guarded skeleton and is disabled by default.
 - Production direction is scheduled backend The Odds refreshes plus read-only frontend endpoints. Public frontend users should not trigger provider refreshes or spend provider credits.
 - EV persistence is not implemented. EV diagnostics are research-only.
@@ -89,11 +92,15 @@ See [WORKFLOWS.md](WORKFLOWS.md) for command-level details.
 
 ## Production Direction
 
-For a real product, The Odds API refreshes should run from a scheduled backend worker or admin process on a controlled cadence. The worker should refresh provider data once per interval, persist normalized rows, generate predictions, build line-shopping/top-pick outputs, and update freshness metadata.
+For a real product, the data strategy is provider-feed-first, not scraper-first. The Odds API or another paid/allowed provider feed should be the production source of truth. Do not plan to build custom scrapers for PrizePicks, Pick6, Betr, Sleeper, ParlayPlay, or other DFS apps.
+
+The Odds API refreshes should run from a scheduled backend worker or admin process on a controlled cadence, roughly every 1-5 minutes depending on credit budget, slate timing, and freshness needs. The worker should refresh provider data once per interval, persist normalized rows, generate predictions, build line-shopping/top-pick outputs, and update freshness metadata.
 
 Frontend users should only call read-only endpoints that return the latest persisted odds, predictions, line-shopping groups, top picks, and freshness state. All users should see the same latest persisted data. The UI should show last refreshed time, stale-data warnings, and game-started/expired lifecycle labels.
 
 The existing debug/admin `refresh-current` endpoint remains for manual controlled refreshes and requires `forceLive=true` for live provider calls. It should not be called by a public frontend.
+
+Direct Underdog should remain configurable while it is useful for development and supplemental coverage. In production it should eventually be disabled by default once The Odds API scheduled refresh coverage is proven adequate, then removed if it is redundant.
 
 ## Automatic Vs Manual
 
@@ -131,6 +138,7 @@ Not present:
 - DFS entries are provider-scoped. Do not mix PrizePicks, Underdog, DraftKings Pick6, Betr Picks, or sportsbook-context legs in one future entry builder. Entry rules marked `NeedsVerification` must be confirmed before production use.
 - Generated endpoint outputs go under `tmp-analysis`; logs go under `logs`; temporary build outputs go under `tmp-build`.
 - Do not add direct PrizePicks scraping, browser automation, or provider-specific bypass work.
+- Do not add new direct scrapers for other DFS providers. Provider feeds are the production path.
 - Do not treat EV outputs as production recommendations until backtests support them.
 - Non-standard market types should be visible as research rows, but not mislabeled as normal recommendations.
 

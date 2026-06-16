@@ -7,28 +7,34 @@ This backlog is intentionally practical and ordered around current MLB research 
 1. Implement scheduled The Odds refresh worker and production read-only endpoints.
    - Impact: prevents frontend users from spending The Odds API credits and gives all users the same latest persisted odds, predictions, line-shopping groups, top picks, and freshness metadata.
    - Dependency: current debug refresh workflow, force-live safety gate, lifecycle metadata, and agreed refresh cadence/provider preset.
+   - Target: configurable 1-5 minute cadence depending on credit budget, slate timing, and freshness needs.
 
-2. Backtest The Odds line-shopping after the 2026-06-15 results import.
+2. Prove The Odds scheduled Underdog DFS coverage against direct Underdog.
+   - Impact: determines whether The Odds API scheduled refreshes can replace direct Underdog as the production source.
+   - Dependency: scheduled The Odds refresh worker running on comparable intervals to direct Underdog.
+   - Note: one-off manual/debug audits are cadence-sensitive and should not be treated as apples-to-apples production comparisons.
+
+3. Backtest The Odds line-shopping after the 2026-06-15 results import.
    - Impact: validates the first persisted standard bookmaker line-shopping loop.
    - Dependency: MLB result import for completed games.
 
-3. Verify lifecycle behavior after the first ingested game starts.
+4. Verify lifecycle behavior after the first ingested game starts.
    - Impact: ensures stale/game-started rows leave the default active recommendation view.
    - Dependency: persisted The Odds event with start time and snapshots.
 
-4. Add a "Model Performance / If You Followed Picks" research page.
+5. Add a "Model Performance / If You Followed Picks" research page.
    - Impact: makes backtests understandable without raw JSON.
    - Dependency: stable line-shopping backtest output.
 
-5. Start paper bet tracking.
+6. Start paper bet tracking.
    - Impact: validates recommendations prospectively, not just retrospectively.
    - Dependency: clear lifecycle state and selected recommendation rules.
 
-6. Harden line lifecycle rules.
+7. Harden line lifecycle rules.
    - Impact: prevents stale or expired lines from being treated as active.
    - Dependency: observed timestamps and event start times.
 
-7. Continue The Odds player mapping cleanup for remaining safe cases.
+8. Continue The Odds player mapping cleanup for remaining safe cases.
    - Impact: improves prediction coverage.
    - Dependency: candidate endpoints and manual review.
 
@@ -55,8 +61,16 @@ This backlog is intentionally practical and ordered around current MLB research 
    - Dependency: backtest validation.
 
 6. Make The Odds worker production-ready.
-   - Impact: keeps standard bookmaker supply fresh.
+   - Impact: keeps sportsbook context and DFS pick'em supply fresh through the provider feed.
    - Dependency: credit policy, observability, retry/error handling, event selection rules.
+
+7. Disable direct Underdog by default once The Odds scheduled coverage is sufficient.
+   - Impact: moves production toward a single provider-feed source of truth while retaining direct Underdog only when explicitly configured.
+   - Dependency: comparable scheduled coverage audit and acceptable freshness/market coverage.
+
+8. Remove direct Underdog if The Odds scheduled coverage makes it redundant.
+   - Impact: reduces custom direct-source maintenance.
+   - Dependency: sustained evidence that The Odds API `us_dfs` Underdog coverage is adequate for production needs.
 
 ## Later
 
@@ -83,6 +97,8 @@ This backlog is intentionally practical and ordered around current MLB research 
 ## Do Not Do Yet
 
 - Do not add direct PrizePicks scraping, browser automation, or provider-specific bypass work.
+- Do not build direct scrapers for Pick6, Betr, PrizePicks, Sleeper, ParlayPlay, or other DFS apps.
+- Do not treat direct Underdog as the final production data dependency.
 - Do not let public frontend routes trigger The Odds API provider refreshes.
 - Do not enable The Odds worker live polling without explicit credit/ops readiness.
 - Do not present EV as proven profitable.
