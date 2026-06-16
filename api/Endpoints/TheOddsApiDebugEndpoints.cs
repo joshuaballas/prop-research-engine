@@ -112,6 +112,7 @@ public static class TheOddsApiDebugEndpoints
                             || row.Strategy.IsWatchlist
                             || string.Equals(row.Strategy.StrategyClassification, "Research", StringComparison.OrdinalIgnoreCase)))
                     .OrderBy(row => GetLineShoppingTopOnlyStrategyRank(row.Strategy))
+                    .ThenBy(row => row.Group.IsActionableForUser ? 0 : 1)
                     .ThenByDescending(row => row.Group.BestEstimatedEv ?? decimal.MinValue)
                     .ThenByDescending(row => row.Group.RankingScore)
                     .Take(requestedTake)
@@ -192,7 +193,21 @@ public static class TheOddsApiDebugEndpoints
                     researchOnlyGroups = groups.Count(group => group.TrustLevel == "ResearchOnly"),
                     positiveBestEvGroups = groups.Count(group => group.BestEstimatedEv > 0m),
                     negativeBestEvGroups = groups.Count(group => group.BestEstimatedEv <= 0m),
-                    lowSampleGroups = groups.Count(group => group.SampleWarning is "LowSample" or "InsufficientHistoricalSample" or "MissingHistoricalDistribution")
+                    lowSampleGroups = groups.Count(group => group.SampleWarning is "LowSample" or "InsufficientHistoricalSample" or "MissingHistoricalDistribution"),
+                    actionableCandidateCount = groups.Count(group => ClassifyTheOddsLineShoppingStrategy(group).IsCandidate && group.IsActionableForUser),
+                    sportsbookContextCandidateCount = groups.Count(group => ClassifyTheOddsLineShoppingStrategy(group).IsCandidate && !group.IsActionableForUser),
+                    dfsCandidateCount = groups.Count(group => ClassifyTheOddsLineShoppingStrategy(group).IsCandidate && string.Equals(group.ProviderCategory, "DFS", StringComparison.OrdinalIgnoreCase)),
+                    providerCategoryBreakdown = groups
+                        .GroupBy(group => group.ProviderCategory, StringComparer.OrdinalIgnoreCase)
+                        .Select(group => new
+                        {
+                            providerCategory = group.Key,
+                            count = group.Count(),
+                            activeCount = group.Count(row => string.Equals(row.LifecycleStatus, "Active", StringComparison.OrdinalIgnoreCase)),
+                            candidateCount = group.Count(row => ClassifyTheOddsLineShoppingStrategy(row).IsCandidate)
+                        })
+                        .OrderBy(row => row.providerCategory)
+                        .ToArray()
                 },
                 strategyClassificationSummary,
                 comparisonGroups,
@@ -275,13 +290,18 @@ public static class TheOddsApiDebugEndpoints
 
             stepStopwatch.Restart();
             var strategyClassificationSummary = BuildTheOddsStrategyClassificationSummary(groups);
-            var topPicks = groups
+            var candidateGroups = groups
                 .Select(group => new
                 {
                     Group = group,
                     Strategy = ClassifyTheOddsLineShoppingStrategy(group)
                 })
                 .Where(row => row.Strategy.IsCandidate)
+                .ToArray();
+            var preferredCandidateGroups = candidateGroups.Any(row => row.Group.IsActionableForUser)
+                ? candidateGroups.Where(row => row.Group.IsActionableForUser)
+                : candidateGroups;
+            var topPicks = preferredCandidateGroups
                 .OrderByDescending(row => row.Group.BestEstimatedEv ?? decimal.MinValue)
                 .ThenByDescending(row => row.Group.RankingScore)
                 .Take(requestedTake)
@@ -323,7 +343,11 @@ public static class TheOddsApiDebugEndpoints
                 summary = new
                 {
                     totalActiveComparisonGroups = groups.Count,
-                    activeCandidateCount = groups.Count(group => ClassifyTheOddsLineShoppingStrategy(group).IsCandidate),
+                    activeCandidateCount = candidateGroups.Length,
+                    actionableCandidateCount = candidateGroups.Count(row => row.Group.IsActionableForUser),
+                    sportsbookContextCandidateCount = candidateGroups.Count(row => !row.Group.IsActionableForUser),
+                    dfsCandidateCount = candidateGroups.Count(row => string.Equals(row.Group.ProviderCategory, "DFS", StringComparison.OrdinalIgnoreCase)),
+                    topPicksPreferredProviderCategory = candidateGroups.Any(row => row.Group.IsActionableForUser) ? "DFS actionable" : "Sportsbook context fallback",
                     activeWatchlistCount = groups.Count(group => ClassifyTheOddsLineShoppingStrategy(group).IsWatchlist),
                     returnedTopPicks = topPicks.Length
                 },
@@ -2602,10 +2626,11 @@ public static class TheOddsApiDebugEndpoints
         endpoints.MapPost("/api/debug/the-odds/mlb/recommendations/refresh-current", async (
             DateOnly? date,
             bool? dryRun,
-            bool? includeCandidates,
-            bool? includeLineShopping,
-            bool? includeFullDiagnostics,
-            int? freshnessMinutes,
+        bool? includeCandidates,
+        bool? includeLineShopping,
+        bool? includeFullDiagnostics,
+        bool? includeDfs,
+        int? freshnessMinutes,
             IOptions<TheOddsIngestionWorkerOptions> workerOptions,
             IOptions<TheOddsApiOptions> theOddsApiOptions,
             ITheOddsApiMlbPlayerPropsAdapter adapter,
@@ -2630,14 +2655,23 @@ public static class TheOddsApiDebugEndpoints
             var resolveSlateDateMs = stepStopwatch.ElapsedMilliseconds;
             var lifecycleFreshnessMinutes = Math.Clamp(freshnessMinutes ?? DefaultTheOddsLineShoppingFreshnessMinutes, 1, 1440);
             var bookmakers = NullIfWhiteSpace(options.Bookmakers);
+            var includeDfsBookmakers = includeDfs ?? options.IncludeDfsBookmakers;
+            var dfsRegion = NullIfWhiteSpace(options.DfsRegion) ?? "us_dfs";
+            var dfsBookmakers = NullIfWhiteSpace(options.DfsBookmakers);
             var markets = NullIfWhiteSpace(options.Markets);
             var requestedBookmakers = ParseCommaSeparatedSet(bookmakers);
+            var requestedDfsBookmakers = includeDfsBookmakers
+                ? ParseCommaSeparatedSet(dfsBookmakers)
+                : [];
             var requestedMarkets = ParseCommaSeparatedSet(markets);
             var requestedPropTypes = requestedMarkets
                 .Select(NormalizeTheOddsMarketKeyToPropType)
                 .Where(value => !string.IsNullOrWhiteSpace(value))
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .ToArray();
+            var predictionBookmakers = includeDfsBookmakers
+                ? JoinCommaSeparatedDistinct(bookmakers, dfsBookmakers)
+                : bookmakers;
             stepStopwatch.Restart();
             var existingSlateProps = await CountPersistedTheOddsPropsForSlateAsync(dbContext, slateDate, cancellationToken);
             var countExistingSlatePropsMs = stepStopwatch.ElapsedMilliseconds;
@@ -2679,13 +2713,19 @@ public static class TheOddsApiDebugEndpoints
                         countExistingSlatePropsMs,
                         theOddsApiCallCount = 0,
                         configuredBookmakers = bookmakers,
+                        configuredDfsBookmakers = dfsBookmakers,
+                        includeDfs = includeDfsBookmakers,
+                        dfsRegion,
                         configuredMarkets = markets,
                         bookmakersRequested = requestedBookmakers,
+                        dfsBookmakersRequested = requestedDfsBookmakers,
                         marketsRequested = requestedMarkets,
                         propTypesRequested = requestedPropTypes,
                         maxConcurrentRequests,
                         existingPersistedTheOddsPropsForSlate = existingSlateProps,
-                        estimatedApiCalls = "Live refresh would call The Odds API once for MLB events, then once per MLB event on the slate.",
+                        estimatedApiCalls = includeDfsBookmakers
+                            ? "Live refresh would call The Odds API once for MLB events, then once per MLB event for sportsbook books and once per MLB event for DFS books."
+                            : "Live refresh would call The Odds API once for MLB events, then once per MLB event on the slate.",
                         recommendedAction = "Run without dryRun only when you want to spend The Odds API credits and refresh persisted market rows."
                     }
                 });
@@ -2721,15 +2761,37 @@ public static class TheOddsApiDebugEndpoints
                     slateEvents,
                     bookmakers,
                     markets,
+                    region: null,
+                    providerCategory: "Sportsbook",
+                    isActionableForUser: false,
+                    isIndicativeOdds: false,
                     maxConcurrentRequests,
                     scopeFactory,
                     cancellationToken);
-                var ingestEventsWallClockMs = stepStopwatch.ElapsedMilliseconds;
+                var sportsbookIngestEventsWallClockMs = stepStopwatch.ElapsedMilliseconds;
+
+                stepStopwatch.Restart();
+                var dfsIngestionResults = includeDfsBookmakers && !string.IsNullOrWhiteSpace(dfsBookmakers)
+                    ? await IngestTheOddsSlateEventsAsync(
+                        slateEvents,
+                        dfsBookmakers,
+                        markets,
+                        dfsRegion,
+                        providerCategory: "DFS",
+                        isActionableForUser: true,
+                        isIndicativeOdds: true,
+                        maxConcurrentRequests,
+                        scopeFactory,
+                        cancellationToken)
+                    : [];
+                var dfsIngestEventsWallClockMs = stepStopwatch.ElapsedMilliseconds;
+                var allIngestionResults = ingestionResults.Concat(dfsIngestionResults).ToArray();
+                var ingestEventsWallClockMs = sportsbookIngestEventsWallClockMs + dfsIngestEventsWallClockMs;
 
                 stepStopwatch.Restart();
                 var afterPlatformPropIds = await LoadTheOddsPlatformPropIdsAsync(dbContext, cancellationToken);
                 var platformPropsCreated = afterPlatformPropIds.Except(beforePlatformPropIds).Count();
-                var platformPropsUpserted = ingestionResults.Sum(row => row.PlatformPropsUpserted);
+                var platformPropsUpserted = allIngestionResults.Sum(row => row.PlatformPropsUpserted);
                 var platformPropsUpdated = Math.Max(0, platformPropsUpserted - platformPropsCreated);
                 var loadAfterPlatformPropsMs = stepStopwatch.ElapsedMilliseconds;
 
@@ -2737,7 +2799,7 @@ public static class TheOddsApiDebugEndpoints
                 var predictionResult = slateEvents.Length == 0
                     ? null
                     : await generationService.GenerateTheOddsMlbBaselinePredictionsAsync(
-                        new TheOddsMlbPredictionGenerationRequest(null, bookmakers, markets),
+                        new TheOddsMlbPredictionGenerationRequest(null, predictionBookmakers, markets),
                         cancellationToken);
                 var generatePredictionsMs = stepStopwatch.ElapsedMilliseconds;
 
@@ -2776,6 +2838,9 @@ public static class TheOddsApiDebugEndpoints
                     .ThenByDescending(row => row.Group.RankingScore)
                     .Select(row => row.Group)
                     .ToArray();
+                var preferredActiveCandidates = activeCandidates.Any(group => group.IsActionableForUser)
+                    ? activeCandidates.Where(group => group.IsActionableForUser).ToArray()
+                    : activeCandidates;
                 var activeWatchlist = classifiedGroups
                     .Where(row => row.Strategy.IsWatchlist)
                     .OrderByDescending(row => row.Group.BestEstimatedEv ?? decimal.MinValue)
@@ -2790,7 +2855,7 @@ public static class TheOddsApiDebugEndpoints
 
                 stepStopwatch.Restart();
                 var topActiveCandidates = shouldIncludeCandidates
-                    ? activeCandidates.Take(25).Select(group => ToLineShoppingResponseGroup(group, includeBookmakerPrices: false)).ToArray()
+                    ? preferredActiveCandidates.Take(25).Select(group => ToLineShoppingResponseGroup(group, includeBookmakerPrices: false)).ToArray()
                     : Array.Empty<object>();
                 var topWatchlist = shouldIncludeCandidates
                     ? activeWatchlist.Take(25).Select(group => ToLineShoppingResponseGroup(group, includeBookmakerPrices: false)).ToArray()
@@ -2815,6 +2880,9 @@ public static class TheOddsApiDebugEndpoints
                         totalMarketsCompared = lineShopping.Rows.Count,
                         totalBookmakers = lineShopping.Rows.Select(row => row.Bookmaker).Distinct(StringComparer.OrdinalIgnoreCase).Count(),
                         eligibleComparisonGroups = lineShopping.Groups.Count(row => row.IsEligibleAsNormalRecommendation),
+                        actionableCandidateGroups = lineShopping.Groups.Count(group => ClassifyTheOddsLineShoppingStrategy(group).IsCandidate && group.IsActionableForUser),
+                        sportsbookContextCandidateGroups = lineShopping.Groups.Count(group => ClassifyTheOddsLineShoppingStrategy(group).IsCandidate && !group.IsActionableForUser),
+                        dfsCandidateGroups = lineShopping.Groups.Count(group => ClassifyTheOddsLineShoppingStrategy(group).IsCandidate && string.Equals(group.ProviderCategory, "DFS", StringComparison.OrdinalIgnoreCase)),
                         activeGroups = activeGroups.Length,
                         staleOrExpiredGroups = lineShopping.Groups.Count(row => !IsActiveTheOddsLineShoppingGroup(row))
                     },
@@ -2822,6 +2890,9 @@ public static class TheOddsApiDebugEndpoints
                         ? lineShopping.StrategyClassificationSummary
                         : Array.Empty<object>(),
                     activeCandidateCount = activeCandidates.Length,
+                    actionableCandidateCount = activeCandidates.Count(group => group.IsActionableForUser),
+                    sportsbookContextCandidateCount = activeCandidates.Count(group => !group.IsActionableForUser),
+                    dfsCandidateCount = activeCandidates.Count(group => string.Equals(group.ProviderCategory, "DFS", StringComparison.OrdinalIgnoreCase)),
                     activeWatchlistCount = activeWatchlist.Length,
                     activeAvoidCount = activeAvoid.Length,
                     topActiveCandidates,
@@ -2835,9 +2906,9 @@ public static class TheOddsApiDebugEndpoints
                         loadBeforePlatformPropsMs,
                         fetchEventsMs,
                         filterEventsMs,
-                        fetchMarketsTotalMs = ingestionResults.Sum(row => row.Timing.FetchMarketsMs),
+                        fetchMarketsTotalMs = allIngestionResults.Sum(row => row.Timing.FetchMarketsMs),
                         fetchMarketsWallClockMs = ingestEventsWallClockMs,
-                        fetchMarketsByEventMs = ingestionResults.Select(row => new
+                        fetchMarketsByEventMs = allIngestionResults.Select(row => new
                         {
                             row.EventId,
                             row.Success,
@@ -2854,38 +2925,56 @@ public static class TheOddsApiDebugEndpoints
                         }),
                         fetchMarketsByBookmakerMs = Array.Empty<object>(),
                         fetchMarketsByBookmakerTimingNote = "The Odds event odds endpoint returns all requested bookmakers for an event in one response, so per-bookmaker network timings are not available.",
-                        persistPlatformPropsMs = ingestionResults.Sum(row => row.Timing.PersistPlatformPropsMs),
+                        persistPlatformPropsMs = allIngestionResults.Sum(row => row.Timing.PersistPlatformPropsMs),
                         persistPlatformPropsWallClockMs = ingestEventsWallClockMs,
-                        normalizedPropsCount = ingestionResults.Sum(row => row.Timing.NormalizedPropsCount),
-                        existingLookupMs = ingestionResults.Sum(row => row.Timing.ExistingLookupMs),
-                        existingRowsMatched = ingestionResults.Sum(row => row.Timing.ExistingRowsMatched),
-                        rowsUnchanged = ingestionResults.Sum(row => row.Timing.RowsUnchanged),
-                        rowsCreated = ingestionResults.Sum(row => row.Timing.RowsCreated),
-                        rowsUpdated = ingestionResults.Sum(row => row.Timing.RowsUpdated),
-                        rowsSkipped = ingestionResults.Sum(row => row.Timing.RowsSkipped),
-                        saveChangesMs = ingestionResults.Sum(row => row.Timing.SaveChangesMs),
-                        dbRoundTripsEstimate = ingestionResults.Sum(row => row.Timing.DbRoundTripsEstimate),
+                        normalizedPropsCount = allIngestionResults.Sum(row => row.Timing.NormalizedPropsCount),
+                        existingLookupMs = allIngestionResults.Sum(row => row.Timing.ExistingLookupMs),
+                        existingRowsMatched = allIngestionResults.Sum(row => row.Timing.ExistingRowsMatched),
+                        rowsUnchanged = allIngestionResults.Sum(row => row.Timing.RowsUnchanged),
+                        rowsCreated = allIngestionResults.Sum(row => row.Timing.RowsCreated),
+                        rowsUpdated = allIngestionResults.Sum(row => row.Timing.RowsUpdated),
+                        rowsSkipped = allIngestionResults.Sum(row => row.Timing.RowsSkipped),
+                        saveChangesMs = allIngestionResults.Sum(row => row.Timing.SaveChangesMs),
+                        dbRoundTripsEstimate = allIngestionResults.Sum(row => row.Timing.DbRoundTripsEstimate),
+                        sportsbookBookmakersRequested = requestedBookmakers,
+                        dfsBookmakersRequested = requestedDfsBookmakers,
+                        sportsbookEventsFetched = slateEvents.Length,
+                        dfsEventsFetched = includeDfsBookmakers ? slateEvents.Length : 0,
+                        dfsPlatformPropsCreated = dfsIngestionResults.Sum(row => row.Timing.RowsCreated),
+                        dfsPlatformPropsUpdated = dfsIngestionResults.Sum(row => row.Timing.RowsUpdated),
+                        dfsPlatformPropsUnchanged = dfsIngestionResults.Sum(row => row.Timing.RowsUnchanged),
+                        dfsApiCallCount = includeDfsBookmakers ? slateEvents.Length : 0,
+                        dfsFetchMs = dfsIngestionResults.Sum(row => row.Timing.FetchMarketsMs),
+                        dfsPersistMs = dfsIngestionResults.Sum(row => row.Timing.PersistPlatformPropsMs),
+                        sportsbookFetchMs = ingestionResults.Sum(row => row.Timing.FetchMarketsMs),
+                        sportsbookPersistMs = ingestionResults.Sum(row => row.Timing.PersistPlatformPropsMs),
+                        sportsbookFetchWallClockMs = sportsbookIngestEventsWallClockMs,
+                        dfsFetchWallClockMs = dfsIngestEventsWallClockMs,
                         loadAfterPlatformPropsMs,
                         generatePredictionsMs,
                         lineShoppingMs,
                         strategyClassificationMs,
                         topCandidatesMs,
                         responseBuildMs,
-                        theOddsApiCallCount = 1 + slateEvents.Length,
+                        theOddsApiCallCount = 1 + slateEvents.Length + (includeDfsBookmakers ? slateEvents.Length : 0),
                         theOddsApiCallsByType = new
                         {
                             events = 1,
-                            eventOdds = slateEvents.Length
+                            sportsbookEventOdds = slateEvents.Length,
+                            dfsEventOdds = includeDfsBookmakers ? slateEvents.Length : 0
                         },
-                        apiCallsMade = 1 + slateEvents.Length,
+                        apiCallsMade = 1 + slateEvents.Length + (includeDfsBookmakers ? slateEvents.Length : 0),
                         maxConcurrentRequests,
                         eventDiscoveryCreditUsage = eventFetch.CreditUsage,
-                        eventIngestionCreditUsage = shouldIncludeFullDiagnostics ? ingestionResults.Select(row => new
+                        eventIngestionCreditUsage = shouldIncludeFullDiagnostics ? allIngestionResults.Select(row => new
                         {
                             row.EventId,
                             row.CreditUsage
                         }).Cast<object>().ToArray() : Array.Empty<object>(),
                         configuredBookmakers = bookmakers,
+                        configuredDfsBookmakers = dfsBookmakers,
+                        includeDfs = includeDfsBookmakers,
+                        dfsRegion,
                         configuredMarkets = markets,
                         eventsFetched = slateEvents.Length,
                         marketsRequested = requestedMarkets,
@@ -2904,7 +2993,7 @@ public static class TheOddsApiDebugEndpoints
                             row.EventStartTime,
                             slateDate = ResolveMlbSlateDate(row.EventStartTime)
                         }).Cast<object>().ToArray() : Array.Empty<object>(),
-                        ingestion = shouldIncludeFullDiagnostics ? ingestionResults.Select(row => new
+                        ingestion = shouldIncludeFullDiagnostics ? allIngestionResults.Select(row => new
                         {
                             row.EventId,
                             row.Success,
@@ -3385,6 +3474,10 @@ public static class TheOddsApiDebugEndpoints
                 row.PlayerName,
                 row.PropType,
                 ExtractMarketClassification(row.Metadata),
+                ExtractProviderCategory(row.Metadata),
+                ExtractMetadataRootString(row.Metadata, "region") ?? "us",
+                ExtractMetadataRootBool(row.Metadata, "isActionableForUser") ?? false,
+                ExtractMetadataRootBool(row.Metadata, "isIndicativeOdds") ?? false,
                 ExtractEventId(row.Metadata),
                 ExtractEventStartTime(row.Metadata),
                 ExtractEventString(row.Metadata, "homeTeam"),
@@ -3425,6 +3518,10 @@ public static class TheOddsApiDebugEndpoints
             platformProp.PropType,
             platformProp.CurrentLine,
             platformProp.MarketClassification,
+            platformProp.ProviderCategory,
+            platformProp.Region,
+            platformProp.IsActionableForUser,
+            platformProp.IsIndicativeOdds,
             impactRow.IsEligibleAsNormalRecommendation,
             prediction.ProbabilityOver,
             prediction.ProbabilityUnder,
@@ -3492,7 +3589,8 @@ public static class TheOddsApiDebugEndpoints
                 row.Player,
                 row.PropType,
                 row.Line,
-                row.MarketClassification))
+                row.MarketClassification,
+                row.ProviderCategory))
             .Select(group => BuildLineShoppingGroup(group.Key, group.ToList(), now, freshnessMinutes))
             .OrderByDescending(group => group.BestEstimatedEv ?? decimal.MinValue)
             .ToList();
@@ -3556,6 +3654,10 @@ public static class TheOddsApiDebugEndpoints
             key.NormalizedPropType,
             key.Line,
             key.MarketClassification,
+            key.ProviderCategory,
+            rows.Any(row => row.IsActionableForUser),
+            rows.Any(row => row.IsIndicativeOdds),
+            rows.Select(row => row.Region).FirstOrDefault(value => !string.IsNullOrWhiteSpace(value)) ?? "us",
             first.PlayerId,
             first.PropTypeId,
             first.EventDate,
@@ -3644,6 +3746,10 @@ public static class TheOddsApiDebugEndpoints
             normalizedPropType = group.NormalizedPropType,
             line = group.Line,
             group.MarketClassification,
+            group.ProviderCategory,
+            group.Region,
+            group.IsActionableForUser,
+            group.IsIndicativeOdds,
             group.IsEligibleAsNormalRecommendation,
             modelProbabilityOver = group.ModelProbabilityOver,
             modelProbabilityUnder = group.ModelProbabilityUnder,
@@ -3718,6 +3824,7 @@ public static class TheOddsApiDebugEndpoints
         var isResearchOnly = string.Equals(group.TrustLevel, "ResearchOnly", StringComparison.OrdinalIgnoreCase)
             || group.SampleWarning is "InsufficientHistoricalSample" or "MissingHistoricalDistribution";
         var isActionableLifecycle = !group.IsStale && !group.IsExpired && string.Equals(group.LifecycleStatus, "Active", StringComparison.OrdinalIgnoreCase);
+        var hasPositiveBestEv = group.BestEstimatedEv > 0m;
         var marketShape = BuildTheOddsLineShoppingMarketShape(group, isBatterProp, isPitcherStrikeouts);
 
         if (!hasBestPrice)
@@ -3799,13 +3906,14 @@ public static class TheOddsApiDebugEndpoints
                 riskTags);
         }
 
-        var qualifiesConservative = group.IsEligibleAsNormalRecommendation
+        var matchesConservativeShape = group.IsEligibleAsNormalRecommendation
             && (isPitcherStrikeouts || isTotalBases)
             && !(isBatterProp && group.Line == 0.5m)
             && !(isBatterProp && group.BestDecimalPrice >= 2.00m)
             && hasBestPrice
             && hasBestSide
             && isActionableLifecycle;
+        var qualifiesConservative = matchesConservativeShape && hasPositiveBestEv;
         if (qualifiesConservative)
         {
             reasons.Add("Matches Conservative Candidate Strategy.");
@@ -3824,7 +3932,7 @@ public static class TheOddsApiDebugEndpoints
         }
 
         var qualifiesPitcherStrikeout = isPitcherStrikeouts
-            && group.BestEstimatedEv > 0m
+            && hasPositiveBestEv
             && hasBestPrice
             && hasBestSide
             && isActionableLifecycle;
@@ -3843,6 +3951,13 @@ public static class TheOddsApiDebugEndpoints
                 "Pitcher Strikeouts Only",
                 marketShape,
                 riskTags);
+        }
+
+        if (matchesConservativeShape && !hasPositiveBestEv)
+        {
+            reasons.Add("Conservative shape matched, but EV is not positive.");
+            warnings.Add("Conservative shape matched, but EV is not positive.");
+            riskTags.Add("NonPositiveEv");
         }
 
         var qualifiesWatchlist = (string.Equals(group.TrustLevel, "Medium", StringComparison.OrdinalIgnoreCase) && isTotalBases)
@@ -4142,6 +4257,43 @@ public static class TheOddsApiDebugEndpoints
             && classification.ValueKind == JsonValueKind.String
             ? classification.GetString() ?? "Unknown"
             : "Unknown";
+    }
+
+    private static string ExtractProviderCategory(JsonDocument? metadata)
+    {
+        var value = ExtractMetadataRootString(metadata, "providerCategory");
+        return string.Equals(value, "DFS", StringComparison.OrdinalIgnoreCase)
+            ? "DFS"
+            : "Sportsbook";
+    }
+
+    private static string? ExtractMetadataRootString(JsonDocument? metadata, string propertyName)
+    {
+        if (metadata?.RootElement.ValueKind != JsonValueKind.Object
+            || !metadata.RootElement.TryGetProperty(propertyName, out var property)
+            || property.ValueKind != JsonValueKind.String)
+        {
+            return null;
+        }
+
+        return property.GetString();
+    }
+
+    private static bool? ExtractMetadataRootBool(JsonDocument? metadata, string propertyName)
+    {
+        if (metadata?.RootElement.ValueKind != JsonValueKind.Object
+            || !metadata.RootElement.TryGetProperty(propertyName, out var property))
+        {
+            return null;
+        }
+
+        return property.ValueKind switch
+        {
+            JsonValueKind.True => true,
+            JsonValueKind.False => false,
+            JsonValueKind.String when bool.TryParse(property.GetString(), out var value) => value,
+            _ => null
+        };
     }
 
     private static int? ExtractAmericanPrice(JsonDocument? metadata, string side)
@@ -8137,10 +8289,26 @@ public static class TheOddsApiDebugEndpoints
             .ToArray();
     }
 
+    private static string? JoinCommaSeparatedDistinct(params string?[] values)
+    {
+        var items = values
+            .Where(value => !string.IsNullOrWhiteSpace(value))
+            .SelectMany(value => value!.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+            .Where(value => !string.IsNullOrWhiteSpace(value))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+        return items.Length == 0 ? null : string.Join(',', items);
+    }
+
     private static async Task<IReadOnlyList<TheOddsApiMlbEventIngestionResult>> IngestTheOddsSlateEventsAsync(
         IReadOnlyCollection<TheOddsApiEventRecord> slateEvents,
         string? bookmakers,
         string? markets,
+        string? region,
+        string providerCategory,
+        bool isActionableForUser,
+        bool isIndicativeOdds,
         int maxConcurrentRequests,
         IServiceScopeFactory scopeFactory,
         CancellationToken cancellationToken)
@@ -8165,7 +8333,11 @@ public static class TheOddsApiDebugEndpoints
                     new TheOddsApiMlbEventIngestionRequest(
                         slateEvent.EventId!,
                         bookmakers,
-                        markets),
+                        markets,
+                        region,
+                        providerCategory,
+                        isActionableForUser,
+                        isIndicativeOdds),
                     dryRun: false,
                     cancellationToken);
             }
@@ -9137,6 +9309,10 @@ public static class TheOddsApiDebugEndpoints
         string PlayerName,
         string PropType,
         string MarketClassification,
+        string ProviderCategory,
+        string Region,
+        bool IsActionableForUser,
+        bool IsIndicativeOdds,
         string? EventId,
         DateTimeOffset? EventStartTime,
         string? HomeTeam,
@@ -9490,6 +9666,10 @@ public static class TheOddsApiDebugEndpoints
         string PropType,
         decimal Line,
         string MarketClassification,
+        string ProviderCategory,
+        string Region,
+        bool IsActionableForUser,
+        bool IsIndicativeOdds,
         bool IsEligibleAsNormalRecommendation,
         decimal? ModelProbabilityOver,
         decimal? ModelProbabilityUnder,
@@ -9530,7 +9710,8 @@ public static class TheOddsApiDebugEndpoints
         string Player,
         string NormalizedPropType,
         decimal Line,
-        string MarketClassification);
+        string MarketClassification,
+        string ProviderCategory);
 
     private sealed record TheOddsBookmakerPriceRow(
         string Bookmaker,
@@ -9604,6 +9785,10 @@ public static class TheOddsApiDebugEndpoints
         string NormalizedPropType,
         decimal Line,
         string MarketClassification,
+        string ProviderCategory,
+        bool IsActionableForUser,
+        bool IsIndicativeOdds,
+        string Region,
         Guid PlayerId,
         Guid PropTypeId,
         DateOnly EventDate,

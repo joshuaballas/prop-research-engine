@@ -3,7 +3,11 @@ namespace SportsBetting.Api.Integrations.TheOddsApi;
 public sealed record TheOddsApiMlbEventIngestionRequest(
     string EventId,
     string? Bookmakers,
-    string? Markets);
+    string? Markets,
+    string? Region = null,
+    string ProviderCategory = "Sportsbook",
+    bool IsActionableForUser = false,
+    bool IsIndicativeOdds = false);
 
 public sealed record TheOddsApiMlbEventIngestionResult(
     bool Success,

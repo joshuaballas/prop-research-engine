@@ -7,6 +7,7 @@ const endpoints = {
     lineShopping: "/api/debug/the-odds/mlb/line-shopping",
     lineShoppingTopPicks: "/api/debug/the-odds/mlb/line-shopping?topOnly=true&take=10&includeBookmakerPrices=false",
     topPicks: "/api/debug/the-odds/mlb/top-picks?take=10&freshnessMinutes=30",
+    dfsProviderPlan: "/api/debug/dfs/provider-expansion-plan",
     theOddsEventWorkflow: "/api/debug/the-odds/mlb/event-workflow-status",
     theOddsIngestionPlan: "/api/debug/the-odds/mlb/ingestion-plan",
     theOddsEvents: "/api/debug/the-odds/mlb/player-props-spike",
@@ -23,6 +24,7 @@ const state = {
     freshness: null,
     rankings: null,
     lineShopping: null,
+    dfsProviderPlan: null,
     theOddsEventWorkflow: null,
     evBacktest: null,
     propReliability: null,
@@ -79,6 +81,7 @@ const els = {
     lineShoppingPropTypeFilter: document.getElementById("lineShoppingPropTypeFilter"),
     lineShoppingTrustFilter: document.getElementById("lineShoppingTrustFilter"),
     lineShoppingStrategyFilter: document.getElementById("lineShoppingStrategyFilter"),
+    lineShoppingProviderCategoryFilter: document.getElementById("lineShoppingProviderCategoryFilter"),
     lineShoppingPositiveEvOnlyFilter: document.getElementById("lineShoppingPositiveEvOnlyFilter"),
     lineShoppingActiveOnlyFilter: document.getElementById("lineShoppingActiveOnlyFilter"),
     lineShoppingIncludeStaleFilter: document.getElementById("lineShoppingIncludeStaleFilter"),
@@ -112,6 +115,7 @@ const els = {
     theOddsIngestSummary: document.getElementById("theOddsIngestSummary"),
     refreshCurrentMlbDryRunButton: document.getElementById("refreshCurrentMlbDryRunButton"),
     refreshCurrentMlbRecommendationsButton: document.getElementById("refreshCurrentMlbRecommendationsButton"),
+    refreshCurrentMlbIncludeDfs: document.getElementById("refreshCurrentMlbIncludeDfs"),
     generateMlbPredictionsButton: document.getElementById("generateMlbPredictionsButton"),
     generateFullMlbPredictionsButton: document.getElementById("generateFullMlbPredictionsButton"),
     refreshLineShoppingButton: document.getElementById("refreshLineShoppingButton"),
@@ -121,6 +125,9 @@ const els = {
     loadEvBacktestButton: document.getElementById("loadEvBacktestButton"),
     loadPropReliabilityButton: document.getElementById("loadPropReliabilityButton"),
     loadPropReliabilityTableButton: document.getElementById("loadPropReliabilityTableButton"),
+    loadDfsProviderPlanButton: document.getElementById("loadDfsProviderPlanButton"),
+    dfsProviderPlanSummary: document.getElementById("dfsProviderPlanSummary"),
+    dfsProviderPlanCards: document.getElementById("dfsProviderPlanCards"),
     marketRows: document.getElementById("marketRows"),
     tableCount: document.getElementById("tableCount"),
     platformFilter: document.getElementById("platformFilter"),
@@ -158,6 +165,7 @@ document.addEventListener("DOMContentLoaded", () => {
     els.loadEvBacktestButton.addEventListener("click", loadEvBacktest);
     els.loadPropReliabilityButton.addEventListener("click", loadPropReliability);
     els.loadPropReliabilityTableButton.addEventListener("click", loadPropReliability);
+    els.loadDfsProviderPlanButton.addEventListener("click", loadDfsProviderPlan);
     document.querySelectorAll("[data-line-shopping-preset]").forEach(button => {
         button.addEventListener("click", () => applyLineShoppingPreset(button.dataset.lineShoppingPreset));
     });
@@ -220,6 +228,55 @@ async function loadFreshness() {
         els.platformFreshness.innerHTML = `<div class="empty-state">Freshness summary failed to load.</div>`;
         setStatus(`Freshness summary failed: ${error.message}`, true);
     }
+}
+
+async function loadDfsProviderPlan() {
+    setStatus("Loading DFS provider plan...");
+    els.dfsProviderPlanSummary.innerHTML = metricRow("Status", "Loading DFS provider plan...");
+    els.dfsProviderPlanCards.innerHTML = `<div class="empty-state">Loading DFS provider plan...</div>`;
+
+    try {
+        state.dfsProviderPlan = await timedFetchJson("dashboard:dfs-provider-plan", endpoints.dfsProviderPlan);
+        renderDfsProviderPlan();
+        setStatus("DFS provider plan loaded.");
+    } catch (error) {
+        els.dfsProviderPlanSummary.innerHTML = metricRow("Error", escapeHtml(error.message));
+        els.dfsProviderPlanCards.innerHTML = `<div class="empty-state">DFS provider plan failed to load.</div>`;
+        setStatus(`DFS provider plan failed: ${error.message}`, true);
+    }
+}
+
+function renderDfsProviderPlan() {
+    const plan = state.dfsProviderPlan || {};
+    const summary = plan.summary || {};
+    const providers = plan.providers || [];
+
+    els.dfsProviderPlanSummary.innerHTML = [
+        metricRow("Actionable supported", formatNumber(summary.actionableSupportedProviders)),
+        metricRow("Actionable candidates", formatNumber(summary.actionableCandidateProviders)),
+        metricRow("Primary actionable", escapeHtml(summary.primaryActionableProvider || "-")),
+        metricRow("DFS odds note", escapeHtml(summary.dfsOddsNote || "-")),
+        metricRow("Next step", escapeHtml(summary.recommendedNextStep || "-"))
+    ].join("");
+
+    els.dfsProviderPlanCards.innerHTML = providers.length === 0
+        ? `<div class="empty-state">No provider plan rows returned.</div>`
+        : providers.map(provider => `
+            <article class="platform-card">
+                <h3>
+                    <span>${escapeHtml(provider.provider)}</span>
+                    ${chip(provider.status || "Unknown", dfsProviderStatusChip(provider.status))}
+                </h3>
+                ${metricRow("Actionable", provider.actionable ? "Yes" : "No")}
+                ${metricRow("Integration", escapeHtml(provider.currentIntegration || "-"))}
+                ${metricRow("Access", escapeHtml(provider.dataAccessMethod || "-"))}
+                ${metricRow("Blocker", escapeHtml(provider.blocker || "-"))}
+                ${metricRow("Anti-bot risk", escapeHtml(provider.antiBotRisk || "-"))}
+                ${metricRow("Priority", escapeHtml(provider.priority || "-"))}
+                ${metricRow("Next step", escapeHtml(provider.recommendedNextStep || "-"))}
+                ${metricRow("Notes", formatPlainList(provider.notes || []))}
+            </article>
+        `).join("");
 }
 
 async function loadTheOddsEventWorkflow() {
@@ -448,6 +505,7 @@ async function refreshCurrentMlbRecommendations(dryRun) {
     params.set("dryRun", dryRun ? "true" : "false");
     params.set("includeCandidates", "true");
     params.set("freshnessMinutes", "30");
+    params.set("includeDfs", els.refreshCurrentMlbIncludeDfs.checked ? "true" : "false");
 
     setTheOddsManualStatus(dryRun ? "Planning refresh" : "Refreshing current slate", "warn");
     els.theOddsPredictionSummary.innerHTML = metricRow(
@@ -493,6 +551,9 @@ function renderCurrentRecommendationRefreshResult(result) {
         metricRow("Run ID", result.predictionRunId ? `<code>${escapeHtml(result.predictionRunId)}</code>` : "-"),
         metricRow("Odds events fetched", formatNumber(result.oddsEventsFetched)),
         metricRow("API calls", formatNumber(diagnostics.apiCallsMade)),
+        metricRow("Include DFS", diagnostics.includeDfs ? "true" : "false"),
+        metricRow("DFS books", formatPlainList(diagnostics.dfsBookmakersRequested || [])),
+        metricRow("DFS created/updated", `${formatNumber(diagnostics.dfsPlatformPropsCreated)} / ${formatNumber(diagnostics.dfsPlatformPropsUpdated)}`),
         metricRow("Platform props created", formatNumber(result.platformPropsCreated)),
         metricRow("Platform props updated", formatNumber(result.platformPropsUpdated)),
         metricRow("Predictions", formatNumber(result.predictionCount)),
@@ -717,6 +778,8 @@ function showDeferredSectionPlaceholders() {
     els.staleMarkets.textContent = "-";
     els.eligibleMarkets.textContent = "-";
     els.platformFreshness.innerHTML = `<div class="empty-state">Not loaded yet. Use Load Freshness.</div>`;
+    els.dfsProviderPlanSummary.innerHTML = [metricRow("Status", "Not loaded yet. Use Load DFS Provider Plan.")].join("");
+    els.dfsProviderPlanCards.innerHTML = `<div class="empty-state">Not loaded yet. This panel does not call external providers.</div>`;
     els.theOddsWorkflowCount.textContent = "Not loaded";
     els.theOddsWorkflowTotal.textContent = "-";
     els.theOddsWorkflowLineShoppingReady.textContent = "-";
@@ -737,7 +800,7 @@ function showDeferredSectionPlaceholders() {
 }
 
 function renderLineShoppingDeferredRows() {
-    els.lineShoppingRows.innerHTML = `<tr><td colspan="18" class="muted">Full line-shopping table not loaded yet. Use Refresh Line Shopping Table.</td></tr>`;
+    els.lineShoppingRows.innerHTML = `<tr><td colspan="19" class="muted">Full line-shopping table not loaded yet. Use Refresh Line Shopping Table.</td></tr>`;
     els.lineShoppingCount.textContent = "Not loaded";
 }
 
@@ -951,6 +1014,7 @@ function applyLineShoppingPreset(preset) {
     els.lineShoppingIncludeExpiredFilter.checked = config.includeExpired;
     els.lineShoppingTrustFilter.value = selectHasOption(els.lineShoppingTrustFilter, config.trust) ? config.trust : "";
     els.lineShoppingStrategyFilter.value = selectHasOption(els.lineShoppingStrategyFilter, config.strategy) ? config.strategy : "";
+    els.lineShoppingProviderCategoryFilter.value = config.providerCategory || "";
     els.lineShoppingMinSampleFilter.value = config.minSample;
     els.lineShoppingMinConfidenceFilter.value = config.minConfidence;
     els.lineShoppingMinRankingFilter.value = config.minRanking;
@@ -972,6 +1036,7 @@ function applyLineShoppingFilters() {
     const propType = els.lineShoppingPropTypeFilter.value;
     const trustLevel = els.lineShoppingTrustFilter.value;
     const strategyTier = els.lineShoppingStrategyFilter.value;
+    const providerCategory = els.lineShoppingProviderCategoryFilter.value;
     const minRanking = parseNumber(els.lineShoppingMinRankingFilter.value);
     const minBestEv = parseNumber(els.lineShoppingMinBestEvFilter.value);
     const minSample = parseNumber(els.lineShoppingMinSampleFilter.value);
@@ -986,6 +1051,7 @@ function applyLineShoppingFilters() {
         return (!propType || group.normalizedPropType === propType)
             && (!trustLevel || group.trustLevel === trustLevel)
             && (!strategyTier || group.strategyTier === strategyTier)
+            && (!providerCategory || group.providerCategory === providerCategory)
             && (!els.lineShoppingEligibleOnlyFilter.checked || group.isEligibleAsNormalRecommendation)
             && (!els.lineShoppingMultiBookOnlyFilter.checked || (group.bookmakerPrices || []).length > 1)
             && (!els.lineShoppingPositiveEvOnlyFilter.checked || bestEv > 0)
@@ -1005,7 +1071,7 @@ function renderLineShoppingRows() {
     const rows = state.filteredLineShoppingGroups.slice(0, 100);
     els.lineShoppingCount.textContent = `${formatNumber(state.filteredLineShoppingGroups.length)} groups`;
     els.lineShoppingRows.innerHTML = rows.length === 0
-        ? `<tr><td colspan="18" class="muted">No line-shopping groups match the current filters.</td></tr>`
+        ? `<tr><td colspan="19" class="muted">No line-shopping groups match the current filters.</td></tr>`
         : rows.map(group => `
             <tr class="${lineShoppingLifecycleRowClass(group)}">
                 <td>${escapeHtml(group.player)}</td>
@@ -1024,6 +1090,10 @@ function renderLineShoppingRows() {
                 <td title="${escapeHtml(group.sampleWarning || "None")}">${formatNumber(group.historicalSampleSize)}</td>
                 <td>${formatPercent(group.confidenceScore)}</td>
                 <td>${chip(group.trustLevel || "ResearchOnly", trustChip(group.trustLevel))}</td>
+                <td>
+                    ${chip(group.providerCategory || "Sportsbook", providerCategoryChip(group.providerCategory, group.isActionableForUser))}
+                    ${group.isIndicativeOdds ? `<div class="muted compact-cell-text">Indicative odds</div>` : `<div class="muted compact-cell-text">Context</div>`}
+                </td>
                 <td title="${escapeHtml([...(group.strategyReasons || []), ...(group.strategyWarnings || [])].join(" "))}">
                     ${chip(group.strategyClassification || "Research", strategyChip(group.strategyClassification))}
                     <div class="muted compact-cell-text">${escapeHtml(group.strategyTier || "")}</div>
@@ -1038,11 +1108,15 @@ function renderLineShoppingRows() {
 
 function renderTopPicks() {
     const groups = state.lineShopping?.comparisonGroups || state.lineShopping?.topGroupsByBestEstimatedEv || [];
-    const picks = groups
+    const candidateGroups = groups
         .filter(group => group.isCandidate
             && group.lifecycleStatus === "Active"
             && !group.isStale
-            && !group.isExpired)
+            && !group.isExpired);
+    const preferredGroups = candidateGroups.some(group => group.isActionableForUser)
+        ? candidateGroups.filter(group => group.isActionableForUser)
+        : candidateGroups;
+    const picks = preferredGroups
         .sort((left, right) => (right.bestEstimatedEv ?? Number.NEGATIVE_INFINITY) - (left.bestEstimatedEv ?? Number.NEGATIVE_INFINITY))
         .slice(0, 10);
 
@@ -1060,6 +1134,8 @@ function renderTopPicks() {
                         ${chip(group.bestSide || "None", group.bestSide === "None" ? "warn" : "ok")}
                         ${chip(group.strategyTier || "Candidate", "ok")}
                         ${chip(group.trustLevel || "Research", trustChip(group.trustLevel))}
+                        ${chip(group.providerCategory === "DFS" ? "DFS" : "Sportsbook Context", providerCategoryChip(group.providerCategory, group.isActionableForUser))}
+                        ${group.isIndicativeOdds ? chip("Indicative Odds", "warn") : ""}
                         ${chip(group.marketShape || "Standard", "")}
                     </div>
                 </header>
@@ -1309,6 +1385,19 @@ function strategyChip(classification) {
     return "";
 }
 
+function providerCategoryChip(providerCategory, actionable) {
+    if (providerCategory === "DFS" || actionable) return "ok";
+    if (providerCategory === "Sportsbook") return "warn";
+    return "";
+}
+
+function dfsProviderStatusChip(status) {
+    if (status === "Supported" || status === "SupportedViaTheOddsApiDfs") return "ok";
+    if (status === "RetiredBlocked") return "bad";
+    if ((status || "").includes("Candidate")) return "warn";
+    return "";
+}
+
 function lifecycleChip(status) {
     if (status === "Active") return "ok";
     if (status === "Stale") return "warn";
@@ -1335,6 +1424,14 @@ function formatList(values) {
     }
 
     return values.map(value => `<span class="chip warn">${escapeHtml(value)}</span>`).join(" ");
+}
+
+function formatPlainList(values) {
+    if (!values || values.length === 0) {
+        return "<span class=\"muted\">-</span>";
+    }
+
+    return values.map(escapeHtml).join(" | ");
 }
 
 function formatNumber(value) {

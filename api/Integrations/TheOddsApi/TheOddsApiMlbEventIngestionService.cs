@@ -39,7 +39,7 @@ public sealed class TheOddsApiMlbEventIngestionService(
             request.EventId,
             request.Markets,
             request.Bookmakers,
-            regions: null,
+            request.Region,
             oddsFormat: null,
             cancellationToken);
         var fetchMarketsMs = stepStopwatch.ElapsedMilliseconds;
@@ -201,6 +201,7 @@ public sealed class TheOddsApiMlbEventIngestionService(
                 propResult.Prop,
                 () => GetOrCreateRawPayload(rawPayloadCache, item.Platform, fetched, observedAt),
                 item.Group,
+                request,
                 eventRecord,
                 observedAt);
             platformPropsUpserted += platformPropResult.Created || platformPropResult.Updated ? 1 : 0;
@@ -217,6 +218,7 @@ public sealed class TheOddsApiMlbEventIngestionService(
                         item.Platform,
                         GetOrCreateRawPayload(rawPayloadCache, item.Platform, fetched, observedAt),
                         item.Group,
+                        request,
                         eventRecord);
                 }
 
@@ -543,6 +545,7 @@ public sealed class TheOddsApiMlbEventIngestionService(
         Prop prop,
         Func<RawIngestionPayload> rawPayloadFactory,
         MarketGroup group,
+        TheOddsApiMlbEventIngestionRequest request,
         TheOddsApiEventRecord? eventRecord,
         DateTimeOffset observedAt)
     {
@@ -579,7 +582,7 @@ public sealed class TheOddsApiMlbEventIngestionService(
 
             if (updated)
             {
-                ApplyPlatformPropSourceMetadata(platformProp, platform, rawPayloadFactory(), group, eventRecord);
+                ApplyPlatformPropSourceMetadata(platformProp, platform, rawPayloadFactory(), group, request, eventRecord);
             }
 
             return new PlatformPropUpsertResult(
@@ -614,7 +617,7 @@ public sealed class TheOddsApiMlbEventIngestionService(
             Status = status,
             ObservedAt = observedAt,
             RawPayloadId = rawPayloadFactory().Id,
-            Metadata = CreatePlatformPropMetadata(group, eventRecord)
+            Metadata = CreatePlatformPropMetadata(group, request, eventRecord)
         };
 
         dbContext.PlatformProps.Add(platformProp);
@@ -640,6 +643,7 @@ public sealed class TheOddsApiMlbEventIngestionService(
         Platform platform,
         RawIngestionPayload rawPayload,
         MarketGroup group,
+        TheOddsApiMlbEventIngestionRequest request,
         TheOddsApiEventRecord? eventRecord)
     {
         platformProp.Platform = platform;
@@ -647,7 +651,7 @@ public sealed class TheOddsApiMlbEventIngestionService(
         platformProp.Label = $"{group.Key.PlayerName} {group.Records[0].NormalizedPropTypeCandidate}";
         platformProp.PayoutType = "standard";
         platformProp.RawPayloadId = rawPayload.Id;
-        platformProp.Metadata = CreatePlatformPropMetadata(group, eventRecord);
+        platformProp.Metadata = CreatePlatformPropMetadata(group, request, eventRecord);
     }
 
     private static bool ShouldCreateSnapshot(
@@ -675,7 +679,10 @@ public sealed class TheOddsApiMlbEventIngestionService(
             || platformPropResult.PreviousUnderAvailable != platformPropResult.UnderAvailable;
     }
 
-    private static JsonDocument CreatePlatformPropMetadata(MarketGroup group, TheOddsApiEventRecord? eventRecord)
+    private static JsonDocument CreatePlatformPropMetadata(
+        MarketGroup group,
+        TheOddsApiMlbEventIngestionRequest request,
+        TheOddsApiEventRecord? eventRecord)
     {
         var over = group.Records.FirstOrDefault(record => record.Side == "Over");
         var under = group.Records.FirstOrDefault(record => record.Side == "Under");
@@ -683,6 +690,10 @@ public sealed class TheOddsApiMlbEventIngestionService(
         return JsonSerializer.SerializeToDocument(new
         {
             dataProvider = DataProvider,
+            providerCategory = NormalizeProviderCategory(request.ProviderCategory),
+            region = string.IsNullOrWhiteSpace(request.Region) ? "us" : request.Region.Trim(),
+            isActionableForUser = request.IsActionableForUser,
+            isIndicativeOdds = request.IsIndicativeOdds,
             marketClassification = "Standard",
             bookmaker = new
             {
@@ -779,6 +790,13 @@ public sealed class TheOddsApiMlbEventIngestionService(
     private static string BuildTheOddsPlatformSlug(string bookmakerKey)
     {
         return $"theodds-{NormalizeCode(bookmakerKey).ToLowerInvariant()}";
+    }
+
+    private static string NormalizeProviderCategory(string? providerCategory)
+    {
+        return string.Equals(providerCategory, "DFS", StringComparison.OrdinalIgnoreCase)
+            ? "DFS"
+            : "Sportsbook";
     }
 
     private static string BuildPlatformPropDictionaryKey(Platform platform, string platformPropId)

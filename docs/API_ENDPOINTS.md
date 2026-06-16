@@ -55,6 +55,19 @@ Invoke-RestMethod -Uri "http://localhost:5299/api/debug/errors/recent?take=5"
 
 Underdog ingestion worker is enabled by default.
 
+## DFS Provider Planning
+
+| Method | Path | Purpose | Writes | External API | Credits |
+| --- | --- | --- | --- | --- | --- |
+| GET | `/api/debug/dfs/provider-expansion-plan` | Lightweight DFS/pick'em provider status and expansion plan. Shows direct Underdog as supported, PrizePicks as supported only through The Odds API `us_dfs`, DraftKings Pick6/Betr Picks as `us_dfs` candidates, and sportsbook rows as market context. | No | No | No |
+
+Example:
+
+```powershell
+Invoke-RestMethod "http://localhost:5299/api/debug/dfs/provider-expansion-plan" |
+  ConvertTo-Json -Depth 10
+```
+
 ## PrizePicks Retired Endpoints
 
 | Method | Path | Purpose | Writes | External API | Credits |
@@ -63,7 +76,7 @@ Underdog ingestion worker is enabled by default.
 | POST | `/api/debug/prizepicks/ingest` | Retired tombstone endpoint; returns Gone. | No | No | No |
 | GET | `/api/health/prizepicks-ingestion` | Historical worker state endpoint. Worker is disabled/not registered. | No | No | No |
 
-PrizePicks direct ingestion is disabled due to DataDome. Do not add bypass or scraping code.
+PrizePicks direct ingestion is disabled due to DataDome. Do not add bypass or scraping code. PrizePicks support should use The Odds API `us_dfs` feed with bookmaker key `prizepicks` when configured.
 
 ## The Odds API MLB
 
@@ -73,9 +86,9 @@ The Odds API is a data provider/aggregator. Persist actual bookmakers as platfor
 | --- | --- | --- | --- | --- | --- |
 | GET | `/api/debug/the-odds/mlb/player-props-spike` | Read-only event/player-props spike. Without `eventId`, fetches MLB events. With `eventId`, fetches event odds. | No | Yes, The Odds API | Yes |
 | POST | `/api/debug/the-odds/mlb/ingest-event` | Controlled one-event ingest. Supports `dryRun=true`. | Yes unless dry-run | Yes, The Odds API | Yes |
-| POST | `/api/debug/the-odds/mlb/recommendations/refresh-current` | Explicit current-slate workflow: discovers today's MLB events using MLB/Eastern date logic, ingests configured The Odds markets, generates scoped predictions, and returns line-shopping strategy summaries. Supports `dryRun=true`, `date`, `includeCandidates`, `includeLineShopping`, `includeFullDiagnostics`, and `freshnessMinutes`. Live mode uses `TheOddsApi:MaxConcurrentRequests` for bounded parallel event odds ingestion and returns detailed timing diagnostics for event fetch, market fetch, persistence, prediction generation, line-shopping, classification, and response build. | Yes unless dry-run | Yes unless dry-run | Yes unless dry-run |
+| POST | `/api/debug/the-odds/mlb/recommendations/refresh-current` | Explicit current-slate workflow: discovers today's MLB events using MLB/Eastern date logic, ingests configured The Odds markets, generates scoped predictions, and returns line-shopping strategy summaries. Supports `dryRun=true`, `date`, `includeCandidates`, `includeLineShopping`, `includeFullDiagnostics`, `includeDfs=true`, and `freshnessMinutes`. Live mode uses `TheOddsApi:MaxConcurrentRequests` for bounded parallel event odds ingestion and returns detailed timing diagnostics for event fetch, market fetch, persistence, prediction generation, line-shopping, classification, and response build. With `includeDfs=true`, it also requests configured DFS books through region `us_dfs`; dry-run remains no-call/no-write. | Yes unless dry-run | Yes unless dry-run | Yes unless dry-run |
 | GET | `/api/debug/the-odds/mlb/ingestion-impact` | Summarizes persisted The Odds rows and prediction impact. | No | No | No |
-| GET | `/api/debug/the-odds/mlb/line-shopping` | Compares persisted The Odds sourced markets across bookmakers. Supports `runId`, `freshnessMinutes`, `summaryOnly=true`, `topOnly=true`, `take`, and `includeBookmakerPrices=false`. Each group includes strategy-aware classification fields such as `strategyClassification`, `strategyTier`, `isCandidate`, `isAvoid`, `isWatchlist`, `marketShape`, and `riskTags`, plus `strategyClassificationSummary`. `summaryOnly` returns summary/diagnostics only; `topOnly` returns a small active top-picks payload for the dashboard. | No | No | No |
+| GET | `/api/debug/the-odds/mlb/line-shopping` | Compares persisted The Odds sourced markets across bookmakers. Supports `runId`, `freshnessMinutes`, `summaryOnly=true`, `topOnly=true`, `take`, and `includeBookmakerPrices=false`. Each group includes provider fields (`providerCategory`, `region`, `isActionableForUser`, `isIndicativeOdds`) plus strategy-aware classification fields such as `strategyClassification`, `strategyTier`, `isCandidate`, `isAvoid`, `isWatchlist`, `marketShape`, and `riskTags`, plus `strategyClassificationSummary`. Candidate tiers require positive `bestEstimatedEv`; conservative-shape rows with non-positive EV are downgraded and tagged `NonPositiveEv`. `summaryOnly` returns summary/diagnostics only; `topOnly` returns a small active top-picks payload for the dashboard. | No | No | No |
 | GET | `/api/debug/the-odds/mlb/top-picks` | Lightweight active Top Picks read for `/research`. Supports `runId`, `take`, and `freshnessMinutes`. Returns run metadata, timing diagnostics, strategy classification summary, and top active candidate rows only. Uses persisted rows only and omits nested bookmaker prices. | No | No | No |
 | GET | `/api/debug/the-odds/mlb/line-shopping-backtest` | Backtests best-side line-shopping groups after results exist. Supports `runId`, `sampleTake`, `includeSamples`, `strategyOnly`, and ad hoc strategy filters such as `bookmaker`, `propType`, `trustLevel`, `line`, `minSampleSize`, `minBestProbability`, `maxBestProbability`, `minEstimatedEv`, `maxEstimatedEv`, `minBestPrice`, and `maxBestPrice`. Includes built-in strategy simulations, calibration breakdowns for model probability, implied probability, probability edge, sample size, price, line value, trust/prop combinations, and a model probability calibration table. Uses persisted rows only and resolves MLB result dates from provider metadata first, then an MLB Eastern-date fallback for late UTC starts. | No | No | No |
 | POST | `/api/debug/the-odds/mlb/line-shopping-backtest/strategy-snapshot` | Computes current line-shopping strategy simulations for a supplied `runId` and persists one snapshot row per strategy. | Yes, strategy snapshots only | No | No |

@@ -22,6 +22,7 @@ Working today:
 - Underdog ingestion worker is enabled by default.
 - MLB result import worker is enabled by default.
 - The Odds API MLB manual event ingest works through debug endpoints and the `/research` dashboard.
+- The Odds API MLB current refresh can optionally include DFS/pick'em books through region `us_dfs`.
 - The Odds API line-shopping uses persisted database rows only.
 - MLB predictions, probability estimates, market ranking, line-shopping, and backtests exist.
 - Persistent application error logging exists.
@@ -29,7 +30,7 @@ Working today:
 
 Disabled or retired:
 
-- PrizePicks direct ingestion is disabled and retired because of DataDome blocking. Do not attempt bypass work.
+- PrizePicks direct ingestion is disabled and retired because of DataDome blocking. Do not attempt bypass work. PrizePicks support should use The Odds API `us_dfs` feed when configured.
 - The Odds API automated ingestion worker exists only as a guarded skeleton and is disabled by default.
 - EV persistence is not implemented. EV diagnostics are research-only.
 
@@ -67,7 +68,7 @@ Key config sections:
 - `UnderdogIngestion`: controls Underdog worker.
 - `MlbResultImportWorker`: controls MLB result import worker.
 - `TheOddsApi`: API key, base URL, sport key, regions, odds format, markets, and `MaxConcurrentRequests` for bounded parallel event-odds requests during explicit current-slate refreshes.
-- `TheOddsIngestionWorker`: disabled, dry-run-first worker skeleton. Its `Bookmakers` value is also the config-driven list used by manual/current The Odds MLB refresh workflows.
+- `TheOddsIngestionWorker`: disabled, dry-run-first worker skeleton. Its `Bookmakers` value is the sportsbook context list used by manual/current The Odds MLB refresh workflows. `DfsRegion`, `DfsBookmakers`, and `IncludeDfsBookmakers` control optional DFS/pick'em rows through The Odds API `us_dfs`.
 - `PredictionGeneration`: recommendation thresholds and enabled prop types.
 
 ## Major Workflows
@@ -112,6 +113,7 @@ Disabled by default:
 - Outside Development, debug/admin routes are blocked unless `DebugAdmin.Enabled=true` and the correct `X-Debug-Admin-Key` header is supplied.
 - The Odds API calls spend credits. The dashboard must not call The Odds API on page load.
 - Use dry-run before committing The Odds API ingestion.
+- DFS rows from The Odds API use indicative odds and may vary based on user selections. Treat sportsbook rows as market context for a DFS-only user.
 - Generated endpoint outputs go under `tmp-analysis`; logs go under `logs`; temporary build outputs go under `tmp-build`.
 - Do not bypass DataDome or revive PrizePicks scraping experiments.
 - Do not treat EV outputs as production recommendations until backtests support them.

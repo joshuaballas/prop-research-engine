@@ -90,12 +90,53 @@ $refresh.topActiveCandidates | Select-Object -First 10
 $refresh | ConvertTo-Json -Depth 20 | Set-Content ".\tmp-analysis\current-mlb-recommendations-refresh.json"
 ```
 
+DFS/pick'em refresh through The Odds API:
+
+```powershell
+$dryRun = Invoke-RestMethod `
+  -Method Post `
+  -Uri "http://localhost:5299/api/debug/the-odds/mlb/recommendations/refresh-current?dryRun=true&includeDfs=true"
+
+$dryRun.diagnostics | ConvertTo-Json -Depth 8
+```
+
+```powershell
+$refresh = Invoke-RestMethod `
+  -Method Post `
+  -Uri "http://localhost:5299/api/debug/the-odds/mlb/recommendations/refresh-current?includeDfs=true&includeCandidates=true&includeLineShopping=true&includeFullDiagnostics=true&freshnessMinutes=30"
+
+$refresh.diagnostics | Select-Object `
+  dfsBookmakersRequested,
+  dfsApiCallCount,
+  dfsPlatformPropsCreated,
+  dfsPlatformPropsUpdated,
+  dfsPlatformPropsUnchanged,
+  dfsFetchMs,
+  dfsPersistMs
+
+$refresh.topActiveCandidates |
+  Where-Object { $_.providerCategory -eq "DFS" -and $_.isActionableForUser } |
+  Select-Object -First 10
+
+$refresh | ConvertTo-Json -Depth 20 | Set-Content ".\tmp-analysis\current-mlb-dfs-refresh.json"
+```
+
+Old PrizePicks direct scraping remains retired. PrizePicks DFS support should come from The Odds API region `us_dfs` with bookmaker key `prizepicks`. DFS odds are indicative and can vary based on user selections.
+
 ## Expand The Odds Bookmaker Coverage Safely
 
 The bookmaker list is config-driven through `TheOddsIngestionWorker:Bookmakers`. Current committed defaults are intentionally narrow:
 
 ```json
 "Bookmakers": "draftkings,fanduel,betmgm"
+```
+
+DFS books are configured separately and are opt-in by default:
+
+```json
+"IncludeDfsBookmakers": false,
+"DfsRegion": "us_dfs",
+"DfsBookmakers": "prizepicks,underdog,pick6,betr_us_dfs"
 ```
 
 To test broader coverage, override this value only in ignored local config (`api/appsettings.Local.json`) or environment variables. Add one or two keys at a time, then dry-run the current refresh before live refresh. Candidate opt-in keys depend on The Odds API plan/provider availability; common US keys to verify manually include `bovada`, `espnbet`, `williamhill_us`, and `betrivers`.
@@ -236,6 +277,8 @@ The Odds line-shopping backtest resolves MLB result dates from persisted provide
 Use the calibration fields such as `byModelProbabilityBucket`, `byProbabilityEdgeBucket`, `byTrustLevelAndPropType`, and `modelProbabilityCalibration` to review whether model probability, edge, and trust labels are ranking outcomes correctly before changing recommendation rules.
 Use `strategySimulations` to compare read-only candidate filters. Add `strategyOnly=true` for a smaller payload, or pass filters such as `bookmaker=DraftKings`, `propType=Total%20Bases`, `line=1.5`, and `minBestPrice=1.75` to produce the `queryFilteredStrategy` row.
 The `/research` MLB Line Shopping table shows strategy classification/tier badges. Use the `Conservative Candidates` preset for the current preferred research view and `Avoid / Diagnostics` to inspect structurally suspicious market shapes without changing model output.
+
+Candidate tiers require positive `bestEstimatedEv`. If a row matches the conservative market shape but the best EV is zero or negative, it remains research/watchlist only and is tagged `NonPositiveEv`.
 
 Persist strategy simulation snapshots after a slate is graded:
 

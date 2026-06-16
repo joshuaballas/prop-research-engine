@@ -134,6 +134,7 @@ app.MapPlayerMappingDebugEndpoints();
 app.MapMarketClassificationDebugEndpoints();
 app.MapApplicationErrorDebugEndpoints();
 app.MapSystemHealthDebugEndpoints();
+app.MapDfsDebugEndpoints();
 app.MapTheOddsApiDebugEndpoints();
 
 app.Run();

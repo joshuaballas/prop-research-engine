@@ -276,6 +276,18 @@
         <section class="section">
             <div class="section-header">
                 <div>
+                    <h2>DFS Provider Plan</h2>
+                    <p>Read-only status for DFS/pick'em provider support. This does not call external providers or re-enable retired scrapers.</p>
+                </div>
+                <button id="loadDfsProviderPlanButton" class="secondary-button" type="button">Load DFS Provider Plan</button>
+            </div>
+            <div id="dfsProviderPlanSummary" class="metric-list"></div>
+            <div id="dfsProviderPlanCards" class="platform-grid"></div>
+        </section>
+
+        <section class="section">
+            <div class="section-header">
+                <div>
                     <h2>The Odds API Manual Ingestion</h2>
                     <p>The Odds API credits are limited. No automatic polling is enabled. Use dry run before commit.</p>
                 </div>
@@ -346,6 +358,13 @@
                         </div>
                     </div>
                     <div class="manual-actions inline-actions">
+                        <label class="checkbox-field">
+                            <input id="refreshCurrentMlbIncludeDfs" type="checkbox">
+                            <span class="checkbox-copy">
+                                <span class="checkbox-title">Include DFS books</span>
+                                <span class="checkbox-helper">Uses The Odds API region us_dfs when live refresh is run.</span>
+                            </span>
+                        </label>
                         <button id="refreshCurrentMlbDryRunButton" class="secondary-button" type="button">Dry Run Current Refresh</button>
                         <button id="refreshCurrentMlbRecommendationsButton" class="primary-button" type="button">Refresh Current MLB Recommendations</button>
                         <button id="generateMlbPredictionsButton" class="secondary-button" type="button">Generate The Odds Predictions</button>
@@ -445,6 +464,14 @@
                     Strategy
                     <select id="lineShoppingStrategyFilter"></select>
                 </label>
+                <label>
+                    Provider
+                    <select id="lineShoppingProviderCategoryFilter">
+                        <option value="">All providers</option>
+                        <option value="DFS">DFS actionable</option>
+                        <option value="Sportsbook">Sportsbook context</option>
+                    </select>
+                </label>
                 <label class="checkbox-field">
                     <input id="lineShoppingPositiveEvOnlyFilter" type="checkbox" checked>
                     <span class="checkbox-copy">
@@ -504,6 +531,7 @@
                             <th>Sample</th>
                             <th>Confidence</th>
                             <th>Trust</th>
+                            <th>Provider</th>
                             <th>Strategy</th>
                             <th>Shape</th>
                             <th>Rank</th>
