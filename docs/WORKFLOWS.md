@@ -69,6 +69,7 @@ Production-style frontend reads should use the non-debug persisted-data endpoint
 ```powershell
 Invoke-RestMethod -Uri "http://localhost:5299/api/markets/freshness?freshnessMinutes=30"
 Invoke-RestMethod -Uri "http://localhost:5299/api/markets/provider-status"
+Invoke-RestMethod -Uri "http://localhost:5299/api/markets/refresh-plan"
 Invoke-RestMethod -Uri "http://localhost:5299/api/markets/top-picks?sport=MLB&take=10&freshnessMinutes=30"
 Invoke-RestMethod -Uri "http://localhost:5299/api/markets/line-shopping?sport=MLB&take=25&freshnessMinutes=30&includeBookmakerPrices=false"
 Invoke-RestMethod -Uri "http://localhost:5299/api/dfs/entry-rules"
@@ -81,6 +82,8 @@ After a successful live The Odds refresh, the app stores stable Top Picks and li
 Freshness separates recency from usability: `isFresh=true` means a successful refresh happened within the threshold, while `hasUsableMarketData=false` means that refresh did not produce usable market snapshots/data. The freshness response includes snapshot counts, active/stale group counts, provider ingestion success/failure counts, provider rejected-key detection, and a `usabilityWarning`.
 
 Provider status is exposed separately at `/api/markets/provider-status`. It reads persisted refresh metadata only and surfaces The Odds API key/credit/provider availability, including rejected-key detection, low/exhausted credit warnings, latest refresh usability, and a recommended action. Use it in frontend health banners before implying current market data is actionable.
+
+Refresh planning is exposed at `/api/markets/refresh-plan`. It is also read-only and uses persisted provider status, snapshots, refresh metadata, and `TheOddsRefreshPlanner` budget/cadence config to explain whether a scheduled refresh would run now or skip. It estimates calls and credit-budget impact, but it never calls The Odds API and never enables the scheduled worker.
 
 Use the production-safe performance summary to inspect provider, prop-type, and strategy slices before showing recommendations confidently:
 

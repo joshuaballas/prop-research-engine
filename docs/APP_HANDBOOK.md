@@ -62,6 +62,7 @@ Useful URLs:
 - Internal dashboard: `http://localhost:5299/research`
 - Production-safe market freshness: `http://localhost:5299/api/markets/freshness`
 - Production-safe provider status: `http://localhost:5299/api/markets/provider-status`
+- Production-safe refresh plan: `http://localhost:5299/api/markets/refresh-plan`
 - Production-safe market top picks: `http://localhost:5299/api/markets/top-picks`
 - Production-safe market line-shopping: `http://localhost:5299/api/markets/line-shopping`
 - Production-safe market performance: `http://localhost:5299/api/markets/performance-summary`
@@ -80,6 +81,7 @@ Key config sections:
 - `TheOddsApi`: API key, base URL, sport key, regions, odds format, markets, and `MaxConcurrentRequests` for bounded parallel event-odds requests during explicit current-slate refreshes.
 - `TheOddsIngestionWorker`: disabled, dry-run-first worker skeleton. Its `Bookmakers` value is the conservative sportsbook context list used by manual/current The Odds MLB refresh workflows. `ExpandedBookmakers` is an opt-in expanded US sportsbook preset used only by `bookmakerPreset=expanded` or `bookmakerPreset=all`. `DfsRegion`, `DfsBookmakers`, and `IncludeDfsBookmakers` control optional DFS/pick'em rows through The Odds API `us_dfs`.
 - `TheOddsScheduledRefresh`: disabled-by-default scheduled refresh worker foundation. Defaults to `Enabled=false`, `BookmakerPreset=dfsOnly`, and `RequireForceLive=true`; the status endpoint is read-only and does not call external APIs.
+- `TheOddsRefreshPlanner`: read-only planning/budget configuration for `/api/markets/refresh-plan`. It estimates cadence and credit budget from persisted metadata only and does not enable scheduled live refreshes.
 - `PredictionGeneration`: recommendation thresholds and enabled prop types.
 
 ## Major Workflows
