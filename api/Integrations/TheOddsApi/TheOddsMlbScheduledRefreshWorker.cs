@@ -6,6 +6,7 @@ namespace SportsBetting.Api.Integrations.TheOddsApi;
 public sealed class TheOddsMlbScheduledRefreshWorker(
     IServiceScopeFactory scopeFactory,
     IOptions<TheOddsScheduledRefreshOptions> options,
+    IOptions<TheOddsRefreshPlannerOptions> plannerOptions,
     ITheOddsScheduledRefreshState state,
     ILogger<TheOddsMlbScheduledRefreshWorker> logger) : BackgroundService
 {
@@ -18,12 +19,13 @@ public sealed class TheOddsMlbScheduledRefreshWorker(
             return;
         }
 
-        var interval = options.Value.GetInterval();
+        var interval = plannerOptions.Value.GetPlannerInterval();
         logger.LogWarning(
-            "The Odds API MLB scheduled refresh worker is enabled. Interval: {Interval}. BookmakerPreset: {BookmakerPreset}. RequireForceLive: {RequireForceLive}.",
+            "The Odds API MLB scheduled refresh worker is enabled. Planner interval: {Interval}. BookmakerPreset: {BookmakerPreset}. RequireForceLive: {RequireForceLive}. AllowScheduledLiveRefresh: {AllowScheduledLiveRefresh}.",
             interval,
             options.Value.BookmakerPreset,
-            options.Value.RequireForceLive);
+            options.Value.RequireForceLive,
+            options.Value.AllowScheduledLiveRefresh);
 
         using var timer = new PeriodicTimer(interval);
 
@@ -45,7 +47,49 @@ public sealed class TheOddsMlbScheduledRefreshWorker(
         var startedAt = DateTimeOffset.UtcNow;
         state.MarkStarted(startedAt);
 
-        if (options.Value.RequireForceLive)
+        await using var scope = scopeFactory.CreateAsyncScope();
+        var planner = scope.ServiceProvider.GetRequiredService<ITheOddsRefreshPlannerService>();
+        var plan = await planner.BuildPlanAsync(cancellationToken);
+        state.MarkPlan(plan);
+
+        if (!plan.ShouldRefresh)
+        {
+            var reason = plan.SkipReason ?? "PlannerSkip";
+            state.MarkSkipped(DateTimeOffset.UtcNow, reason);
+            logger.LogInformation(
+                "The Odds API MLB scheduled refresh skipped by planner. Reason: {Reason}. EstimatedApiCalls: {EstimatedApiCalls}. BudgetAllowed: {BudgetAllowed}. ProviderAvailable: {ProviderAvailable}.",
+                reason,
+                plan.EstimatedApiCalls,
+                plan.Budget.BudgetAllowed,
+                plan.ProviderAvailable);
+            return;
+        }
+
+        if (!plan.ProviderAvailable)
+        {
+            const string reason = "Scheduled refresh skipped because provider status is unavailable.";
+            state.MarkSkipped(DateTimeOffset.UtcNow, reason);
+            logger.LogWarning("{Reason}", reason);
+            return;
+        }
+
+        if (!plan.Budget.BudgetAllowed)
+        {
+            const string reason = "Scheduled refresh skipped because planner credit budget is not allowed.";
+            state.MarkSkipped(DateTimeOffset.UtcNow, reason);
+            logger.LogWarning("{Reason}", reason);
+            return;
+        }
+
+        if (!options.Value.AllowScheduledLiveRefresh)
+        {
+            const string reason = "Scheduled live refresh is blocked because TheOddsScheduledRefresh:AllowScheduledLiveRefresh is false.";
+            state.MarkBlocked(DateTimeOffset.UtcNow, reason);
+            logger.LogWarning("{Reason}", reason);
+            return;
+        }
+
+        if (options.Value.RequireForceLive && !options.Value.AllowScheduledLiveRefresh)
         {
             const string reason = "Scheduled live refresh is blocked because TheOddsScheduledRefresh:RequireForceLive is true. Set it false only in explicit local/production ops config after credit policy is approved.";
             state.MarkBlocked(DateTimeOffset.UtcNow, reason);

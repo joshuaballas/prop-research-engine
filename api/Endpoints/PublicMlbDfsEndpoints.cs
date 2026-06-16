@@ -1,4 +1,5 @@
 using SportsBetting.Api.Data;
+using SportsBetting.Api.Integrations.TheOddsApi;
 using SportsBetting.Api.Models;
 using SportsBetting.Api.Predictions;
 using Microsoft.EntityFrameworkCore;
@@ -56,13 +57,11 @@ public static class PublicMlbDfsEndpoints
         .WithSummary("Production-safe provider/API-key/credit status from persisted refresh metadata.");
 
         endpoints.MapGet("/api/markets/refresh-plan", async (
-            ApplicationDbContext dbContext,
-            IConfiguration configuration,
+            ITheOddsRefreshPlannerService planner,
             CancellationToken cancellationToken) =>
         {
             return Results.Ok(await BuildMarketRefreshPlanResponseAsync(
-                dbContext,
-                configuration,
+                planner,
                 cancellationToken));
         })
         .WithName("MarketsRefreshPlan")
@@ -340,132 +339,48 @@ public static class PublicMlbDfsEndpoints
     }
 
     private static async Task<object> BuildMarketRefreshPlanResponseAsync(
-        ApplicationDbContext dbContext,
-        IConfiguration configuration,
+        ITheOddsRefreshPlannerService planner,
         CancellationToken cancellationToken)
     {
-        var generatedAtUtc = DateTimeOffset.UtcNow;
-        var options = configuration.GetSection(TheOddsRefreshPlannerOptions.SectionName)
-            .Get<TheOddsRefreshPlannerOptions>() ?? new TheOddsRefreshPlannerOptions();
-        var providerStatus = await BuildTheOddsProviderStatusAsync(
-            options.GetNearLockRefreshMinutes(),
-            dbContext,
-            cancellationToken);
-        var slateDate = ResolveMlbEasternDate(generatedAtUtc);
-        var latestRun = await dbContext.TheOddsRefreshRuns
-            .AsNoTracking()
-            .Where(row => row.Provider == "The Odds API" && row.Sport == "MLB")
-            .OrderByDescending(row => row.StartedAtUtc)
-            .FirstOrDefaultAsync(cancellationToken);
-        var latestSuccessfulRun = await dbContext.TheOddsRefreshRuns
-            .AsNoTracking()
-            .Where(row => row.Provider == "The Odds API"
-                && row.Sport == "MLB"
-                && row.Succeeded
-                && !row.DryRun
-                && !row.Blocked
-                && row.BookmakerPreset == options.DefaultBookmakerPreset)
-            .OrderByDescending(row => row.CompletedAtUtc ?? row.StartedAtUtc)
-            .FirstOrDefaultAsync(cancellationToken);
-
-        var snapshotStarts = await dbContext.MarketLineShoppingSnapshots
-            .AsNoTracking()
-            .Where(row => row.Sport == "MLB" && row.SlateDate == slateDate && row.EventStartTime.HasValue)
-            .Select(row => row.EventStartTime!.Value)
-            .Distinct()
-            .ToArrayAsync(cancellationToken);
-        var eventStartTimes = ExtractEventStartTimes(latestRun?.DiagnosticsJson)
-            .Concat(snapshotStarts)
-            .Distinct()
-            .OrderBy(value => value)
-            .ToArray();
-        var nextEventStart = eventStartTimes.FirstOrDefault(value => value > generatedAtUtc);
-        var minutesUntilNextEventStart = nextEventStart == default
-            ? (decimal?)null
-            : Math.Round((decimal)(nextEventStart - generatedAtUtc).TotalMinutes, 2);
-        var estimatedSlateEvents = ExtractEstimatedSlateEvents(latestRun?.DiagnosticsJson);
-        if (estimatedSlateEvents == 0)
-        {
-            estimatedSlateEvents = eventStartTimes.Length;
-        }
-
-        var estimatedApiCalls = estimatedSlateEvents == 0 ? 0 : 1 + estimatedSlateEvents;
-        var lastSuccessfulAt = latestSuccessfulRun?.CompletedAtUtc ?? latestSuccessfulRun?.StartedAtUtc;
-        var minutesSinceLastSuccessfulRefresh = lastSuccessfulAt.HasValue
-            ? Math.Round((decimal)(generatedAtUtc - lastSuccessfulAt.Value).TotalMinutes, 2)
-            : (decimal?)null;
-        var cadence = ResolvePlannerCadence(options, minutesUntilNextEventStart);
-        var nextEligibleRefreshUtc = lastSuccessfulAt.HasValue
-            ? lastSuccessfulAt.Value.AddMinutes(cadence.RefreshEveryMinutes)
-            : generatedAtUtc;
-        var budget = await BuildRefreshBudgetSummaryAsync(
-            options,
-            providerStatus,
-            estimatedApiCalls,
-            generatedAtUtc,
-            dbContext,
-            cancellationToken);
-        var providerAvailable = providerStatus.status is "Healthy" or "Degraded" &&
-            !providerStatus.providerRejectedKeyDetected &&
-            !providerStatus.creditExhaustionLikely;
-        var cadenceAllowsRefresh = !lastSuccessfulAt.HasValue || generatedAtUtc >= nextEligibleRefreshUtc;
-        var stopAfterStartTriggered = options.StopAfterEventStart &&
-            eventStartTimes.Length > 0 &&
-            eventStartTimes.All(value => value <= generatedAtUtc);
-        var skipReason = BuildRefreshPlanSkipReason(
-            options,
-            providerAvailable,
-            budget.budgetAllowed,
-            cadenceAllowsRefresh,
-            stopAfterStartTriggered,
-            estimatedSlateEvents);
-        var shouldRefresh = skipReason is null;
+        var plan = await planner.BuildPlanAsync(cancellationToken);
 
         return new
         {
-            generatedAtUtc,
+            generatedAtUtc = plan.GeneratedAtUtc,
             callsExternalApis = false,
             readOnly = true,
             providerStatus = new
             {
-                providerStatus.provider,
-                providerStatus.status,
-                providerStatus.latestRefreshRunId,
-                providerStatus.latestRefreshHadUsableMarketData,
-                providerStatus.requestsUsed,
-                providerStatus.requestsRemaining,
-                providerStatus.providerRejectedKeyDetected,
-                providerStatus.creditExhaustionLikely,
-                providerStatus.statusReason,
-                providerStatus.recommendedAction
+                provider = "The Odds API",
+                status = plan.ProviderStatus,
+                requestsUsed = plan.RequestsUsed,
+                requestsRemaining = plan.RequestsRemaining,
+                providerRejectedKeyDetected = plan.ProviderRejectedKeyDetected,
+                providerAvailable = plan.ProviderAvailable
             },
-            budgetSummary = budget,
+            budgetSummary = plan.Budget,
             plans = new[]
             {
                 new
                 {
                     sport = "MLB",
-                    slateDate,
+                    plan.SlateDate,
                     provider = "The Odds API",
-                    bookmakerPreset = options.DefaultBookmakerPreset,
+                    plan.BookmakerPreset,
                     supportedSports = SupportedMarketSports,
-                    estimatedSlateEvents,
-                    estimatedApiCalls,
-                    cadenceRule = cadence,
-                    minutesUntilNextEventStart,
-                    lastSuccessfulRefreshAtUtc = lastSuccessfulAt,
-                    minutesSinceLastSuccessfulRefresh,
-                    shouldRefresh,
-                    skipReason,
-                    nextEligibleRefreshUtc,
-                    budgetAllowed = budget.budgetAllowed,
-                    providerAvailable,
-                    hasUsableMarketData = providerStatus.latestRefreshHadUsableMarketData,
-                    recommendedAction = BuildRefreshPlanRecommendedAction(
-                        shouldRefresh,
-                        skipReason,
-                        providerStatus,
-                        budget.budgetAllowed)
+                    plan.EstimatedSlateEvents,
+                    plan.EstimatedApiCalls,
+                    cadenceRule = plan.CadenceRule,
+                    plan.MinutesUntilNextEventStart,
+                    plan.LastSuccessfulRefreshAtUtc,
+                    plan.MinutesSinceLastSuccessfulRefresh,
+                    plan.ShouldRefresh,
+                    plan.SkipReason,
+                    plan.NextEligibleRefreshUtc,
+                    budgetAllowed = plan.Budget.BudgetAllowed,
+                    plan.ProviderAvailable,
+                    hasUsableMarketData = plan.HasUsableMarketData,
+                    plan.RecommendedAction
                 }
             }
         };
@@ -1250,240 +1165,6 @@ public static class PublicMlbDfsEndpoints
                 .ToArray();
     }
 
-    private static async Task<dynamic> BuildRefreshBudgetSummaryAsync(
-        TheOddsRefreshPlannerOptions options,
-        TheOddsProviderStatusReadModel providerStatus,
-        int estimatedApiCalls,
-        DateTimeOffset generatedAtUtc,
-        ApplicationDbContext dbContext,
-        CancellationToken cancellationToken)
-    {
-        var today = generatedAtUtc.UtcDateTime.Date;
-        var monthStart = new DateTime(generatedAtUtc.Year, generatedAtUtc.Month, 1, 0, 0, 0, DateTimeKind.Utc);
-        var dailyUsedCredits = await dbContext.TheOddsRefreshRuns
-            .AsNoTracking()
-            .Where(row => row.Provider == "The Odds API"
-                && !row.DryRun
-                && !row.Blocked
-                && row.StartedAtUtc >= today)
-            .SumAsync(row => row.ActualApiCalls, cancellationToken);
-        var persistedMonthlyUsedCredits = await dbContext.TheOddsRefreshRuns
-            .AsNoTracking()
-            .Where(row => row.Provider == "The Odds API"
-                && !row.DryRun
-                && !row.Blocked
-                && row.StartedAtUtc >= monthStart)
-            .SumAsync(row => row.ActualApiCalls, cancellationToken);
-        var monthlyUsedCredits = Math.Max(persistedMonthlyUsedCredits, providerStatus.requestsUsed ?? 0);
-        var dailyAfterEstimate = dailyUsedCredits + estimatedApiCalls;
-        var monthlyAfterEstimate = monthlyUsedCredits + estimatedApiCalls;
-        var dailyPercentAfterEstimate = Percent(dailyAfterEstimate, options.MaxDailyCredits);
-        var monthlyPercentAfterEstimate = Percent(monthlyAfterEstimate, options.MaxMonthlyCredits);
-        var dailyHardStop = dailyPercentAfterEstimate >= options.HardStopAtDailyPercent;
-        var monthlyHardStop = monthlyPercentAfterEstimate >= options.HardStopAtMonthlyPercent;
-        var providerRemainingHardStop = providerStatus.requestsRemaining.HasValue &&
-            providerStatus.requestsRemaining.Value < estimatedApiCalls;
-        var budgetAllowed = !dailyHardStop && !monthlyHardStop && !providerRemainingHardStop;
-
-        return new
-        {
-            options.Enabled,
-            options.PlannerIntervalSeconds,
-            options.MaxDailyCredits,
-            options.MaxMonthlyCredits,
-            options.WarnAtDailyPercent,
-            options.WarnAtMonthlyPercent,
-            options.HardStopAtDailyPercent,
-            options.HardStopAtMonthlyPercent,
-            dailyUsedCredits,
-            monthlyUsedCredits,
-            persistedMonthlyUsedCredits,
-            providerReportedRequestsUsed = providerStatus.requestsUsed,
-            providerReportedRequestsRemaining = providerStatus.requestsRemaining,
-            estimatedApiCalls,
-            dailyAfterEstimate,
-            monthlyAfterEstimate,
-            dailyPercentAfterEstimate,
-            monthlyPercentAfterEstimate,
-            dailyWarning = dailyPercentAfterEstimate >= options.WarnAtDailyPercent,
-            monthlyWarning = monthlyPercentAfterEstimate >= options.WarnAtMonthlyPercent,
-            dailyHardStop,
-            monthlyHardStop,
-            providerRemainingHardStop,
-            budgetAllowed
-        };
-    }
-
-    private static PlannerCadenceRule ResolvePlannerCadence(
-        TheOddsRefreshPlannerOptions options,
-        decimal? minutesUntilNextEventStart)
-    {
-        if (!minutesUntilNextEventStart.HasValue)
-        {
-            return new PlannerCadenceRule(
-                "NoKnownUpcomingEvent",
-                null,
-                null,
-                options.FarOutRefreshMinutes,
-                "No upcoming event start was found in persisted metadata; use far-out cadence until a slate is known.");
-        }
-
-        var minutes = minutesUntilNextEventStart.Value;
-        if (minutes <= options.NearLockMaxMinutes && minutes >= 0)
-        {
-            return new PlannerCadenceRule("NearLock", 0, options.NearLockMaxMinutes, options.NearLockRefreshMinutes, "0-30 minutes before first pitch.");
-        }
-
-        if (minutes <= options.PreLockMaxMinutes)
-        {
-            return new PlannerCadenceRule("PreLock", options.NearLockMaxMinutes, options.PreLockMaxMinutes, options.PreLockRefreshMinutes, "30-120 minutes before first pitch.");
-        }
-
-        if (minutes <= options.SameDayMaxMinutes)
-        {
-            return new PlannerCadenceRule("SameDay", options.PreLockMaxMinutes, options.SameDayMaxMinutes, options.SameDayRefreshMinutes, "120-720 minutes before first pitch.");
-        }
-
-        return new PlannerCadenceRule("FarOut", options.SameDayMaxMinutes, options.FarOutMaxMinutes, options.FarOutRefreshMinutes, "720-1440+ minutes before first pitch.");
-    }
-
-    private static string? BuildRefreshPlanSkipReason(
-        TheOddsRefreshPlannerOptions options,
-        bool providerAvailable,
-        bool budgetAllowed,
-        bool cadenceAllowsRefresh,
-        bool stopAfterStartTriggered,
-        int estimatedSlateEvents)
-    {
-        if (!options.Enabled)
-        {
-            return "PlannerDisabled";
-        }
-
-        if (!providerAvailable)
-        {
-            return "ProviderUnavailable";
-        }
-
-        if (!budgetAllowed)
-        {
-            return "CreditBudgetExceeded";
-        }
-
-        if (stopAfterStartTriggered)
-        {
-            return "StopAfterEventStart";
-        }
-
-        if (estimatedSlateEvents <= 0)
-        {
-            return "NoPersistedSlateEvents";
-        }
-
-        if (!cadenceAllowsRefresh)
-        {
-            return "CadenceNotDue";
-        }
-
-        return null;
-    }
-
-    private static string BuildRefreshPlanRecommendedAction(
-        bool shouldRefresh,
-        string? skipReason,
-        TheOddsProviderStatusReadModel providerStatus,
-        bool budgetAllowed)
-    {
-        if (shouldRefresh)
-        {
-            return "Refresh is eligible by persisted planner state. Scheduled live execution remains disabled unless explicitly configured.";
-        }
-
-        return skipReason switch
-        {
-            "ProviderUnavailable" => providerStatus.recommendedAction,
-            "CreditBudgetExceeded" when !budgetAllowed => "Skip refresh because estimated calls would exceed the configured credit budget or provider remaining credits.",
-            "CadenceNotDue" => "Skip refresh until the configured cadence window is due.",
-            "StopAfterEventStart" => "Skip refresh because configured planning stops after the slate has started.",
-            "NoPersistedSlateEvents" => "No persisted slate events are available for estimation; run a safe dry-run/admin review before enabling scheduled live refresh.",
-            "PlannerDisabled" => "Planner is disabled in config. Enable TheOddsRefreshPlanner only if read-only planning output should be active.",
-            _ => "Skip refresh based on current planner state."
-        };
-    }
-
-    private static int ExtractEstimatedSlateEvents(JsonDocument? diagnosticsJson)
-    {
-        if (diagnosticsJson is null)
-        {
-            return 0;
-        }
-
-        var root = diagnosticsJson.RootElement;
-        if (TryGetPropertyIgnoreCase(root, "events", out var events) &&
-            events.ValueKind == JsonValueKind.Array)
-        {
-            return events.GetArrayLength();
-        }
-
-        return FindFirstIntProperty(root, "eventsFetched", "oddsEventsFetched", "estimatedSlateEvents") ?? 0;
-    }
-
-    private static DateTimeOffset[] ExtractEventStartTimes(JsonDocument? diagnosticsJson)
-    {
-        if (diagnosticsJson is null ||
-            !TryGetPropertyIgnoreCase(diagnosticsJson.RootElement, "events", out var events) ||
-            events.ValueKind != JsonValueKind.Array)
-        {
-            return [];
-        }
-
-        return events.EnumerateArray()
-            .Select(item => TryGetDateTimeOffsetProperty(item, "eventStartTime") ??
-                TryGetDateTimeOffsetProperty(item, "EventStartTime"))
-            .Where(value => value.HasValue)
-            .Select(value => value!.Value)
-            .ToArray();
-    }
-
-    private static DateTimeOffset? TryGetDateTimeOffsetProperty(JsonElement element, string propertyName)
-    {
-        if (!TryGetPropertyIgnoreCase(element, propertyName, out var value) ||
-            value.ValueKind != JsonValueKind.String)
-        {
-            return null;
-        }
-
-        return DateTimeOffset.TryParse(value.GetString(), out var parsed)
-            ? parsed
-            : null;
-    }
-
-    private static DateOnly ResolveMlbEasternDate(DateTimeOffset utcNow)
-    {
-        try
-        {
-            var eastern = TimeZoneInfo.FindSystemTimeZoneById("Eastern Standard Time");
-            return DateOnly.FromDateTime(TimeZoneInfo.ConvertTime(utcNow, eastern).DateTime);
-        }
-        catch (TimeZoneNotFoundException)
-        {
-            var easternOffset = TimeSpan.FromHours(-4);
-            return DateOnly.FromDateTime(utcNow.ToOffset(easternOffset).DateTime);
-        }
-        catch (InvalidTimeZoneException)
-        {
-            var easternOffset = TimeSpan.FromHours(-4);
-            return DateOnly.FromDateTime(utcNow.ToOffset(easternOffset).DateTime);
-        }
-    }
-
-    private static decimal Percent(int value, int denominator)
-    {
-        return denominator <= 0
-            ? 100m
-            : Math.Round(value / (decimal)denominator * 100m, 2);
-    }
-
     private static object ToPublicFreshnessSummary(TheOddsApiDebugEndpoints.MlbRefreshFreshnessResponse response)
     {
         return new
@@ -1541,43 +1222,6 @@ public static class PublicMlbDfsEndpoints
         int ProviderIngestionFailureCount,
         int ProviderIngestionSuccessCount,
         bool ProviderRejectedKeyDetected);
-
-    private sealed class TheOddsRefreshPlannerOptions
-    {
-        public const string SectionName = "TheOddsRefreshPlanner";
-
-        public bool Enabled { get; set; } = true;
-        public string DefaultBookmakerPreset { get; set; } = "dfsOnly";
-        public int PlannerIntervalSeconds { get; set; } = 60;
-        public int MaxDailyCredits { get; set; } = 500;
-        public int MaxMonthlyCredits { get; set; } = 500;
-        public decimal WarnAtDailyPercent { get; set; } = 80m;
-        public decimal WarnAtMonthlyPercent { get; set; } = 80m;
-        public decimal HardStopAtDailyPercent { get; set; } = 100m;
-        public decimal HardStopAtMonthlyPercent { get; set; } = 100m;
-        public int FarOutMinMinutes { get; set; } = 720;
-        public int FarOutMaxMinutes { get; set; } = 1440;
-        public int FarOutRefreshMinutes { get; set; } = 60;
-        public int SameDayMinMinutes { get; set; } = 120;
-        public int SameDayMaxMinutes { get; set; } = 720;
-        public int SameDayRefreshMinutes { get; set; } = 30;
-        public int PreLockMinMinutes { get; set; } = 30;
-        public int PreLockMaxMinutes { get; set; } = 120;
-        public int PreLockRefreshMinutes { get; set; } = 15;
-        public int NearLockMinMinutes { get; set; } = 0;
-        public int NearLockMaxMinutes { get; set; } = 30;
-        public int NearLockRefreshMinutes { get; set; } = 5;
-        public bool StopAfterEventStart { get; set; } = true;
-
-        public int GetNearLockRefreshMinutes() => Math.Max(1, NearLockRefreshMinutes);
-    }
-
-    private sealed record PlannerCadenceRule(
-        string Name,
-        int? MinMinutesUntilStart,
-        int? MaxMinutesUntilStart,
-        int RefreshEveryMinutes,
-        string Description);
 
     private sealed record PerformancePickRow(
         Models.MarketLineShoppingSnapshot Snapshot,

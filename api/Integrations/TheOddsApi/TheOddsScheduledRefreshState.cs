@@ -6,6 +6,8 @@ public interface ITheOddsScheduledRefreshState
     void MarkDisabled();
     void MarkStarted(DateTimeOffset startedAt);
     void MarkBlocked(DateTimeOffset completedAt, string reason);
+    void MarkSkipped(DateTimeOffset completedAt, string reason);
+    void MarkPlan(TheOddsRefreshPlanResult plan);
     void MarkCompleted(DateTimeOffset completedAt);
     void MarkFailed(DateTimeOffset completedAt, string error);
 }
@@ -19,6 +21,14 @@ public sealed class TheOddsScheduledRefreshState : ITheOddsScheduledRefreshState
     private bool lastRunBlocked;
     private string? lastRunError;
     private string status = "disabled";
+    private DateTimeOffset? lastPlanGeneratedAtUtc;
+    private bool? lastPlanShouldRefresh;
+    private string? lastPlanSkipReason;
+    private int? lastPlanEstimatedApiCalls;
+    private bool? lastPlanBudgetAllowed;
+    private bool? lastPlanProviderAvailable;
+    private DateTimeOffset? lastSkippedAtUtc;
+    private string? lastSkipReason;
 
     public TheOddsScheduledRefreshStateSnapshot GetSnapshot()
     {
@@ -30,7 +40,15 @@ public sealed class TheOddsScheduledRefreshState : ITheOddsScheduledRefreshState
                 lastRunSucceeded,
                 lastRunBlocked,
                 lastRunError,
-                status);
+                status,
+                lastPlanGeneratedAtUtc,
+                lastPlanShouldRefresh,
+                lastPlanSkipReason,
+                lastPlanEstimatedApiCalls,
+                lastPlanBudgetAllowed,
+                lastPlanProviderAvailable,
+                lastSkippedAtUtc,
+                lastSkipReason);
         }
     }
 
@@ -69,6 +87,33 @@ public sealed class TheOddsScheduledRefreshState : ITheOddsScheduledRefreshState
         }
     }
 
+    public void MarkSkipped(DateTimeOffset completedAt, string reason)
+    {
+        lock (syncRoot)
+        {
+            status = "skipped";
+            lastRunCompletedAtUtc = completedAt;
+            lastRunSucceeded = false;
+            lastRunBlocked = false;
+            lastRunError = null;
+            lastSkippedAtUtc = completedAt;
+            lastSkipReason = reason;
+        }
+    }
+
+    public void MarkPlan(TheOddsRefreshPlanResult plan)
+    {
+        lock (syncRoot)
+        {
+            lastPlanGeneratedAtUtc = plan.GeneratedAtUtc;
+            lastPlanShouldRefresh = plan.ShouldRefresh;
+            lastPlanSkipReason = plan.SkipReason;
+            lastPlanEstimatedApiCalls = plan.EstimatedApiCalls;
+            lastPlanBudgetAllowed = plan.Budget.BudgetAllowed;
+            lastPlanProviderAvailable = plan.ProviderAvailable;
+        }
+    }
+
     public void MarkCompleted(DateTimeOffset completedAt)
     {
         lock (syncRoot)
@@ -100,4 +145,12 @@ public sealed record TheOddsScheduledRefreshStateSnapshot(
     bool? LastRunSucceeded,
     bool LastRunBlocked,
     string? LastRunError,
-    string Status);
+    string Status,
+    DateTimeOffset? LastPlanGeneratedAtUtc,
+    bool? LastPlanShouldRefresh,
+    string? LastPlanSkipReason,
+    int? LastPlanEstimatedApiCalls,
+    bool? LastPlanBudgetAllowed,
+    bool? LastPlanProviderAvailable,
+    DateTimeOffset? LastSkippedAtUtc,
+    string? LastSkipReason);

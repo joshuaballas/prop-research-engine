@@ -950,13 +950,18 @@ public static partial class TheOddsApiDebugEndpoints
         .WithName("TheOddsApiMlbIngestionWorkerStatusDebug")
         .WithSummary("Read-only The Odds API MLB ingestion worker status and safety configuration.");
 
-        endpoints.MapGet("/api/debug/the-odds/mlb/scheduled-refresh/status", (
+        endpoints.MapGet("/api/debug/the-odds/mlb/scheduled-refresh/status", async (
             IOptions<TheOddsScheduledRefreshOptions> options,
-            ITheOddsScheduledRefreshState state) =>
+            IOptions<TheOddsRefreshPlannerOptions> plannerOptions,
+            ITheOddsRefreshPlannerService planner,
+            ITheOddsScheduledRefreshState state,
+            CancellationToken cancellationToken) =>
         {
             var scheduledOptions = options.Value;
+            var plannerConfig = plannerOptions.Value;
             var snapshot = state.GetSnapshot();
-            var interval = scheduledOptions.GetInterval();
+            var currentPlan = await planner.BuildPlanAsync(cancellationToken);
+            var interval = plannerConfig.GetPlannerInterval();
             var nextRunEstimateUtc = scheduledOptions.Enabled
                 ? snapshot.LastRunCompletedAtUtc?.Add(interval)
                     ?? snapshot.LastRunStartedAtUtc?.Add(interval)
@@ -973,11 +978,33 @@ public static partial class TheOddsApiDebugEndpoints
                 includeFullDiagnostics = scheduledOptions.IncludeFullDiagnostics,
                 freshnessMinutes = scheduledOptions.FreshnessMinutes,
                 requireForceLive = scheduledOptions.RequireForceLive,
+                allowScheduledLiveRefresh = scheduledOptions.AllowScheduledLiveRefresh,
+                plannerIntervalSeconds = plannerConfig.PlannerIntervalSeconds,
                 snapshot.LastRunStartedAtUtc,
                 snapshot.LastRunCompletedAtUtc,
                 snapshot.LastRunSucceeded,
                 snapshot.LastRunBlocked,
                 snapshot.LastRunError,
+                snapshot.LastPlanGeneratedAtUtc,
+                snapshot.LastPlanShouldRefresh,
+                snapshot.LastPlanSkipReason,
+                snapshot.LastPlanEstimatedApiCalls,
+                snapshot.LastPlanBudgetAllowed,
+                snapshot.LastPlanProviderAvailable,
+                snapshot.LastSkippedAtUtc,
+                snapshot.LastSkipReason,
+                currentPlan = new
+                {
+                    currentPlan.GeneratedAtUtc,
+                    currentPlan.ShouldRefresh,
+                    currentPlan.SkipReason,
+                    currentPlan.EstimatedApiCalls,
+                    budgetAllowed = currentPlan.Budget.BudgetAllowed,
+                    currentPlan.ProviderAvailable,
+                    currentPlan.ProviderStatus,
+                    currentPlan.ProviderRejectedKeyDetected,
+                    currentPlan.RecommendedAction
+                },
                 nextRunEstimateUtc,
                 callsExternalApis = false,
                 readOnly = true,
@@ -988,8 +1015,10 @@ public static partial class TheOddsApiDebugEndpoints
                     callsTheOddsApiWhenDisabled = false,
                     statusEndpointCallsExternalApis = false,
                     requiresExplicitLocalEnablement = true,
+                    liveExecutionRequiresAllowScheduledLiveRefresh = true,
                     liveExecutionBlockedWhenRequireForceLive = true,
-                    refreshLogicSource = "Shared refresh-current service; automatic live execution remains disabled by default and guarded by scheduled refresh config."
+                    plannerGatedExecution = true,
+                    refreshLogicSource = "Shared refresh-current service; automatic live execution remains disabled by default and guarded by planner, budget, provider status, and scheduled refresh config."
                 }
             });
         })

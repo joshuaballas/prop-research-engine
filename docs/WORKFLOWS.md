@@ -85,6 +85,8 @@ Provider status is exposed separately at `/api/markets/provider-status`. It read
 
 Refresh planning is exposed at `/api/markets/refresh-plan`. It is also read-only and uses persisted provider status, snapshots, refresh metadata, and `TheOddsRefreshPlanner` budget/cadence config to explain whether a scheduled refresh would run now or skip. It estimates calls and credit-budget impact, but it never calls The Odds API and never enables the scheduled worker.
 
+The scheduled The Odds refresh worker is planner-gated. Even if `TheOddsScheduledRefresh:Enabled=true` is set in local/ops config, each tick first reads the same planner decision. The worker skips without provider calls when the planner says `shouldRefresh=false`, when `budgetAllowed=false`, when provider status is unavailable/rejected-key, or when `AllowScheduledLiveRefresh=false`. Committed config keeps `AllowScheduledLiveRefresh=false`.
+
 Use the production-safe performance summary to inspect provider, prop-type, and strategy slices before showing recommendations confidently:
 
 ```powershell

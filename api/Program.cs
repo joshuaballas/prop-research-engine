@@ -30,6 +30,7 @@ builder.Services.Configure<MlbResultsOptions>(builder.Configuration.GetSection(M
 builder.Services.Configure<TheOddsApiOptions>(builder.Configuration.GetSection(TheOddsApiOptions.SectionName));
 builder.Services.Configure<TheOddsIngestionWorkerOptions>(builder.Configuration.GetSection(TheOddsIngestionWorkerOptions.SectionName));
 builder.Services.Configure<TheOddsScheduledRefreshOptions>(builder.Configuration.GetSection(TheOddsScheduledRefreshOptions.SectionName));
+builder.Services.Configure<TheOddsRefreshPlannerOptions>(builder.Configuration.GetSection(TheOddsRefreshPlannerOptions.SectionName));
 builder.Services.Configure<MlbResultImportWorkerOptions>(builder.Configuration.GetSection(MlbResultImportWorkerOptions.SectionName));
 builder.Services.Configure<PredictionGenerationOptions>(builder.Configuration.GetSection(PredictionGenerationOptions.SectionName));
 builder.Services.AddHttpClient<IUnderdogAdapter, UnderdogAdapter>(client =>
@@ -55,6 +56,7 @@ builder.Services.AddScoped<IUnderdogIngestionService, UnderdogIngestionService>(
 builder.Services.AddScoped<IMlbResultImportService, MlbResultImportService>();
 builder.Services.AddScoped<ITheOddsApiMlbEventIngestionService, TheOddsApiMlbEventIngestionService>();
 builder.Services.AddScoped<ITheOddsMlbIngestionPlanner, TheOddsMlbIngestionPlanner>();
+builder.Services.AddScoped<ITheOddsRefreshPlannerService, TheOddsRefreshPlannerService>();
 builder.Services.AddScoped<IPropResultRepository, PropResultRepository>();
 builder.Services.AddScoped<IPredictionRepository, PredictionRepository>();
 builder.Services.AddScoped<IPlayerIdentityAliasService, PlayerIdentityAliasService>();

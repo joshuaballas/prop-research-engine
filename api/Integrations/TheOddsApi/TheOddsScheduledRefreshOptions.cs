@@ -12,6 +12,7 @@ public sealed class TheOddsScheduledRefreshOptions
     public bool IncludeFullDiagnostics { get; set; } = false;
     public int FreshnessMinutes { get; set; } = 30;
     public bool RequireForceLive { get; set; } = true;
+    public bool AllowScheduledLiveRefresh { get; set; } = false;
 
     public TimeSpan GetInterval() => TimeSpan.FromMinutes(Math.Max(1, IntervalMinutes));
 }
