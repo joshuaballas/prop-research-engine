@@ -64,6 +64,7 @@ builder.Services.AddScoped<IPredictionProbabilityService, PredictionProbabilityS
 builder.Services.AddScoped<IPlayerExternalRefRepository, PlayerExternalRefRepository>();
 builder.Services.AddScoped<IPlayerResolutionService, PlayerResolutionService>();
 builder.Services.AddScoped<IApplicationErrorLogger, ApplicationErrorLogger>();
+builder.Services.AddScoped<ITheOddsMlbRefreshService, TheOddsApiDebugEndpoints.TheOddsMlbRefreshService>();
 builder.Services.AddSingleton<IPlayerResolutionStats, PlayerResolutionStats>();
 builder.Services.AddSingleton<IPlayerMergeExecutionState, PlayerMergeExecutionState>();
 builder.Services.AddSingleton<IUnderdogIngestionWorkerState, UnderdogIngestionWorkerState>();

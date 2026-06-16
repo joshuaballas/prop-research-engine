@@ -404,7 +404,7 @@ Invoke-RestMethod -Uri "http://localhost:5299/api/debug/the-odds/mlb/scheduled-r
   ConvertTo-Json -Depth 20
 ```
 
-Do not enable scheduled live refreshes until the existing `refresh-current` workflow has been extracted into an injectable service and credit/ops policy is approved. If enabled while `RequireForceLive=true`, the worker logs a warning and marks the cycle blocked instead of calling The Odds API.
+The scheduled worker and debug/admin `refresh-current` endpoint share the same refresh service. Do not enable scheduled live refreshes until credit/ops policy is approved. If enabled while `RequireForceLive=true`, the worker logs a warning and marks the cycle blocked instead of calling The Odds API.
 
 ## Dashboard Usage
 
