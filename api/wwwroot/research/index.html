@@ -336,6 +336,8 @@
                         </div>
                     </div>
                     <div class="manual-actions inline-actions">
+                        <button id="refreshCurrentMlbDryRunButton" class="secondary-button" type="button">Dry Run Current Refresh</button>
+                        <button id="refreshCurrentMlbRecommendationsButton" class="primary-button" type="button">Refresh Current MLB Recommendations</button>
                         <button id="generateMlbPredictionsButton" class="secondary-button" type="button">Generate The Odds Predictions</button>
                         <button id="generateFullMlbPredictionsButton" class="secondary-button" type="button">Generate Full MLB Predictions</button>
                         <button id="refreshLineShoppingButton" class="secondary-button" type="button">Refresh Line Shopping</button>
@@ -382,12 +384,25 @@
                 </div>
             </section>
 
+            <section class="top-picks-panel" aria-label="Top Picks">
+                <div class="section-header compact">
+                    <div>
+                        <h3>Top Picks</h3>
+                        <p>Active strategy candidates only. Research output, not betting advice.</p>
+                    </div>
+                    <div id="topPicksCount" class="table-count">0 picks</div>
+                </div>
+                <div id="topPicksRows" class="top-picks-list"></div>
+            </section>
+
             <div class="preset-bar" aria-label="Line shopping filter presets">
                 <span>Presets</span>
                 <button class="secondary-button preset-button" type="button" data-line-shopping-preset="bestResearch">Best Research</button>
+                <button class="secondary-button preset-button" type="button" data-line-shopping-preset="conservativeCandidates">Conservative Candidates</button>
                 <button class="secondary-button preset-button" type="button" data-line-shopping-preset="allEligible">All Eligible</button>
                 <button class="secondary-button preset-button" type="button" data-line-shopping-preset="strongOnly">Strong Only</button>
                 <button class="secondary-button preset-button" type="button" data-line-shopping-preset="multiBookEv">Multi-book EV</button>
+                <button class="secondary-button preset-button" type="button" data-line-shopping-preset="avoidDiagnostics">Avoid / Diagnostics</button>
                 <button class="secondary-button preset-button" type="button" data-line-shopping-preset="diagnostics">Research Only / Diagnostics</button>
                 <button class="secondary-button preset-button" type="button" data-line-shopping-preset="reset">Reset</button>
             </div>
@@ -412,6 +427,10 @@
                 <label>
                     Trust
                     <select id="lineShoppingTrustFilter"></select>
+                </label>
+                <label>
+                    Strategy
+                    <select id="lineShoppingStrategyFilter"></select>
                 </label>
                 <label class="checkbox-field">
                     <input id="lineShoppingPositiveEvOnlyFilter" type="checkbox" checked>
@@ -472,6 +491,8 @@
                             <th>Sample</th>
                             <th>Confidence</th>
                             <th>Trust</th>
+                            <th>Strategy</th>
+                            <th>Shape</th>
                             <th>Rank</th>
                             <th>Eligible</th>
                             <th>Book Prices</th>

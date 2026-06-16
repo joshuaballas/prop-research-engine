@@ -56,6 +56,57 @@ Invoke-RestMethod `
   -Body '{"eventId":"EVENT_ID","bookmakers":"draftkings,betmgm","markets":"batter_hits,batter_total_bases,pitcher_strikeouts"}'
 ```
 
+## Refresh Current MLB Recommendations
+
+Use this when you want the dashboard to produce active strategy-aware candidates for the current MLB slate. The dry-run form does not call The Odds API and does not write rows. The live form spends The Odds API credits, persists/refreshes The Odds market rows, generates a scoped prediction run, and returns line-shopping strategy summaries for that run.
+
+Dry run:
+
+```powershell
+Invoke-RestMethod `
+  -Method Post `
+  -Uri "http://localhost:5299/api/debug/the-odds/mlb/recommendations/refresh-current?dryRun=true"
+```
+
+Live refresh:
+
+```powershell
+$refresh = Invoke-RestMethod `
+  -Method Post `
+  -Uri "http://localhost:5299/api/debug/the-odds/mlb/recommendations/refresh-current?includeCandidates=true&freshnessMinutes=30"
+
+$refresh.predictionRunId
+$refresh.strategyClassificationSummary
+$refresh.topActiveCandidates | Select-Object -First 10
+$refresh | ConvertTo-Json -Depth 20 | Set-Content ".\tmp-analysis\current-mlb-recommendations-refresh.json"
+```
+
+## Expand The Odds Bookmaker Coverage Safely
+
+The bookmaker list is config-driven through `TheOddsIngestionWorker:Bookmakers`. Current committed defaults are intentionally narrow:
+
+```json
+"Bookmakers": "draftkings,fanduel,betmgm"
+```
+
+To test broader coverage, override this value only in ignored local config (`api/appsettings.Local.json`) or environment variables. Add one or two keys at a time, then dry-run the current refresh before live refresh. Candidate opt-in keys depend on The Odds API plan/provider availability; common US keys to verify manually include `bovada`, `espnbet`, `williamhill_us`, and `betrivers`.
+
+Coverage diagnostic uses persisted rows only and does not spend credits:
+
+```powershell
+Invoke-RestMethod -Uri "http://localhost:5299/api/debug/the-odds/mlb/bookmaker-coverage" |
+  ConvertTo-Json -Depth 20 |
+  Set-Content ".\tmp-analysis\the-odds-bookmaker-coverage.json"
+```
+
+Dry-run current refresh after config changes:
+
+```powershell
+Invoke-RestMethod `
+  -Method Post `
+  -Uri "http://localhost:5299/api/debug/the-odds/mlb/recommendations/refresh-current?dryRun=true"
+```
+
 ## Generate Predictions
 
 For The Odds API workflow, prefer scoped generation:
@@ -91,11 +142,15 @@ Invoke-RestMethod -Uri "http://localhost:5299/api/debug/the-odds/mlb/line-shoppi
 The dashboard includes presets:
 
 - Best Research
+- Conservative Candidates
 - All Eligible
 - Strong Only
 - Multi-book EV
+- Avoid / Diagnostics
 - Research Only / Diagnostics
 - Reset
+
+The compact Top Picks panel uses the current line-shopping response and shows the top 10 active, non-stale, non-expired strategy candidates sorted by estimated EV.
 
 ## Check Event Workflow And Planner
 
@@ -163,6 +218,7 @@ $r | ConvertTo-Json -Depth 12 | Set-Content ".\tmp-analysis\the-odds-line-shoppi
 The Odds line-shopping backtest resolves MLB result dates from persisted provider event-date metadata when available, otherwise it uses an MLB Eastern-date fallback so late UTC starts can still match the correct MLB slate date.
 Use the calibration fields such as `byModelProbabilityBucket`, `byProbabilityEdgeBucket`, `byTrustLevelAndPropType`, and `modelProbabilityCalibration` to review whether model probability, edge, and trust labels are ranking outcomes correctly before changing recommendation rules.
 Use `strategySimulations` to compare read-only candidate filters. Add `strategyOnly=true` for a smaller payload, or pass filters such as `bookmaker=DraftKings`, `propType=Total%20Bases`, `line=1.5`, and `minBestPrice=1.75` to produce the `queryFilteredStrategy` row.
+The `/research` MLB Line Shopping table shows strategy classification/tier badges. Use the `Conservative Candidates` preset for the current preferred research view and `Avoid / Diagnostics` to inspect structurally suspicious market shapes without changing model output.
 
 Persist strategy simulation snapshots after a slate is graded:
 

@@ -9,6 +9,7 @@ const endpoints = {
     theOddsIngestionPlan: "/api/debug/the-odds/mlb/ingestion-plan",
     theOddsEvents: "/api/debug/the-odds/mlb/player-props-spike",
     theOddsIngestEvent: "/api/debug/the-odds/mlb/ingest-event",
+    refreshCurrentMlbRecommendations: "/api/debug/the-odds/mlb/recommendations/refresh-current",
     generateMlbPredictions: "/api/debug/predictions/generate/mlb",
     generateTheOddsMlbPredictions: "/api/debug/predictions/generate/mlb/the-odds",
     evBacktest: "/api/debug/markets/underdog-ev-backtest",
@@ -66,12 +67,15 @@ const els = {
     lineShoppingMultiBook: document.getElementById("lineShoppingMultiBook"),
     lineShoppingEligible: document.getElementById("lineShoppingEligible"),
     lineShoppingReady: document.getElementById("lineShoppingReady"),
+    topPicksCount: document.getElementById("topPicksCount"),
+    topPicksRows: document.getElementById("topPicksRows"),
     lineShoppingCount: document.getElementById("lineShoppingCount"),
     lineShoppingRows: document.getElementById("lineShoppingRows"),
     lineShoppingEligibleOnlyFilter: document.getElementById("lineShoppingEligibleOnlyFilter"),
     lineShoppingMultiBookOnlyFilter: document.getElementById("lineShoppingMultiBookOnlyFilter"),
     lineShoppingPropTypeFilter: document.getElementById("lineShoppingPropTypeFilter"),
     lineShoppingTrustFilter: document.getElementById("lineShoppingTrustFilter"),
+    lineShoppingStrategyFilter: document.getElementById("lineShoppingStrategyFilter"),
     lineShoppingPositiveEvOnlyFilter: document.getElementById("lineShoppingPositiveEvOnlyFilter"),
     lineShoppingActiveOnlyFilter: document.getElementById("lineShoppingActiveOnlyFilter"),
     lineShoppingIncludeStaleFilter: document.getElementById("lineShoppingIncludeStaleFilter"),
@@ -102,6 +106,8 @@ const els = {
     theOddsCommitConfirm: document.getElementById("theOddsCommitConfirm"),
     theOddsCommitButton: document.getElementById("theOddsCommitButton"),
     theOddsIngestSummary: document.getElementById("theOddsIngestSummary"),
+    refreshCurrentMlbDryRunButton: document.getElementById("refreshCurrentMlbDryRunButton"),
+    refreshCurrentMlbRecommendationsButton: document.getElementById("refreshCurrentMlbRecommendationsButton"),
     generateMlbPredictionsButton: document.getElementById("generateMlbPredictionsButton"),
     generateFullMlbPredictionsButton: document.getElementById("generateFullMlbPredictionsButton"),
     refreshLineShoppingButton: document.getElementById("refreshLineShoppingButton"),
@@ -131,6 +137,8 @@ document.addEventListener("DOMContentLoaded", () => {
         els.theOddsCommitButton.disabled = !els.theOddsCommitConfirm.checked;
     });
     els.theOddsCommitButton.addEventListener("click", () => ingestTheOddsEvent(false));
+    els.refreshCurrentMlbDryRunButton.addEventListener("click", () => refreshCurrentMlbRecommendations(true));
+    els.refreshCurrentMlbRecommendationsButton.addEventListener("click", () => refreshCurrentMlbRecommendations(false));
     els.generateMlbPredictionsButton.addEventListener("click", () => generateMlbPredictions(true));
     els.generateFullMlbPredictionsButton.addEventListener("click", () => generateMlbPredictions(false));
     els.refreshLineShoppingButton.addEventListener("click", refreshLineShoppingForLatestRun);
@@ -348,6 +356,78 @@ function renderTheOddsIngestResult(result) {
     ].join("");
 }
 
+async function refreshCurrentMlbRecommendations(dryRun) {
+    const params = new URLSearchParams();
+    params.set("dryRun", dryRun ? "true" : "false");
+    params.set("includeCandidates", "true");
+    params.set("freshnessMinutes", "30");
+
+    setTheOddsManualStatus(dryRun ? "Planning refresh" : "Refreshing current slate", "warn");
+    els.theOddsPredictionSummary.innerHTML = metricRow(
+        "Status",
+        dryRun
+            ? "Planning current MLB recommendation refresh without API calls or writes..."
+            : "Fetching current The Odds API slate, ingesting markets, generating predictions, and rebuilding line shopping...");
+
+    try {
+        const result = await postJson(`${endpoints.refreshCurrentMlbRecommendations}?${params}`, {});
+        els.theOddsPredictionSummary.innerHTML = renderCurrentRecommendationRefreshResult(result);
+
+        if (!dryRun && result.predictionRunId) {
+            state.latestGeneratedRunId = result.predictionRunId;
+            await refreshLineShoppingForLatestRun();
+            const hasActiveCandidates = (result.activeCandidateCount || 0) > 0;
+            if (hasActiveCandidates) {
+                applyLineShoppingPreset("conservativeCandidates");
+            }
+        }
+
+        if (!dryRun && (result.lineShoppingSummary?.activeGroups || 0) === 0) {
+            setStatus("Current refresh completed, but all returned line-shopping rows are stale, expired, or game-started.", true);
+        } else {
+            setStatus(dryRun ? "Current recommendation refresh dry-run complete." : "Current MLB recommendations refreshed.");
+        }
+
+        setTheOddsManualStatus(dryRun ? "Dry run complete" : "Current refresh complete", "ok");
+    } catch (error) {
+        els.theOddsPredictionSummary.innerHTML = metricRow("Error", escapeHtml(error.message));
+        setTheOddsManualStatus(dryRun ? "Dry run failed" : "Current refresh failed", "bad");
+        setStatus(`Current MLB recommendation refresh failed: ${error.message}`, true);
+    }
+}
+
+function renderCurrentRecommendationRefreshResult(result) {
+    const diagnostics = result.diagnostics || {};
+    const lineShopping = result.lineShoppingSummary || {};
+    const summaryRows = [
+        metricRow("Success", result.success ? "true" : "false"),
+        metricRow("Dry run", result.dryRun ? "true" : "false"),
+        metricRow("Slate date", escapeHtml(result.slateDate || "-")),
+        metricRow("Run ID", result.predictionRunId ? `<code>${escapeHtml(result.predictionRunId)}</code>` : "-"),
+        metricRow("Odds events fetched", formatNumber(result.oddsEventsFetched)),
+        metricRow("API calls", formatNumber(diagnostics.apiCallsMade)),
+        metricRow("Platform props created", formatNumber(result.platformPropsCreated)),
+        metricRow("Platform props updated", formatNumber(result.platformPropsUpdated)),
+        metricRow("Predictions", formatNumber(result.predictionCount)),
+        metricRow("Line-shopping groups", formatNumber(lineShopping.totalComparisonGroups)),
+        metricRow("Active groups", formatNumber(lineShopping.activeGroups)),
+        metricRow("Active candidates", formatNumber(result.activeCandidateCount)),
+        metricRow("Active watchlist", formatNumber(result.activeWatchlistCount)),
+        metricRow("Active avoid", formatNumber(result.activeAvoidCount))
+    ];
+
+    if (diagnostics.warning) {
+        summaryRows.push(metricRow("Warning", escapeHtml(diagnostics.warning)));
+    }
+
+    if (result.dryRun) {
+        summaryRows.push(metricRow("Dry-run behavior", "No The Odds API calls and no database writes."));
+        summaryRows.push(metricRow("Estimated calls", escapeHtml(diagnostics.estimatedApiCalls || "-")));
+    }
+
+    return summaryRows.join("");
+}
+
 function renderEventList(events) {
     if (!events || events.length === 0) {
         return `<div class="metric-row"><span>Events</span><strong>-</strong></div>`;
@@ -385,6 +465,7 @@ function renderLineShoppingSummary() {
     els.lineShoppingMultiBook.textContent = formatNumber(summary.groupsWithMultipleBookmakers);
     els.lineShoppingEligible.textContent = formatNumber(summary.eligibleComparisonGroups);
     els.lineShoppingReady.innerHTML = ready ? chip("Ready", "ok") : chip("Research", "warn");
+    renderTopPicks();
 }
 
 function renderTheOddsEventWorkflow() {
@@ -610,6 +691,11 @@ function renderPropReliability() {
 function populateLineShoppingFilters(groups) {
     setSelectOptions(els.lineShoppingPropTypeFilter, uniqueValues(groups, row => row.normalizedPropType), "All prop types");
     setSelectOptions(els.lineShoppingTrustFilter, uniqueValues(groups, row => row.trustLevel), "All trust levels");
+    setSelectOptions(els.lineShoppingStrategyFilter, uniqueValues(groups, row => row.strategyTier), "All strategy tiers");
+
+    if (groups.some(row => row.strategyTier === "ConservativeCandidate")) {
+        applyLineShoppingPreset("conservativeCandidates");
+    }
 }
 
 function applyLineShoppingPreset(preset) {
@@ -619,6 +705,7 @@ function applyLineShoppingPreset(preset) {
             positiveEvOnly: true,
             multiBookOnly: true,
             trust: "",
+            strategy: "",
             activeOnly: true,
             includeStale: false,
             includeExpired: false,
@@ -627,11 +714,26 @@ function applyLineShoppingPreset(preset) {
             minRanking: "",
             minBestEv: ""
         },
+        conservativeCandidates: {
+            eligibleOnly: true,
+            positiveEvOnly: false,
+            multiBookOnly: false,
+            trust: "",
+            strategy: "ConservativeCandidate",
+            activeOnly: true,
+            includeStale: false,
+            includeExpired: false,
+            minSample: "",
+            minConfidence: "",
+            minRanking: "",
+            minBestEv: ""
+        },
         allEligible: {
             eligibleOnly: true,
             positiveEvOnly: false,
             multiBookOnly: false,
             trust: "",
+            strategy: "",
             activeOnly: true,
             includeStale: false,
             includeExpired: false,
@@ -645,6 +747,7 @@ function applyLineShoppingPreset(preset) {
             positiveEvOnly: true,
             multiBookOnly: false,
             trust: "Strong",
+            strategy: "",
             activeOnly: true,
             includeStale: false,
             includeExpired: false,
@@ -658,9 +761,24 @@ function applyLineShoppingPreset(preset) {
             positiveEvOnly: true,
             multiBookOnly: true,
             trust: "",
+            strategy: "",
             activeOnly: true,
             includeStale: false,
             includeExpired: false,
+            minSample: "",
+            minConfidence: "",
+            minRanking: "",
+            minBestEv: ""
+        },
+        avoidDiagnostics: {
+            eligibleOnly: false,
+            positiveEvOnly: false,
+            multiBookOnly: false,
+            trust: "",
+            strategy: "DiagnosticAvoid",
+            activeOnly: false,
+            includeStale: true,
+            includeExpired: true,
             minSample: "",
             minConfidence: "",
             minRanking: "",
@@ -671,6 +789,7 @@ function applyLineShoppingPreset(preset) {
             positiveEvOnly: false,
             multiBookOnly: false,
             trust: "",
+            strategy: "",
             activeOnly: false,
             includeStale: true,
             includeExpired: true,
@@ -684,6 +803,7 @@ function applyLineShoppingPreset(preset) {
             positiveEvOnly: true,
             multiBookOnly: true,
             trust: "",
+            strategy: "",
             activeOnly: true,
             includeStale: false,
             includeExpired: false,
@@ -702,6 +822,7 @@ function applyLineShoppingPreset(preset) {
     els.lineShoppingIncludeStaleFilter.checked = config.includeStale;
     els.lineShoppingIncludeExpiredFilter.checked = config.includeExpired;
     els.lineShoppingTrustFilter.value = selectHasOption(els.lineShoppingTrustFilter, config.trust) ? config.trust : "";
+    els.lineShoppingStrategyFilter.value = selectHasOption(els.lineShoppingStrategyFilter, config.strategy) ? config.strategy : "";
     els.lineShoppingMinSampleFilter.value = config.minSample;
     els.lineShoppingMinConfidenceFilter.value = config.minConfidence;
     els.lineShoppingMinRankingFilter.value = config.minRanking;
@@ -714,6 +835,7 @@ function applyLineShoppingFilters() {
     const groups = state.lineShopping?.topGroupsByBestEstimatedEv || [];
     const propType = els.lineShoppingPropTypeFilter.value;
     const trustLevel = els.lineShoppingTrustFilter.value;
+    const strategyTier = els.lineShoppingStrategyFilter.value;
     const minRanking = parseNumber(els.lineShoppingMinRankingFilter.value);
     const minBestEv = parseNumber(els.lineShoppingMinBestEvFilter.value);
     const minSample = parseNumber(els.lineShoppingMinSampleFilter.value);
@@ -727,6 +849,7 @@ function applyLineShoppingFilters() {
 
         return (!propType || group.normalizedPropType === propType)
             && (!trustLevel || group.trustLevel === trustLevel)
+            && (!strategyTier || group.strategyTier === strategyTier)
             && (!els.lineShoppingEligibleOnlyFilter.checked || group.isEligibleAsNormalRecommendation)
             && (!els.lineShoppingMultiBookOnlyFilter.checked || (group.bookmakerPrices || []).length > 1)
             && (!els.lineShoppingPositiveEvOnlyFilter.checked || bestEv > 0)
@@ -746,7 +869,7 @@ function renderLineShoppingRows() {
     const rows = state.filteredLineShoppingGroups.slice(0, 100);
     els.lineShoppingCount.textContent = `${formatNumber(state.filteredLineShoppingGroups.length)} groups`;
     els.lineShoppingRows.innerHTML = rows.length === 0
-        ? `<tr><td colspan="16" class="muted">No line-shopping groups match the current filters.</td></tr>`
+        ? `<tr><td colspan="18" class="muted">No line-shopping groups match the current filters.</td></tr>`
         : rows.map(group => `
             <tr class="${lineShoppingLifecycleRowClass(group)}">
                 <td>${escapeHtml(group.player)}</td>
@@ -765,11 +888,133 @@ function renderLineShoppingRows() {
                 <td title="${escapeHtml(group.sampleWarning || "None")}">${formatNumber(group.historicalSampleSize)}</td>
                 <td>${formatPercent(group.confidenceScore)}</td>
                 <td>${chip(group.trustLevel || "ResearchOnly", trustChip(group.trustLevel))}</td>
+                <td title="${escapeHtml([...(group.strategyReasons || []), ...(group.strategyWarnings || [])].join(" "))}">
+                    ${chip(group.strategyClassification || "Research", strategyChip(group.strategyClassification))}
+                    <div class="muted compact-cell-text">${escapeHtml(group.strategyTier || "")}</div>
+                </td>
+                <td title="${escapeHtml((group.riskTags || []).join(", "))}">${escapeHtml(group.marketShape || "")}</td>
                 <td>${formatNumber(group.rankingScore)}</td>
                 <td>${group.isEligibleAsNormalRecommendation ? chip("Eligible", "ok") : chip("Research", "warn")}</td>
                 <td>${renderBookmakerPriceDetails(group.bookmakerPrices || [])}</td>
             </tr>
         `).join("");
+}
+
+function renderTopPicks() {
+    const groups = state.lineShopping?.comparisonGroups || state.lineShopping?.topGroupsByBestEstimatedEv || [];
+    const picks = groups
+        .filter(group => group.isCandidate
+            && group.lifecycleStatus === "Active"
+            && !group.isStale
+            && !group.isExpired)
+        .sort((left, right) => (right.bestEstimatedEv ?? Number.NEGATIVE_INFINITY) - (left.bestEstimatedEv ?? Number.NEGATIVE_INFINITY))
+        .slice(0, 10);
+
+    els.topPicksCount.textContent = `${formatNumber(picks.length)} picks`;
+    els.topPicksRows.innerHTML = picks.length === 0
+        ? `<div class="empty-state">No active Conservative Candidate picks in the current line-shopping response.</div>`
+        : picks.map(group => `
+            <article class="top-pick-card">
+                <header class="top-pick-header">
+                    <div class="top-pick-title">
+                        <strong>${escapeHtml(group.player)}</strong>
+                        <span>${escapeHtml(group.normalizedPropType)} ${formatNumber(group.line)}</span>
+                    </div>
+                    <div class="top-pick-badges">
+                        ${chip(group.bestSide || "None", group.bestSide === "None" ? "warn" : "ok")}
+                        ${chip(group.strategyTier || "Candidate", "ok")}
+                        ${chip(group.trustLevel || "Research", trustChip(group.trustLevel))}
+                        ${chip(group.marketShape || "Standard", "")}
+                    </div>
+                </header>
+                <div class="top-pick-event">${escapeHtml(formatEventPlain(group))}</div>
+                <section class="top-pick-row odds-row">
+                    ${topPickStat("Pick", group.bestSide || "-")}
+                    ${topPickStat("Book", escapeHtml(group.bestBookmaker || "-"))}
+                    ${topPickStat("Odds", `${formatAmericanPrice(group.bestAmericanPrice)} / ${formatDecimalOdds(group.bestDecimalPrice)}`)}
+                    ${topPickStat("Risk", escapeHtml(formatRiskToWin(group.bestAmericanPrice)), "wide")}
+                </section>
+                <section class="top-pick-row">
+                    ${topPickStat("Break-even", formatPercent(group.bestImpliedProbability))}
+                    ${topPickStat("Model", formatPercent(group.bestProbability), "strong")}
+                    ${topPickStat("Edge", formatSignedPercent(group.bestProbabilityEdge), signedValueClass(group.bestProbabilityEdge))}
+                </section>
+                <section class="top-pick-row">
+                    ${topPickStat("EV", formatSignedPercent(group.bestEstimatedEv), signedValueClass(group.bestEstimatedEv))}
+                    ${topPickStat("Sample", formatNumber(group.historicalSampleSize))}
+                    ${topPickStat("Trust", escapeHtml(group.trustLevel || "-"))}
+                    ${topPickStat("Shape", escapeHtml(group.marketShape || "-"))}
+                </section>
+                ${renderTopPickReasons(group.strategyReasons)}
+                ${renderTopPickWarnings([...(group.strategyWarnings || []), ...(group.riskTags || [])])}
+            </article>
+        `).join("");
+}
+
+function topPickStat(label, value, className = "") {
+    return `<div class="top-pick-stat ${className}"><span>${label}</span><strong>${value}</strong></div>`;
+}
+
+function renderTopPickReasons(values) {
+    const items = (values || []).filter(Boolean);
+    if (items.length === 0) {
+        return "";
+    }
+
+    return `<div class="top-pick-reasons"><span>Reasons</span><p>${items.map(escapeHtml).join(" · ")}</p></div>`;
+}
+
+function renderTopPickWarnings(values) {
+    const items = (values || []).filter(Boolean);
+    if (items.length === 0) {
+        return "";
+    }
+
+    return `<div class="top-pick-warning-tags">${items.map(value => `<span>${escapeHtml(value)}</span>`).join("")}</div>`;
+}
+
+function formatDecimalOdds(value) {
+    if (value === null || value === undefined || Number.isNaN(Number(value))) {
+        return "-";
+    }
+
+    return Number(value).toLocaleString(undefined, {
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 3
+    });
+}
+
+function formatSignedPercent(value) {
+    if (value === null || value === undefined || Number.isNaN(Number(value))) {
+        return "-";
+    }
+
+    const percent = Number(value) * 100;
+    const sign = percent > 0 ? "+" : "";
+    return `${sign}${percent.toFixed(2)}%`;
+}
+
+function signedValueClass(value) {
+    if (value === null || value === undefined || Number.isNaN(Number(value))) {
+        return "";
+    }
+
+    return Number(value) > 0 ? "positive" : Number(value) < 0 ? "negative" : "";
+}
+
+function formatRiskToWin(americanPrice) {
+    if (americanPrice === null || americanPrice === undefined) {
+        return "-";
+    }
+
+    const price = Number(americanPrice);
+    if (!Number.isFinite(price) || price === 0) {
+        return "-";
+    }
+
+    return price < 0
+        ? `Risk $${formatNumber(Math.abs(price))} to win $100`
+        : `Risk $100 to win $${formatNumber(price)}`;
 }
 
 function lineShoppingLifecycleRowClass(group) {
@@ -920,6 +1165,14 @@ function trustChip(trustLevel) {
     return "warn";
 }
 
+function strategyChip(classification) {
+    if (classification === "Candidate") return "ok";
+    if (classification === "Watchlist") return "warn";
+    if (classification === "Avoid") return "bad";
+    if (classification === "ResearchOnly") return "warn";
+    return "";
+}
+
 function lifecycleChip(status) {
     if (status === "Active") return "ok";
     if (status === "Stale") return "warn";
@@ -990,6 +1243,13 @@ function formatEvent(group) {
     const start = formatDate(group.eventStartTime);
 
     return `${escapeHtml(teams || group.eventId || "-")}<br><span class="muted">${escapeHtml(start)}</span>`;
+}
+
+function formatEventPlain(group) {
+    const teams = [group.awayTeam, group.homeTeam].filter(Boolean).join(" @ ");
+    const start = formatDate(group.eventStartTime);
+
+    return `${teams || group.eventId || "-"} (${start})`;
 }
 
 function formatDate(value) {

@@ -73,8 +73,9 @@ The Odds API is a data provider/aggregator. Persist actual bookmakers as platfor
 | --- | --- | --- | --- | --- | --- |
 | GET | `/api/debug/the-odds/mlb/player-props-spike` | Read-only event/player-props spike. Without `eventId`, fetches MLB events. With `eventId`, fetches event odds. | No | Yes, The Odds API | Yes |
 | POST | `/api/debug/the-odds/mlb/ingest-event` | Controlled one-event ingest. Supports `dryRun=true`. | Yes unless dry-run | Yes, The Odds API | Yes |
+| POST | `/api/debug/the-odds/mlb/recommendations/refresh-current` | Explicit current-slate workflow: discovers today's MLB events using MLB/Eastern date logic, ingests configured The Odds markets, generates scoped predictions, and returns line-shopping strategy summaries. Supports `dryRun=true`, `date`, `includeCandidates`, and `freshnessMinutes`. | Yes unless dry-run | Yes unless dry-run | Yes unless dry-run |
 | GET | `/api/debug/the-odds/mlb/ingestion-impact` | Summarizes persisted The Odds rows and prediction impact. | No | No | No |
-| GET | `/api/debug/the-odds/mlb/line-shopping` | Compares persisted The Odds sourced markets across bookmakers. Supports `runId`, `freshnessMinutes`. | No | No | No |
+| GET | `/api/debug/the-odds/mlb/line-shopping` | Compares persisted The Odds sourced markets across bookmakers. Supports `runId`, `freshnessMinutes`. Each group includes strategy-aware classification fields such as `strategyClassification`, `strategyTier`, `isCandidate`, `isAvoid`, `isWatchlist`, `marketShape`, and `riskTags`, plus `strategyClassificationSummary`. | No | No | No |
 | GET | `/api/debug/the-odds/mlb/line-shopping-backtest` | Backtests best-side line-shopping groups after results exist. Supports `runId`, `sampleTake`, `includeSamples`, `strategyOnly`, and ad hoc strategy filters such as `bookmaker`, `propType`, `trustLevel`, `line`, `minSampleSize`, `minBestProbability`, `maxBestProbability`, `minEstimatedEv`, `maxEstimatedEv`, `minBestPrice`, and `maxBestPrice`. Includes built-in strategy simulations, calibration breakdowns for model probability, implied probability, probability edge, sample size, price, line value, trust/prop combinations, and a model probability calibration table. Uses persisted rows only and resolves MLB result dates from provider metadata first, then an MLB Eastern-date fallback for late UTC starts. | No | No | No |
 | POST | `/api/debug/the-odds/mlb/line-shopping-backtest/strategy-snapshot` | Computes current line-shopping strategy simulations for a supplied `runId` and persists one snapshot row per strategy. | Yes, strategy snapshots only | No | No |
 | GET | `/api/debug/the-odds/mlb/line-shopping-backtest/strategy-snapshots` | Reads persisted strategy snapshots. Supports `runId`, `strategyName`, `fromDate`, and `toDate`. | No | No | No |
@@ -83,6 +84,7 @@ The Odds API is a data provider/aggregator. Persist actual bookmakers as platfor
 | GET | `/api/debug/the-odds/mlb/ingestion-plan` | Planner/dashboard helper using persisted DB state only. Supports `date`, `bookmakers`, `markets`, `maxEvents`. | No | No | No |
 | GET | `/api/debug/the-odds/mlb/worker-status` | Disabled worker skeleton status and last dry-run fields. | No | No | No |
 | POST | `/api/debug/the-odds/mlb/worker-dry-run` | Runs worker planning manually without enabling worker, API calls, or writes. | No | No | No |
+| GET | `/api/debug/the-odds/mlb/bookmaker-coverage` | Compact persisted-row coverage report by bookmaker and prop type for the latest relevant run/slate. Shows configured bookmakers, observed bookmakers, missing configured event coverage, and candidate/watchlist/avoid contribution by best book. | No | No | No |
 | GET | `/api/debug/the-odds/mlb/bookmaker-coverage-audit` | Audits persisted bookmaker coverage. Supports `eventId`, `runId`. | No | No | No |
 | GET | `/api/debug/the-odds/mlb/bookmaker-prediction-dropout` | Explains why a bookmaker's persisted props did not produce predictions. Supports `bookmaker`, `eventId`, `runId`, `ignoreRunContext`. | No | No | No |
 | GET | `/api/debug/the-odds/mlb/prediction-readiness-audit` | Full readiness pipeline for persisted The Odds MLB props. Supports `eventId`, `bookmaker`, `runId`. | No | No | No |
@@ -110,7 +112,13 @@ Invoke-RestMethod `
   -ContentType "application/json" `
   -Body '{"eventId":"EVENT_ID","bookmakers":"draftkings,betmgm","markets":"batter_hits,batter_total_bases,pitcher_strikeouts"}'
 
+$refresh = Invoke-RestMethod `
+  -Method Post `
+  -Uri "http://localhost:5299/api/debug/the-odds/mlb/recommendations/refresh-current?dryRun=true"
+
 Invoke-RestMethod -Uri "http://localhost:5299/api/debug/the-odds/mlb/line-shopping"
+
+Invoke-RestMethod -Uri "http://localhost:5299/api/debug/the-odds/mlb/bookmaker-coverage"
 ```
 
 ## MLB Results
