@@ -1096,7 +1096,9 @@ function renderLineShoppingRows() {
                 <td>${chip(group.trustLevel || "ResearchOnly", trustChip(group.trustLevel))}</td>
                 <td>
                     ${chip(group.providerCategory || "Sportsbook", providerCategoryChip(group.providerCategory, group.isActionableForUser))}
+                    ${chip(group.entryCompatibilityGroup || group.entryProvider || "Provider scoped", group.entryActionableForUser ? "ok" : "warn")}
                     ${group.isIndicativeOdds ? `<div class="muted compact-cell-text">Indicative odds</div>` : `<div class="muted compact-cell-text">Context</div>`}
+                    ${group.entryRuleWarning ? `<div class="muted compact-cell-text">${escapeHtml(group.entryRuleWarning)}</div>` : ""}
                 </td>
                 <td title="${escapeHtml([...(group.strategyReasons || []), ...(group.strategyWarnings || [])].join(" "))}">
                     ${chip(group.strategyClassification || "Research", strategyChip(group.strategyClassification))}
@@ -1139,6 +1141,7 @@ function renderTopPicks() {
                         ${chip(group.strategyTier || "Candidate", "ok")}
                         ${chip(group.trustLevel || "Research", trustChip(group.trustLevel))}
                         ${chip(group.providerCategory === "DFS" ? "DFS" : "Sportsbook Context", providerCategoryChip(group.providerCategory, group.isActionableForUser))}
+                        ${chip(group.entryCompatibilityGroup || group.entryProvider || "Provider scoped", group.entryActionableForUser ? "ok" : "warn")}
                         ${group.isIndicativeOdds ? chip("Indicative Odds", "warn") : ""}
                         ${chip(group.marketShape || "Standard", "")}
                     </div>
@@ -1159,8 +1162,11 @@ function renderTopPicks() {
                     ${topPickStat("EV", formatSignedPercent(group.bestEstimatedEv), signedValueClass(group.bestEstimatedEv))}
                     ${topPickStat("Sample", formatNumber(group.historicalSampleSize))}
                     ${topPickStat("Trust", escapeHtml(group.trustLevel || "-"))}
+                    ${topPickStat("Provider", escapeHtml(group.entryProvider || group.bestBookmaker || "-"))}
+                    ${topPickStat("Group", escapeHtml(group.entryCompatibilityGroup || "-"))}
                     ${topPickStat("Shape", escapeHtml(group.marketShape || "-"))}
                 </section>
+                ${group.entryRuleWarning ? `<div class="top-pick-reasons"><span>Entry rule</span><p>${escapeHtml(group.entryRuleWarning)}</p></div>` : ""}
                 ${renderTopPickReasons(group.strategyReasons)}
                 ${renderTopPickWarnings([...(group.strategyWarnings || []), ...(group.riskTags || [])])}
             </article>

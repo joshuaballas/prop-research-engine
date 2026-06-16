@@ -115,6 +115,7 @@ Disabled by default:
 - Use dry-run before committing The Odds API ingestion.
 - Expanded and All bookmaker presets are opt-in because they can spend more credits and increase refresh time.
 - DFS rows from The Odds API use indicative odds and may vary based on user selections. Treat sportsbook rows as market context for a DFS-only user.
+- DFS entries are provider-scoped. Do not mix PrizePicks, Underdog, DraftKings Pick6, Betr Picks, or sportsbook-context legs in one future entry builder. Entry rules marked `NeedsVerification` must be confirmed before production use.
 - Generated endpoint outputs go under `tmp-analysis`; logs go under `logs`; temporary build outputs go under `tmp-build`.
 - Do not bypass DataDome or revive PrizePicks scraping experiments.
 - Do not treat EV outputs as production recommendations until backtests support them.

@@ -229,6 +229,7 @@ The dashboard includes presets:
 - Reset
 
 The compact Top Picks panel uses the current line-shopping response and shows the top 10 active, non-stale, non-expired strategy candidates sorted by estimated EV.
+Top Picks and line-shopping rows include `entryCompatibilityGroup` and related entry-rule metadata. DFS entries are provider-scoped: PrizePicks legs cannot mix with Underdog, DraftKings Pick6, Betr Picks, or sportsbook-context legs. Sportsbook rows remain market context for this DFS-only user.
 
 For dashboard startup performance, `/research` initially uses a lightweight Top Picks read:
 

@@ -3870,6 +3870,7 @@ public static class TheOddsApiDebugEndpoints
         bool includeBookmakerPrices)
     {
         var strategy = ClassifyTheOddsLineShoppingStrategy(group);
+        var entryCompatibility = BuildTheOddsEntryCompatibility(group);
 
         return new
         {
@@ -3934,7 +3935,88 @@ public static class TheOddsApiDebugEndpoints
             strategy.IsResearchOnly,
             strategy.CandidateStrategyName,
             strategy.MarketShape,
-            strategy.RiskTags
+            strategy.RiskTags,
+            entryCompatibility.EntryCompatibilityGroup,
+            entryCompatibility.EntryProvider,
+            entryCompatibility.EntryProviderCategory,
+            entryCompatibility.EntryActionableForUser,
+            entryCompatibility.SupportedEntryTypes,
+            entryCompatibility.AllowedLegCounts,
+            entryCompatibility.EntryRuleWarning
+        };
+    }
+
+    private static TheOddsEntryCompatibilityMetadata BuildTheOddsEntryCompatibility(
+        TheOddsLineShoppingGroup group)
+    {
+        var providerCategory = string.IsNullOrWhiteSpace(group.ProviderCategory)
+            ? "Sportsbook"
+            : group.ProviderCategory;
+        var provider = group.BookmakerPrices
+            .FirstOrDefault(price => string.Equals(price.Bookmaker, group.BestBookmaker, StringComparison.OrdinalIgnoreCase))
+            ?.Bookmaker
+            ?? group.BestBookmaker
+            ?? group.BookmakerPrices.FirstOrDefault()?.Bookmaker
+            ?? providerCategory;
+        var bookmakerKey = group.BookmakerPrices
+            .FirstOrDefault(price => string.Equals(price.Bookmaker, provider, StringComparison.OrdinalIgnoreCase))
+            ?.BookmakerKey
+            ?? NormalizeTheOddsBookmakerKey(null, provider);
+
+        if (!string.Equals(providerCategory, "DFS", StringComparison.OrdinalIgnoreCase))
+        {
+            return new TheOddsEntryCompatibilityMetadata(
+                EntryCompatibilityGroup: provider,
+                EntryProvider: provider,
+                EntryProviderCategory: providerCategory,
+                EntryActionableForUser: false,
+                SupportedEntryTypes: Array.Empty<string>(),
+                AllowedLegCounts: Array.Empty<int>(),
+                EntryRuleWarning: "Sportsbook rows are market context for this DFS-only user. Do not mix sportsbook legs across books.");
+        }
+
+        return bookmakerKey switch
+        {
+            "prizepicks" => new TheOddsEntryCompatibilityMetadata(
+                "PrizePicks",
+                "PrizePicks",
+                "DFS",
+                group.IsActionableForUser,
+                new[] { "Power", "Flex" },
+                new[] { 2, 3, 4, 5, 6 },
+                "PrizePicks entries must use PrizePicks legs only. Rules need verification before production use."),
+            "underdog" => new TheOddsEntryCompatibilityMetadata(
+                "Underdog",
+                "Underdog",
+                "DFS",
+                group.IsActionableForUser,
+                new[] { "PickEm" },
+                new[] { 2, 3, 4, 5 },
+                "Underdog entries must use Underdog legs only. Rules need verification before production use."),
+            "pick6" => new TheOddsEntryCompatibilityMetadata(
+                "DraftKingsPick6",
+                "DraftKings Pick6",
+                "DFS",
+                group.IsActionableForUser,
+                new[] { "Pick6" },
+                Array.Empty<int>(),
+                "DraftKings Pick6 entries must use Pick6 legs only. Leg-count rules need verification."),
+            "betr_us_dfs" => new TheOddsEntryCompatibilityMetadata(
+                "BetrPicks",
+                "Betr Picks",
+                "DFS",
+                group.IsActionableForUser,
+                new[] { "Picks" },
+                Array.Empty<int>(),
+                "Betr Picks entries must use Betr Picks legs only. Leg-count rules need verification."),
+            _ => new TheOddsEntryCompatibilityMetadata(
+                provider,
+                provider,
+                "DFS",
+                group.IsActionableForUser,
+                Array.Empty<string>(),
+                Array.Empty<int>(),
+                "DFS provider entry rules are not verified. Keep entries scoped to this provider only.")
         };
     }
 
@@ -9303,6 +9385,10 @@ public static class TheOddsApiDebugEndpoints
             "fanduel" => "fanduel",
             "betmgm" => "betmgm",
             "bovada" => "bovada",
+            "prizepicks" => "prizepicks",
+            "underdog" or "underdogfantasy" => "underdog",
+            "pick6" or "draftkingspick6" => "pick6",
+            "betrusdfs" or "betrdfs" or "betrpicks" or "betr" => "betr_us_dfs",
             var other when !string.IsNullOrWhiteSpace(other) => other,
             _ => "unknown"
         };
@@ -10043,6 +10129,15 @@ public static class TheOddsApiDebugEndpoints
         string? CandidateStrategyName,
         string MarketShape,
         IReadOnlyList<string> RiskTags);
+
+    private sealed record TheOddsEntryCompatibilityMetadata(
+        string EntryCompatibilityGroup,
+        string EntryProvider,
+        string EntryProviderCategory,
+        bool EntryActionableForUser,
+        IReadOnlyList<string> SupportedEntryTypes,
+        IReadOnlyList<int> AllowedLegCounts,
+        string EntryRuleWarning);
 
     private sealed record TheOddsCurrentRecommendationLineShoppingResult(
         IReadOnlyList<TheOddsLineShoppingSourceRow> Rows,
