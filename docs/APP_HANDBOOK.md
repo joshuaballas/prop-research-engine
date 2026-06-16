@@ -60,6 +60,10 @@ Useful URLs:
 - API health: `http://localhost:5299/health`
 - DB readiness: `http://localhost:5299/health/ready`
 - Internal dashboard: `http://localhost:5299/research`
+- Production-safe market freshness: `http://localhost:5299/api/markets/freshness`
+- Production-safe market top picks: `http://localhost:5299/api/markets/top-picks`
+- Production-safe market line-shopping: `http://localhost:5299/api/markets/line-shopping`
+- Production-safe DFS entry rules: `http://localhost:5299/api/dfs/entry-rules`
 - System health JSON: `http://localhost:5299/api/debug/system/health`
 
 Do not commit real API keys. Keep local secrets in `api/appsettings.Local.json` or environment variables. Environment variables override local JSON.
@@ -98,6 +102,8 @@ For a real product, the data strategy is provider-feed-first, not scraper-first.
 The Odds API refreshes should run from a scheduled backend worker or admin process on a controlled cadence, roughly every 1-5 minutes depending on credit budget, slate timing, and freshness needs. The worker should refresh provider data once per interval, persist normalized rows, generate predictions, build line-shopping/top-pick outputs, and update freshness metadata.
 
 Frontend users should only call read-only endpoints that return the latest persisted odds, predictions, line-shopping groups, top picks, and freshness state. All users should see the same latest persisted data. The UI should show last refreshed time, stale-data warnings, and game-started/expired lifecycle labels.
+
+The current production-safe read endpoints are `/api/markets/freshness`, `/api/markets/top-picks`, `/api/markets/line-shopping`, and `/api/dfs/entry-rules`. They do not call provider APIs and do not write rows. `/api/mlb/*` remains as compatibility aliases for MLB-specific reads, but future frontend work should prefer `/api/markets/*` with filters instead of adding duplicated endpoint families per sport. The generic market routes currently support MLB only and report that limitation in response metadata.
 
 The existing debug/admin `refresh-current` endpoint remains for manual controlled refreshes and requires `forceLive=true` for live provider calls. It should not be called by a public frontend.
 

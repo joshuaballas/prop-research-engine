@@ -69,6 +69,7 @@ Invoke-RestMethod "http://localhost:5299/api/debug/underdog/source-coverage-audi
 | --- | --- | --- | --- | --- | --- |
 | GET | `/api/debug/dfs/provider-expansion-plan` | Lightweight DFS/pick'em provider status and expansion plan. Shows direct Underdog as supported, PrizePicks as supported only through The Odds API `us_dfs`, DraftKings Pick6/Betr Picks as `us_dfs` candidates, and sportsbook rows as market context. | No | No | No |
 | GET | `/api/debug/dfs/entry-rules` | Read-only provider-scoped entry compatibility rules for PrizePicks, Underdog, DraftKings Pick6, Betr Picks, and sportsbook context providers. Rules are conservative and marked `NeedsVerification` where production details still need confirmation. | No | No | No |
+| GET | `/api/dfs/entry-rules` | Production-safe provider-scoped DFS entry compatibility rules. Same persisted/read-only catalog as the debug route, without `/api/debug`. | No | No | No |
 
 Example:
 
@@ -77,6 +78,9 @@ Invoke-RestMethod "http://localhost:5299/api/debug/dfs/provider-expansion-plan" 
   ConvertTo-Json -Depth 10
 
 Invoke-RestMethod "http://localhost:5299/api/debug/dfs/entry-rules" |
+  ConvertTo-Json -Depth 10
+
+Invoke-RestMethod "http://localhost:5299/api/dfs/entry-rules" |
   ConvertTo-Json -Depth 10
 ```
 
@@ -87,6 +91,39 @@ PrizePicks is supported only as a The Odds API DFS bookmaker through region `us_
 ## The Odds API MLB
 
 The Odds API is a data provider/aggregator. Persist actual bookmakers as platforms, such as DraftKings, FanDuel, BetMGM, or Bovada. Store provider context in metadata as The Odds API.
+
+## Production-Safe Market Read Endpoints
+
+These routes are intended for a future frontend/public surface. They never call The Odds API, never call Underdog, and never write rows. They read the latest persisted odds, prediction, line-shopping, top-pick, and refresh metadata populated by debug/admin refreshes today and by the scheduled refresh worker later.
+
+Prefer `/api/markets/*` for frontend work. `/api/mlb/*` remains as compatibility wrappers around the same implementation with `sport=MLB`. Do not add separate duplicated endpoint families such as `/api/nba/*` or `/api/ufc/*` unless there is a specific reason; add new sports behind `/api/markets/*` with sport filters instead.
+
+Current limitation: only MLB persisted market read models are implemented. When `sport` is omitted, `/api/markets/*` currently returns MLB data and includes `supportedSports=["MLB"]` plus a limitation note. When `sport=MLB`, behavior matches `/api/mlb/*`.
+
+| Method | Path | Purpose | Writes | External API | Credits |
+| --- | --- | --- | --- | --- | --- |
+| GET | `/api/markets/freshness` | Preferred production-safe freshness metadata route. Supports optional `sport`, `freshnessMinutes`, `slateDate`, and `bookmakerPreset`. Returns supported/effective sport metadata, latest successful refresh, stale flags, stale reason, and threshold. | No | No | No |
+| GET | `/api/markets/top-picks` | Preferred production-safe persisted Top Picks route. Supports optional `sport`, `take`, `freshnessMinutes`, optional `runId`, optional `providerCategory`, and optional `bookmakerPreset` for freshness filtering. Returns sport metadata, freshness, run metadata, strategy summary, and top active candidate rows with provider-scoped entry metadata. | No | No | No |
+| GET | `/api/markets/line-shopping` | Preferred production-safe persisted line-shopping route. Supports optional `sport`, `runId`, `take`, `topOnly`, `freshnessMinutes`, `providerCategory`, and `bookmakerPreset`. Defaults to `topOnly=true`, `take=25`, and `includeBookmakerPrices=false`. | No | No | No |
+| GET | `/api/mlb/freshness` | Compatibility wrapper for `/api/markets/freshness?sport=MLB`. | No | No | No |
+| GET | `/api/mlb/top-picks` | Compatibility wrapper for `/api/markets/top-picks?sport=MLB`. | No | No | No |
+| GET | `/api/mlb/line-shopping` | Compatibility wrapper for `/api/markets/line-shopping?sport=MLB`. | No | No | No |
+
+Examples:
+
+```powershell
+Invoke-RestMethod "http://localhost:5299/api/markets/freshness?freshnessMinutes=30" |
+  ConvertTo-Json -Depth 20
+
+Invoke-RestMethod "http://localhost:5299/api/markets/freshness?sport=MLB&freshnessMinutes=30" |
+  ConvertTo-Json -Depth 20
+
+Invoke-RestMethod "http://localhost:5299/api/markets/top-picks?sport=MLB&take=10&freshnessMinutes=30" |
+  ConvertTo-Json -Depth 20
+
+Invoke-RestMethod "http://localhost:5299/api/markets/line-shopping?sport=MLB&take=10&freshnessMinutes=30&includeBookmakerPrices=false" |
+  ConvertTo-Json -Depth 20
+```
 
 | Method | Path | Purpose | Writes | External API | Credits |
 | --- | --- | --- | --- | --- | --- |

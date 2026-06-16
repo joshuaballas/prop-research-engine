@@ -135,6 +135,7 @@ app.MapApplicationErrorDebugEndpoints();
 app.MapSystemHealthDebugEndpoints();
 app.MapDfsDebugEndpoints();
 app.MapTheOddsApiDebugEndpoints();
+app.MapPublicMlbDfsEndpoints();
 
 app.Run();
 

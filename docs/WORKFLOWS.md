@@ -64,6 +64,17 @@ This is a debug/admin workflow. A production frontend should not call this endpo
 
 The target production cadence for The Odds API refreshes is roughly every 1-5 minutes, configurable by credit budget, slate timing, and freshness needs. Public/frontend users must not trigger provider refreshes.
 
+Production-style frontend reads should use the non-debug persisted-data endpoints. Prefer `/api/markets/*`; `/api/mlb/*` remains as an MLB compatibility wrapper.
+
+```powershell
+Invoke-RestMethod -Uri "http://localhost:5299/api/markets/freshness?freshnessMinutes=30"
+Invoke-RestMethod -Uri "http://localhost:5299/api/markets/top-picks?sport=MLB&take=10&freshnessMinutes=30"
+Invoke-RestMethod -Uri "http://localhost:5299/api/markets/line-shopping?sport=MLB&take=25&freshnessMinutes=30&includeBookmakerPrices=false"
+Invoke-RestMethod -Uri "http://localhost:5299/api/dfs/entry-rules"
+```
+
+These endpoints are read-only, use persisted database rows only, and do not call The Odds API or Underdog. The generic market routes currently support MLB only and report `supportedSports=["MLB"]`; add future sports behind `/api/markets/*` instead of duplicating endpoint trees.
+
 The current refresh endpoint supports profiling options:
 
 ```powershell
