@@ -78,7 +78,7 @@ This backlog is intentionally practical and ordered around current MLB research 
 
 ## Do Not Do Yet
 
-- Do not revive PrizePicks scraping or DataDome bypass work.
+- Do not add direct PrizePicks scraping, browser automation, or provider-specific bypass work.
 - Do not enable The Odds worker live polling without explicit credit/ops readiness.
 - Do not present EV as proven profitable.
 - Do not auto-merge ambiguous players.

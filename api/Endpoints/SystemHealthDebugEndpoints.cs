@@ -3,6 +3,7 @@ using Microsoft.Extensions.Options;
 using SportsBetting.Api.Data;
 using SportsBetting.Api.Ingestion;
 using SportsBetting.Api.Integrations.Results.Mlb;
+using SportsBetting.Api.Integrations.TheOddsApi;
 
 namespace SportsBetting.Api.Endpoints;
 
@@ -14,10 +15,8 @@ public static class SystemHealthDebugEndpoints
     {
         endpoints.MapGet("/api/debug/system/health", async (
             ApplicationDbContext dbContext,
-            IOptions<PrizePicksIngestionOptions> prizePicksOptions,
             IOptions<UnderdogIngestionOptions> underdogOptions,
             IOptions<MlbResultImportWorkerOptions> mlbImportOptions,
-            IPrizePicksIngestionWorkerState prizePicksState,
             IUnderdogIngestionWorkerState underdogState,
             CancellationToken cancellationToken) =>
         {
@@ -25,9 +24,7 @@ public static class SystemHealthDebugEndpoints
             var applicationErrorSummary = await BuildApplicationErrorSummaryAsync(dbContext, generatedAtUtc, cancellationToken);
             var platformSummaries = await BuildPlatformSummariesAsync(
                 dbContext,
-                prizePicksOptions.Value,
                 underdogOptions.Value,
-                prizePicksState,
                 underdogState,
                 generatedAtUtc,
                 cancellationToken);
@@ -93,9 +90,7 @@ public static class SystemHealthDebugEndpoints
 
     private static async Task<SportsbookHealthRow[]> BuildPlatformSummariesAsync(
         ApplicationDbContext dbContext,
-        PrizePicksIngestionOptions prizePicksOptions,
         UnderdogIngestionOptions underdogOptions,
-        IPrizePicksIngestionWorkerState prizePicksState,
         IUnderdogIngestionWorkerState underdogState,
         DateTimeOffset generatedAtUtc,
         CancellationToken cancellationToken)
@@ -192,13 +187,13 @@ public static class SystemHealthDebugEndpoints
                 latestWorkerErrors.FirstOrDefault(error => error.Component == nameof(UnderdogIngestionWorker)),
                 generatedAtUtc),
             BuildSportsbookHealth(
-                "PrizePicks",
-                prizePicksOptions.Enabled,
-                "disabled",
-                prizePicksState.LastErrorMessage,
+                "The Odds API DFS",
+                true,
+                "manual",
+                null,
                 rankedPlatformRows,
                 platformRows,
-                latestWorkerErrors.FirstOrDefault(error => error.Component == nameof(PrizePicksIngestionWorker)),
+                latestWorkerErrors.FirstOrDefault(error => error.Component == nameof(TheOddsMlbIngestionWorker)),
                 generatedAtUtc)
         ];
     }
@@ -409,7 +404,6 @@ public static class SystemHealthDebugEndpoints
     {
         return status switch
         {
-            "Disabled" when platform == "PrizePicks" => "PrizePicks ingestion is intentionally disabled while DataDome blocking remains unresolved.",
             "Disabled" => $"Enable {platform} ingestion if this source should refresh automatically.",
             "Blocked" => $"Review recent application errors and worker status for {platform}.",
             "Stale" => $"Check {platform} ingestion worker and source availability; latest markets are outside the freshness window.",

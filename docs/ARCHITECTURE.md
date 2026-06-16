@@ -113,8 +113,7 @@ MLB Stats API supplies finalized box score/player stats. The app maps those stat
 
 ### PrizePicks
 
-PrizePicks direct ingestion is retired/disabled because of DataDome. Browser automation and bypass experiments are quarantined or removed. Revisit only through official/allowed data access.
-
+PrizePicks support is provided only through The Odds API DFS region `us_dfs` with bookmaker key `prizepicks`. There is no direct PrizePicks ingestion, scraping, worker, or health endpoint.
 ## Result Import Pipeline
 
 MLB result import flow:
@@ -176,7 +175,7 @@ Hosted workers:
 
 Retired:
 
-- PrizePicks worker is not active and must remain disabled.
+- There is no direct PrizePicks worker.
 
 Workers should log caught exceptions to `application_errors` and continue or fail according to their existing behavior.
 

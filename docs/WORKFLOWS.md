@@ -143,7 +143,7 @@ $refresh.topActiveCandidates |
 $refresh | ConvertTo-Json -Depth 20 | Set-Content ".\tmp-analysis\current-mlb-dfs-refresh.json"
 ```
 
-Old PrizePicks direct scraping is deprecated and scheduled for complete removal. PrizePicks DFS support should come from The Odds API region `us_dfs` with bookmaker key `prizepicks`. DFS odds are indicative and can vary based on user selections.
+PrizePicks DFS support comes from The Odds API region `us_dfs` with bookmaker key `prizepicks`. DFS odds are indicative and can vary based on user selections.
 
 ## Expand The Odds Bookmaker Coverage Safely
 

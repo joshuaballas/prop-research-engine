@@ -174,9 +174,9 @@ public static class PlayerMappingDebugEndpoints
                 playerRowCount = rows.Length,
                 rootCauseAnalysis = new
                 {
-                    playerLookupLogic = "PrizePicks and Underdog ingestion first try their own provider id from Player.ExternalRefs, then fall back to league_id + display_name.",
+                    playerLookupLogic = "Provider ingestion first tries its own provider id from Player.ExternalRefs, then falls back to league_id + display_name.",
                     leagueIdentityIssue = "MLBLIVE is normalized into a separate league row from MLB, so the fallback key differs even when display_name is identical.",
-                    crossPlatformIssue = "PrizePicks and Underdog use different provider id namespaces in Player.ExternalRefs and do not consult player_external_refs or a league-agnostic canonical name key during sportsbook ingestion.",
+                    crossPlatformIssue = "Provider feeds can use different player id namespaces in Player.ExternalRefs and may not consult player_external_refs or a league-agnostic canonical name key during ingestion.",
                     impact = "The same human can be created once per league variant and once per sportsbook namespace."
                 },
                 players = rows
@@ -2950,7 +2950,7 @@ public static class PlayerMappingDebugEndpoints
         var summaries = SummarizeExternalRefs(externalRefs);
         if (summaries.Any(summary => string.Equals(summary.Provider, "prizepicks", StringComparison.OrdinalIgnoreCase)))
         {
-            return "PrizePicks ingestion";
+            return "Historical DFS provider source row";
         }
 
         if (summaries.Any(summary => string.Equals(summary.Provider, "underdog", StringComparison.OrdinalIgnoreCase)))

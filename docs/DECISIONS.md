@@ -2,16 +2,14 @@
 
 This file records durable decisions that should not be rediscovered from chat history.
 
-## PrizePicks Direct Ingestion Is Deprecated
+## PrizePicks Uses The Odds API DFS Only
 
-PrizePicks direct ingestion is deprecated and scheduled for complete removal because DataDome blocks automated API access. Browser automation and bypass experiments are not part of the active product direction.
+PrizePicks is supported only through The Odds API DFS region `us_dfs` with bookmaker key `prizepicks`.
 
 Decision:
 
-- Do not attempt DataDome bypass.
-- Do not ship scraping/browser automation.
 - Use The Odds API `us_dfs` for PrizePicks rows.
-- Do not add new dependencies on the old direct PrizePicks ingestion path while it awaits removal.
+- Do not add direct PrizePicks scraping, browser automation, or provider-specific bypass work.
 
 ## The Odds API Is A Data Provider, Not A Sportsbook
 

@@ -27,11 +27,11 @@ public static class DfsDebugEndpoints
                     "PrizePicks",
                     "SupportedViaTheOddsApiDfs",
                     actionable: true,
-                    "Direct PrizePicks scraping/API access remains retired, but PrizePicks can be requested through The Odds API region `us_dfs` with bookmaker key `prizepicks`.",
-                    "The Odds API us_dfs feed only; no direct scraper",
-                    blocker: "Direct attempts previously hit DataDome/403.",
-                    antiBotRisk: "Do not bypass DataDome. The Odds API provider feed is the safe supported path.",
-                    recommendedNextStep: "Use `includeDfs=true` with configured DFS bookmakers. Do not re-enable old PrizePicks scraping/browser automation.",
+                    "PrizePicks should be requested through The Odds API region `us_dfs` with bookmaker key `prizepicks`.",
+                    "The Odds API us_dfs feed only",
+                    blocker: null,
+                    antiBotRisk: "Low through The Odds API provider feed.",
+                    recommendedNextStep: "Use `bookmakerPreset=dfsOnly` or include configured DFS bookmakers when intentionally refreshing current markets.",
                     priority: "High",
                     notes: new[]
                     {
@@ -121,7 +121,7 @@ public static class DfsDebugEndpoints
                     actionableCandidateProviders = providers.Count(row => row.Actionable && row.Status.Contains("Candidate", StringComparison.OrdinalIgnoreCase)),
                     primaryActionableProvider = "Underdog",
                     dfsOddsNote = "The Odds API DFS odds are indicative and can vary based on user selections.",
-                    recommendedNextStep = "Validate The Odds API `us_dfs` rows with includeDfs=true. Keep old PrizePicks direct scraping retired."
+                    recommendedNextStep = "Validate The Odds API `us_dfs` rows with bookmakerPreset=dfsOnly before expanding DFS workflows."
                 },
                 providers
             });
@@ -149,7 +149,7 @@ public static class DfsDebugEndpoints
                     notes: new[]
                     {
                         "PrizePicks entries should use PrizePicks legs only.",
-                        "PrizePicks direct scraping remains retired; current PrizePicks rows should come through The Odds API us_dfs."
+                        "Current PrizePicks rows should come through The Odds API us_dfs."
                     },
                     sourceConfidence: "NeedsVerification"),
                 BuildEntryRule(

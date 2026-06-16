@@ -12,7 +12,7 @@ Underdog ingestion is technically feasible for Phase 1 using a currently reachab
 GET https://api.underdogfantasy.com/beta/v5/over_under_lines
 ```
 
-The endpoint returns active pick'em lines, player metadata, game metadata, line values, over/under option availability, and payout/pricing fields. This is enough to build the same ingestion flow already designed for PrizePicks: store raw payloads, normalize platform props, create/update players and leagues, and create line snapshots.
+The endpoint returns active pick'em lines, player metadata, game metadata, line values, over/under option availability, and payout/pricing fields. This is enough to support the current ingestion flow: store raw payloads, normalize platform props, create/update players and leagues, and create line snapshots.
 
 The main risk is operational rather than parsing. This endpoint appears to be an undocumented application endpoint, not a public developer API. It may change schema, require additional headers, become authenticated, or start rejecting automated traffic without notice.
 
@@ -349,7 +349,7 @@ Sample observed option pricing:
 | higher | -112 | 1.9 | 1.0 |
 | lower | -112 | 1.9 | 1.0 |
 
-This is richer than PrizePicks for EV modeling because Underdog exposes option-level prices and multipliers. Phase 1 should store these in `platform_props.metadata` until a dedicated payout/pricing model is added.
+Underdog exposes option-level prices and multipliers. Phase 1 should store these in `platform_props.metadata` until a dedicated payout/pricing model is added.
 
 ## Example Trimmed Record
 
@@ -432,7 +432,7 @@ Underdog provides enough data to:
 
 ## Recommended Implementation Approach
 
-1. Create an `UnderdogAdapter` isolated from PrizePicks logic.
+1. Create an `UnderdogAdapter` isolated from other provider logic.
 2. Fetch only `GET /beta/v5/over_under_lines` for Phase 1.
 3. Store the full raw payload and payload hash.
 4. Normalize each `over_under_lines[]` record into a platform prop.

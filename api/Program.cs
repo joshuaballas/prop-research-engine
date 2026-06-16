@@ -24,7 +24,6 @@ builder.Logging.AddConsole();
 
 builder.Services.AddOpenApi();
 builder.Services.Configure<DebugAdminOptions>(builder.Configuration.GetSection(DebugAdminOptions.SectionName));
-builder.Services.Configure<PrizePicksIngestionOptions>(builder.Configuration.GetSection(PrizePicksIngestionOptions.SectionName));
 builder.Services.Configure<UnderdogIngestionOptions>(builder.Configuration.GetSection(UnderdogIngestionOptions.SectionName));
 builder.Services.Configure<UnderdogOptions>(builder.Configuration.GetSection(UnderdogOptions.SectionName));
 builder.Services.Configure<MlbResultsOptions>(builder.Configuration.GetSection(MlbResultsOptions.SectionName));
@@ -66,7 +65,6 @@ builder.Services.AddScoped<IPlayerResolutionService, PlayerResolutionService>();
 builder.Services.AddScoped<IApplicationErrorLogger, ApplicationErrorLogger>();
 builder.Services.AddSingleton<IPlayerResolutionStats, PlayerResolutionStats>();
 builder.Services.AddSingleton<IPlayerMergeExecutionState, PlayerMergeExecutionState>();
-builder.Services.AddSingleton<IPrizePicksIngestionWorkerState, PrizePicksIngestionWorkerState>();
 builder.Services.AddSingleton<IUnderdogIngestionWorkerState, UnderdogIngestionWorkerState>();
 builder.Services.AddSingleton<ITheOddsMlbIngestionWorkerState, TheOddsMlbIngestionWorkerState>();
 builder.Services.AddHostedService<UnderdogIngestionWorker>();
@@ -121,11 +119,8 @@ app.MapGet("/health/ready", async (ApplicationDbContext dbContext, CancellationT
 })
 .WithName("Readiness");
 
-app.MapPrizePicksDebugEndpoints();
 app.MapUnderdogDebugEndpoints();
 app.MapUnderdogIngestionHealthEndpoints();
-app.MapPrizePicksIngestionHealthEndpoints();
-app.MapMarketComparisonDebugEndpoints();
 app.MapLineHistoryDebugEndpoints();
 app.MapResultsDebugEndpoints();
 app.MapPredictionDebugEndpoints();

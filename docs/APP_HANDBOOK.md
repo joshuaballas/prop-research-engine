@@ -28,9 +28,9 @@ Working today:
 - Persistent application error logging exists.
 - Debug/admin routes are protected outside Development unless `DebugAdmin` is explicitly enabled with an API key.
 
-Disabled or retired:
+Provider notes:
 
-- PrizePicks direct ingestion is deprecated and scheduled for complete removal because of DataDome blocking. Do not attempt bypass work. PrizePicks support should use The Odds API `us_dfs` feed when configured.
+- PrizePicks support comes only through The Odds API `us_dfs` feed when configured.
 - The Odds API automated ingestion worker exists only as a guarded skeleton and is disabled by default.
 - EV persistence is not implemented. EV diagnostics are research-only.
 
@@ -105,7 +105,10 @@ Manual:
 Disabled by default:
 
 - The Odds API automated ingestion worker.
-- PrizePicks ingestion.
+
+Not present:
+
+- Direct PrizePicks ingestion, scraping, worker, and health endpoints.
 
 ## Safe Operating Rules
 
@@ -118,7 +121,7 @@ Disabled by default:
 - DFS rows from The Odds API use indicative odds and may vary based on user selections. Treat sportsbook rows as market context for a DFS-only user.
 - DFS entries are provider-scoped. Do not mix PrizePicks, Underdog, DraftKings Pick6, Betr Picks, or sportsbook-context legs in one future entry builder. Entry rules marked `NeedsVerification` must be confirmed before production use.
 - Generated endpoint outputs go under `tmp-analysis`; logs go under `logs`; temporary build outputs go under `tmp-build`.
-- Do not bypass DataDome, revive PrizePicks scraping experiments, or add new dependencies on the old direct PrizePicks path.
+- Do not add direct PrizePicks scraping, browser automation, or provider-specific bypass work.
 - Do not treat EV outputs as production recommendations until backtests support them.
 - Non-standard market types should be visible as research rows, but not mislabeled as normal recommendations.
 

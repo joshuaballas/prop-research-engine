@@ -76,7 +76,6 @@ Health endpoints:
 
 - `GET /health`
 - `GET /health/ready`
-- `GET /api/health/prizepicks-ingestion`
 - `GET /api/health/underdog-ingestion`
 
 The ingestion health endpoints return the last successful ingestion time, last ingestion duration, last ingestion status, failure count, last error message, and whether the worker is currently running.
@@ -103,14 +102,7 @@ http://localhost:5299/research
 
 `/research` and `/api/debug/*` are internal/admin surfaces. Outside Development they are blocked unless `DebugAdmin` is explicitly enabled and the correct admin key is provided.
 
-Deprecated PrizePicks direct ingestion endpoints scheduled for removal:
-
-- `GET /api/debug/prizepicks`
-- `POST /api/debug/prizepicks/ingest`
-
-PrizePicks direct ingestion is deprecated and scheduled for complete removal. These endpoints return a disabled response and do not call PrizePicks.
-
-PrizePicks background ingestion is not configured through committed appsettings. Do not add active PrizePicks config or new dependencies on the old direct ingestion path. PrizePicks support should come through The Odds API `us_dfs`.
+PrizePicks support is available only through The Odds API `us_dfs` with bookmaker key `prizepicks`. There are no direct PrizePicks ingestion, scraping, worker, or health endpoints.
 
 ## Underdog Background Ingestion Worker
 
@@ -156,11 +148,8 @@ Implemented:
 - Entity models based on `docs/ARCHITECTURE.md`
 - Initial migration
 - Health endpoint
-- PrizePicks ingestion spike debug endpoint
-- PrizePicks persistence debug endpoint
-- PrizePicks background ingestion worker
-- PrizePicks ingestion worker health endpoint
 - Underdog ingestion worker health endpoint
+- The Odds API DFS support for PrizePicks through `us_dfs`
 - League configuration table for downstream filtering
 
 Not implemented yet:

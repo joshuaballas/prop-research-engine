@@ -72,15 +72,9 @@ Invoke-RestMethod "http://localhost:5299/api/debug/dfs/entry-rules" |
   ConvertTo-Json -Depth 10
 ```
 
-## PrizePicks Retired Endpoints
+## PrizePicks Through The Odds API DFS
 
-| Method | Path | Purpose | Writes | External API | Credits |
-| --- | --- | --- | --- | --- | --- |
-| GET | `/api/debug/prizepicks` | Retired tombstone endpoint; returns Gone. | No | No | No |
-| POST | `/api/debug/prizepicks/ingest` | Retired tombstone endpoint; returns Gone. | No | No | No |
-| GET | `/api/health/prizepicks-ingestion` | Historical worker state endpoint. Worker is disabled/not registered. | No | No | No |
-
-PrizePicks direct ingestion is deprecated and scheduled for complete removal due to DataDome blocking. Do not add bypass or scraping code. PrizePicks support should use The Odds API `us_dfs` feed with bookmaker key `prizepicks` when configured.
+PrizePicks is supported only as a The Odds API DFS bookmaker through region `us_dfs` with bookmaker key `prizepicks`. There are no direct PrizePicks ingestion, scraping, worker, or health endpoints.
 
 ## The Odds API MLB
 

@@ -49,7 +49,7 @@ const els = {
     systemHealthBadge: document.getElementById("systemHealthBadge"),
     systemErrorsLast24h: document.getElementById("systemErrorsLast24h"),
     underdogHealth: document.getElementById("underdogHealth"),
-    prizePicksHealth: document.getElementById("prizePicksHealth"),
+    theOddsDfsHealth: document.getElementById("theOddsDfsHealth"),
     mlbImportHealth: document.getElementById("mlbImportHealth"),
     predictionResearchHealth: document.getElementById("predictionResearchHealth"),
     systemRecommendedActions: document.getElementById("systemRecommendedActions"),
@@ -669,7 +669,7 @@ function renderSystemHealth() {
     const overall = health.overall || {};
     const sportsbooks = health.sportsbookIngestionHealth || [];
     const underdog = sportsbooks.find(row => row.platform === "Underdog Fantasy") || {};
-    const prizePicks = sportsbooks.find(row => row.platform === "PrizePicks") || {};
+    const theOddsDfs = sportsbooks.find(row => row.platform === "The Odds API DFS") || {};
     const mlbImport = health.mlbResultImportHealth || {};
     const prediction = health.predictionResearchHealth || {};
     const status = overall.status || "Unknown";
@@ -678,13 +678,13 @@ function renderSystemHealth() {
     els.systemHealthBadge.textContent = status;
     els.systemErrorsLast24h.textContent = formatNumber(overall.applicationErrorsLast24h);
     els.underdogHealth.innerHTML = chip(underdog.status || "Unknown", statusChip(underdog.status));
-    els.prizePicksHealth.innerHTML = chip(prizePicks.status || "Unknown", statusChip(prizePicks.status));
+    els.theOddsDfsHealth.innerHTML = chip(theOddsDfs.status || "Unknown", statusChip(theOddsDfs.status));
     els.mlbImportHealth.innerHTML = chip(mlbImport.status || "Unknown", statusChip(mlbImport.status));
     els.predictionResearchHealth.innerHTML = chip(prediction.evResearchStatus || "Unknown", statusChip(prediction.evResearchStatus));
 
     const actions = [
         ["Underdog", underdog.recommendedAction],
-        ["PrizePicks", prizePicks.recommendedAction],
+        ["The Odds DFS", theOddsDfs.recommendedAction],
         ["MLB import", mlbImport.recommendedAction],
         ["Prediction research", prediction.recommendedAction]
     ].filter(([, action]) => action);
