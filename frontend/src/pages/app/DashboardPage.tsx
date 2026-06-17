@@ -1,6 +1,9 @@
 import AccountTreeOutlinedIcon from '@mui/icons-material/AccountTreeOutlined';
+import AddCircleOutlineRoundedIcon from '@mui/icons-material/AddCircleOutlineRounded';
 import AutoGraphOutlinedIcon from '@mui/icons-material/AutoGraphOutlined';
 import InsightsOutlinedIcon from '@mui/icons-material/InsightsOutlined';
+import LockRoundedIcon from '@mui/icons-material/LockRounded';
+import RemoveCircleOutlineRoundedIcon from '@mui/icons-material/RemoveCircleOutlineRounded';
 import ShoppingCartOutlinedIcon from '@mui/icons-material/ShoppingCartOutlined';
 import { Box, Button, Divider, Grid, Stack, Typography } from '@mui/material';
 import type { ReactNode } from 'react';
@@ -18,17 +21,19 @@ import { StatusPill } from '../../components/ui/StatusPill';
 import { mockMarkets } from '../../data/mockMarkets';
 import { mockPerformance } from '../../data/mockPerformance';
 import { mockTopPicks } from '../../data/mockTopPicks';
+import { useEntryBuilder } from '../../hooks/useEntryBuilder';
 import { useSelectedSports } from '../../hooks/useSelectedSports';
 import type { MarketOpportunity } from '../../types/markets';
 import { formatPercent } from '../../utils/formatters';
 
 export function DashboardPage() {
   const sports = useSelectedSports();
+  const builder = useEntryBuilder();
   const filtered = mockTopPicks.filter((market) => sports.includesSport(market.sport));
   const filteredMarkets = mockMarkets.filter((market) => sports.includesSport(market.sport));
   const activeDfs = filteredMarkets.filter((market) => market.providerCategory === 'DFS' && market.freshness === 'Fresh');
-  const entryProvider = activeDfs[0]?.provider ?? 'No provider selected';
-  const entryLegs = activeDfs.filter((market) => market.provider === entryProvider).slice(0, 2);
+  const entryProvider = builder.lockedProviderName ?? 'No provider selected';
+  const entryLegs = builder.legs;
   const compatibleSports = Array.from(new Set(entryLegs.map((market) => market.sport)));
   const overall = mockPerformance[0];
   const bestStrategy = mockPerformance.find((item) => item.groupType === 'Strategy');
@@ -87,7 +92,7 @@ export function DashboardPage() {
       <Grid container spacing={2}>
         {filtered.slice(0, 3).map((market) => (
           <Grid key={market.id} size={{ xs: 12, lg: 4 }}>
-            <DashboardOpportunityCard market={market} />
+            <DashboardOpportunityCard market={market} builder={builder} />
           </Grid>
         ))}
       </Grid>
@@ -136,8 +141,11 @@ export function DashboardPage() {
   );
 }
 
-function DashboardOpportunityCard({ market }: { market: MarketOpportunity }) {
+function DashboardOpportunityCard({ market, builder }: { market: MarketOpportunity; builder: ReturnType<typeof useEntryBuilder> }) {
   const warning = market.warnings[0];
+  const selected = builder.isSelected(market.id);
+  const incompatible = !selected && !builder.isCompatible(market);
+  const canAdd = market.canAddToEntry && market.estimatedEv > 0 && !incompatible;
 
   return (
     <AppCard sx={{ height: '100%' }}>
@@ -160,7 +168,6 @@ function DashboardOpportunityCard({ market }: { market: MarketOpportunity }) {
 
         <Stack direction="row" gap={0.75} flexWrap="wrap">
           <StatusPill label={market.strategyClassification} />
-          <StatusPill label={market.side} />
           <ProjectionModifierBadge modifier={market.projectionModifier} />
         </Stack>
 
@@ -189,8 +196,15 @@ function DashboardOpportunityCard({ market }: { market: MarketOpportunity }) {
         )}
 
         <Stack direction="row" spacing={1}>
-          <Button size="small" variant="contained" disabled={!market.canAddToEntry}>
-            Add
+          <Button
+            size="small"
+            variant="contained"
+            startIcon={selected ? <RemoveCircleOutlineRoundedIcon /> : incompatible ? <LockRoundedIcon /> : <AddCircleOutlineRoundedIcon />}
+            disabled={!selected && !canAdd}
+            onClick={() => (selected || canAdd ? builder.toggleLeg(market) : undefined)}
+            sx={entryButtonSx(selected, incompatible)}
+          >
+            {selected ? 'Remove' : incompatible ? 'Locked' : 'Add leg'}
           </Button>
           <Button component={RouterLink} to="/app/line-shopping" size="small" variant="outlined">
             Compare
@@ -334,6 +348,60 @@ function MiniMetric({ label, value, tone = 'default' }: { label: string; value: 
       </Typography>
     </Box>
   );
+}
+
+const baseEntryButtonSx = {
+  minWidth: 104,
+  height: 34,
+  fontSize: 12.5,
+  fontWeight: 900,
+  color: '#06111f',
+  background: 'linear-gradient(135deg, #22d3ee 0%, #818cf8 100%)',
+  boxShadow: 'none',
+  whiteSpace: 'nowrap',
+  '& .MuiButton-startIcon': { mr: 0.55 },
+  '&:hover': {
+    background: 'linear-gradient(135deg, #38e1f4 0%, #8b96ff 100%)'
+  },
+  '&.Mui-disabled': {
+    color: 'rgba(203,213,225,.42)',
+    background: 'rgba(148,163,184,.08)',
+    border: '1px solid rgba(148,163,184,.16)'
+  }
+};
+
+function entryButtonSx(selected: boolean, incompatible: boolean) {
+  if (selected) {
+    return {
+      ...baseEntryButtonSx,
+      color: '#FECACA',
+      background: 'rgba(244,63,94,.16)',
+      border: '1px solid rgba(244,63,94,.42)',
+      '&:hover': {
+        background: 'rgba(244,63,94,.24)',
+        borderColor: 'rgba(244,63,94,.56)',
+        color: '#FFE4E6'
+      }
+    };
+  }
+
+  if (incompatible) {
+    return {
+      ...baseEntryButtonSx,
+      color: '#CBD5E1',
+      background: 'rgba(51,65,85,.42)',
+      border: '1px solid rgba(148,163,184,.24)',
+      boxShadow: 'none',
+      '&.Mui-disabled': {
+        color: '#CBD5E1',
+        background: 'rgba(51,65,85,.42)',
+        border: '1px solid rgba(148,163,184,.24)',
+        opacity: 1
+      }
+    };
+  }
+
+  return baseEntryButtonSx;
 }
 
 function PerformancePanel({ icon, title, value, detail, tone = 'default' }: { icon: ReactNode; title: string; value: string; detail: string; tone?: 'default' | 'warning' }) {

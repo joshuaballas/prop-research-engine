@@ -1,5 +1,8 @@
 import AddCircleOutlineRoundedIcon from '@mui/icons-material/AddCircleOutlineRounded';
+import LockRoundedIcon from '@mui/icons-material/LockRounded';
+import RemoveCircleOutlineRoundedIcon from '@mui/icons-material/RemoveCircleOutlineRounded';
 import { Button, Stack, Typography } from '@mui/material';
+import { useEntryBuilder } from '../../hooks/useEntryBuilder';
 import type { MarketOpportunity } from '../../types/markets';
 import { formatPercent } from '../../utils/formatters';
 import { ProviderLabel } from '../providers/ProviderLabel';
@@ -8,7 +11,11 @@ import { StatusPill } from '../ui/StatusPill';
 import { ProjectionModifierBadge } from './ProjectionModifierBadge';
 
 export function MarketCard({ market }: { market: MarketOpportunity }) {
+  const builder = useEntryBuilder();
   const addable = isScannerAddable(market);
+  const selected = builder.isSelected(market.id);
+  const incompatible = !selected && !builder.isCompatible(market);
+  const canAddFromScanner = addable && !incompatible;
   return (
     <AppCard contentSx={{ p: 1.75 }}>
       <Stack spacing={1.15}>
@@ -63,19 +70,60 @@ export function MarketCard({ market }: { market: MarketOpportunity }) {
         <Stack direction="row" spacing={1}>
           <Button
             size="small"
-            variant={addable ? 'contained' : 'outlined'}
-            startIcon={addable ? <AddCircleOutlineRoundedIcon /> : undefined}
-            sx={{ minWidth: 100 }}
+            variant={canAddFromScanner || selected ? 'contained' : 'outlined'}
+            startIcon={selected ? <RemoveCircleOutlineRoundedIcon /> : incompatible && addable ? <LockRoundedIcon /> : canAddFromScanner ? <AddCircleOutlineRoundedIcon /> : undefined}
+            disabled={incompatible && addable}
+            onClick={() => (canAddFromScanner || selected ? builder.toggleLeg(market) : undefined)}
+            sx={entryButtonSx(selected, incompatible && addable)}
           >
-            {addable ? 'Add leg' : 'Details'}
+            {selected ? 'Remove' : incompatible && addable ? 'Locked' : canAddFromScanner ? 'Add leg' : 'Details'}
           </Button>
-          <Button size="small" variant="outlined" sx={{ display: addable ? 'inline-flex' : 'none' }}>
+          <Button size="small" variant="outlined" sx={{ display: canAddFromScanner || selected ? 'inline-flex' : 'none' }}>
             Details
           </Button>
         </Stack>
       </Stack>
     </AppCard>
   );
+}
+
+const baseActionButtonSx = {
+  minWidth: 100,
+  height: 32,
+  fontWeight: 900
+};
+
+function entryButtonSx(selected: boolean, incompatible: boolean) {
+  if (selected) {
+    return {
+      ...baseActionButtonSx,
+      color: '#FECACA',
+      background: 'rgba(244,63,94,.16)',
+      border: '1px solid rgba(244,63,94,.42)',
+      '&:hover': {
+        background: 'rgba(244,63,94,.24)',
+        borderColor: 'rgba(244,63,94,.56)',
+        color: '#FFE4E6'
+      }
+    };
+  }
+
+  if (incompatible) {
+    return {
+      ...baseActionButtonSx,
+      color: '#CBD5E1',
+      background: 'rgba(51,65,85,.42)',
+      border: '1px solid rgba(148,163,184,.24)',
+      '&.Mui-disabled': {
+        color: '#CBD5E1',
+        background: 'rgba(51,65,85,.42)',
+        border: '1px solid rgba(148,163,184,.24)',
+        opacity: 1
+      }
+    };
+  }
+
+  return baseActionButtonSx;
 }
 
 function isScannerAddable(market: MarketOpportunity) {

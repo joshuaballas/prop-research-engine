@@ -1,5 +1,7 @@
 import AddCircleOutlineRoundedIcon from '@mui/icons-material/AddCircleOutlineRounded';
 import CompareArrowsRoundedIcon from '@mui/icons-material/CompareArrowsRounded';
+import LockRoundedIcon from '@mui/icons-material/LockRounded';
+import RemoveCircleOutlineRoundedIcon from '@mui/icons-material/RemoveCircleOutlineRounded';
 import TuneRoundedIcon from '@mui/icons-material/TuneRounded';
 import { Box, Button, Collapse, Grid, MenuItem, Stack, Table, TableBody, TableCell, TableHead, TableRow, TextField, Typography } from '@mui/material';
 import { useState } from 'react';
@@ -9,13 +11,13 @@ import { ProviderLabel } from '../../components/providers/ProviderLabel';
 import { PageHeader } from '../../components/ui/PageHeader';
 import { StatusPill } from '../../components/ui/StatusPill';
 import { mockTopPicks } from '../../data/mockTopPicks';
+import { useEntryBuilder } from '../../hooks/useEntryBuilder';
 import { useResponsiveView } from '../../hooks/useResponsiveView';
-import { useToast } from '../../hooks/useToast';
 import type { MarketOpportunity } from '../../types/markets';
 import { formatPercent } from '../../utils/formatters';
 
 export function TopPicksPage() {
-  const { showToast } = useToast();
+  const builder = useEntryBuilder();
   const { isMobile } = useResponsiveView();
   const featured = mockTopPicks.slice(0, 3);
 
@@ -27,7 +29,14 @@ export function TopPicksPage() {
       {isMobile ? (
         <Stack spacing={1.35}>
           {mockTopPicks.map((market) => (
-            <TopPickCard key={market.id} market={market} variant="compact" onAdd={() => showToast(`${market.player} added to mock entry.`, 'success')} />
+            <TopPickCard
+              key={market.id}
+              market={market}
+              variant="compact"
+              selected={builder.isSelected(market.id)}
+              incompatible={!builder.isSelected(market.id) && !builder.isCompatible(market)}
+              onAdd={builder.toggleLeg}
+            />
           ))}
         </Stack>
       ) : (
@@ -39,7 +48,13 @@ export function TopPicksPage() {
             <Grid container spacing={1.5}>
               {featured.map((market) => (
                 <Grid key={market.id} size={{ xs: 12, lg: 4 }} sx={{ display: 'flex' }}>
-                  <TopPickCard market={market} variant="featured" onAdd={() => showToast(`${market.player} added to mock entry.`, 'success')} />
+                  <TopPickCard
+                    market={market}
+                    variant="featured"
+                    selected={builder.isSelected(market.id)}
+                    incompatible={!builder.isSelected(market.id) && !builder.isCompatible(market)}
+                    onAdd={builder.toggleLeg}
+                  />
                 </Grid>
               ))}
             </Grid>
@@ -49,7 +64,7 @@ export function TopPicksPage() {
             <Typography variant="h5" fontWeight={950}>
               All Ranked Picks
             </Typography>
-            <RankedPicksTable markets={mockTopPicks} onAdd={(market) => showToast(`${market.player} added to mock entry.`, 'success')} />
+            <RankedPicksTable markets={mockTopPicks} builder={builder} />
           </Stack>
         </>
       )}
@@ -190,7 +205,7 @@ function TopPickControls({ isMobile }: { isMobile: boolean }) {
   );
 }
 
-function RankedPicksTable({ markets, onAdd }: { markets: MarketOpportunity[]; onAdd: (market: MarketOpportunity) => void }) {
+function RankedPicksTable({ markets, builder }: { markets: MarketOpportunity[]; builder: ReturnType<typeof useEntryBuilder> }) {
   return (
     <Box sx={{ overflowX: 'auto', border: '1px solid rgba(148,163,184,.16)', borderRadius: 4, bgcolor: 'rgba(8,13,26,.28)' }}>
       <Table size="small" stickyHeader sx={{ minWidth: 1040 }}>
@@ -210,6 +225,8 @@ function RankedPicksTable({ markets, onAdd }: { markets: MarketOpportunity[]; on
         <TableBody>
           {markets.map((market) => {
             const confidence = getTopPickConfidence(market);
+            const selected = builder.isSelected(market.id);
+            const incompatible = !selected && !builder.isCompatible(market);
             return (
               <TableRow key={market.id} hover sx={{ '& td': { borderColor: 'rgba(148,163,184,.12)', py: 1.25 } }}>
                 <TableCell>
@@ -251,14 +268,14 @@ function RankedPicksTable({ markets, onAdd }: { markets: MarketOpportunity[]; on
                 <TableCell align="center" sx={{ minWidth: 190 }}>
                   <Stack direction="row" spacing={0.8} justifyContent="center" flexWrap="nowrap">
                     <Button
-                      startIcon={<AddCircleOutlineRoundedIcon />}
+                      startIcon={selected ? <RemoveCircleOutlineRoundedIcon /> : incompatible ? <LockRoundedIcon /> : <AddCircleOutlineRoundedIcon />}
                       size="small"
                       variant="contained"
-                      disabled={!market.canAddToEntry}
-                      onClick={() => onAdd(market)}
-                      sx={actionButtonSx}
+                      disabled={!market.canAddToEntry || incompatible}
+                      onClick={() => builder.toggleLeg(market)}
+                      sx={entryButtonSx(selected, incompatible)}
                     >
-                      Add leg
+                      {selected ? 'Remove' : incompatible ? 'Locked' : 'Add leg'}
                     </Button>
                     <Button startIcon={<CompareArrowsRoundedIcon />} size="small" variant="outlined" sx={compareButtonSx}>
                       Compare
@@ -294,6 +311,40 @@ const actionButtonSx = {
     border: '1px solid rgba(148,163,184,.16)'
   }
 };
+
+function entryButtonSx(selected: boolean, incompatible: boolean) {
+  if (selected) {
+    return {
+      ...actionButtonSx,
+      color: '#FECACA',
+      background: 'rgba(244,63,94,.16)',
+      border: '1px solid rgba(244,63,94,.42)',
+      '&:hover': {
+        background: 'rgba(244,63,94,.24)',
+        borderColor: 'rgba(244,63,94,.56)',
+        color: '#FFE4E6'
+      }
+    };
+  }
+
+  if (incompatible) {
+    return {
+      ...actionButtonSx,
+      color: '#CBD5E1',
+      background: 'rgba(51,65,85,.42)',
+      border: '1px solid rgba(148,163,184,.24)',
+      boxShadow: 'none',
+      '&.Mui-disabled': {
+        color: '#CBD5E1',
+        background: 'rgba(51,65,85,.42)',
+        border: '1px solid rgba(148,163,184,.24)',
+        opacity: 1
+      }
+    };
+  }
+
+  return actionButtonSx;
+}
 
 const compareButtonSx = {
   width: 96,

@@ -1,5 +1,7 @@
 import AddCircleOutlineRoundedIcon from '@mui/icons-material/AddCircleOutlineRounded';
 import CompareArrowsRoundedIcon from '@mui/icons-material/CompareArrowsRounded';
+import LockRoundedIcon from '@mui/icons-material/LockRounded';
+import RemoveCircleOutlineRoundedIcon from '@mui/icons-material/RemoveCircleOutlineRounded';
 import { Box, Button, Divider, Stack, Typography } from '@mui/material';
 import { useToast } from '../../hooks/useToast';
 import { formatAmericanOdds, formatDecimal, formatPercent, formatRiskToWin } from '../../utils/formatters';
@@ -14,9 +16,11 @@ interface TopPickCardProps {
   onAdd?: (market: MarketOpportunity) => void;
   hideActions?: boolean;
   variant?: 'default' | 'featured' | 'compact';
+  selected?: boolean;
+  incompatible?: boolean;
 }
 
-export function TopPickCard({ market, onAdd, hideActions = false, variant = 'default' }: TopPickCardProps) {
+export function TopPickCard({ market, onAdd, hideActions = false, variant = 'default', selected = false, incompatible = false }: TopPickCardProps) {
   const { showToast } = useToast();
   const handleCompare = () => showToast('Line comparison is available inside the app workspace.', 'info');
   const confidence = resolveConfidence(market);
@@ -92,13 +96,13 @@ export function TopPickCard({ market, onAdd, hideActions = false, variant = 'def
         {hideActions ? null : (
           <Stack direction="row" spacing={1} alignSelf="end">
             <Button
-              startIcon={<AddCircleOutlineRoundedIcon />}
+              startIcon={selected ? <RemoveCircleOutlineRoundedIcon /> : incompatible ? <LockRoundedIcon /> : <AddCircleOutlineRoundedIcon />}
               variant="contained"
-              disabled={!market.canAddToEntry}
+              disabled={!market.canAddToEntry || incompatible}
               onClick={() => onAdd?.(market)}
-              sx={actionButtonSx}
+              sx={entryButtonSx(selected, incompatible)}
             >
-              Add leg
+              {selected ? 'Remove' : incompatible ? 'Locked' : 'Add leg'}
             </Button>
             <Button startIcon={<CompareArrowsRoundedIcon />} variant="outlined" onClick={handleCompare} sx={compareButtonSx}>
               Compare
@@ -163,13 +167,13 @@ export function TopPickCard({ market, onAdd, hideActions = false, variant = 'def
           {hideActions ? null : (
             <Stack direction="row" spacing={1}>
               <Button
-                startIcon={<AddCircleOutlineRoundedIcon />}
+                startIcon={selected ? <RemoveCircleOutlineRoundedIcon /> : incompatible ? <LockRoundedIcon /> : <AddCircleOutlineRoundedIcon />}
                 variant="contained"
-                disabled={!market.canAddToEntry}
+                disabled={!market.canAddToEntry || incompatible}
                 onClick={() => onAdd?.(market)}
-                sx={actionButtonSx}
+                sx={entryButtonSx(selected, incompatible)}
               >
-                Add leg
+                {selected ? 'Remove' : incompatible ? 'Locked' : 'Add leg'}
               </Button>
               <Button startIcon={<CompareArrowsRoundedIcon />} variant="outlined" onClick={handleCompare} sx={compareButtonSx}>
                 Compare
@@ -238,12 +242,13 @@ export function TopPickCard({ market, onAdd, hideActions = false, variant = 'def
         {hideActions ? null : (
           <Stack direction="row" spacing={1}>
             <Button
-              startIcon={<AddCircleOutlineRoundedIcon />}
+              startIcon={selected ? <RemoveCircleOutlineRoundedIcon /> : incompatible ? <LockRoundedIcon /> : <AddCircleOutlineRoundedIcon />}
               variant="contained"
-              disabled={!market.canAddToEntry}
+              disabled={!market.canAddToEntry || incompatible}
               onClick={() => onAdd?.(market)}
+              sx={entryButtonSx(selected, incompatible)}
             >
-              Add to Entry
+              {selected ? 'Remove' : incompatible ? 'Locked' : 'Add leg'}
             </Button>
             <Button startIcon={<CompareArrowsRoundedIcon />} variant="outlined" onClick={handleCompare}>
               Compare
@@ -347,6 +352,40 @@ const actionButtonSx = {
     border: '1px solid rgba(148,163,184,.16)'
   }
 };
+
+function entryButtonSx(selected: boolean, incompatible: boolean) {
+  if (selected) {
+    return {
+      ...actionButtonSx,
+      color: '#FECACA',
+      background: 'rgba(244,63,94,.16)',
+      border: '1px solid rgba(244,63,94,.42)',
+      '&:hover': {
+        background: 'rgba(244,63,94,.24)',
+        borderColor: 'rgba(244,63,94,.56)',
+        color: '#FFE4E6'
+      }
+    };
+  }
+
+  if (incompatible) {
+    return {
+      ...actionButtonSx,
+      color: '#CBD5E1',
+      background: 'rgba(51,65,85,.42)',
+      border: '1px solid rgba(148,163,184,.24)',
+      boxShadow: 'none',
+      '&.Mui-disabled': {
+        color: '#CBD5E1',
+        background: 'rgba(51,65,85,.42)',
+        border: '1px solid rgba(148,163,184,.24)',
+        opacity: 1
+      }
+    };
+  }
+
+  return actionButtonSx;
+}
 
 const compareButtonSx = {
   width: 104,

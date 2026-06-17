@@ -10,6 +10,7 @@ import { LineShoppingPage } from '../pages/app/LineShoppingPage';
 import { MarketsPage } from '../pages/app/MarketsPage';
 import { PerformancePage } from '../pages/app/PerformancePage';
 import { TopPicksPage } from '../pages/app/TopPicksPage';
+import { EntryBuilderProvider } from '../hooks/useEntryBuilder';
 import { CreateAccountPage } from '../pages/public/CreateAccountPage';
 import { HomePage } from '../pages/public/HomePage';
 import { PricingPage } from '../pages/public/PricingPage';
@@ -26,7 +27,14 @@ export function AppRoutes() {
         <Route path="/sign-in" element={<SignInPage />} />
         <Route path="/create-account" element={<CreateAccountPage />} />
       </Route>
-      <Route path="/app" element={<AppLayout />}>
+      <Route
+        path="/app"
+        element={
+          <EntryBuilderProvider>
+            <AppLayout />
+          </EntryBuilderProvider>
+        }
+      >
         <Route index element={<Navigate to="/app/dashboard" replace />} />
         <Route path="dashboard" element={<DashboardPage />} />
         <Route path="markets" element={<MarketsPage />} />

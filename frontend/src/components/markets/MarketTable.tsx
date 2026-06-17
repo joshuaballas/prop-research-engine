@@ -1,5 +1,8 @@
 import AddCircleOutlineRoundedIcon from '@mui/icons-material/AddCircleOutlineRounded';
+import LockRoundedIcon from '@mui/icons-material/LockRounded';
+import RemoveCircleOutlineRoundedIcon from '@mui/icons-material/RemoveCircleOutlineRounded';
 import { Box, Button, Stack, Table, TableBody, TableCell, TableHead, TableRow, Typography } from '@mui/material';
+import { useEntryBuilder } from '../../hooks/useEntryBuilder';
 import type { MarketOpportunity } from '../../types/markets';
 import { formatPercent } from '../../utils/formatters';
 import { StatusPill } from '../ui/StatusPill';
@@ -7,6 +10,7 @@ import { ProjectionModifierBadge } from './ProjectionModifierBadge';
 import { ProviderLabel } from '../providers/ProviderLabel';
 
 export function MarketTable({ markets }: { markets: MarketOpportunity[] }) {
+  const builder = useEntryBuilder();
   return (
     <Box sx={{ overflowX: 'auto', border: '1px solid rgba(148,163,184,.16)', borderRadius: 3 }}>
       <Table size="small" stickyHeader>
@@ -27,6 +31,9 @@ export function MarketTable({ markets }: { markets: MarketOpportunity[] }) {
         <TableBody>
           {markets.map((market) => {
             const addable = isScannerAddable(market);
+            const selected = builder.isSelected(market.id);
+            const incompatible = !selected && !builder.isCompatible(market);
+            const canAddFromScanner = addable && !incompatible;
             return (
               <TableRow key={market.id} hover>
                 <TableCell>
@@ -81,11 +88,13 @@ export function MarketTable({ markets }: { markets: MarketOpportunity[] }) {
                 <TableCell>
                   <Button
                     size="small"
-                    variant={addable ? 'contained' : 'outlined'}
-                    startIcon={addable ? <AddCircleOutlineRoundedIcon /> : undefined}
-                    sx={{ minWidth: 94, whiteSpace: 'nowrap' }}
+                    variant={canAddFromScanner || selected ? 'contained' : 'outlined'}
+                    startIcon={selected ? <RemoveCircleOutlineRoundedIcon /> : incompatible && addable ? <LockRoundedIcon /> : canAddFromScanner ? <AddCircleOutlineRoundedIcon /> : undefined}
+                    disabled={incompatible && addable}
+                    onClick={() => (canAddFromScanner || selected ? builder.toggleLeg(market) : undefined)}
+                    sx={entryButtonSx(selected, incompatible && addable)}
                   >
-                    {addable ? 'Add leg' : 'Details'}
+                    {selected ? 'Remove' : incompatible && addable ? 'Locked' : canAddFromScanner ? 'Add leg' : 'Details'}
                   </Button>
                 </TableCell>
               </TableRow>
@@ -95,6 +104,46 @@ export function MarketTable({ markets }: { markets: MarketOpportunity[] }) {
       </Table>
     </Box>
   );
+}
+
+const baseActionButtonSx = {
+  minWidth: 94,
+  height: 32,
+  whiteSpace: 'nowrap',
+  fontWeight: 900
+};
+
+function entryButtonSx(selected: boolean, incompatible: boolean) {
+  if (selected) {
+    return {
+      ...baseActionButtonSx,
+      color: '#FECACA',
+      background: 'rgba(244,63,94,.16)',
+      border: '1px solid rgba(244,63,94,.42)',
+      '&:hover': {
+        background: 'rgba(244,63,94,.24)',
+        borderColor: 'rgba(244,63,94,.56)',
+        color: '#FFE4E6'
+      }
+    };
+  }
+
+  if (incompatible) {
+    return {
+      ...baseActionButtonSx,
+      color: '#CBD5E1',
+      background: 'rgba(51,65,85,.42)',
+      border: '1px solid rgba(148,163,184,.24)',
+      '&.Mui-disabled': {
+        color: '#CBD5E1',
+        background: 'rgba(51,65,85,.42)',
+        border: '1px solid rgba(148,163,184,.24)',
+        opacity: 1
+      }
+    };
+  }
+
+  return baseActionButtonSx;
 }
 
 function isScannerAddable(market: MarketOpportunity) {

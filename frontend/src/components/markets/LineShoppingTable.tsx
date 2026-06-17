@@ -1,7 +1,10 @@
 import AddCircleOutlineRoundedIcon from '@mui/icons-material/AddCircleOutlineRounded';
 import CompareArrowsRoundedIcon from '@mui/icons-material/CompareArrowsRounded';
 import ExpandMoreRoundedIcon from '@mui/icons-material/ExpandMoreRounded';
+import LockRoundedIcon from '@mui/icons-material/LockRounded';
+import RemoveCircleOutlineRoundedIcon from '@mui/icons-material/RemoveCircleOutlineRounded';
 import { Accordion, AccordionDetails, AccordionSummary, Box, Button, Divider, Stack, Table, TableBody, TableCell, TableHead, TableRow, Typography } from '@mui/material';
+import { useEntryBuilder } from '../../hooks/useEntryBuilder';
 import type { MarketOpportunity } from '../../types/markets';
 import { formatPercent } from '../../utils/formatters';
 import { ProviderLabel } from '../providers/ProviderLabel';
@@ -38,6 +41,10 @@ export function LineShoppingTable({ markets }: { markets: MarketOpportunity[] })
 
 function LineShoppingRow({ market }: { market: MarketOpportunity }) {
   const confidence = resolveConfidence(market);
+  const builder = useEntryBuilder();
+  const selected = builder.isSelected(market.id);
+  const incompatible = !selected && !builder.isCompatible(market);
+  const canAdd = market.canAddToEntry && market.estimatedEv > 0 && !incompatible;
 
   return (
     <TableRow
@@ -94,13 +101,14 @@ function LineShoppingRow({ market }: { market: MarketOpportunity }) {
               <TableCell align="center" sx={{ minWidth: 175 }}>
                 <Stack direction="row" spacing={0.8} justifyContent="center" flexWrap="nowrap">
                   <Button
-                    startIcon={<AddCircleOutlineRoundedIcon />}
+                    startIcon={selected ? <RemoveCircleOutlineRoundedIcon /> : incompatible ? <LockRoundedIcon /> : <AddCircleOutlineRoundedIcon />}
                     size="small"
                     variant="contained"
-                    disabled={!market.canAddToEntry || market.estimatedEv <= 0}
-                    sx={addLegButtonSx}
+                    disabled={!selected && !canAdd}
+                    onClick={() => (selected || canAdd ? builder.toggleLeg(market) : undefined)}
+                    sx={entryButtonSx(selected, incompatible)}
                   >
-                    Add leg
+                    {selected ? 'Remove' : incompatible ? 'Locked' : 'Add leg'}
                   </Button>
                   <Button startIcon={<CompareArrowsRoundedIcon />} size="small" variant="outlined" sx={detailsButtonSx}>
                     Details
@@ -115,6 +123,10 @@ export function LineShoppingCard({ market }: { market: MarketOpportunity }) {
   const dfsLines = market.providerLines?.filter((line) => line.providerCategory === 'DFS') ?? [];
   const referenceLines = market.providerLines?.filter((line) => line.providerCategory === 'Sportsbook') ?? [];
   const confidence = resolveConfidence(market);
+  const builder = useEntryBuilder();
+  const selected = builder.isSelected(market.id);
+  const incompatible = !selected && !builder.isCompatible(market);
+  const canAdd = market.canAddToEntry && market.estimatedEv > 0 && !incompatible;
 
   return (
     <Accordion
@@ -166,13 +178,14 @@ export function LineShoppingCard({ market }: { market: MarketOpportunity }) {
           <ProviderLineGroup title="Reference lines" lines={referenceLines} marketId={market.id} emptyText="No reference-line details available." />
           <Stack direction="row" spacing={1} flexWrap="nowrap" pt={0.2}>
             <Button
-              startIcon={<AddCircleOutlineRoundedIcon />}
+              startIcon={selected ? <RemoveCircleOutlineRoundedIcon /> : incompatible ? <LockRoundedIcon /> : <AddCircleOutlineRoundedIcon />}
               size="small"
               variant="contained"
-              disabled={!market.canAddToEntry || market.estimatedEv <= 0}
-              sx={addLegButtonSx}
+              disabled={!selected && !canAdd}
+              onClick={() => (selected || canAdd ? builder.toggleLeg(market) : undefined)}
+              sx={entryButtonSx(selected, incompatible)}
             >
-              Add leg
+              {selected ? 'Remove' : incompatible ? 'Locked' : 'Add leg'}
             </Button>
             <Button startIcon={<CompareArrowsRoundedIcon />} size="small" variant="outlined" sx={detailsButtonSx}>
               Details
@@ -262,6 +275,40 @@ const addLegButtonSx = {
     boxShadow: 'none'
   }
 };
+
+function entryButtonSx(selected: boolean, incompatible: boolean) {
+  if (selected) {
+    return {
+      ...addLegButtonSx,
+      color: '#FECACA',
+      background: 'rgba(244,63,94,.16)',
+      border: '1px solid rgba(244,63,94,.42)',
+      '&:hover': {
+        background: 'rgba(244,63,94,.24)',
+        borderColor: 'rgba(244,63,94,.56)',
+        color: '#FFE4E6'
+      }
+    };
+  }
+
+  if (incompatible) {
+    return {
+      ...addLegButtonSx,
+      color: '#CBD5E1',
+      background: 'rgba(51,65,85,.42)',
+      border: '1px solid rgba(148,163,184,.24)',
+      boxShadow: 'none',
+      '&.Mui-disabled': {
+        color: '#CBD5E1',
+        background: 'rgba(51,65,85,.42)',
+        border: '1px solid rgba(148,163,184,.24)',
+        opacity: 1
+      }
+    };
+  }
+
+  return addLegButtonSx;
+}
 
 const detailsButtonSx = {
   width: 86,

@@ -10,37 +10,57 @@ const sportsbookLogoModules = import.meta.globEager('../../assets/sportsbooks/*.
 const aliases: Record<string, string> = {
   prizepicks: 'prizepicks',
   prize_picks: 'prizepicks',
-  underdog: 'underdog',
-  underdogfantasy: 'underdog',
-  draftkingspick6: 'draftkings-pick6',
-  draftkings_pick6: 'draftkings-pick6',
-  pick6: 'draftkings-pick6',
-  betr: 'betr-picks',
-  betrdfs: 'betr-picks',
-  betrpicks: 'betr-picks',
-  betr_us_dfs: 'betr-picks',
+  underdog: 'underdogfantasy',
+  underdogfantasy: 'underdogfantasy',
+  draftkingspick6: 'dkpick6webp',
+  draftkings_pick6: 'dkpick6webp',
+  pick6: 'dkpick6webp',
+  betr: 'betr',
+  betrdfs: 'betr',
+  betrpicks: 'betr',
+  betr_us_dfs: 'betr',
   sportsbookcontext: 'sportsbook-context',
   draftkings: 'draftkings',
   fanduel: 'fanduel',
   betmgm: 'betmgm',
-  espnbet: 'espn-bet',
+  espnbet: 'espnbet',
   caesars: 'caesars',
+  williamhillus: 'caesars',
+  williamhill_us: 'caesars',
   betrivers: 'betrivers',
-  fanatics: 'fanatics'
+  fanatics: 'fanatics',
+  betonline: 'betonline',
+  betonlineag: 'betonline',
+  bovada: 'bovada',
+  lowvig: 'lowvig',
+  mybookie: 'mybookie',
+  mybookieag: 'mybookie',
+  ballybet: 'ballybet',
+  betanything: 'betanything',
+  betparx: 'betparx',
+  betus: 'betus',
+  getfliff: 'getfliff',
+  hardrock: 'hardrock',
+  hardrockbet: 'hardrock',
+  rebet: 'rebet'
 };
 
 const monograms: Record<string, string> = {
   prizepicks: 'PP',
-  underdog: 'UD',
-  'draftkings-pick6': 'P6',
-  'betr-picks': 'BP',
+  underdogfantasy: 'UD',
+  dkpick6webp: 'P6',
+  betr: 'BP',
   draftkings: 'DK',
   fanduel: 'FD',
   betmgm: 'MGM',
-  'espn-bet': 'ESPN',
+  espnbet: 'ESPN',
   caesars: 'CZR',
   betrivers: 'BR',
   fanatics: 'FAN',
+  betonline: 'BOL',
+  bovada: 'BOV',
+  lowvig: 'LV',
+  mybookie: 'MYB',
   'sportsbook-context': 'SB'
 };
 
@@ -62,6 +82,26 @@ export function ProviderLogo({ provider, category = 'DFS', mark, size = 38, sx }
   const logo = resolveLogo(key, category);
   const fallback = mark ?? monograms[key] ?? initials(provider);
 
+  if (logo) {
+    return (
+      <Box
+        component="img"
+        src={logo}
+        alt=""
+        aria-label={`${provider} logo`}
+        sx={{
+          width: size,
+          height: size,
+          borderRadius: '12px',
+          objectFit: 'cover',
+          display: 'block',
+          flexShrink: 0,
+          ...sx
+        }}
+      />
+    );
+  }
+
   return (
     <Box
       aria-label={`${provider} logo`}
@@ -76,27 +116,16 @@ export function ProviderLogo({ provider, category = 'DFS', mark, size = 38, sx }
         border: category === 'Sportsbook' ? '1px solid rgba(148,163,184,.22)' : '1px solid rgba(34,211,238,.28)',
         bgcolor: category === 'Sportsbook' ? 'rgba(148,163,184,.1)' : 'rgba(34,211,238,.12)',
         color: category === 'Sportsbook' ? 'rgba(226,232,240,.78)' : '#031018',
-        background: logo
-          ? 'rgba(8,13,26,.42)'
-          : category === 'Sportsbook'
-            ? 'linear-gradient(135deg, rgba(148,163,184,.16), rgba(15,23,42,.3))'
-            : 'linear-gradient(135deg, #22D3EE, #A78BFA)',
+        background: category === 'Sportsbook'
+          ? 'linear-gradient(135deg, rgba(148,163,184,.16), rgba(15,23,42,.3))'
+          : 'linear-gradient(135deg, #22D3EE, #A78BFA)',
         fontSize: fallback.length > 3 ? size * 0.24 : size * 0.31,
         fontWeight: 950,
         letterSpacing: 0,
         ...sx
       }}
     >
-      {logo ? (
-        <Box
-          component="img"
-          src={logo}
-          alt=""
-          sx={{ maxWidth: '78%', maxHeight: '78%', objectFit: 'contain', display: 'block' }}
-        />
-      ) : (
-        fallback
-      )}
+      {fallback}
     </Box>
   );
 }
