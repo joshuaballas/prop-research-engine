@@ -2,8 +2,8 @@ import DeleteOutlineRoundedIcon from '@mui/icons-material/DeleteOutlineRounded';
 import { IconButton, Stack, Typography } from '@mui/material';
 import type { EntryLeg } from '../../types/entryBuilder';
 import { AppCard } from '../ui/AppCard';
-import { StatusPill } from '../ui/StatusPill';
 import { ProjectionModifierBadge } from '../markets/ProjectionModifierBadge';
+import { ProviderLabel } from '../providers/ProviderLabel';
 
 export function EntryLegCard({ leg, onRemove }: { leg: EntryLeg; onRemove?: (id: string) => void }) {
   return (
@@ -15,7 +15,7 @@ export function EntryLegCard({ leg, onRemove }: { leg: EntryLeg; onRemove?: (id:
             {leg.side} {leg.propType} {leg.line} · {leg.sport}
           </Typography>
           <Stack direction="row" gap={0.8} flexWrap="wrap">
-            <StatusPill label={leg.entryProvider} />
+            <ProviderLabel provider={leg.entryProvider} category={leg.providerCategory} compact />
             <ProjectionModifierBadge modifier={leg.projectionModifier} />
           </Stack>
         </Stack>

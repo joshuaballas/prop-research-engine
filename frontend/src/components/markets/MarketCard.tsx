@@ -4,6 +4,7 @@ import { formatPercent } from '../../utils/formatters';
 import { AppCard } from '../ui/AppCard';
 import { StatusPill } from '../ui/StatusPill';
 import { ProjectionModifierBadge } from './ProjectionModifierBadge';
+import { ProviderLabel } from '../providers/ProviderLabel';
 
 export function MarketCard({ market }: { market: MarketOpportunity }) {
   return (
@@ -20,7 +21,7 @@ export function MarketCard({ market }: { market: MarketOpportunity }) {
           {market.side} {market.propType} {market.line}
         </Typography>
         <Stack direction="row" gap={1} flexWrap="wrap">
-          <StatusPill label={market.provider} />
+          <ProviderLabel provider={market.provider} category={market.providerCategory} compact />
           <StatusPill label={market.providerCategory} />
           <ProjectionModifierBadge modifier={market.projectionModifier} />
         </Stack>

@@ -17,7 +17,9 @@ import type { ReactNode } from 'react';
 import { Link as RouterLink } from 'react-router-dom';
 import { LineShoppingTable } from '../../components/markets/LineShoppingTable';
 import { TopPickCard } from '../../components/markets/TopPickCard';
+import { ProviderLogo } from '../../components/providers/ProviderLogo';
 import { AppCard } from '../../components/ui/AppCard';
+import { MetadataText } from '../../components/ui/MetadataText';
 import { SectionHeader } from '../../components/ui/SectionHeader';
 import { StatusPill } from '../../components/ui/StatusPill';
 import { mockMarkets } from '../../data/mockMarkets';
@@ -95,11 +97,11 @@ export function HomePage() {
                   Compare DFS projections, see sportsbook context, spot model edges, and avoid mixing incompatible providers before you open the provider app.
                 </Typography>
                 <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.5}>
-                  <Button component={RouterLink} to="/create-account" variant="contained" size="large">
-                    Create Account
+                  <Button component={RouterLink} to="/pricing" variant="contained" size="large">
+                    View Plans
                   </Button>
-                  <Button component={RouterLink} to="/pricing" variant="outlined" size="large">
-                    Compare Plans
+                  <Button component={RouterLink} to="/#how-it-works" variant="outlined" size="large">
+                    See How It Works
                   </Button>
                 </Stack>
                 <Typography variant="caption" color="text.secondary" maxWidth={640}>
@@ -182,17 +184,9 @@ export function HomePage() {
                 <Typography color="rgba(226,232,240,.82)" maxWidth={680}>
                   Start with provider-safe entries, reference lines, and modifier-aware payout context.
                 </Typography>
-                <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
-                  {['Provider-safe entries', 'Reference lines', 'Modifier-aware payouts', 'Freshness labels'].map((chip) => (
-                    <StatusPill
-                      key={chip}
-                      label={chip}
-                      sx={{
-                        bgcolor: 'rgba(15,23,42,.78)',
-                        color: 'rgba(226,232,240,.88)',
-                        borderColor: 'rgba(148,163,184,.24)'
-                      }}
-                    />
+                <Stack direction="row" spacing={1.3} flexWrap="wrap" useFlexGap>
+                  {['Provider-safe entries', 'Reference lines', 'Modifier-aware payouts', 'Freshness labels'].map((label) => (
+                    <MetadataText key={label}>{label}</MetadataText>
                   ))}
                 </Stack>
               </Stack>
@@ -203,11 +197,11 @@ export function HomePage() {
                 spacing={1.25}
                 justifyContent={{ md: 'flex-end' }}
               >
-                <Button component={RouterLink} to="/create-account" variant="contained" size="large">
-                  Create Account
+                <Button component={RouterLink} to="/pricing" variant="contained" size="large">
+                  View Plans
                 </Button>
-                <Button component={RouterLink} to="/pricing" variant="outlined" size="large">
-                  Compare Plans
+                <Button component={RouterLink} to="/sign-in" variant="outlined" size="large">
+                  Sign In
                 </Button>
               </Stack>
             </Grid>
@@ -268,11 +262,8 @@ function ScannerBackground() {
           <Box
             key={term}
             sx={{
-              px: 1.4,
-              py: 0.65,
-              borderRadius: 999,
-              border: '1px solid rgba(148,163,184,.18)',
-              bgcolor: 'rgba(15,23,42,.68)',
+              px: 0.5,
+              py: 0.2,
               color: 'rgba(226,232,240,.76)',
               fontSize: 12,
               fontWeight: 850
@@ -304,7 +295,7 @@ function HeroProductPreview({ children }: { children: ReactNode }) {
       >
         <Stack spacing={1.5}>
           <Stack direction="row" justifyContent="space-between" alignItems="center" gap={1.25} flexWrap="wrap" useFlexGap sx={{ px: 0.25 }}>
-            <StatusPill label="Markets updated 3m ago" />
+            <MetadataText tone="fresh">Markets updated 3m ago</MetadataText>
             <Typography variant="caption" color="text.secondary" fontWeight={850}>
               15 active candidates
             </Typography>
@@ -340,7 +331,7 @@ function HeroProductPreview({ children }: { children: ReactNode }) {
         />
         <Stack spacing={1.5} sx={{ position: 'relative', zIndex: 1 }}>
           <Stack direction="row" justifyContent="space-between" alignItems="center" gap={1}>
-            <StatusPill label="Markets updated 3m ago" />
+            <MetadataText tone="fresh">Markets updated 3m ago</MetadataText>
             <Typography variant="caption" color="text.secondary" fontWeight={850}>
               15 active candidates
             </Typography>
@@ -454,18 +445,18 @@ function LineStripPreview() {
           <Typography variant="caption" color="text.secondary" fontWeight={900}>
             LINE SHOPPING STRIP
           </Typography>
-          <StatusPill label="Reference lines" />
+          <MetadataText>REFERENCE LINES</MetadataText>
         </Stack>
         <Stack spacing={0.85}>
           {strip.map((row) => (
             <Grid key={row.id} container alignItems="center" spacing={1}>
               <Grid size={{ xs: 5 }}>
-                <Typography variant="body2" fontWeight={900} noWrap>
+                <Typography variant="body2" color="text.secondary" fontWeight={760} noWrap>
                   {row.player}
                 </Typography>
               </Grid>
               <Grid size={{ xs: 3 }}>
-                <Typography variant="body2" color="text.secondary" noWrap>
+                <Typography variant="body2" color="text.secondary" fontWeight={760} noWrap>
                   {row.side} {row.line}
                 </Typography>
               </Grid>
@@ -650,25 +641,11 @@ function PlatformBadge({ platform, mark }: { platform: string; mark: string }) {
         bgcolor: 'rgba(8,13,26,.5)'
       }}
     >
-      <Box
-        sx={{
-          width: 42,
-          height: 42,
-          borderRadius: 2,
-          display: 'grid',
-          placeItems: 'center',
-          fontWeight: 950,
-          letterSpacing: 0,
-          color: '#031018',
-          background: 'linear-gradient(135deg, #22D3EE, #A78BFA)'
-        }}
-      >
-        {mark}
-      </Box>
+      <ProviderLogo provider={platform} category="DFS" mark={mark} size={42} />
       <Stack spacing={0.15}>
         <Typography fontWeight={950}>{platform}</Typography>
         <Typography variant="caption" color="text.secondary">
-          Entry builder supported
+          Provider-scoped entries
         </Typography>
       </Stack>
     </Stack>
@@ -689,22 +666,7 @@ function SportsbookTile({ book, mark }: { book: string; mark: string }) {
         bgcolor: 'rgba(8,13,26,.34)'
       }}
     >
-      <Box
-        sx={{
-          width: 38,
-          height: 38,
-          borderRadius: 1.75,
-          display: 'grid',
-          placeItems: 'center',
-          fontSize: mark.length > 3 ? 10 : 12,
-          fontWeight: 950,
-          color: 'rgba(226,232,240,.72)',
-          border: '1px solid rgba(148,163,184,.2)',
-          background: 'linear-gradient(135deg, rgba(148,163,184,.16), rgba(15,23,42,.3))'
-        }}
-      >
-        {mark}
-      </Box>
+      <ProviderLogo provider={book} category="Sportsbook" mark={mark} size={38} />
       <Stack spacing={0.1} minWidth={0}>
         <Typography fontWeight={900} fontSize={13} noWrap>
           {book}

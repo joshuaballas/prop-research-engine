@@ -7,6 +7,7 @@ import type { MarketOpportunity } from '../../types/markets';
 import { AppCard } from '../ui/AppCard';
 import { StatusPill } from '../ui/StatusPill';
 import { ProjectionModifierBadge } from './ProjectionModifierBadge';
+import { ProviderLabel } from '../providers/ProviderLabel';
 
 interface TopPickCardProps {
   market: MarketOpportunity;
@@ -46,7 +47,7 @@ export function TopPickCard({ market, onAdd, hideActions = false }: TopPickCardP
 
         <Stack direction="row" flexWrap="wrap" gap={1}>
           <StatusPill label={market.providerCategory} />
-          <StatusPill label={market.provider} />
+          <ProviderLabel provider={market.provider} category={market.providerCategory} compact />
           <StatusPill label={market.trustLevel} />
           <StatusPill label={market.marketShape} />
         </Stack>

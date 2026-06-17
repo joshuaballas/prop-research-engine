@@ -35,18 +35,41 @@ export function AppSidebar() {
         bgcolor: 'rgba(7,11,20,.82)',
         minHeight: '100vh',
         position: 'sticky',
-        top: 0
+        top: 0,
+        overflow: 'hidden',
+        '&:before': {
+          content: '""',
+          position: 'absolute',
+          inset: 0,
+          background:
+            'radial-gradient(circle at 20% 0%, rgba(34,211,238,.1), transparent 34%), linear-gradient(rgba(125,211,252,.035) 1px, transparent 1px), linear-gradient(90deg, rgba(125,211,252,.025) 1px, transparent 1px)',
+          backgroundSize: 'auto, 34px 34px, 34px 34px',
+          pointerEvents: 'none'
+        }
       }}
     >
-      <Stack spacing={3} p={2.5}>
+      <Stack spacing={3} p={2.5} sx={{ position: 'relative', zIndex: 1 }}>
         <Stack direction="row" spacing={1.2} alignItems="center">
-          <FactCheckOutlinedIcon color="primary" />
+          <Box
+            sx={{
+              width: 40,
+              height: 40,
+              borderRadius: 2,
+              display: 'grid',
+              placeItems: 'center',
+              color: 'primary.main',
+              bgcolor: 'rgba(34,211,238,.12)',
+              border: '1px solid rgba(34,211,238,.28)'
+            }}
+          >
+            <FactCheckOutlinedIcon />
+          </Box>
           <Box>
             <Typography variant="h6" lineHeight={1} fontWeight={950}>
               EdgeScope
             </Typography>
             <Typography variant="caption" color="text.secondary">
-              DFS research suite
+              DFS research workspace
             </Typography>
           </Box>
         </Stack>
@@ -63,9 +86,19 @@ export function AppSidebar() {
                   mb: 0.6,
                   borderRadius: 2,
                   color: active ? 'primary.main' : 'text.secondary',
+                  border: '1px solid transparent',
+                  transition: 'background-color .18s ease, border-color .18s ease, color .18s ease',
+                  '&:hover': {
+                    bgcolor: 'rgba(148,163,184,.08)',
+                    color: 'text.primary'
+                  },
                   '&.Mui-selected': {
                     bgcolor: 'rgba(34,211,238,.1)',
-                    border: `1px solid ${palette.borderStrong}`
+                    borderColor: palette.borderStrong,
+                    color: 'primary.main',
+                    '&:hover': {
+                      bgcolor: 'rgba(34,211,238,.13)'
+                    }
                   }
                 }}
               >

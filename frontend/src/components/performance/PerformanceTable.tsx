@@ -1,7 +1,7 @@
 import { Box, Table, TableBody, TableCell, TableHead, TableRow } from '@mui/material';
 import type { PerformanceGroup } from '../../data/mockPerformance';
 import { formatPercent } from '../../utils/formatters';
-import { StatusPill } from '../ui/StatusPill';
+import { MetadataText } from '../ui/MetadataText';
 
 export function PerformanceTable({ rows }: { rows: PerformanceGroup[] }) {
   return (
@@ -27,7 +27,7 @@ export function PerformanceTable({ rows }: { rows: PerformanceGroup[] }) {
               <TableCell align="right">{row.wins}-{row.losses}-{row.pushes}</TableCell>
               <TableCell align="right">{formatPercent(row.hitRate)}</TableCell>
               <TableCell align="right">{formatPercent(row.roi, { signed: true })}</TableCell>
-              <TableCell>{row.warning ? <StatusPill label={row.warning} /> : 'None'}</TableCell>
+              <TableCell>{row.warning ? <MetadataText tone="stale">{row.warning}</MetadataText> : 'None'}</TableCell>
             </TableRow>
           ))}
         </TableBody>

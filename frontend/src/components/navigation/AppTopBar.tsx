@@ -1,7 +1,7 @@
 import MenuRoundedIcon from '@mui/icons-material/MenuRounded';
 import { Avatar, Box, IconButton, Stack, Typography } from '@mui/material';
 import { mockUser } from '../../data/mockUser';
-import { StatusPill } from '../ui/StatusPill';
+import { MetadataText } from '../ui/MetadataText';
 
 export function AppTopBar() {
   return (
@@ -9,21 +9,27 @@ export function AppTopBar() {
       direction="row"
       alignItems="center"
       justifyContent="space-between"
-      sx={{ py: 1.5, px: { xs: 2, md: 3 }, borderBottom: '1px solid rgba(148,163,184,.12)', bgcolor: 'rgba(7,11,20,.72)', backdropFilter: 'blur(18px)' }}
+      gap={2}
+      sx={{ py: 1.35, px: { xs: 2, md: 3 }, borderBottom: '1px solid rgba(148,163,184,.12)', bgcolor: 'rgba(7,11,20,.76)', backdropFilter: 'blur(18px)', position: 'sticky', top: 0, zIndex: 10 }}
     >
       <Stack direction="row" alignItems="center" spacing={1.5}>
         <IconButton sx={{ display: { lg: 'none' } }}>
           <MenuRoundedIcon />
         </IconButton>
         <Box>
-          <Typography fontWeight={900}>Market command center</Typography>
+          <Typography fontWeight={900}>DFS research dashboard</Typography>
           <Typography variant="caption" color="text.secondary">
-            Mock prototype data only
+            Line comparison and entry building
           </Typography>
         </Box>
       </Stack>
-      <Stack direction="row" spacing={1.5} alignItems="center">
-        <StatusPill label="Fresh" />
+      <Stack direction="row" spacing={{ xs: 1.25, sm: 2 }} alignItems="center" minWidth={0}>
+        <Stack spacing={0.1} alignItems="flex-end" sx={{ display: { xs: 'none', sm: 'flex' } }}>
+          <MetadataText tone="fresh">Updated 4m ago</MetadataText>
+          <Typography variant="caption" color="text.secondary">
+            DFS rows usable
+          </Typography>
+        </Stack>
         <Avatar sx={{ width: 34, height: 34 }}>{mockUser.name[0]}</Avatar>
       </Stack>
     </Stack>

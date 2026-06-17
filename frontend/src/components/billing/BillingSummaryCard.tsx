@@ -2,7 +2,7 @@ import { Button, Divider, Stack, Typography } from '@mui/material';
 import { mockUser } from '../../data/mockUser';
 import { useToast } from '../../hooks/useToast';
 import { AppCard } from '../ui/AppCard';
-import { StatusPill } from '../ui/StatusPill';
+import { MetadataText } from '../ui/MetadataText';
 
 export function BillingSummaryCard() {
   const { showToast } = useToast();
@@ -11,7 +11,7 @@ export function BillingSummaryCard() {
       <Stack spacing={1.5}>
         <Stack direction="row" justifyContent="space-between">
           <Typography variant="h5">Billing</Typography>
-          <StatusPill label={mockUser.subscriptionStatus} />
+          <MetadataText tone="fresh">{mockUser.subscriptionStatus}</MetadataText>
         </Stack>
         <Divider />
         <Typography>

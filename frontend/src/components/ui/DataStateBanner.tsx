@@ -1,6 +1,6 @@
 import { Box, Stack, Typography } from '@mui/material';
-import { StatusPill } from './StatusPill';
 import { palette } from '../../theme/palette';
+import { MetadataText } from './MetadataText';
 
 interface DataStateBannerProps {
   title: string;
@@ -9,6 +9,8 @@ interface DataStateBannerProps {
 }
 
 export function DataStateBanner({ title, message, status }: DataStateBannerProps) {
+  const tone = status === 'Fresh' ? 'fresh' : status === 'Stale' || status === 'Limited' ? 'stale' : status === 'Unavailable' ? 'danger' : 'default';
+
   return (
     <Box
       sx={{
@@ -28,7 +30,7 @@ export function DataStateBanner({ title, message, status }: DataStateBannerProps
             {message}
           </Typography>
         </Box>
-        <StatusPill label={status} />
+        {status === 'Fresh' ? null : <MetadataText tone={tone}>{status}</MetadataText>}
       </Stack>
     </Box>
   );

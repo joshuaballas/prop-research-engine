@@ -4,7 +4,7 @@ import TrendingUpOutlinedIcon from '@mui/icons-material/TrendingUpOutlined';
 import { Box, Container, Grid, Stack, Typography } from '@mui/material';
 import { PlanCard } from '../../components/billing/PlanCard';
 import { AppCard } from '../../components/ui/AppCard';
-import { StatusPill } from '../../components/ui/StatusPill';
+import { MetadataText } from '../../components/ui/MetadataText';
 import { mockPricingPlans } from '../../data/mockPricingPlans';
 
 export function PricingPage() {
@@ -16,7 +16,7 @@ export function PricingPage() {
     },
     {
       icon: <ShieldOutlinedIcon />,
-      title: 'Provider-aware entries',
+      title: 'Entry compatibility',
       body: 'Entry tools are designed around DFS provider compatibility so incompatible legs stay separated before review.'
     },
     {
@@ -30,34 +30,13 @@ export function PricingPage() {
     <Container maxWidth="xl" sx={{ py: { xs: 5, md: 8 } }}>
       <Stack spacing={{ xs: 4, md: 5 }}>
         <Stack spacing={1.35} textAlign="center" alignItems="center">
-          <StatusPill label="DFS research plans" />
           <Typography variant="h2" maxWidth={860}>
             Choose your DFS research workflow.
           </Typography>
           <Typography color="text.secondary" maxWidth={760} fontSize={{ md: 18 }}>
             Start with provider-safe line shopping, top candidates, and modifier-aware entry research.
           </Typography>
-          <Box
-            sx={{
-              mt: 1,
-              display: 'flex',
-              alignItems: 'center',
-              gap: 1,
-              px: 1.4,
-              py: 0.8,
-              borderRadius: 999,
-              border: '1px solid rgba(148,163,184,.16)',
-              bgcolor: 'rgba(8,13,26,.34)'
-            }}
-          >
-            <Typography variant="body2" fontWeight={900}>
-              Monthly pricing
-            </Typography>
-            <Box sx={{ width: 4, height: 4, borderRadius: 999, bgcolor: 'rgba(148,163,184,.45)' }} />
-            <Typography variant="body2" color="text.secondary" fontWeight={760}>
-              Annual plans coming later
-            </Typography>
-          </Box>
+          <MetadataText sx={{ mt: 1 }}>Monthly pricing. Annual plans coming later.</MetadataText>
         </Stack>
 
         <Box

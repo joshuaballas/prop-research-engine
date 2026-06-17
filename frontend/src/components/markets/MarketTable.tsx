@@ -3,6 +3,7 @@ import type { MarketOpportunity } from '../../types/markets';
 import { formatAmericanOdds, formatPercent } from '../../utils/formatters';
 import { StatusPill } from '../ui/StatusPill';
 import { ProjectionModifierBadge } from './ProjectionModifierBadge';
+import { ProviderLabel } from '../providers/ProviderLabel';
 
 export function MarketTable({ markets }: { markets: MarketOpportunity[] }) {
   return (
@@ -34,7 +35,7 @@ export function MarketTable({ markets }: { markets: MarketOpportunity[] }) {
                 <Box mt={0.5}><ProjectionModifierBadge modifier={market.projectionModifier} /></Box>
               </TableCell>
               <TableCell>
-                <StatusPill label={market.provider} />
+                <ProviderLabel provider={market.provider} category={market.providerCategory} compact />
                 <Box mt={0.5} color="text.secondary" fontSize={12}>{formatAmericanOdds(market.bestAmericanPrice)}</Box>
               </TableCell>
               <TableCell align="right">{formatPercent(market.estimatedEv, { signed: true })}</TableCell>

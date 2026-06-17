@@ -3,5 +3,5 @@ import type { ProjectionModifier } from '../../types/markets';
 
 export function ProjectionModifierBadge({ modifier }: { modifier: ProjectionModifier }) {
   if (modifier === 'Normal') return null;
-  return <StatusPill label={modifier} />;
+  return <StatusPill label={modifier === 'Discount' ? 'Discounted Line' : modifier} />;
 }

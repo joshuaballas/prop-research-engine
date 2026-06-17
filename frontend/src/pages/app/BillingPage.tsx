@@ -7,7 +7,7 @@ import { mockPricingPlans } from '../../data/mockPricingPlans';
 export function BillingPage() {
   return (
     <Stack spacing={3}>
-      <PageHeader title="Billing" description="Mock subscription management. Stripe is not wired in this prototype." />
+      <PageHeader title="Billing" description="Manage plan and subscription details." />
       <Grid container spacing={2}>
         <Grid size={{ xs: 12, md: 4 }}><BillingSummaryCard /></Grid>
         {mockPricingPlans.map((plan) => (

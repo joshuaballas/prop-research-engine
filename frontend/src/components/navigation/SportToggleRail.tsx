@@ -17,23 +17,44 @@ export function SportToggleRail({ selectedSports, onToggle }: SportToggleRailPro
           return (
             <Button
               key={sport.code}
-              variant={active ? 'contained' : 'outlined'}
+              variant="outlined"
               onClick={() => onToggle(sport.code)}
               sx={{
-                minWidth: 104,
+                minWidth: 122,
+                px: 1.4,
+                py: 1,
                 justifyContent: 'flex-start',
-                borderColor: active ? 'transparent' : palette.border,
-                bgcolor: active ? undefined : 'rgba(15,23,42,.55)'
+                borderRadius: 2.25,
+                borderColor: active ? 'rgba(34,211,238,.58)' : palette.border,
+                bgcolor: active ? 'rgba(34,211,238,.12)' : 'rgba(15,23,42,.55)',
+                color: active ? 'primary.main' : 'text.secondary',
+                boxShadow: active ? '0 0 0 1px rgba(34,211,238,.08), 0 12px 34px rgba(34,211,238,.08)' : 'none',
+                '&:hover': {
+                  borderColor: active ? 'rgba(34,211,238,.72)' : 'rgba(148,163,184,.32)',
+                  bgcolor: active ? 'rgba(34,211,238,.15)' : 'rgba(15,23,42,.78)'
+                }
               }}
             >
               <Stack direction="row" spacing={1} alignItems="center">
-                <span>{sport.icon}</span>
+                <Box
+                  component="span"
+                  sx={{
+                    width: 26,
+                    height: 26,
+                    borderRadius: 1.5,
+                    display: 'grid',
+                    placeItems: 'center',
+                    bgcolor: active ? 'rgba(34,211,238,.16)' : 'rgba(148,163,184,.08)'
+                  }}
+                >
+                  {sport.icon}
+                </Box>
                 <Box textAlign="left">
                   <Typography variant="body2" fontWeight={900} lineHeight={1.1}>
                     {sport.label}
                   </Typography>
-                  <Typography variant="caption" color={active ? '#031019' : 'text.secondary'} lineHeight={1}>
-                    {sport.status ?? `${sport.candidateCount} candidates`}
+                  <Typography variant="caption" color="text.secondary" lineHeight={1}>
+                    {(sport.status === 'No data' ? 'No markets' : sport.status) ?? `${sport.candidateCount} candidates`}
                   </Typography>
                 </Box>
               </Stack>

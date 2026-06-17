@@ -31,8 +31,8 @@ export function PublicNav() {
             <Button component={RouterLink} to="/sign-in" color="inherit">
               Sign in
             </Button>
-            <Button component={RouterLink} to="/create-account" variant="contained">
-              Create account
+            <Button component={RouterLink} to="/pricing" variant="contained">
+              View Plans
             </Button>
           </Stack>
         </Toolbar>

@@ -2,7 +2,8 @@ import { Divider, Stack, Typography } from '@mui/material';
 import type { EntryLeg, EntryRule } from '../../types/entryBuilder';
 import { estimatePayout } from '../../utils/payoutEstimator';
 import { AppCard } from '../ui/AppCard';
-import { StatusPill } from '../ui/StatusPill';
+import { MetadataText } from '../ui/MetadataText';
+import { ProviderLabel } from '../providers/ProviderLabel';
 
 export function EntryBuilderSummary({ legs, rules, amount }: { legs: EntryLeg[]; rules: EntryRule[]; amount: number }) {
   const rule = legs[0] ? rules.find((item) => item.compatibilityGroup === legs[0].entryCompatibilityGroup) : undefined;
@@ -14,9 +15,9 @@ export function EntryBuilderSummary({ legs, rules, amount }: { legs: EntryLeg[];
       <Stack spacing={1.5}>
         <Typography variant="h6">Entry Summary</Typography>
         <Stack direction="row" gap={1} flexWrap="wrap">
-          <StatusPill label={rule?.provider ?? 'No provider locked'} />
-          <StatusPill label={`${legs.length} legs`} />
-          <StatusPill label={`Avg EV ${(averageEv * 100).toFixed(1)}%`} />
+          {rule ? <ProviderLabel provider={rule.provider} category={rule.providerCategory} compact /> : <MetadataText>No provider locked</MetadataText>}
+          <MetadataText>{legs.length} legs</MetadataText>
+          <MetadataText tone={averageEv > 0 ? 'fresh' : 'default'}>Avg EV {(averageEv * 100).toFixed(1)}%</MetadataText>
         </Stack>
         <Divider />
         <Metric label="Allowed legs" value={rule ? rule.allowedLegCounts.join(', ') : 'Select a leg'} />

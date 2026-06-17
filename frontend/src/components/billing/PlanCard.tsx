@@ -1,8 +1,13 @@
 import CheckCircleRoundedIcon from '@mui/icons-material/CheckCircleRounded';
 import { Button, Card, CardContent, Chip, Divider, Stack, Typography } from '@mui/material';
+import { Link as RouterLink } from 'react-router-dom';
 import type { PricingPlan } from '../../types/billing';
 import { formatCurrency } from '../../utils/formatters';
 import { StatusPill } from '../ui/StatusPill';
+
+export function planSelectionCode(plan: PricingPlan) {
+  return plan.name.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '');
+}
 
 export function PlanCard({ plan }: { plan: PricingPlan }) {
   const isFeatured = Boolean(plan.isFeatured);
@@ -114,7 +119,13 @@ export function PlanCard({ plan }: { plan: PricingPlan }) {
           ))}
         </Stack>
 
-        <Button variant={isFeatured ? 'contained' : 'outlined'} size="large" fullWidth>
+        <Button
+          component={RouterLink}
+          to={`/create-account?plan=${encodeURIComponent(planSelectionCode(plan))}`}
+          variant={isFeatured ? 'contained' : 'outlined'}
+          size="large"
+          fullWidth
+        >
           Select {plan.name}
         </Button>
       </Stack>

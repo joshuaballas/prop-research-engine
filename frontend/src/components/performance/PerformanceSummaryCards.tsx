@@ -8,19 +8,19 @@ export function PerformanceSummaryCards() {
   return (
     <Grid container spacing={2}>
       <Grid size={{ xs: 12, sm: 6, lg: 2 }}>
-        <MetricCard label="Candidate ROI" value={formatPercent(overall.roi, { signed: true })} helper="Mock graded sample" />
+        <MetricCard label="Candidate ROI" value={formatPercent(overall.roi, { signed: true })} helper="Graded sample" />
       </Grid>
       <Grid size={{ xs: 12, sm: 6, lg: 2 }}>
         <MetricCard label="Hit Rate" value={formatPercent(overall.hitRate)} helper={`${overall.wins}-${overall.losses}-${overall.pushes}`} />
       </Grid>
       <Grid size={{ xs: 12, sm: 6, lg: 2 }}>
-        <MetricCard label="Graded Picks" value={`${overall.gradedPicks}`} helper="All mock sources" />
+        <MetricCard label="Graded Picks" value={`${overall.gradedPicks}`} helper="All sources" />
       </Grid>
       <Grid size={{ xs: 12, sm: 6, lg: 2 }}>
         <MetricCard label="Average EV" value={formatPercent(overall.averageEv, { signed: true })} helper="At recommendation time" />
       </Grid>
       <Grid size={{ xs: 12, sm: 6, lg: 2 }}>
-        <MetricCard label="Best Strategy" value="Conservative" helper="+12.1% mock ROI" />
+        <MetricCard label="Best Strategy" value="Conservative" helper="+12.1% ROI" />
       </Grid>
       <Grid size={{ xs: 12, sm: 6, lg: 2 }}>
         <MetricCard label="Low Sample" value="2" helper="Use caution" />

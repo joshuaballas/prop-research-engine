@@ -47,7 +47,7 @@ export const mockEntryRules: EntryRule[] = [
     supportsModifiers: 'Unknown',
     sameGameAllowed: 'Unknown',
     sourceConfidence: 'NeedsVerification',
-    notes: 'Mock rule set for prototype only.'
+    notes: 'Provider compatibility requires verification before submitting entries.'
   },
   {
     provider: 'Betr Picks',
@@ -79,6 +79,6 @@ export const mockEntryRules: EntryRule[] = [
     supportsModifiers: false,
     sameGameAllowed: false,
     sourceConfidence: 'Assumed',
-    notes: 'Sportsbook rows are market context only for this DFS-focused prototype.'
+    notes: 'Sportsbook rows are reference lines only for DFS research.'
   }
 ];
