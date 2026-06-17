@@ -21,7 +21,7 @@ export function PlanCard({ plan }: { plan: PricingPlan }) {
         flexDirection: 'column',
         position: 'relative',
         overflow: 'hidden',
-        borderRadius: 3,
+        borderRadius: 4,
         border: `1px solid ${isFeatured ? 'rgba(34,211,238,.62)' : 'rgba(148,163,184,.18)'}`,
         background: isFeatured
           ? 'linear-gradient(180deg, rgba(17, 34, 58, 0.98), rgba(8, 16, 32, 0.98))'

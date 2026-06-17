@@ -37,6 +37,7 @@ export const components: Components<Omit<Theme, 'components'>> = {
   MuiCard: {
     styleOverrides: {
       root: {
+        borderRadius: 20,
         backgroundImage: 'none',
         border: `1px solid ${palette.border}`,
         backgroundColor: palette.surface,

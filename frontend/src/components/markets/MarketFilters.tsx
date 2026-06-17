@@ -23,7 +23,7 @@ export function MarketFilters({
     <Box
       sx={{
         border: '1px solid rgba(148,163,184,.16)',
-        borderRadius: 3,
+        borderRadius: 4,
         bgcolor: 'rgba(15,23,42,.54)',
         p: 1.25
       }}

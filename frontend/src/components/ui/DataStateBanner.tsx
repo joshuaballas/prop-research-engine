@@ -15,7 +15,7 @@ export function DataStateBanner({ title, message, status }: DataStateBannerProps
     <Box
       sx={{
         border: `1px solid ${status === 'Unavailable' ? 'rgba(244,63,94,.35)' : palette.borderStrong}`,
-        borderRadius: 3,
+        borderRadius: 4,
         p: 2,
         background:
           status === 'Unavailable'

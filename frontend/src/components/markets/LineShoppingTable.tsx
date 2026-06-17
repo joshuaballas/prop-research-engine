@@ -12,7 +12,7 @@ export function LineShoppingTable({ markets }: { markets: MarketOpportunity[] })
   const visibleMarkets = markets.filter((market) => market.providerCategory === 'DFS');
 
   return (
-    <Box sx={{ overflowX: 'auto', border: '1px solid rgba(148,163,184,.16)', borderRadius: 3, bgcolor: 'rgba(8,13,26,.28)' }}>
+    <Box sx={{ overflowX: 'auto', border: '1px solid rgba(148,163,184,.16)', borderRadius: 4, bgcolor: 'rgba(8,13,26,.28)' }}>
       <Table size="small" stickyHeader sx={{ minWidth: 980 }}>
         <TableHead>
           <TableRow>

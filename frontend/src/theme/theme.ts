@@ -38,7 +38,7 @@ export const theme = createTheme({
     button: { letterSpacing: 0 }
   },
   shape: {
-    borderRadius: 10
+    borderRadius: 5
   },
   components
 });

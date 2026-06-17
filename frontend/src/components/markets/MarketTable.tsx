@@ -7,7 +7,7 @@ import { ProviderLabel } from '../providers/ProviderLabel';
 
 export function MarketTable({ markets }: { markets: MarketOpportunity[] }) {
   return (
-    <Box sx={{ overflowX: 'auto', border: '1px solid rgba(148,163,184,.16)', borderRadius: 3 }}>
+    <Box sx={{ overflowX: 'auto', border: '1px solid rgba(148,163,184,.16)', borderRadius: 4 }}>
       <Table size="small" stickyHeader>
         <TableHead>
           <TableRow>

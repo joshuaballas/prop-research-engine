@@ -5,7 +5,7 @@ import { MetadataText } from '../ui/MetadataText';
 
 export function PerformanceTable({ rows }: { rows: PerformanceGroup[] }) {
   return (
-    <Box sx={{ overflowX: 'auto', border: '1px solid rgba(148,163,184,.16)', borderRadius: 3 }}>
+    <Box sx={{ overflowX: 'auto', border: '1px solid rgba(148,163,184,.16)', borderRadius: 4 }}>
       <Table size="small" stickyHeader>
         <TableHead>
           <TableRow>

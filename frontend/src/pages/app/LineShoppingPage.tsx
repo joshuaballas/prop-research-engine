@@ -99,7 +99,7 @@ function MobileSummaryStrip({
     <Box
       sx={{
         border: '1px solid rgba(148,163,184,.16)',
-        borderRadius: 3,
+        borderRadius: 4,
         bgcolor: 'rgba(15,23,42,.62)',
         px: 1.2,
         py: 1
@@ -129,7 +129,7 @@ function SummaryMetric({ label, value, helper, tone = 'default' }: { label: stri
       sx={{
         height: '100%',
         border: '1px solid rgba(148,163,184,.16)',
-        borderRadius: 3,
+        borderRadius: 4,
         bgcolor: 'rgba(15,23,42,.72)',
         p: 1.7
       }}

@@ -310,7 +310,7 @@ function HeroProductPreview({ children }: { children: ReactNode }) {
         sx={{
           display: { xs: 'none', sm: 'block' },
           position: 'relative',
-          borderRadius: 5,
+          borderRadius: 4,
           p: { sm: 2, md: 2.2 },
           border: '1px solid rgba(125,211,252,.22)',
           background:
