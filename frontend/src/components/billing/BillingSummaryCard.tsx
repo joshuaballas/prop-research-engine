@@ -1,27 +1,45 @@
-import { Button, Divider, Stack, Typography } from '@mui/material';
+import { Divider, Stack, Typography } from '@mui/material';
 import { mockUser } from '../../data/mockUser';
-import { useToast } from '../../hooks/useToast';
+import { palette } from '../../theme/palette';
 import { AppCard } from '../ui/AppCard';
-import { MetadataText } from '../ui/MetadataText';
+
+function BillingDetail({ label, value, tone }: { label: string; value: string; tone?: 'success' }) {
+  return (
+    <Stack
+      direction="row"
+      justifyContent="space-between"
+      spacing={2}
+      sx={{
+        py: 1,
+        borderBottom: `1px solid ${palette.border}`,
+        '&:last-child': { borderBottom: 0, pb: 0 }
+      }}
+    >
+      <Typography color="text.secondary">{label}</Typography>
+      <Typography fontWeight={900} textAlign="right" sx={{ color: tone === 'success' ? palette.success : palette.text }}>
+        {value}
+      </Typography>
+    </Stack>
+  );
+}
 
 export function BillingSummaryCard() {
-  const { showToast } = useToast();
   return (
-    <AppCard>
-      <Stack spacing={1.5}>
-        <Stack direction="row" justifyContent="space-between">
-          <Typography variant="h5">Billing</Typography>
-          <MetadataText tone="fresh">{mockUser.subscriptionStatus}</MetadataText>
+    <AppCard sx={{ height: '100%' }}>
+      <Stack spacing={1.6}>
+        <Stack spacing={0.35}>
+          <Typography variant="h5" fontWeight={950}>
+            Current subscription
+          </Typography>
+          <Typography color="text.secondary">Plan access, renewal status, and payment details.</Typography>
         </Stack>
         <Divider />
-        <Typography>
-          Current plan: <b>{mockUser.planName}</b>
-        </Typography>
-        <Typography color="text.secondary">Renews {mockUser.renewalDate}</Typography>
-        <Typography color="text.secondary">Payment method: Visa ending in 4242</Typography>
-        <Button variant="contained" onClick={() => showToast('Billing portal action mocked.', 'success')}>
-          Manage billing
-        </Button>
+        <Stack spacing={0.4}>
+          <BillingDetail label="Current plan" value={mockUser.planName} />
+          <BillingDetail label="Status" value={mockUser.subscriptionStatus} tone="success" />
+          <BillingDetail label="Renews" value={mockUser.renewalDate} />
+          <BillingDetail label="Payment method" value="Visa ending in 4242" />
+        </Stack>
       </Stack>
     </AppCard>
   );

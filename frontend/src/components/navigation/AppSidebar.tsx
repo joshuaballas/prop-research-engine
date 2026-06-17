@@ -2,7 +2,6 @@ import AnalyticsOutlinedIcon from '@mui/icons-material/AnalyticsOutlined';
 import AutoGraphOutlinedIcon from '@mui/icons-material/AutoGraphOutlined';
 import DashboardOutlinedIcon from '@mui/icons-material/DashboardOutlined';
 import FactCheckOutlinedIcon from '@mui/icons-material/FactCheckOutlined';
-import PaidOutlinedIcon from '@mui/icons-material/PaidOutlined';
 import PersonOutlineOutlinedIcon from '@mui/icons-material/PersonOutlineOutlined';
 import SearchOutlinedIcon from '@mui/icons-material/SearchOutlined';
 import ShoppingCartOutlinedIcon from '@mui/icons-material/ShoppingCartOutlined';
@@ -18,8 +17,7 @@ const navItems = [
   { label: 'Line Shopping', to: '/app/line-shopping', icon: <StackedLineChartOutlinedIcon /> },
   { label: 'Entry Builder', to: '/app/entry-builder', icon: <ShoppingCartOutlinedIcon /> },
   { label: 'Performance', to: '/app/performance', icon: <AnalyticsOutlinedIcon /> },
-  { label: 'Account', to: '/app/account', icon: <PersonOutlineOutlinedIcon /> },
-  { label: 'Billing', to: '/app/billing', icon: <PaidOutlinedIcon /> }
+  { label: 'Account', to: '/app/account', icon: <PersonOutlineOutlinedIcon /> }
 ];
 
 export function AppSidebar() {
