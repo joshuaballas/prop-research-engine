@@ -9,6 +9,7 @@ import { EntryBuilderPage } from '../pages/app/EntryBuilderPage';
 import { LineShoppingPage } from '../pages/app/LineShoppingPage';
 import { MarketsPage } from '../pages/app/MarketsPage';
 import { PerformancePage } from '../pages/app/PerformancePage';
+import { PlayerResearchPage } from '../pages/app/PlayerResearchPage';
 import { TopPicksPage } from '../pages/app/TopPicksPage';
 import { EntryBuilderProvider } from '../hooks/useEntryBuilder';
 import { CreateAccountPage } from '../pages/public/CreateAccountPage';
@@ -40,6 +41,7 @@ export function AppRoutes() {
         <Route path="markets" element={<MarketsPage />} />
         <Route path="top-picks" element={<TopPicksPage />} />
         <Route path="line-shopping" element={<LineShoppingPage />} />
+        <Route path="player-research" element={<PlayerResearchPage />} />
         <Route path="entry-builder" element={<EntryBuilderPage />} />
         <Route path="performance" element={<PerformancePage />} />
         <Route path="account" element={<AccountPage />} />

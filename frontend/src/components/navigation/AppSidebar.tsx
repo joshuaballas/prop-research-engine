@@ -3,6 +3,7 @@ import AutoGraphOutlinedIcon from '@mui/icons-material/AutoGraphOutlined';
 import DashboardOutlinedIcon from '@mui/icons-material/DashboardOutlined';
 import FactCheckOutlinedIcon from '@mui/icons-material/FactCheckOutlined';
 import PersonOutlineOutlinedIcon from '@mui/icons-material/PersonOutlineOutlined';
+import PersonSearchOutlinedIcon from '@mui/icons-material/PersonSearchOutlined';
 import SearchOutlinedIcon from '@mui/icons-material/SearchOutlined';
 import ShoppingCartOutlinedIcon from '@mui/icons-material/ShoppingCartOutlined';
 import StackedLineChartOutlinedIcon from '@mui/icons-material/StackedLineChartOutlined';
@@ -15,6 +16,7 @@ const navItems = [
   { label: 'Markets', to: '/app/markets', icon: <SearchOutlinedIcon /> },
   { label: 'Top Picks', to: '/app/top-picks', icon: <AutoGraphOutlinedIcon /> },
   { label: 'Line Shopping', to: '/app/line-shopping', icon: <StackedLineChartOutlinedIcon /> },
+  { label: 'Player Research', to: '/app/player-research', icon: <PersonSearchOutlinedIcon /> },
   { label: 'Entry Builder', to: '/app/entry-builder', icon: <ShoppingCartOutlinedIcon /> },
   { label: 'Performance', to: '/app/performance', icon: <AnalyticsOutlinedIcon /> },
   { label: 'Account', to: '/app/account', icon: <PersonOutlineOutlinedIcon /> }
