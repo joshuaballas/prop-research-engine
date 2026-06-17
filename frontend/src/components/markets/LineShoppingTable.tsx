@@ -12,12 +12,12 @@ import { StatusPill } from '../ui/StatusPill';
 import { compactActionButtonSx, lockedActionButtonSx, removeActionButtonSx, secondaryGhostButtonSx } from '../ui/buttonStyles';
 import { ProjectionModifierBadge } from './ProjectionModifierBadge';
 
-export function LineShoppingTable({ markets }: { markets: MarketOpportunity[] }) {
+export function LineShoppingTable({ markets, showActions = true }: { markets: MarketOpportunity[]; showActions?: boolean }) {
   const visibleMarkets = markets.filter((market) => market.providerCategory === 'DFS');
 
   return (
     <Box sx={{ overflowX: 'auto', border: '1px solid rgba(148,163,184,.16)', borderRadius: 4, bgcolor: 'rgba(8,13,26,.28)' }}>
-      <Table size="small" stickyHeader sx={{ minWidth: 980 }}>
+      <Table size="small" stickyHeader sx={{ minWidth: showActions ? 980 : 820 }}>
         <TableHead>
           <TableRow>
             <TableCell>Market</TableCell>
@@ -27,12 +27,12 @@ export function LineShoppingTable({ markets }: { markets: MarketOpportunity[] })
             <TableCell align="right">EV</TableCell>
             <TableCell>Confidence</TableCell>
             <TableCell>Warning</TableCell>
-            <TableCell align="center">Action</TableCell>
+            {showActions ? <TableCell align="center">Action</TableCell> : null}
           </TableRow>
         </TableHead>
         <TableBody>
           {visibleMarkets.map((market) => (
-            <LineShoppingRow key={market.id} market={market} />
+            <LineShoppingRow key={market.id} market={market} showActions={showActions} />
           ))}
         </TableBody>
       </Table>
@@ -40,12 +40,8 @@ export function LineShoppingTable({ markets }: { markets: MarketOpportunity[] })
   );
 }
 
-function LineShoppingRow({ market }: { market: MarketOpportunity }) {
+function LineShoppingRow({ market, showActions }: { market: MarketOpportunity; showActions: boolean }) {
   const confidence = resolveConfidence(market);
-  const builder = useEntryBuilder();
-  const selected = builder.isSelected(market.id);
-  const incompatible = !selected && !builder.isCompatible(market);
-  const canAdd = market.canAddToEntry && market.estimatedEv > 0 && !incompatible;
 
   return (
     <TableRow
@@ -99,24 +95,35 @@ function LineShoppingRow({ market }: { market: MarketOpportunity }) {
                   {market.warnings.map(cleanWarning).join(', ') || 'None'}
                 </Typography>
               </TableCell>
-              <TableCell align="center" sx={{ minWidth: 175 }}>
-                <Stack direction="row" spacing={0.8} justifyContent="center" flexWrap="nowrap">
-                  <Button
-                    startIcon={selected ? <RemoveCircleOutlineRoundedIcon /> : incompatible ? <LockRoundedIcon /> : <AddCircleOutlineRoundedIcon />}
-                    size="small"
-                    variant="contained"
-                    disabled={!selected && !canAdd}
-                    onClick={() => (selected || canAdd ? builder.toggleLeg(market) : undefined)}
-                    sx={entryButtonSx(selected, incompatible)}
-                  >
-                    {selected ? 'Remove' : incompatible ? 'Locked' : 'Add leg'}
-                  </Button>
-                  <Button startIcon={<CompareArrowsRoundedIcon />} size="small" variant="outlined" sx={detailsButtonSx}>
-                    Details
-                  </Button>
-                </Stack>
-              </TableCell>
+              {showActions ? <LineShoppingActionCell market={market} /> : null}
     </TableRow>
+  );
+}
+
+function LineShoppingActionCell({ market }: { market: MarketOpportunity }) {
+  const builder = useEntryBuilder();
+  const selected = builder.isSelected(market.id);
+  const incompatible = !selected && !builder.isCompatible(market);
+  const canAdd = market.canAddToEntry && market.estimatedEv > 0 && !incompatible;
+
+  return (
+    <TableCell align="center" sx={{ minWidth: 175 }}>
+      <Stack direction="row" spacing={0.8} justifyContent="center" flexWrap="nowrap">
+        <Button
+          startIcon={selected ? <RemoveCircleOutlineRoundedIcon /> : incompatible ? <LockRoundedIcon /> : <AddCircleOutlineRoundedIcon />}
+          size="small"
+          variant="contained"
+          disabled={!selected && !canAdd}
+          onClick={() => (selected || canAdd ? builder.toggleLeg(market) : undefined)}
+          sx={entryButtonSx(selected, incompatible)}
+        >
+          {selected ? 'Remove' : incompatible ? 'Locked' : 'Add leg'}
+        </Button>
+        <Button startIcon={<CompareArrowsRoundedIcon />} size="small" variant="outlined" sx={detailsButtonSx}>
+          Details
+        </Button>
+      </Stack>
+    </TableCell>
   );
 }
 

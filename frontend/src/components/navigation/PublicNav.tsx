@@ -22,12 +22,6 @@ export function PublicNav() {
           </Stack>
           <Box flex={1} />
           <Stack direction="row" spacing={1} sx={{ display: { xs: 'none', sm: 'flex' } }}>
-            <Button component={RouterLink} to="/#how-it-works" color="inherit">
-              How it works
-            </Button>
-            <Button component={RouterLink} to="/pricing" color="inherit">
-              Pricing
-            </Button>
             <Button component={RouterLink} to="/sign-in" color="inherit">
               Sign in
             </Button>

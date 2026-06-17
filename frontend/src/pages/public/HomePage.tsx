@@ -151,7 +151,7 @@ export function HomePage() {
                 <StatusPill label="Limited history" />
               </Stack>
             </Stack>
-            <LineShoppingTable markets={mockMarkets.slice(0, 4)} />
+            <LineShoppingTable markets={mockMarkets.slice(0, 4)} showActions={false} />
           </Stack>
         </AppCard>
       </LandingSection>
