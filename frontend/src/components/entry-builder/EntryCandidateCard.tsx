@@ -9,6 +9,7 @@ import { AppCard } from '../ui/AppCard';
 import { ProjectionModifierBadge } from '../markets/ProjectionModifierBadge';
 import { ProviderLabel } from '../providers/ProviderLabel';
 import { StatusPill } from '../ui/StatusPill';
+import { compactActionButtonSx, lockedActionButtonSx, removeActionButtonSx, secondaryGhostButtonSx } from '../ui/buttonStyles';
 
 interface EntryCandidateCardProps {
   market: MarketOpportunity;
@@ -130,37 +131,27 @@ export function EntryCandidateCard({ market, lockedProvider, selected = false, o
             onClick={() => onAdd(market)}
             disabled={incompatible}
             sx={{
+              ...compactActionButtonSx,
               minWidth: 106,
               ...(selected
                 ? {
-                    color: '#FECACA',
-                    background: 'rgba(244,63,94,.16)',
-                    border: '1px solid rgba(244,63,94,.42)',
-                    '&:hover': {
-                      background: 'rgba(244,63,94,.24)',
-                      borderColor: 'rgba(244,63,94,.56)',
-                      color: '#FFE4E6'
-                    }
+                    ...removeActionButtonSx
                   }
                 : incompatible
                   ? {
-                      color: '#CBD5E1',
-                      background: 'rgba(51,65,85,.42)',
-                      border: '1px solid rgba(148,163,184,.24)',
-                      boxShadow: 'none',
-                      '&.Mui-disabled': {
-                        color: '#CBD5E1',
-                        background: 'rgba(51,65,85,.42)',
-                        border: '1px solid rgba(148,163,184,.24)',
-                        opacity: 1
-                      }
+                      ...lockedActionButtonSx
                     }
                   : undefined)
             }}
           >
             {selected ? 'Remove' : incompatible ? 'Locked' : 'Add leg'}
           </Button>
-          <Button variant="outlined" size="small" startIcon={<CompareArrowsRoundedIcon />}>
+          <Button
+            variant="outlined"
+            size="small"
+            startIcon={<CompareArrowsRoundedIcon />}
+            sx={{ ...secondaryGhostButtonSx, minWidth: 106 }}
+          >
             Compare
           </Button>
         </Stack>

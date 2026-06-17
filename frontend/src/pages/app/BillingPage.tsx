@@ -4,6 +4,7 @@ import { Box, Button, Divider, Stack, Typography } from '@mui/material';
 import { BillingSummaryCard } from '../../components/billing/BillingSummaryCard';
 import { AppCard } from '../../components/ui/AppCard';
 import { PageHeader } from '../../components/ui/PageHeader';
+import { destructiveOutlineButtonSx } from '../../components/ui/buttonStyles';
 import { mockPricingPlans } from '../../data/mockPricingPlans';
 import { mockUser } from '../../data/mockUser';
 import { useToast } from '../../hooks/useToast';
@@ -124,15 +125,9 @@ export function BillingPage() {
               variant="outlined"
               onClick={() => showToast('Cancellation flow will be available when billing is connected.', 'warning')}
               sx={{
+                ...destructiveOutlineButtonSx,
                 alignSelf: { xs: 'stretch', sm: 'flex-start' },
-                mt: 'auto',
-                color: palette.danger,
-                borderColor: 'rgba(244, 63, 94, 0.38)',
-                backgroundColor: 'rgba(244, 63, 94, 0.07)',
-                '&:hover': {
-                  borderColor: 'rgba(244, 63, 94, 0.58)',
-                  backgroundColor: 'rgba(244, 63, 94, 0.11)'
-                }
+                mt: 'auto'
               }}
             >
               Cancel subscription

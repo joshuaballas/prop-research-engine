@@ -10,6 +10,7 @@ import { AppCard } from '../ui/AppCard';
 import { StatusPill } from '../ui/StatusPill';
 import { ProjectionModifierBadge } from './ProjectionModifierBadge';
 import { ProviderLabel } from '../providers/ProviderLabel';
+import { compactActionButtonSx, lockedActionButtonSx, removeActionButtonSx, secondaryGhostButtonSx } from '../ui/buttonStyles';
 
 interface TopPickCardProps {
   market: MarketOpportunity;
@@ -250,7 +251,7 @@ export function TopPickCard({ market, onAdd, hideActions = false, variant = 'def
             >
               {selected ? 'Remove' : incompatible ? 'Locked' : 'Add leg'}
             </Button>
-            <Button startIcon={<CompareArrowsRoundedIcon />} variant="outlined" onClick={handleCompare}>
+            <Button startIcon={<CompareArrowsRoundedIcon />} variant="outlined" onClick={handleCompare} sx={compareButtonSx}>
               Compare
             </Button>
           </Stack>
@@ -333,54 +334,26 @@ const confidenceTone = {
 } as const;
 
 const actionButtonSx = {
+  ...compactActionButtonSx,
   width: 112,
   minWidth: 112,
   height: 34,
   fontSize: 12.5,
-  fontWeight: 900,
-  color: '#06111f',
-  background: 'linear-gradient(135deg, #22d3ee 0%, #818cf8 100%)',
-  boxShadow: 'none',
-  whiteSpace: 'nowrap',
-  '& .MuiButton-startIcon': { mr: 0.55 },
-  '&:hover': {
-    background: 'linear-gradient(135deg, #38e1f4 0%, #8b96ff 100%)'
-  },
-  '&.Mui-disabled': {
-    color: 'rgba(203,213,225,.42)',
-    background: 'rgba(148,163,184,.08)',
-    border: '1px solid rgba(148,163,184,.16)'
-  }
+  whiteSpace: 'nowrap'
 };
 
 function entryButtonSx(selected: boolean, incompatible: boolean) {
   if (selected) {
     return {
       ...actionButtonSx,
-      color: '#FECACA',
-      background: 'rgba(244,63,94,.16)',
-      border: '1px solid rgba(244,63,94,.42)',
-      '&:hover': {
-        background: 'rgba(244,63,94,.24)',
-        borderColor: 'rgba(244,63,94,.56)',
-        color: '#FFE4E6'
-      }
+      ...removeActionButtonSx
     };
   }
 
   if (incompatible) {
     return {
       ...actionButtonSx,
-      color: '#CBD5E1',
-      background: 'rgba(51,65,85,.42)',
-      border: '1px solid rgba(148,163,184,.24)',
-      boxShadow: 'none',
-      '&.Mui-disabled': {
-        color: '#CBD5E1',
-        background: 'rgba(51,65,85,.42)',
-        border: '1px solid rgba(148,163,184,.24)',
-        opacity: 1
-      }
+      ...lockedActionButtonSx
     };
   }
 
@@ -388,17 +361,11 @@ function entryButtonSx(selected: boolean, incompatible: boolean) {
 }
 
 const compareButtonSx = {
-  width: 104,
-  minWidth: 104,
+  ...secondaryGhostButtonSx,
+  width: 112,
+  minWidth: 112,
   height: 34,
   fontSize: 12.5,
   fontWeight: 850,
-  color: 'text.secondary',
-  borderColor: 'rgba(148,163,184,.22)',
-  whiteSpace: 'nowrap',
-  '& .MuiButton-startIcon': { mr: 0.55 },
-  '&:hover': {
-    borderColor: 'rgba(148,163,184,.36)',
-    bgcolor: 'rgba(148,163,184,.08)'
-  }
+  whiteSpace: 'nowrap'
 };

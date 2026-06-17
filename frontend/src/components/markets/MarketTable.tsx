@@ -8,6 +8,7 @@ import { formatPercent } from '../../utils/formatters';
 import { StatusPill } from '../ui/StatusPill';
 import { ProjectionModifierBadge } from './ProjectionModifierBadge';
 import { ProviderLabel } from '../providers/ProviderLabel';
+import { compactActionButtonSx, lockedActionButtonSx, removeActionButtonSx, secondaryGhostButtonSx } from '../ui/buttonStyles';
 
 export function MarketTable({ markets }: { markets: MarketOpportunity[] }) {
   const builder = useEntryBuilder();
@@ -92,7 +93,7 @@ export function MarketTable({ markets }: { markets: MarketOpportunity[] }) {
                     startIcon={selected ? <RemoveCircleOutlineRoundedIcon /> : incompatible && addable ? <LockRoundedIcon /> : canAddFromScanner ? <AddCircleOutlineRoundedIcon /> : undefined}
                     disabled={incompatible && addable}
                     onClick={() => (canAddFromScanner || selected ? builder.toggleLeg(market) : undefined)}
-                    sx={entryButtonSx(selected, incompatible && addable)}
+                    sx={entryButtonSx(selected, incompatible && addable, canAddFromScanner)}
                   >
                     {selected ? 'Remove' : incompatible && addable ? 'Locked' : canAddFromScanner ? 'Add leg' : 'Details'}
                   </Button>
@@ -107,43 +108,39 @@ export function MarketTable({ markets }: { markets: MarketOpportunity[] }) {
 }
 
 const baseActionButtonSx = {
-  minWidth: 94,
+  ...compactActionButtonSx,
+  width: 98,
+  minWidth: 98,
   height: 32,
-  whiteSpace: 'nowrap',
-  fontWeight: 900
+  fontSize: 12,
+  whiteSpace: 'nowrap'
 };
 
-function entryButtonSx(selected: boolean, incompatible: boolean) {
+const detailsActionButtonSx = {
+  ...secondaryGhostButtonSx,
+  width: 98,
+  minWidth: 98,
+  height: 32,
+  fontSize: 12,
+  whiteSpace: 'nowrap'
+};
+
+function entryButtonSx(selected: boolean, incompatible: boolean, canAdd: boolean) {
   if (selected) {
     return {
       ...baseActionButtonSx,
-      color: '#FECACA',
-      background: 'rgba(244,63,94,.16)',
-      border: '1px solid rgba(244,63,94,.42)',
-      '&:hover': {
-        background: 'rgba(244,63,94,.24)',
-        borderColor: 'rgba(244,63,94,.56)',
-        color: '#FFE4E6'
-      }
+      ...removeActionButtonSx
     };
   }
 
   if (incompatible) {
     return {
       ...baseActionButtonSx,
-      color: '#CBD5E1',
-      background: 'rgba(51,65,85,.42)',
-      border: '1px solid rgba(148,163,184,.24)',
-      '&.Mui-disabled': {
-        color: '#CBD5E1',
-        background: 'rgba(51,65,85,.42)',
-        border: '1px solid rgba(148,163,184,.24)',
-        opacity: 1
-      }
+      ...lockedActionButtonSx
     };
   }
 
-  return baseActionButtonSx;
+  return canAdd ? baseActionButtonSx : detailsActionButtonSx;
 }
 
 function isScannerAddable(market: MarketOpportunity) {

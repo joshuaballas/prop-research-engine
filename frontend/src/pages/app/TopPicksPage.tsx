@@ -10,6 +10,7 @@ import { formatTopPickWarning, getTopPickConfidence, TopPickCard } from '../../c
 import { ProviderLabel } from '../../components/providers/ProviderLabel';
 import { PageHeader } from '../../components/ui/PageHeader';
 import { StatusPill } from '../../components/ui/StatusPill';
+import { compactActionButtonSx, lockedActionButtonSx, removeActionButtonSx, secondaryGhostButtonSx } from '../../components/ui/buttonStyles';
 import { mockTopPicks } from '../../data/mockTopPicks';
 import { useEntryBuilder } from '../../hooks/useEntryBuilder';
 import { useResponsiveView } from '../../hooks/useResponsiveView';
@@ -292,54 +293,26 @@ function RankedPicksTable({ markets, builder }: { markets: MarketOpportunity[]; 
 }
 
 const actionButtonSx = {
+  ...compactActionButtonSx,
   width: 98,
   minWidth: 98,
   height: 32,
   fontSize: 12,
-  fontWeight: 900,
-  color: '#06111f',
-  background: 'linear-gradient(135deg, #22d3ee 0%, #818cf8 100%)',
-  boxShadow: 'none',
-  whiteSpace: 'nowrap',
-  '& .MuiButton-startIcon': { mr: 0.55 },
-  '&:hover': {
-    background: 'linear-gradient(135deg, #38e1f4 0%, #8b96ff 100%)'
-  },
-  '&.Mui-disabled': {
-    color: 'rgba(203,213,225,.42)',
-    background: 'rgba(148,163,184,.08)',
-    border: '1px solid rgba(148,163,184,.16)'
-  }
+  whiteSpace: 'nowrap'
 };
 
 function entryButtonSx(selected: boolean, incompatible: boolean) {
   if (selected) {
     return {
       ...actionButtonSx,
-      color: '#FECACA',
-      background: 'rgba(244,63,94,.16)',
-      border: '1px solid rgba(244,63,94,.42)',
-      '&:hover': {
-        background: 'rgba(244,63,94,.24)',
-        borderColor: 'rgba(244,63,94,.56)',
-        color: '#FFE4E6'
-      }
+      ...removeActionButtonSx
     };
   }
 
   if (incompatible) {
     return {
       ...actionButtonSx,
-      color: '#CBD5E1',
-      background: 'rgba(51,65,85,.42)',
-      border: '1px solid rgba(148,163,184,.24)',
-      boxShadow: 'none',
-      '&.Mui-disabled': {
-        color: '#CBD5E1',
-        background: 'rgba(51,65,85,.42)',
-        border: '1px solid rgba(148,163,184,.24)',
-        opacity: 1
-      }
+      ...lockedActionButtonSx
     };
   }
 
@@ -347,17 +320,11 @@ function entryButtonSx(selected: boolean, incompatible: boolean) {
 }
 
 const compareButtonSx = {
-  width: 96,
-  minWidth: 96,
+  ...secondaryGhostButtonSx,
+  width: 98,
+  minWidth: 98,
   height: 32,
   fontSize: 12,
   fontWeight: 850,
-  color: 'text.secondary',
-  borderColor: 'rgba(148,163,184,.22)',
-  whiteSpace: 'nowrap',
-  '& .MuiButton-startIcon': { mr: 0.55 },
-  '&:hover': {
-    borderColor: 'rgba(148,163,184,.36)',
-    bgcolor: 'rgba(148,163,184,.08)'
-  }
+  whiteSpace: 'nowrap'
 };

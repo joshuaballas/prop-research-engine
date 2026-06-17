@@ -14,22 +14,57 @@ export const components: Components<Omit<Theme, 'components'>> = {
         textTransform: 'none',
         fontWeight: 800,
         boxShadow: 'none',
-        paddingInline: 18
+        paddingInline: 18,
+        minHeight: 38,
+        transition:
+          'background-color .16s ease, border-color .16s ease, box-shadow .16s ease, color .16s ease, transform .08s ease',
+        '& .MuiButton-startIcon, & .MuiButton-endIcon': {
+          color: 'inherit'
+        },
+        '&:focus-visible': {
+          outline: 'none',
+          boxShadow: `0 0 0 3px rgba(34, 211, 238, 0.22), 0 0 0 1px ${palette.primary}`
+        },
+        '&:active:not(.Mui-disabled)': {
+          transform: 'translateY(1px)'
+        }
       },
       contained: {
-        background: `linear-gradient(135deg, ${palette.primary}, ${palette.secondary})`,
-        color: '#031019',
+        backgroundColor: 'rgba(11, 74, 94, 0.92)',
+        color: palette.text,
+        border: '1px solid rgba(125, 211, 252, 0.5)',
+        textShadow: 'none',
+        boxShadow: 'inset 0 1px 0 rgba(255,255,255,.12), 0 8px 20px rgba(8, 145, 178, 0.12)',
         '&:hover': {
-          boxShadow: `0 0 0 1px ${palette.borderStrong}, 0 18px 45px rgba(34, 211, 238, 0.18)`
+          backgroundColor: 'rgba(13, 91, 116, 0.96)',
+          borderColor: 'rgba(165, 243, 252, 0.64)',
+          boxShadow: 'inset 0 1px 0 rgba(255,255,255,.14), 0 10px 24px rgba(8, 145, 178, 0.16)'
+        },
+        '&:active:not(.Mui-disabled)': {
+          boxShadow: 'inset 0 2px 8px rgba(3,7,18,.34), 0 5px 16px rgba(8, 145, 178, 0.14)'
+        },
+        '&.Mui-disabled': {
+          color: 'rgba(203,213,225,.44)',
+          background: 'rgba(51,65,85,.36)',
+          border: '1px solid rgba(148,163,184,.16)',
+          boxShadow: 'none',
+          textShadow: 'none'
         }
       },
       outlined: {
         borderColor: palette.border,
-        color: palette.text,
-        backgroundColor: 'rgba(15, 23, 42, 0.45)',
+        color: palette.textMuted,
+        backgroundColor: 'rgba(15, 23, 42, 0.5)',
+        boxShadow: 'inset 0 1px 0 rgba(255,255,255,.03)',
         '&:hover': {
           borderColor: palette.borderStrong,
-          backgroundColor: 'rgba(34, 211, 238, 0.08)'
+          color: palette.text,
+          backgroundColor: 'rgba(34, 211, 238, 0.07)'
+        },
+        '&.Mui-disabled': {
+          color: 'rgba(203,213,225,.36)',
+          borderColor: 'rgba(148,163,184,.12)',
+          backgroundColor: 'rgba(51,65,85,.24)'
         }
       }
     }

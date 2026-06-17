@@ -13,7 +13,7 @@ export const theme = createTheme({
     primary: {
       main: palette.primary,
       dark: palette.primaryDark,
-      contrastText: '#031019'
+      contrastText: palette.text
     },
     secondary: {
       main: palette.secondary

@@ -18,6 +18,7 @@ import { MetricCard } from '../../components/ui/MetricCard';
 import { PageHeader } from '../../components/ui/PageHeader';
 import { SectionHeader } from '../../components/ui/SectionHeader';
 import { StatusPill } from '../../components/ui/StatusPill';
+import { compactActionButtonSx, lockedActionButtonSx, removeActionButtonSx, secondaryGhostButtonSx } from '../../components/ui/buttonStyles';
 import { mockMarkets } from '../../data/mockMarkets';
 import { mockPerformance } from '../../data/mockPerformance';
 import { mockTopPicks } from '../../data/mockTopPicks';
@@ -206,7 +207,7 @@ function DashboardOpportunityCard({ market, builder }: { market: MarketOpportuni
           >
             {selected ? 'Remove' : incompatible ? 'Locked' : 'Add leg'}
           </Button>
-          <Button component={RouterLink} to="/app/line-shopping" size="small" variant="outlined">
+          <Button component={RouterLink} to="/app/line-shopping" size="small" variant="outlined" sx={compareButtonSx}>
             Compare
           </Button>
         </Stack>
@@ -351,53 +352,33 @@ function MiniMetric({ label, value, tone = 'default' }: { label: string; value: 
 }
 
 const baseEntryButtonSx = {
+  ...compactActionButtonSx,
   minWidth: 104,
   height: 34,
   fontSize: 12.5,
-  fontWeight: 900,
-  color: '#06111f',
-  background: 'linear-gradient(135deg, #22d3ee 0%, #818cf8 100%)',
-  boxShadow: 'none',
-  whiteSpace: 'nowrap',
-  '& .MuiButton-startIcon': { mr: 0.55 },
-  '&:hover': {
-    background: 'linear-gradient(135deg, #38e1f4 0%, #8b96ff 100%)'
-  },
-  '&.Mui-disabled': {
-    color: 'rgba(203,213,225,.42)',
-    background: 'rgba(148,163,184,.08)',
-    border: '1px solid rgba(148,163,184,.16)'
-  }
+  whiteSpace: 'nowrap'
+};
+
+const compareButtonSx = {
+  ...secondaryGhostButtonSx,
+  minWidth: 104,
+  height: 34,
+  fontSize: 12.5,
+  whiteSpace: 'nowrap'
 };
 
 function entryButtonSx(selected: boolean, incompatible: boolean) {
   if (selected) {
     return {
       ...baseEntryButtonSx,
-      color: '#FECACA',
-      background: 'rgba(244,63,94,.16)',
-      border: '1px solid rgba(244,63,94,.42)',
-      '&:hover': {
-        background: 'rgba(244,63,94,.24)',
-        borderColor: 'rgba(244,63,94,.56)',
-        color: '#FFE4E6'
-      }
+      ...removeActionButtonSx
     };
   }
 
   if (incompatible) {
     return {
       ...baseEntryButtonSx,
-      color: '#CBD5E1',
-      background: 'rgba(51,65,85,.42)',
-      border: '1px solid rgba(148,163,184,.24)',
-      boxShadow: 'none',
-      '&.Mui-disabled': {
-        color: '#CBD5E1',
-        background: 'rgba(51,65,85,.42)',
-        border: '1px solid rgba(148,163,184,.24)',
-        opacity: 1
-      }
+      ...lockedActionButtonSx
     };
   }
 

@@ -9,6 +9,7 @@ import { ProviderLabel } from '../providers/ProviderLabel';
 import { AppCard } from '../ui/AppCard';
 import { StatusPill } from '../ui/StatusPill';
 import { ProjectionModifierBadge } from './ProjectionModifierBadge';
+import { compactActionButtonSx, lockedActionButtonSx, removeActionButtonSx, secondaryGhostButtonSx } from '../ui/buttonStyles';
 
 export function MarketCard({ market }: { market: MarketOpportunity }) {
   const builder = useEntryBuilder();
@@ -74,11 +75,11 @@ export function MarketCard({ market }: { market: MarketOpportunity }) {
             startIcon={selected ? <RemoveCircleOutlineRoundedIcon /> : incompatible && addable ? <LockRoundedIcon /> : canAddFromScanner ? <AddCircleOutlineRoundedIcon /> : undefined}
             disabled={incompatible && addable}
             onClick={() => (canAddFromScanner || selected ? builder.toggleLeg(market) : undefined)}
-            sx={entryButtonSx(selected, incompatible && addable)}
+            sx={entryButtonSx(selected, incompatible && addable, canAddFromScanner)}
           >
             {selected ? 'Remove' : incompatible && addable ? 'Locked' : canAddFromScanner ? 'Add leg' : 'Details'}
           </Button>
-          <Button size="small" variant="outlined" sx={{ display: canAddFromScanner || selected ? 'inline-flex' : 'none' }}>
+          <Button size="small" variant="outlined" sx={{ ...secondaryActionButtonSx, display: canAddFromScanner || selected ? 'inline-flex' : 'none' }}>
             Details
           </Button>
         </Stack>
@@ -88,42 +89,39 @@ export function MarketCard({ market }: { market: MarketOpportunity }) {
 }
 
 const baseActionButtonSx = {
+  ...compactActionButtonSx,
+  width: 100,
   minWidth: 100,
   height: 32,
-  fontWeight: 900
+  fontSize: 12,
+  whiteSpace: 'nowrap'
 };
 
-function entryButtonSx(selected: boolean, incompatible: boolean) {
+const secondaryActionButtonSx = {
+  ...secondaryGhostButtonSx,
+  width: 100,
+  minWidth: 100,
+  height: 32,
+  fontSize: 12,
+  whiteSpace: 'nowrap'
+};
+
+function entryButtonSx(selected: boolean, incompatible: boolean, canAdd: boolean) {
   if (selected) {
     return {
       ...baseActionButtonSx,
-      color: '#FECACA',
-      background: 'rgba(244,63,94,.16)',
-      border: '1px solid rgba(244,63,94,.42)',
-      '&:hover': {
-        background: 'rgba(244,63,94,.24)',
-        borderColor: 'rgba(244,63,94,.56)',
-        color: '#FFE4E6'
-      }
+      ...removeActionButtonSx
     };
   }
 
   if (incompatible) {
     return {
       ...baseActionButtonSx,
-      color: '#CBD5E1',
-      background: 'rgba(51,65,85,.42)',
-      border: '1px solid rgba(148,163,184,.24)',
-      '&.Mui-disabled': {
-        color: '#CBD5E1',
-        background: 'rgba(51,65,85,.42)',
-        border: '1px solid rgba(148,163,184,.24)',
-        opacity: 1
-      }
+      ...lockedActionButtonSx
     };
   }
 
-  return baseActionButtonSx;
+  return canAdd ? baseActionButtonSx : secondaryActionButtonSx;
 }
 
 function isScannerAddable(market: MarketOpportunity) {
