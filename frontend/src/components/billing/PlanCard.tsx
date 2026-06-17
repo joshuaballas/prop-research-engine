@@ -1,48 +1,123 @@
 import CheckCircleRoundedIcon from '@mui/icons-material/CheckCircleRounded';
-import { Button, Divider, Stack, Typography } from '@mui/material';
+import { Button, Card, CardContent, Chip, Divider, Stack, Typography } from '@mui/material';
 import type { PricingPlan } from '../../types/billing';
 import { formatCurrency } from '../../utils/formatters';
-import { AppCard } from '../ui/AppCard';
 import { StatusPill } from '../ui/StatusPill';
 
 export function PlanCard({ plan }: { plan: PricingPlan }) {
+  const isFeatured = Boolean(plan.isFeatured);
+
   return (
-    <AppCard sx={{ height: '100%', borderColor: plan.isFeatured ? 'rgba(34,211,238,.5)' : undefined }}>
-      <Stack spacing={1.5} height="100%">
-        <Stack direction="row" justifyContent="space-between" alignItems="center" gap={1}>
-          <Typography variant="h5">{plan.name}</Typography>
-          {plan.badgeText ? <StatusPill label={plan.badgeText} /> : null}
-        </Stack>
-        <Typography color="text.secondary" minHeight={48}>
-          {plan.description}
-        </Typography>
-        <Typography variant="h3">
-          {formatCurrency(plan.priceCents)}
-          <Typography component="span" color="text.secondary" variant="body2">
-            /{plan.billingInterval}
-          </Typography>
-        </Typography>
-        <Divider />
-        <Stack spacing={1} flex={1}>
-          {plan.features.map((feature) => (
-            <Stack key={feature} direction="row" spacing={1} alignItems="flex-start">
-              <CheckCircleRoundedIcon color="primary" sx={{ fontSize: 18, mt: 0.2 }} />
-              <Typography variant="body2">{feature}</Typography>
+    <Card
+      sx={{
+        height: '100%',
+        width: '100%',
+        display: 'flex',
+        flexDirection: 'column',
+        position: 'relative',
+        overflow: 'hidden',
+        borderRadius: 3,
+        border: `1px solid ${isFeatured ? 'rgba(34,211,238,.62)' : 'rgba(148,163,184,.18)'}`,
+        background: isFeatured
+          ? 'linear-gradient(180deg, rgba(17, 34, 58, 0.98), rgba(8, 16, 32, 0.98))'
+          : `linear-gradient(180deg, rgba(17, 28, 49, 0.96), rgba(10, 16, 32, 0.96))`,
+        boxShadow: isFeatured ? '0 24px 80px rgba(34,211,238,.12)' : undefined,
+        '&:before': isFeatured
+          ? {
+              content: '""',
+              position: 'absolute',
+              inset: 0,
+              background:
+                'radial-gradient(circle at 50% 0%, rgba(34,211,238,.16), transparent 36%), linear-gradient(90deg, rgba(34,211,238,.18), rgba(129,140,248,.12))',
+              opacity: 0.8,
+              pointerEvents: 'none'
+            }
+          : undefined
+      }}
+    >
+      <CardContent
+        sx={{
+          position: 'relative',
+          zIndex: 1,
+          p: 2.25,
+          pb: '150px !important',
+          display: 'flex',
+          flex: 1,
+          flexDirection: 'column',
+          width: '100%'
+        }}
+      >
+        <Stack spacing={2} sx={{ flex: 1, minHeight: 0 }}>
+          <Stack spacing={1.2}>
+            <Stack direction="row" justifyContent="space-between" alignItems="center" gap={1}>
+              <Typography variant="h5">{plan.name}</Typography>
+              {plan.badgeText ? <StatusPill label={plan.badgeText} /> : null}
             </Stack>
-          ))}
-        </Stack>
-        <Divider />
-        <Stack spacing={0.6}>
-          {plan.entitlements.map((entitlement) => (
-            <Typography key={entitlement} variant="caption" color="text.secondary">
-              {entitlement}
+            <Typography color="text.secondary" minHeight={48}>
+              {plan.description}
             </Typography>
+          </Stack>
+
+          <Stack spacing={0.5}>
+            <Typography variant="h3" lineHeight={1}>
+              {formatCurrency(plan.priceCents)}
+              <Typography component="span" color="text.secondary" variant="body2" fontWeight={800}>
+                /{plan.billingInterval}
+              </Typography>
+            </Typography>
+            <Typography variant="caption" color="text.secondary">
+              Cancel anytime. Billing will be handled securely at checkout.
+            </Typography>
+          </Stack>
+
+          <Divider />
+          <Stack spacing={1.05}>
+            {plan.features.map((feature) => (
+              <Stack key={feature} direction="row" spacing={1.1} alignItems="flex-start">
+                <CheckCircleRoundedIcon color="primary" sx={{ fontSize: 17, mt: 0.18, flexShrink: 0 }} />
+                <Typography variant="body2" fontWeight={760} lineHeight={1.45}>
+                  {feature}
+                </Typography>
+              </Stack>
+            ))}
+          </Stack>
+
+        </Stack>
+      </CardContent>
+
+      <Stack
+        spacing={1.5}
+        sx={{
+          position: 'absolute',
+          left: 18,
+          right: 18,
+          bottom: 18,
+          zIndex: 2
+        }}
+      >
+        <Divider />
+        <Stack direction="row" flexWrap="wrap" gap={0.8} useFlexGap>
+          {plan.entitlements.map((entitlement) => (
+            <Chip
+              key={entitlement}
+              label={entitlement}
+              size="small"
+              sx={{
+                height: 26,
+                borderRadius: 1.5,
+                color: 'text.secondary',
+                bgcolor: 'rgba(8,13,26,.46)',
+                border: '1px solid rgba(148,163,184,.14)',
+                '& .MuiChip-label': { px: 1, fontWeight: 800 }
+              }}
+            />
           ))}
         </Stack>
-        <Button variant={plan.isFeatured ? 'contained' : 'outlined'} size="large">
+
+        <Button variant={isFeatured ? 'contained' : 'outlined'} size="large" fullWidth>
           Select {plan.name}
         </Button>
       </Stack>
-    </AppCard>
+    </Card>
   );
 }

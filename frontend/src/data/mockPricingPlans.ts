@@ -15,7 +15,7 @@ export const mockPricingPlans: PricingPlan[] = [
   {
     code: 'research-pro',
     name: 'Research Pro',
-    description: 'Full line-shopping research and provider-scoped entry building.',
+    description: 'Best for individual DFS researchers who want full line shopping, candidate review, and provider-scoped entry building.',
     priceCents: 4900,
     currency: 'USD',
     billingInterval: 'month',
@@ -28,12 +28,12 @@ export const mockPricingPlans: PricingPlan[] = [
       'Line-shopping comparison views',
       'Strategy performance breakdowns'
     ],
-    entitlements: ['3 seats', 'Unlimited mock entries', 'Advanced filters', 'Priority freshness alerts'],
+    entitlements: ['3 seats', 'Unlimited saved entries', 'Advanced filters', 'Priority freshness alerts'],
     checkoutPlanCode: 'research_pro_monthly'
   },
   {
     code: 'studio',
-    name: 'Studio',
+    name: 'Team',
     description: 'For serious research groups that want shared workflows.',
     priceCents: 9900,
     currency: 'USD',
