@@ -30,16 +30,26 @@ export function ToastProvider({ children }: PropsWithChildren) {
       {children}
       <Snackbar
         open={Boolean(toast)}
-        autoHideDuration={toast?.severity === 'error' ? 6500 : 3600}
+        autoHideDuration={toast?.severity === 'error' || toast?.severity === 'warning' ? 6500 : 2400}
         onClose={() => setToast(null)}
-        anchorOrigin={{ vertical: 'bottom', horizontal: isMobile ? 'center' : 'right' }}
+        anchorOrigin={{ vertical: isMobile ? 'top' : 'bottom', horizontal: isMobile ? 'center' : 'left' }}
+        sx={{
+          ...(isMobile
+            ? {
+                top: '72px !important',
+                left: '16px !important',
+                right: '16px !important',
+                width: 'auto'
+              }
+            : undefined)
+        }}
       >
         {toast ? (
           <Alert
             severity={toast.severity}
             variant="filled"
             onClose={() => setToast(null)}
-            sx={{ borderRadius: 2, fontWeight: 800 }}
+            sx={{ borderRadius: 2, fontWeight: 800, width: isMobile ? '100%' : undefined }}
           >
             {toast.message}
           </Alert>

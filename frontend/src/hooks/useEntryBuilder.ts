@@ -14,17 +14,27 @@ export function useEntryBuilder() {
     const result = canAddLeg(legs, market, mockEntryRules);
     if (!result.allowed) {
       showToast(result.reason, 'warning');
-      return;
+      return false;
     }
     setLegs((current) => [...current, market]);
-    showToast(`${market.player} added. ${result.reason}`, 'success');
+    return true;
   };
 
   const removeLeg = (id: string) => setLegs((current) => current.filter((leg) => leg.id !== id));
+  const toggleLeg = (market: MarketOpportunity) => {
+    if (legs.some((leg) => leg.id === market.id)) {
+      removeLeg(market.id);
+      showToast(`${market.player} removed.`, 'info');
+      return true;
+    }
+
+    return addLeg(market);
+  };
+
   const clear = () => {
     setLegs([]);
     showToast('Entry cleared.', 'info');
   };
 
-  return { legs, amount, setAmount, addLeg, removeLeg, clear };
+  return { legs, amount, setAmount, addLeg, toggleLeg, removeLeg, clear };
 }

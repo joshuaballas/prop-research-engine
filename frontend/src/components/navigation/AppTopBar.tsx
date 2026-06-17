@@ -1,5 +1,4 @@
-import MenuRoundedIcon from '@mui/icons-material/MenuRounded';
-import { Avatar, Box, IconButton, Stack, Typography } from '@mui/material';
+import { Avatar, Box, Stack, Typography } from '@mui/material';
 import { mockUser } from '../../data/mockUser';
 import { MetadataText } from '../ui/MetadataText';
 
@@ -13,9 +12,6 @@ export function AppTopBar() {
       sx={{ py: 1.35, px: { xs: 2, md: 3 }, borderBottom: '1px solid rgba(148,163,184,.12)', bgcolor: 'rgba(7,11,20,.76)', backdropFilter: 'blur(18px)', position: 'sticky', top: 0, zIndex: 10 }}
     >
       <Stack direction="row" alignItems="center" spacing={1.5}>
-        <IconButton sx={{ display: { lg: 'none' } }}>
-          <MenuRoundedIcon />
-        </IconButton>
         <Box>
           <Typography fontWeight={900}>DFS research dashboard</Typography>
           <Typography variant="caption" color="text.secondary">
