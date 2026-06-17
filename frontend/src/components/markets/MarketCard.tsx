@@ -1,37 +1,118 @@
-import { Stack, Typography } from '@mui/material';
+import AddCircleOutlineRoundedIcon from '@mui/icons-material/AddCircleOutlineRounded';
+import { Button, Stack, Typography } from '@mui/material';
 import type { MarketOpportunity } from '../../types/markets';
 import { formatPercent } from '../../utils/formatters';
+import { ProviderLabel } from '../providers/ProviderLabel';
 import { AppCard } from '../ui/AppCard';
 import { StatusPill } from '../ui/StatusPill';
 import { ProjectionModifierBadge } from './ProjectionModifierBadge';
-import { ProviderLabel } from '../providers/ProviderLabel';
 
 export function MarketCard({ market }: { market: MarketOpportunity }) {
+  const addable = isScannerAddable(market);
   return (
-    <AppCard>
-      <Stack spacing={1}>
-        <Stack direction="row" justifyContent="space-between">
-          <Typography fontWeight={950}>{market.player}</Typography>
-          <StatusPill label={market.strategyClassification} />
-        </Stack>
-        <Typography color="text.secondary" variant="body2">
-          {market.sport} · {market.event}
-        </Typography>
-        <Typography fontWeight={900}>
-          {market.side} {market.propType} {market.line}
-        </Typography>
-        <Stack direction="row" gap={1} flexWrap="wrap">
-          <ProviderLabel provider={market.provider} category={market.providerCategory} compact />
-          <StatusPill label={market.providerCategory} />
-          <ProjectionModifierBadge modifier={market.projectionModifier} />
-        </Stack>
-        <Stack direction="row" justifyContent="space-between">
-          <Typography color="text.secondary">EV</Typography>
-          <Typography color={market.estimatedEv > 0 ? 'success.main' : 'error.main'} fontWeight={950}>
+    <AppCard contentSx={{ p: 1.75 }}>
+      <Stack spacing={1.15}>
+        <Stack direction="row" justifyContent="space-between" alignItems="flex-start" gap={1}>
+          <Stack spacing={0.2} minWidth={0}>
+            <Typography fontWeight={950}>{market.player}</Typography>
+            <Typography color="text.secondary" variant="body2">
+              {market.side} {market.propType} {market.line}
+            </Typography>
+          </Stack>
+          <Typography color={market.estimatedEv > 0 ? 'success.main' : 'error.main'} fontWeight={950} whiteSpace="nowrap">
             {formatPercent(market.estimatedEv, { signed: true })}
           </Typography>
+        </Stack>
+
+        <Typography color="text.secondary" variant="body2">
+          {market.sport} - {market.event} - {market.startTime}
+        </Typography>
+
+        <Stack direction="row" justifyContent="space-between" alignItems="center" gap={1}>
+          {market.providerCategory === 'Sportsbook' ? (
+            <Stack spacing={0}>
+              <Typography fontWeight={900}>Reference only</Typography>
+              <Typography variant="caption" color="text.secondary">
+                Sportsbook line
+              </Typography>
+            </Stack>
+          ) : (
+            <ProviderLabel provider={market.provider} category={market.providerCategory} compact />
+          )}
+          <Typography color={confidenceColor(market.trustLevel)} fontWeight={950} variant="body2">
+            {market.trustLevel === 'Research' ? 'Weak' : market.trustLevel}
+          </Typography>
+        </Stack>
+
+        <Stack direction="row" gap={0.6} flexWrap="wrap" useFlexGap>
+          <StatusPill label={market.strategyClassification} />
+          {market.projectionModifier === 'Unknown Promo' ? null : <ProjectionModifierBadge modifier={market.projectionModifier} />}
+        </Stack>
+
+        <Stack direction="row" justifyContent="space-between" sx={{ borderTop: '1px solid rgba(148,163,184,.14)', pt: 1 }}>
+          <Metric label="Edge" value={formatPercent(market.probabilityEdge, { signed: true })} />
+          <Metric label="Model" value={formatPercent(market.modelProbability)} />
+          <Metric label="Sample" value={String(market.historicalSampleSize)} />
+          <Metric label="Line" value={String(market.line)} />
+        </Stack>
+
+        <Typography variant="body2" color={market.warnings.length || !addable ? 'warning.main' : 'text.secondary'}>
+          {formatWarning(market, addable)}
+        </Typography>
+
+        <Stack direction="row" spacing={1}>
+          <Button
+            size="small"
+            variant={addable ? 'contained' : 'outlined'}
+            startIcon={addable ? <AddCircleOutlineRoundedIcon /> : undefined}
+            sx={{ minWidth: 100 }}
+          >
+            {addable ? 'Add leg' : 'Details'}
+          </Button>
+          <Button size="small" variant="outlined" sx={{ display: addable ? 'inline-flex' : 'none' }}>
+            Details
+          </Button>
         </Stack>
       </Stack>
     </AppCard>
   );
+}
+
+function isScannerAddable(market: MarketOpportunity) {
+  return (
+    market.providerCategory === 'DFS' &&
+    market.canAddToEntry &&
+    market.estimatedEv > 0 &&
+    (market.strategyClassification === 'Candidate' || market.strategyClassification === 'Watchlist') &&
+    market.freshness !== 'Unavailable'
+  );
+}
+
+function Metric({ label, value }: { label: string; value: string }) {
+  return (
+    <Stack spacing={0.15}>
+      <Typography variant="caption" color="text.secondary" fontWeight={850}>
+        {label}
+      </Typography>
+      <Typography fontWeight={950}>{value}</Typography>
+    </Stack>
+  );
+}
+
+function confidenceColor(level: MarketOpportunity['trustLevel']) {
+  if (level === 'Strong') return 'success.main';
+  if (level === 'Medium') return 'warning.main';
+  return 'error.main';
+}
+
+function formatWarning(market: MarketOpportunity, addable: boolean) {
+  if (market.providerCategory === 'Sportsbook') return 'Reference lines are not entry legs.';
+  if (market.estimatedEv <= 0) return 'Non-positive EV. Review details only.';
+  if (market.freshness === 'Unavailable') return 'Limited coverage.';
+  if (!addable && market.strategyClassification === 'Research') return 'Research row. Review before adding.';
+  if (!market.warnings.length) return market.reasons[0] ?? 'Active DFS row';
+  return market.warnings[0]
+    .replace('Provider limited for this sport', 'Limited coverage')
+    .replace('Low sample size', 'Low sample')
+    .replace('Confirm final payout in provider app', 'Payout may vary');
 }

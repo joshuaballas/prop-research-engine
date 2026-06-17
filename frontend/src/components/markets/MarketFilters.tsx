@@ -1,5 +1,6 @@
 import CheckRoundedIcon from '@mui/icons-material/CheckRounded';
-import { Box, Button, Checkbox, FormControlLabel, MenuItem, Stack, TextField } from '@mui/material';
+import TuneRoundedIcon from '@mui/icons-material/TuneRounded';
+import { Box, Button, Checkbox, Collapse, FormControlLabel, MenuItem, Stack, TextField } from '@mui/material';
 import { useState } from 'react';
 
 interface MarketFiltersProps {
@@ -9,6 +10,8 @@ interface MarketFiltersProps {
   dfsActionableOnly?: boolean;
   onCandidateOnlyChange?: (value: boolean) => void;
   onDfsActionableOnlyChange?: (value: boolean) => void;
+  scannerFields?: boolean;
+  compactMobile?: boolean;
 }
 
 export function MarketFilters({
@@ -17,8 +20,66 @@ export function MarketFilters({
   candidateOnly,
   dfsActionableOnly,
   onCandidateOnlyChange,
-  onDfsActionableOnlyChange
+  onDfsActionableOnlyChange,
+  scannerFields = false,
+  compactMobile = false
 }: MarketFiltersProps) {
+  const [mobileFiltersOpen, setMobileFiltersOpen] = useState(false);
+  const selectControls = (
+    <>
+      {scannerFields ? (
+        <TextField label="Sport" size="small" select defaultValue="All" sx={{ minWidth: { xs: '100%', md: 104 }, width: { md: 104 } }}>
+          {['All', 'MLB', 'NBA', 'NFL', 'NHL', 'Tennis', 'Golf'].map((item) => (
+            <MenuItem key={item} value={item}>
+              {item}
+            </MenuItem>
+          ))}
+        </TextField>
+      ) : null}
+      {scannerFields ? (
+        <TextField label="Provider" size="small" select defaultValue="All" sx={{ minWidth: { xs: '100%', md: 142 }, width: { md: 142 } }}>
+          {['All', 'PrizePicks', 'Underdog', 'DraftKings Pick6', 'Betr Picks'].map((item) => (
+            <MenuItem key={item} value={item}>
+              {item}
+            </MenuItem>
+          ))}
+        </TextField>
+      ) : null}
+      <TextField label="Provider category" size="small" select defaultValue="All" sx={{ minWidth: { xs: '100%', md: 148 }, width: { md: 148 } }}>
+        {['All', 'DFS', 'Reference only'].map((item) => (
+          <MenuItem key={item} value={item}>
+            {item}
+          </MenuItem>
+        ))}
+      </TextField>
+      <TextField label={classificationLabel} size="small" select defaultValue="All" sx={{ minWidth: { xs: '100%', md: 126 }, width: { md: 126 } }}>
+        {(classificationLabel === 'Confidence' ? ['All', 'Strong', 'Medium', 'Weak'] : ['All', 'Candidate', 'Watchlist', 'Research', 'Avoid']).map((item) => (
+          <MenuItem key={item} value={item}>
+            {item}
+          </MenuItem>
+        ))}
+      </TextField>
+      {scannerFields ? (
+        <>
+          <TextField label="Opportunity" size="small" select defaultValue="All" sx={{ minWidth: { xs: '100%', md: 132 }, width: { md: 132 } }}>
+            {['All', 'Top Pick', 'Watchlist', 'Research'].map((item) => (
+              <MenuItem key={item} value={item}>
+                {item}
+              </MenuItem>
+            ))}
+          </TextField>
+          <TextField label="Sort" size="small" select defaultValue="EV" sx={{ minWidth: { xs: '100%', md: 104 }, width: { md: 104 } }}>
+            {['EV', 'Edge', 'Sample'].map((item) => (
+              <MenuItem key={item} value={item}>
+                {item}
+              </MenuItem>
+            ))}
+          </TextField>
+        </>
+      ) : null}
+    </>
+  );
+
   return (
     <Box
       sx={{
@@ -30,22 +91,57 @@ export function MarketFilters({
         pb: { md: 1.35 }
       }}
     >
-      <Stack direction={{ xs: 'column', md: 'row' }} spacing={{ xs: 1.75, md: 1 }} alignItems={{ xs: 'stretch', md: 'center' }}>
-        <TextField label="Search player" size="small" fullWidth sx={{ maxWidth: { md: 360 }, minWidth: { md: 300 } }} />
-        <TextField label="Provider category" size="small" select defaultValue="All" sx={{ minWidth: { xs: '100%', md: 168 }, width: { md: 168 } }}>
-          {['All', 'DFS', 'Sportsbook'].map((item) => (
-            <MenuItem key={item} value={item}>
-              {item}
-            </MenuItem>
-          ))}
-        </TextField>
-        <TextField label={classificationLabel} size="small" select defaultValue="All" sx={{ minWidth: { xs: '100%', md: 150 }, width: { md: 150 } }}>
-          {['All', 'Candidate', 'Watchlist', 'Research', 'Avoid'].map((item) => (
-            <MenuItem key={item} value={item}>
-              {item}
-            </MenuItem>
-          ))}
-        </TextField>
+      {compactMobile ? (
+        <Stack direction="row" spacing={1} sx={{ display: { xs: 'flex', md: 'none' } }}>
+          <TextField label="Search player" size="small" fullWidth />
+          <Button
+            variant="outlined"
+            size="small"
+            startIcon={<TuneRoundedIcon />}
+            onClick={() => setMobileFiltersOpen((open) => !open)}
+            sx={{ flexShrink: 0, px: 1.25 }}
+          >
+            Filters
+          </Button>
+        </Stack>
+      ) : null}
+      {compactMobile ? (
+        <Collapse in={mobileFiltersOpen} sx={{ display: { xs: 'block', md: 'none' } }}>
+          <Stack spacing={1.25} sx={{ pt: 1.25 }}>
+            {selectControls}
+            {useToggleButtons ? (
+              <FilterToggleGroup
+                candidateOnly={candidateOnly}
+                dfsActionableOnly={dfsActionableOnly}
+                onCandidateOnlyChange={onCandidateOnlyChange}
+                onDfsActionableOnlyChange={onDfsActionableOnlyChange}
+              />
+            ) : <CheckboxGroup />}
+          </Stack>
+        </Collapse>
+      ) : null}
+      <Stack
+        direction={{ xs: 'column', md: 'row' }}
+        spacing={{ xs: 1.75, md: 1 }}
+        alignItems={{ xs: 'stretch', md: 'center' }}
+        useFlexGap
+        sx={{
+          display: compactMobile ? { xs: 'none', md: 'flex' } : 'flex',
+          flexWrap: { md: 'wrap' },
+          rowGap: { md: 1 }
+        }}
+      >
+        <TextField
+          label="Search player"
+          size="small"
+          fullWidth
+          sx={{
+            flex: { md: '1 1 240px' },
+            maxWidth: { md: 360 },
+            minWidth: { md: 220 }
+          }}
+        />
+        {selectControls}
         {useToggleButtons ? (
           <FilterToggleGroup
             candidateOnly={candidateOnly}
@@ -96,7 +192,7 @@ function FilterToggleGroup({
   ];
 
   return (
-    <Stack direction="row" spacing={0.75} flexWrap="wrap" useFlexGap sx={{ flexShrink: 0, userSelect: 'none' }}>
+    <Stack direction="row" spacing={0.75} useFlexGap sx={{ flex: '0 0 auto', flexWrap: 'nowrap', userSelect: 'none' }}>
       {filters.map((filter) => (
         <Button
           key={filter.label}

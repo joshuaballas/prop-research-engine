@@ -1,52 +1,131 @@
-import { Box, Button, Table, TableBody, TableCell, TableHead, TableRow } from '@mui/material';
+import AddCircleOutlineRoundedIcon from '@mui/icons-material/AddCircleOutlineRounded';
+import { Box, Button, Stack, Table, TableBody, TableCell, TableHead, TableRow, Typography } from '@mui/material';
 import type { MarketOpportunity } from '../../types/markets';
-import { formatAmericanOdds, formatPercent } from '../../utils/formatters';
+import { formatPercent } from '../../utils/formatters';
 import { StatusPill } from '../ui/StatusPill';
 import { ProjectionModifierBadge } from './ProjectionModifierBadge';
 import { ProviderLabel } from '../providers/ProviderLabel';
 
 export function MarketTable({ markets }: { markets: MarketOpportunity[] }) {
   return (
-    <Box sx={{ overflowX: 'auto', border: '1px solid rgba(148,163,184,.16)', borderRadius: 4 }}>
+    <Box sx={{ overflowX: 'auto', border: '1px solid rgba(148,163,184,.16)', borderRadius: 3 }}>
       <Table size="small" stickyHeader>
         <TableHead>
           <TableRow>
-            <TableCell>Player</TableCell>
+            <TableCell>Market</TableCell>
             <TableCell>Sport</TableCell>
-            <TableCell>Prop</TableCell>
             <TableCell>Provider</TableCell>
+            <TableCell>Line</TableCell>
             <TableCell align="right">EV</TableCell>
-            <TableCell align="right">Model</TableCell>
             <TableCell align="right">Edge</TableCell>
-            <TableCell>Strategy</TableCell>
+            <TableCell>Confidence</TableCell>
+            <TableCell>Tags</TableCell>
+            <TableCell>Warning</TableCell>
             <TableCell>Action</TableCell>
           </TableRow>
         </TableHead>
         <TableBody>
-          {markets.map((market) => (
-            <TableRow key={market.id} hover>
-              <TableCell>
-                <Box fontWeight={900}>{market.player}</Box>
-                <Box color="text.secondary" fontSize={12}>{market.event}</Box>
-              </TableCell>
-              <TableCell>{market.sport}</TableCell>
-              <TableCell>
-                {market.side} {market.propType} {market.line}
-                <Box mt={0.5}><ProjectionModifierBadge modifier={market.projectionModifier} /></Box>
-              </TableCell>
-              <TableCell>
-                <ProviderLabel provider={market.provider} category={market.providerCategory} compact />
-                <Box mt={0.5} color="text.secondary" fontSize={12}>{formatAmericanOdds(market.bestAmericanPrice)}</Box>
-              </TableCell>
-              <TableCell align="right">{formatPercent(market.estimatedEv, { signed: true })}</TableCell>
-              <TableCell align="right">{formatPercent(market.modelProbability)}</TableCell>
-              <TableCell align="right">{formatPercent(market.probabilityEdge, { signed: true })}</TableCell>
-              <TableCell><StatusPill label={market.strategyClassification} /></TableCell>
-              <TableCell><Button size="small" variant="outlined" disabled={!market.canAddToEntry}>Add</Button></TableCell>
-            </TableRow>
-          ))}
+          {markets.map((market) => {
+            const addable = isScannerAddable(market);
+            return (
+              <TableRow key={market.id} hover>
+                <TableCell>
+                  <Typography fontWeight={950}>{market.player}</Typography>
+                  <Typography color="text.secondary" fontSize={12}>
+                    {market.side} {market.propType} {market.line}
+                  </Typography>
+                  <Typography color="text.secondary" fontSize={12}>
+                    {market.event} - {market.startTime}
+                  </Typography>
+                </TableCell>
+                <TableCell>
+                  <Typography fontWeight={850}>{market.sport}</Typography>
+                </TableCell>
+                <TableCell>
+                  {market.providerCategory === 'Sportsbook' ? (
+                    <Stack spacing={0.2}>
+                      <Typography fontWeight={900}>Reference only</Typography>
+                      <Typography variant="caption" color="text.secondary">
+                        Sportsbook line
+                      </Typography>
+                    </Stack>
+                  ) : (
+                    <ProviderLabel provider={market.provider} category={market.providerCategory} compact />
+                  )}
+                </TableCell>
+                <TableCell>
+                  <Typography fontWeight={900}>
+                    {market.side} {market.line}
+                  </Typography>
+                </TableCell>
+                <TableCell align="right">
+                  <Typography color={market.estimatedEv > 0 ? 'success.main' : 'error.main'} fontWeight={950}>
+                    {formatPercent(market.estimatedEv, { signed: true })}
+                  </Typography>
+                </TableCell>
+                <TableCell align="right">
+                  <Typography fontWeight={900}>{formatPercent(market.probabilityEdge, { signed: true })}</Typography>
+                </TableCell>
+                <TableCell><ConfidenceLabel level={market.trustLevel} /></TableCell>
+                <TableCell>
+                  <Stack direction="row" gap={0.6} flexWrap="wrap" useFlexGap>
+                    <StatusPill label={market.strategyClassification} />
+                    {market.projectionModifier === 'Unknown Promo' ? null : <ProjectionModifierBadge modifier={market.projectionModifier} />}
+                  </Stack>
+                </TableCell>
+                <TableCell sx={{ minWidth: 170 }}>
+                  <Typography variant="body2" color={market.warnings.length || !addable ? 'warning.main' : 'text.secondary'}>
+                    {formatWarning(market, addable)}
+                  </Typography>
+                </TableCell>
+                <TableCell>
+                  <Button
+                    size="small"
+                    variant={addable ? 'contained' : 'outlined'}
+                    startIcon={addable ? <AddCircleOutlineRoundedIcon /> : undefined}
+                    sx={{ minWidth: 94, whiteSpace: 'nowrap' }}
+                  >
+                    {addable ? 'Add leg' : 'Details'}
+                  </Button>
+                </TableCell>
+              </TableRow>
+            );
+          })}
         </TableBody>
       </Table>
     </Box>
   );
+}
+
+function isScannerAddable(market: MarketOpportunity) {
+  return (
+    market.providerCategory === 'DFS' &&
+    market.canAddToEntry &&
+    market.estimatedEv > 0 &&
+    (market.strategyClassification === 'Candidate' || market.strategyClassification === 'Watchlist') &&
+    market.freshness !== 'Unavailable'
+  );
+}
+
+function ConfidenceLabel({ level }: { level: MarketOpportunity['trustLevel'] }) {
+  const label = level === 'Research' ? 'Weak' : level;
+  const color = label === 'Strong' ? 'success.main' : label === 'Medium' ? 'warning.main' : 'error.main';
+  return (
+    <Typography color={color} fontWeight={950}>
+      {label}
+    </Typography>
+  );
+}
+
+function formatWarning(market: MarketOpportunity, addable: boolean) {
+  if (market.providerCategory === 'Sportsbook') return 'Reference lines are not entry legs.';
+  if (market.estimatedEv <= 0) return 'Non-positive EV. Review details only.';
+  if (market.freshness === 'Unavailable') return 'Limited coverage.';
+  if (!addable && market.strategyClassification === 'Research') return 'Research row. Review before adding.';
+  if (!market.warnings.length) return 'None';
+  return market.warnings[0]
+    .replace('Sportsbook context rows cannot be added', 'Reference lines are not entry legs')
+    .replace('Provider limited for this sport', 'Limited coverage')
+    .replace('Low sample size', 'Low sample')
+    .replace('Confirm final payout in provider app', 'Payout may vary');
 }
