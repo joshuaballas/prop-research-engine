@@ -64,9 +64,9 @@ function TopPickControls({ isMobile }: { isMobile: boolean }) {
     return (
       <Box
         sx={{
-          border: '1px solid rgba(148,163,184,.16)',
-          borderRadius: 4,
-          bgcolor: 'rgba(15,23,42,.54)',
+          border: '1px solid rgba(148,163,184,.14)',
+          borderRadius: 3,
+          bgcolor: 'rgba(15,23,42,.42)',
           p: 1
         }}
       >
@@ -130,49 +130,61 @@ function TopPickControls({ isMobile }: { isMobile: boolean }) {
   return (
     <Box
       sx={{
-        border: '1px solid rgba(148,163,184,.16)',
-        borderRadius: 4,
-        bgcolor: 'rgba(15,23,42,.54)',
-        p: 1.25
+        borderBottom: '1px solid rgba(148,163,184,.14)',
+        pb: 1.35
       }}
     >
-      <Stack direction={{ xs: 'column', md: 'row' }} spacing={{ xs: 1.5, md: 1.1 }} alignItems={{ xs: 'stretch', md: 'center' }}>
-        <TextField label="Search player" size="small" fullWidth sx={{ minWidth: { md: 260 } }} />
-        <TextField label="Sport" size="small" select defaultValue="All" sx={{ minWidth: { xs: '100%', md: 140 } }}>
+      <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
+        <TextField label="Search player" size="small" fullWidth sx={{ maxWidth: 360, minWidth: 300 }} />
+        <TextField label="Sport" size="small" select defaultValue="All" sx={{ width: 122 }}>
           {['All', 'MLB', 'NBA', 'TENNIS', 'GOLF'].map((item) => (
             <MenuItem key={item} value={item}>
               {item}
             </MenuItem>
           ))}
         </TextField>
-        <TextField label="Provider" size="small" select defaultValue="All" sx={{ minWidth: { xs: '100%', md: 185 } }}>
+        <TextField label="Provider" size="small" select defaultValue="All" sx={{ width: 168 }}>
           {['All', 'PrizePicks', 'Underdog', 'DraftKings Pick6', 'Betr Picks'].map((item) => (
             <MenuItem key={item} value={item}>
               {item}
             </MenuItem>
           ))}
         </TextField>
-        <TextField label="Opportunity" size="small" select defaultValue="All" sx={{ minWidth: { xs: '100%', md: 150 } }}>
+        <TextField label="Opportunity" size="small" select defaultValue="All" sx={{ width: 138 }}>
           {['All', 'Candidate', 'Watchlist', 'Research'].map((item) => (
             <MenuItem key={item} value={item}>
               {item}
             </MenuItem>
           ))}
         </TextField>
-        <TextField label="Confidence" size="small" select defaultValue="All" sx={{ minWidth: { xs: '100%', md: 145 } }}>
+        <TextField label="Confidence" size="small" select defaultValue="All" sx={{ width: 132 }}>
           {['All', 'Strong', 'Medium', 'Weak'].map((item) => (
             <MenuItem key={item} value={item}>
               {item}
             </MenuItem>
           ))}
         </TextField>
-        <TextField label="Sort by" size="small" select defaultValue="EV" sx={{ minWidth: { xs: '100%', md: 145 } }}>
+        <TextField label="Sort by" size="small" select defaultValue="EV" sx={{ width: 126 }}>
           {['EV', 'Edge', 'Confidence', 'Sample'].map((item) => (
             <MenuItem key={item} value={item}>
               {item}
             </MenuItem>
           ))}
         </TextField>
+        <Button
+          variant="text"
+          size="small"
+          sx={{
+            ml: 'auto',
+            minWidth: 92,
+            height: 38,
+            color: 'text.secondary',
+            fontWeight: 850,
+            '&:hover': { bgcolor: 'rgba(148,163,184,.07)', color: 'text.primary' }
+          }}
+        >
+          Clear filters
+        </Button>
       </Stack>
     </Box>
   );

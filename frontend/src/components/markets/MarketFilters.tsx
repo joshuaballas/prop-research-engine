@@ -22,22 +22,24 @@ export function MarketFilters({
   return (
     <Box
       sx={{
-        border: '1px solid rgba(148,163,184,.16)',
-        borderRadius: 4,
-        bgcolor: 'rgba(15,23,42,.54)',
-        p: 1.25
+        border: { xs: '1px solid rgba(148,163,184,.14)', md: 0 },
+        borderBottom: { md: '1px solid rgba(148,163,184,.14)' },
+        borderRadius: { xs: 3, md: 0 },
+        bgcolor: { xs: 'rgba(15,23,42,.42)', md: 'transparent' },
+        p: { xs: 1, md: 0 },
+        pb: { md: 1.35 }
       }}
     >
-      <Stack direction={{ xs: 'column', md: 'row' }} spacing={{ xs: 1.75, md: 1.1 }} alignItems={{ xs: 'stretch', md: 'center' }}>
-        <TextField label="Search player" size="small" fullWidth sx={{ minWidth: { md: 260 } }} />
-        <TextField label="Provider category" size="small" select defaultValue="All" sx={{ minWidth: { xs: '100%', md: 180 } }}>
+      <Stack direction={{ xs: 'column', md: 'row' }} spacing={{ xs: 1.75, md: 1 }} alignItems={{ xs: 'stretch', md: 'center' }}>
+        <TextField label="Search player" size="small" fullWidth sx={{ maxWidth: { md: 360 }, minWidth: { md: 300 } }} />
+        <TextField label="Provider category" size="small" select defaultValue="All" sx={{ minWidth: { xs: '100%', md: 168 }, width: { md: 168 } }}>
           {['All', 'DFS', 'Sportsbook'].map((item) => (
             <MenuItem key={item} value={item}>
               {item}
             </MenuItem>
           ))}
         </TextField>
-        <TextField label={classificationLabel} size="small" select defaultValue="All" sx={{ minWidth: { xs: '100%', md: 180 } }}>
+        <TextField label={classificationLabel} size="small" select defaultValue="All" sx={{ minWidth: { xs: '100%', md: 150 }, width: { md: 150 } }}>
           {['All', 'Candidate', 'Watchlist', 'Research', 'Avoid'].map((item) => (
             <MenuItem key={item} value={item}>
               {item}
