@@ -6,10 +6,12 @@ import type { PropHistoryResponseDto } from '../../api/types';
 import { isDemoDataMode } from '../../config/dataMode';
 import { mockPlayerResearchPlayers } from '../../data/mockPlayerResearch';
 import { formatPercent } from '../../utils/formatters';
+import { getMarketCautions } from '../../utils/marketCautions';
 import { MetricLabelWithHelp } from '../metrics/MetricLabelWithHelp';
 import { TrustValue } from '../metrics/TrustValue';
 import { ProviderLabel } from '../providers/ProviderLabel';
 import { AppCard } from '../ui/AppCard';
+import { CautionLabels } from '../markets/CautionLabels';
 import type { MarketOpportunity } from '../../types/markets';
 import { PropHistoryCard } from './PropHistoryCard';
 
@@ -36,13 +38,20 @@ export function PropDetailsModal({ market, open, onClose }: PropDetailsModalProp
           borderRadius: 2.5,
           border: '1px solid rgba(148,163,184,.18)',
           bgcolor: 'rgba(8,13,25,.98)',
+          backgroundImage: 'none',
+          m: { xs: '10px', sm: 4 },
+          width: { xs: 'calc(100vw - 20px)', sm: 'auto' },
+          maxWidth: { xs: 'calc(100vw - 20px)', sm: 1200 },
+          maxHeight: { xs: 'calc(100vh - 24px)', sm: 'calc(100vh - 64px)' },
           boxShadow: '0 28px 80px rgba(0,0,0,.48)'
         }
       }}
     >
-      <DialogTitle id="prop-details-title" sx={{ pr: 7, pb: 1 }}>
-        <Stack spacing={0.65}>
-          <Typography variant="h4">{market?.player ?? 'Prop details'}</Typography>
+      <DialogTitle id="prop-details-title" sx={{ pr: { xs: 6, sm: 7 }, pb: { xs: 0.75, sm: 1 }, pt: { xs: 2, sm: 2.5 } }}>
+        <Stack spacing={{ xs: 0.45, sm: 0.65 }}>
+          <Typography variant="h4" sx={{ fontSize: { xs: 26, sm: 34 }, lineHeight: 1.05 }}>
+            {market?.player ?? 'Prop details'}
+          </Typography>
           {market ? (
             <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
               <ProviderLabel provider={market.provider} category={market.providerCategory} compact />
@@ -57,8 +66,8 @@ export function PropDetailsModal({ market, open, onClose }: PropDetailsModalProp
           onClick={onClose}
           sx={{
             position: 'absolute',
-            right: 14,
-            top: 14,
+            right: { xs: 10, sm: 14 },
+            top: { xs: 10, sm: 14 },
             color: 'text.secondary',
             '&:hover': { color: 'text.primary', bgcolor: 'rgba(148,163,184,.10)' }
           }}
@@ -66,12 +75,12 @@ export function PropDetailsModal({ market, open, onClose }: PropDetailsModalProp
           <CloseRoundedIcon />
         </IconButton>
       </DialogTitle>
-      <DialogContent className="app-scrollbar" sx={{ pt: 1, pb: 3 }}>
+      <DialogContent className="app-scrollbar" sx={{ pt: { xs: 0.75, sm: 1 }, pb: { xs: 2.25, sm: 3 }, px: { xs: 1.25, sm: 3 } }}>
         {market ? (
           <Stack spacing={1.5}>
             <MetricStrip market={market} />
             {isDemoDataMode && demoHistory ? (
-              <AppCard contentSx={{ p: { xs: 1.5, md: 2 } }}>
+              <AppCard contentSx={{ p: { xs: 1.25, md: 2 } }}>
                 <PropHistoryCard stat={demoHistory.stat} selectedOffering={market} allLines={demoHistory.allLines} />
               </AppCard>
             ) : null}
@@ -84,7 +93,7 @@ export function PropDetailsModal({ market, open, onClose }: PropDetailsModalProp
               </AppCard>
             ) : null}
             {!isDemoDataMode && !loading && hasApiHistory && apiHistory ? (
-              <AppCard contentSx={{ p: { xs: 1.5, md: 2 } }}>
+              <AppCard contentSx={{ p: { xs: 1.25, md: 2 } }}>
                 <PropHistoryCard history={apiHistory} selectedOffering={market} />
               </AppCard>
             ) : null}
@@ -98,7 +107,7 @@ export function PropDetailsModal({ market, open, onClose }: PropDetailsModalProp
                       : apiHistory?.emptyReason ?? 'Prop history is not available for this opportunity yet.'}
                   </Typography>
                   <Typography variant="body2" color="text.secondary">
-                    {market.provider} · {market.side} {market.propType} {formatLineNumber(market.line)}
+                    {market.provider} - {market.side} {market.propType} {formatLineNumber(market.line)}
                   </Typography>
                 </Stack>
               </AppCard>
@@ -154,13 +163,19 @@ function usePropHistory(market: MarketOpportunity | null, enabled: boolean) {
 }
 
 function MetricStrip({ market }: { market: MarketOpportunity }) {
+  const cautions = getMarketCautions(market);
+  const hasCautions = cautions.length > 0;
   return (
     <Box
       sx={{
         display: 'grid',
-        gridTemplateColumns: { xs: 'repeat(2, minmax(0, 1fr))', md: 'repeat(4, minmax(0, 1fr))' },
-        gap: 1,
-        p: 1.2,
+        gridTemplateColumns: {
+          xs: 'repeat(2, minmax(0, 1fr))',
+          md: hasCautions ? 'repeat(5, minmax(0, 1fr))' : 'repeat(4, minmax(0, 1fr))'
+        },
+        gap: { xs: 1.05, md: 1.25 },
+        px: { xs: 1.35, md: 1.6 },
+        py: { xs: 1.25, md: 1.45 },
         borderRadius: 2.5,
         border: '1px solid rgba(148,163,184,.14)',
         bgcolor: 'rgba(15,23,42,.45)'
@@ -170,6 +185,14 @@ function MetricStrip({ market }: { market: MarketOpportunity }) {
       <DetailMetric metric="edge" value={formatPercent(market.probabilityEdge, { signed: true })} />
       <DetailMetric metric="ev" value={formatPercent(market.estimatedEv, { signed: true })} tone={market.estimatedEv >= 0 ? 'success.main' : 'error.main'} />
       <DetailMetric metric="trust" value={market.trustLevel === 'Research' ? 'Weak' : market.trustLevel} />
+      {hasCautions ? (
+        <Stack spacing={0.45} minWidth={0} sx={{ gridColumn: { xs: '1 / -1', md: 'auto' } }}>
+          <MetricLabelWithHelp metric="caution" />
+          <Box sx={{ display: 'flex', minHeight: 26, alignItems: 'center' }}>
+            <CautionLabels cautions={cautions} />
+          </Box>
+        </Stack>
+      ) : null}
     </Box>
   );
 }
@@ -184,12 +207,12 @@ function DetailMetric({
   tone?: string;
 }) {
   return (
-    <Stack spacing={0.25} minWidth={0}>
+    <Stack spacing={0.35} minWidth={0}>
       <MetricLabelWithHelp metric={metric} />
       {metric === 'trust' ? (
         <TrustValue level={value} />
       ) : (
-        <Typography fontWeight={900} sx={{ color: tone }} noWrap>
+        <Typography fontWeight={900} sx={{ color: tone, lineHeight: 1.25 }} noWrap>
           {value}
         </Typography>
       )}

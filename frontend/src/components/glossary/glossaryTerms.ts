@@ -43,9 +43,9 @@ export const glossaryTerms: GlossaryTerm[] = [
     ]
   },
   {
-    label: 'Warning',
+    label: 'Caution',
     definition:
-      'A caution flag shown when something may make the opportunity less reliable or less actionable. Examples include low sample size, stale data, pulled lines, locked entries, or provider availability issues.'
+      'A short reason a line may need extra review or may not be addable, such as low sample size, stale data, locked entries, or provider availability issues.'
   },
   {
     label: 'Low sample',
@@ -79,7 +79,7 @@ export const glossaryTerms: GlossaryTerm[] = [
   {
     label: 'Top pick',
     definition:
-      'A high-priority opportunity surfaced by the app based on EV, edge, trust, warning state, and current line context. Top pick does not mean guaranteed winner.'
+      'A high-priority opportunity surfaced by the app based on EV, edge, trust, caution state, and current line context. Top pick does not mean guaranteed winner.'
   },
   {
     label: 'Best DFS line',

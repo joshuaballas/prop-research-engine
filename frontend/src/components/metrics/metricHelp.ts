@@ -18,8 +18,8 @@ export const metricHelp: Record<MetricHelpKey, { label: string; description: str
     description: 'Reliability of the estimate based on sample size, model confidence, and data quality.'
   },
   warning: {
-    label: 'Warning',
-    description: 'Caution flags that may make the pick less reliable, such as low sample size.'
+    label: 'Caution',
+    description: 'Short reasons this line may need extra review or may not be addable.'
   },
   caution: {
     label: 'Caution',

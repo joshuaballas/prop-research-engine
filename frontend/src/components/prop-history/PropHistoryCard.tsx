@@ -1,4 +1,4 @@
-import { Box, Stack, Typography } from '@mui/material';
+import { Box, Stack, Typography, useMediaQuery, useTheme } from '@mui/material';
 import {
   Bar,
   BarChart,
@@ -42,35 +42,43 @@ interface PropHistoryLogRow {
   result?: string;
   line?: number | null;
   side?: string | null;
+  sortKey?: number;
 }
 
 export function PropHistoryCard({ stat, history, selectedOffering, allLines = [] }: PropHistoryCardProps) {
+  const theme = useTheme();
+  const isMobile = useMediaQuery(theme.breakpoints.down('sm'));
   const historyView = history ? mapApiHistoryToView(history) : stat ? mapPlayerStatToView(stat) : null;
 
   if (!historyView) {
     return null;
   }
 
+  const chartGameLimit = isMobile ? 5 : 10;
+  const chartHistoryView = { ...historyView, log: getDisplayLog(historyView.log, chartGameLimit) };
+
   return (
     <Stack spacing={0.95} sx={{ height: '100%', minHeight: 0 }}>
-      <Stack direction="row" justifyContent="space-between" alignItems="flex-start" gap={1}>
+      <Stack direction={{ xs: 'column', sm: 'row' }} justifyContent="space-between" alignItems={{ xs: 'stretch', sm: 'flex-start' }} gap={{ xs: 0.55, sm: 1 }}>
         <Stack spacing={0.25}>
           <Typography variant="h5">Prop history</Typography>
           <Typography color="text.secondary" variant="body2">
             Recent stat values against the selected line.
           </Typography>
         </Stack>
-        <Typography color="warning.main" variant="body2" fontWeight={900} textAlign="right">
+        <Typography color="warning.main" variant="body2" fontWeight={900} textAlign={{ xs: 'left', sm: 'right' }} sx={{ overflowWrap: 'anywhere' }}>
           {formatOfferingLabel(selectedOffering)}
         </Typography>
       </Stack>
-      <PropHistoryBarChart stat={historyView} selectedOffering={selectedOffering} />
-      <StatSummary stat={historyView} selectedOffering={selectedOffering} allLines={allLines} />
+      <PropHistoryBarChart stat={chartHistoryView} selectedOffering={selectedOffering} />
+      <StatSummary stat={historyView} selectedOffering={selectedOffering} allLines={allLines} displayedLog={chartHistoryView.log} />
     </Stack>
   );
 }
 
 function PropHistoryBarChart({ stat, selectedOffering }: { stat: PropHistoryView; selectedOffering: MarketOpportunity }) {
+  const theme = useTheme();
+  const isMobile = useMediaQuery(theme.breakpoints.down('sm'));
   const lineValue = typeof stat.selectedLine === 'number' ? stat.selectedLine : selectedOffering.line;
   const selectedSide = normalizeSide(stat.selectedSide) ?? selectedOffering.side;
   const data: ChartDatum[] = stat.log
@@ -95,8 +103,8 @@ function PropHistoryBarChart({ stat, selectedOffering }: { stat: PropHistoryView
     <Box
       sx={{
         width: '100%',
-        height: { xs: 250, md: 280, xl: 300 },
-        minHeight: { xs: 250, md: 280 },
+        height: { xs: 265, md: 280, xl: 300 },
+        minHeight: { xs: 265, md: 280 },
         minWidth: 0,
         flex: { md: '1 1 auto' },
         flexShrink: 0,
@@ -105,7 +113,7 @@ function PropHistoryBarChart({ stat, selectedOffering }: { stat: PropHistoryView
       }}
     >
       <ResponsiveContainer width="100%" height="100%">
-        <BarChart data={data} margin={{ top: 12, right: 12, bottom: 2, left: -10 }}>
+        <BarChart data={data} margin={isMobile ? { top: 10, right: 6, bottom: 2, left: -8 } : { top: 12, right: 12, bottom: 2, left: -10 }}>
           <CartesianGrid vertical={false} stroke="rgba(148,163,184,.12)" />
           <XAxis
             dataKey="date"
@@ -117,6 +125,7 @@ function PropHistoryBarChart({ stat, selectedOffering }: { stat: PropHistoryView
             tick={{ fill: palette.textMuted, fontSize: 12 }}
             tickLine={false}
             axisLine={false}
+            width={isMobile ? 30 : 60}
             domain={[0, 'dataMax + 4']}
             allowDecimals
           />
@@ -186,20 +195,22 @@ function TooltipRow({ label, value, color }: { label: string; value: string; col
 function StatSummary({
   stat,
   selectedOffering,
-  allLines
+  allLines,
+  displayedLog
 }: {
   stat: PropHistoryView;
   selectedOffering: MarketOpportunity;
   allLines: MarketOpportunity[];
+  displayedLog: PropHistoryLogRow[];
 }) {
   const hitRate = calculateHitRate(stat, selectedOffering);
-  const gradedResults = stat.log
+  const displayedResults = displayedLog
     .map((row) => {
       const value = parseStatNumber(row.value);
       return value === undefined ? undefined : normalizeResult(row.result) ?? deriveResult(value, selectedOffering.line, selectedOffering.side);
     })
     .filter((result) => result === 'Cleared' || result === 'Missed');
-  const clears = gradedResults.filter((result) => result === 'Cleared').length;
+  const displayedClears = displayedResults.filter((result) => result === 'Cleared').length;
   const alternatives = allLines.filter((line) => line.propType === selectedOffering.propType && line.id !== selectedOffering.id);
   const alternativeProviders = Array.from(new Set(alternatives.map((line) => line.provider))).slice(0, 3);
   const metrics = [
@@ -211,9 +222,11 @@ function StatSummary({
   ];
   const warning = renderWarningText(stat.sampleWarning);
   const hasWarning = Boolean(warning);
+  const displayedGameCount = displayedResults.length;
+  const shownGameLabel = displayedGameCount === 1 ? 'shown game' : 'shown games';
   const baseContext = `${selectedOffering.provider} ${formatLineLabel(selectedOffering)}: last 5 avg ${stat.last5Average} vs selected line ${formatLineNumber(
     selectedOffering.line
-  )}. Cleared ${clears} of ${gradedResults.length} tracked results.`;
+  )}. Cleared ${displayedClears} of ${displayedGameCount} ${shownGameLabel}.`;
   const alternativeContext = alternativeProviders.length ? ` Alternatives listed from ${alternativeProviders.join(', ')}.` : '';
 
   return (
@@ -307,6 +320,15 @@ function calculateHitRate(stat: PropHistoryView, selectedOffering: MarketOpportu
   return `${Math.round((clears / graded.length) * 100)}%`;
 }
 
+function getDisplayLog(log: PropHistoryLogRow[], limit: number) {
+  if (log.length <= limit) return log;
+
+  const sortable = log.every((row) => typeof row.sortKey === 'number' && Number.isFinite(row.sortKey));
+  const orderedLog = sortable ? [...log].sort((a, b) => (a.sortKey ?? 0) - (b.sortKey ?? 0)) : log;
+
+  return orderedLog.slice(-limit);
+}
+
 function formatLineLabel(line: MarketOpportunity) {
   return `${line.side} ${formatLineNumber(line.line)}`;
 }
@@ -367,7 +389,8 @@ function mapApiHistoryToView(history: PropHistoryResponseDto): PropHistoryView {
       value: game.value ?? 0,
       result: game.result,
       line: game.selectedLine ?? game.line ?? history.line,
-      side: game.side ?? history.side
+      side: game.side ?? history.side,
+      sortKey: parseDateSortKey(game.date)
     }))
   };
 }
@@ -391,4 +414,10 @@ function formatDateLabel(value?: string) {
   const date = new Date(`${value}T00:00:00`);
   if (Number.isNaN(date.getTime())) return value;
   return new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric' }).format(date);
+}
+
+function parseDateSortKey(value?: string) {
+  if (!value) return undefined;
+  const parsed = Date.parse(`${value}T00:00:00`);
+  return Number.isFinite(parsed) ? parsed : undefined;
 }
