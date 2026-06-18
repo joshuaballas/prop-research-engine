@@ -1,5 +1,4 @@
 import AddCircleOutlineRoundedIcon from '@mui/icons-material/AddCircleOutlineRounded';
-import LockRoundedIcon from '@mui/icons-material/LockRounded';
 import RemoveCircleOutlineRoundedIcon from '@mui/icons-material/RemoveCircleOutlineRounded';
 import { Box, Button, Grid, Stack, Typography } from '@mui/material';
 import type { ReactNode } from 'react';
@@ -15,7 +14,7 @@ import { ProviderLabel } from '../providers/ProviderLabel';
 import { AppCard } from '../ui/AppCard';
 import { StatusPill } from '../ui/StatusPill';
 import { ProjectionModifierBadge } from './ProjectionModifierBadge';
-import { compactActionButtonSx, lockedActionButtonSx, removeActionButtonSx, secondaryGhostButtonSx } from '../ui/buttonStyles';
+import { compactActionButtonSx, removeActionButtonSx, secondaryGhostButtonSx } from '../ui/buttonStyles';
 import { marketTagLabel } from '../../utils/marketTags';
 import { CautionLabels } from './CautionLabels';
 
@@ -108,18 +107,19 @@ export function MarketCard({ market }: { market: MarketOpportunity }) {
           </Box>
         ) : null}
 
-        <Stack direction="row" spacing={1} sx={{ mt: 'auto', '& > .MuiButton-root': { flex: 1, width: '100%', minWidth: 0 } }}>
-          <Button
-            size="small"
-            variant={canAddFromScanner || selected ? 'contained' : 'outlined'}
-            startIcon={selected ? <RemoveCircleOutlineRoundedIcon /> : incompatible && addable ? <LockRoundedIcon /> : canAddFromScanner ? <AddCircleOutlineRoundedIcon /> : undefined}
-            disabled={incompatible && addable}
-            onClick={() => (canAddFromScanner || selected ? builder.toggleLeg(market) : setDetailsOpen(true))}
-            sx={entryButtonSx(selected, incompatible && addable, canAddFromScanner)}
-          >
-            {selected ? 'Remove' : incompatible && addable ? 'Locked' : canAddFromScanner ? 'Add leg' : 'Details'}
-          </Button>
-          <Button size="small" variant="outlined" onClick={() => setDetailsOpen(true)} sx={{ ...secondaryActionButtonSx, display: canAddFromScanner || selected ? 'inline-flex' : 'none' }}>
+        <Stack spacing={0.8} sx={{ mt: 'auto', '& > .MuiButton-root': { width: '100%', minWidth: 0 } }}>
+          {canAddFromScanner || selected ? (
+            <Button
+              size="small"
+              variant="contained"
+              startIcon={selected ? <RemoveCircleOutlineRoundedIcon /> : <AddCircleOutlineRoundedIcon />}
+              onClick={() => builder.toggleLeg(market)}
+              sx={entryButtonSx(selected)}
+            >
+              {selected ? 'Remove' : 'Add leg'}
+            </Button>
+          ) : null}
+          <Button size="small" variant="outlined" onClick={() => setDetailsOpen(true)} sx={secondaryActionButtonSx}>
             Details
           </Button>
         </Stack>
@@ -147,7 +147,7 @@ const secondaryActionButtonSx = {
   whiteSpace: 'nowrap'
 };
 
-function entryButtonSx(selected: boolean, incompatible: boolean, canAdd: boolean) {
+function entryButtonSx(selected: boolean) {
   if (selected) {
     return {
       ...baseActionButtonSx,
@@ -155,14 +155,7 @@ function entryButtonSx(selected: boolean, incompatible: boolean, canAdd: boolean
     };
   }
 
-  if (incompatible) {
-    return {
-      ...baseActionButtonSx,
-      ...lockedActionButtonSx
-    };
-  }
-
-  return canAdd ? baseActionButtonSx : secondaryActionButtonSx;
+  return baseActionButtonSx;
 }
 
 function Metric({ label, value, metric }: { label: string; value: ReactNode; metric?: 'ev' | 'edge' | 'hitChance' | 'trust' | 'warning' }) {

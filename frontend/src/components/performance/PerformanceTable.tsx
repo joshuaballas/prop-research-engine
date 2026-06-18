@@ -3,6 +3,7 @@ import type { PerformanceGroup } from '../../types/performance';
 import { formatPercent } from '../../utils/formatters';
 import { MetadataText } from '../ui/MetadataText';
 import { palette } from '../../theme/palette';
+import { appTableRowSx } from '../ui/appTableStyles';
 
 function getSampleWarning(row: PerformanceGroup) {
   if (row.warning) {
@@ -36,9 +37,8 @@ export function PerformanceTable({ rows, category }: { rows: PerformanceGroup[];
               return (
                 <TableRow
                   key={`${row.groupType}-${row.groupKey}`}
-                  sx={{
-                    '&:hover': { backgroundColor: 'rgba(148, 163, 184, 0.04)' }
-                  }}
+                  hover
+                  sx={appTableRowSx}
                 >
                   <TableCell>
                     <Stack spacing={0.25}>

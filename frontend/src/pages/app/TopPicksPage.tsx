@@ -13,6 +13,7 @@ import { PropDetailsModal } from '../../components/prop-history/PropDetailsModal
 import { ProviderLabel } from '../../components/providers/ProviderLabel';
 import { PageHeader } from '../../components/ui/PageHeader';
 import { StatusPill } from '../../components/ui/StatusPill';
+import { appTableRowSx, stackedRowActionsSx } from '../../components/ui/appTableStyles';
 import { compactActionButtonSx, lockedActionButtonSx, removeActionButtonSx, secondaryGhostButtonSx } from '../../components/ui/buttonStyles';
 import { useEntryBuilder } from '../../hooks/useEntryBuilder';
 import { useTopPicksData } from '../../hooks/useMarketData';
@@ -267,7 +268,7 @@ function RankedPicksTable({ markets, builder }: { markets: MarketOpportunity[]; 
               const incompatible = !selected && !builder.isCompatible(market);
               const hasWarning = hasRenderableWarning(market.warnings);
               return (
-              <TableRow key={market.id} hover sx={{ '& td': { borderColor: 'rgba(148,163,184,.12)', py: 1.25 } }}>
+              <TableRow key={market.id} hover sx={appTableRowSx}>
                 <TableCell>
                   <Typography fontWeight={950}>#{market.rank ?? '-'}</Typography>
                 </TableCell>
@@ -303,8 +304,8 @@ function RankedPicksTable({ markets, builder }: { markets: MarketOpportunity[]; 
                     {formatTopPickWarning(market)}
                   </Typography>
                 </TableCell>
-                <TableCell align="center" sx={{ minWidth: 190 }}>
-                  <Stack direction="row" spacing={0.8} justifyContent="center" flexWrap="nowrap">
+                <TableCell align="center" sx={{ minWidth: 130 }}>
+                  <Stack spacing={0.65} sx={{ ...stackedRowActionsSx, mx: 'auto' }}>
                     <Button
                       startIcon={selected ? <RemoveCircleOutlineRoundedIcon /> : incompatible ? <LockRoundedIcon /> : <AddCircleOutlineRoundedIcon />}
                       size="small"

@@ -15,6 +15,7 @@ import { TrustValue } from '../metrics/TrustValue';
 import { PropDetailsModal } from '../prop-history/PropDetailsModal';
 import { ProviderLabel } from '../providers/ProviderLabel';
 import { StatusPill } from '../ui/StatusPill';
+import { appTableRowSx, stackedRowActionsSx } from '../ui/appTableStyles';
 import { compactActionButtonSx, lockedActionButtonSx, removeActionButtonSx, secondaryGhostButtonSx } from '../ui/buttonStyles';
 import { ProjectionModifierBadge } from './ProjectionModifierBadge';
 
@@ -57,9 +58,7 @@ function LineShoppingRow({ market, showActions, onDetails }: { market: MarketOpp
   return (
     <TableRow
       hover
-      sx={{
-        '& td': { borderColor: 'rgba(148,163,184,.12)', py: 1.35 }
-      }}
+      sx={appTableRowSx}
     >
               <TableCell sx={{ minWidth: 220 }}>
                 <Stack spacing={0.45}>
@@ -118,8 +117,8 @@ function LineShoppingActionCell({ market, onDetails }: { market: MarketOpportuni
   const canAdd = market.canAddToEntry && market.estimatedEv > 0 && !incompatible;
 
   return (
-    <TableCell align="center" sx={{ minWidth: 175 }}>
-      <Stack direction="row" spacing={0.8} justifyContent="center" flexWrap="nowrap">
+    <TableCell align="center" sx={{ minWidth: 130 }}>
+      <Stack spacing={0.65} sx={{ ...stackedRowActionsSx, mx: 'auto' }}>
         <Button
           startIcon={selected ? <RemoveCircleOutlineRoundedIcon /> : incompatible ? <LockRoundedIcon /> : <AddCircleOutlineRoundedIcon />}
           size="small"
