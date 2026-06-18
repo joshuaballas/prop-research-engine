@@ -66,7 +66,7 @@ export function PropDetailsModal({ market, open, onClose }: PropDetailsModalProp
           <CloseRoundedIcon />
         </IconButton>
       </DialogTitle>
-      <DialogContent sx={{ pt: 1, pb: 3 }}>
+      <DialogContent className="app-scrollbar" sx={{ pt: 1, pb: 3 }}>
         {market ? (
           <Stack spacing={1.5}>
             <MetricStrip market={market} />

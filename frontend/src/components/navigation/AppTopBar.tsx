@@ -81,7 +81,7 @@ export function AppTopBar() {
             bgcolor: 'rgba(15,23,42,.52)',
             color: 'text.secondary',
             fontWeight: 800,
-            '& .MuiButton-startIcon': { color: 'primary.main' },
+            '& .MuiButton-startIcon': { color: 'inherit' },
             '&:hover': {
               borderColor: 'rgba(34,211,238,.38)',
               bgcolor: 'rgba(15,23,42,.78)',
@@ -91,7 +91,47 @@ export function AppTopBar() {
         >
           Glossary
         </Button>
-        <Stack direction="row" spacing={{ xs: 1.25, sm: 2 }} alignItems="center" minWidth={0}>
+        <Stack direction="row" spacing={{ xs: 1, sm: 2 }} alignItems="center" minWidth={0} sx={{ flex: { xs: 1, sm: '0 1 auto' }, justifyContent: 'flex-end' }}>
+          <Tooltip title={`${syncDisplay.primary} - ${syncDisplay.secondary}`} arrow>
+            <Stack
+              spacing={0.2}
+              alignItems="flex-end"
+              sx={{
+                display: { xs: 'flex', sm: 'none' },
+                minWidth: 0,
+                maxWidth: 'min(45vw, 190px)',
+                textAlign: 'right'
+              }}
+            >
+              <Typography
+                variant="caption"
+                noWrap
+                color="text.secondary"
+                sx={{
+                  maxWidth: '100%',
+                  fontSize: 11,
+                  fontWeight: 750,
+                  lineHeight: 1.05
+                }}
+              >
+                {formatMobileUpdatedAge(syncDisplay.primary)}
+              </Typography>
+              <Typography
+                variant="caption"
+                noWrap
+                sx={{
+                  maxWidth: '100%',
+                  color: syncDisplay.tone === 'success' ? 'success.main' : syncDisplay.tone === 'warning' ? 'warning.main' : 'text.secondary',
+                  fontVariantNumeric: 'tabular-nums',
+                  fontSize: 12,
+                  fontWeight: 900,
+                  lineHeight: 1.05
+                }}
+              >
+                {formatMobileSyncStatus(syncDisplay.secondary)}
+              </Typography>
+            </Stack>
+          </Tooltip>
           <Stack spacing={0.1} alignItems="flex-end" sx={{ display: { xs: 'none', sm: 'flex' } }}>
             <Stack direction="row" spacing={1} alignItems="center">
               {isDemoDataMode ? (
@@ -285,6 +325,19 @@ function formatSyncCountdown(diffMs: number) {
   const seconds = totalSeconds % 60;
 
   return `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+}
+
+function formatMobileSyncStatus(status: string) {
+  if (isDemoDataMode) return 'Demo data';
+  if (status.startsWith('Next sync in ')) return status;
+  if (status === 'Checking...') return 'Syncing...';
+  if (status === 'Auto-sync off') return 'Auto off';
+  if (status === 'No enabled refresh targets') return 'No targets';
+  return status;
+}
+
+function formatMobileUpdatedAge(status: string) {
+  return status.replace(/^Updated (\d+)m ago$/, 'Updated $1m ago');
 }
 
 function getRefreshCompletedAt(refresh?: { completedAtUtc?: string | null; CompletedAtUtc?: string | null; startedAtUtc?: string | null; StartedAtUtc?: string | null } | null) {

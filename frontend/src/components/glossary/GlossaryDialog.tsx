@@ -1,5 +1,6 @@
 import CloseRoundedIcon from '@mui/icons-material/CloseRounded';
 import { Box, Dialog, DialogContent, DialogTitle, IconButton, Stack, Typography } from '@mui/material';
+import { palette } from '../../theme/palette';
 import { trustColor, type TrustColorLevel } from '../../utils/trustColors';
 import { glossaryTerms } from './glossaryTerms';
 
@@ -20,7 +21,8 @@ export function GlossaryDialog({ open, onClose }: GlossaryDialogProps) {
         sx: {
           borderRadius: 2.5,
           border: '1px solid rgba(148,163,184,.18)',
-          bgcolor: 'rgba(8,13,25,.98)',
+          bgcolor: palette.bg,
+          backgroundImage: 'none',
           boxShadow: '0 28px 80px rgba(0,0,0,.48)'
         }
       }}
@@ -46,7 +48,7 @@ export function GlossaryDialog({ open, onClose }: GlossaryDialogProps) {
           <CloseRoundedIcon />
         </IconButton>
       </DialogTitle>
-      <DialogContent sx={{ pt: 1, pb: 3 }}>
+      <DialogContent className="app-scrollbar" sx={{ pt: 1, pb: 3 }}>
         <Box
           sx={{
             display: 'grid',

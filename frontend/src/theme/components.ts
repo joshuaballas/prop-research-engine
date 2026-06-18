@@ -2,6 +2,36 @@ import type { Components, Theme } from '@mui/material/styles';
 import { palette } from './palette';
 
 export const components: Components<Omit<Theme, 'components'>> = {
+  MuiCssBaseline: {
+    styleOverrides: {
+      '*': {
+        scrollbarWidth: 'thin',
+        scrollbarColor: `${palette.textSubtle} ${palette.bg}`
+      },
+      '*::-webkit-scrollbar': {
+        width: 10,
+        height: 10
+      },
+      '*::-webkit-scrollbar-track': {
+        backgroundColor: palette.bg
+      },
+      '*::-webkit-scrollbar-thumb': {
+        backgroundColor: palette.textSubtle,
+        borderRadius: 999,
+        border: `2px solid ${palette.bg}`
+      },
+      '*::-webkit-scrollbar-thumb:hover': {
+        backgroundColor: palette.textMuted
+      },
+      '*::-webkit-scrollbar-corner': {
+        backgroundColor: palette.bg
+      },
+      '.app-scrollbar': {
+        scrollbarWidth: 'thin',
+        scrollbarColor: `${palette.textSubtle} ${palette.bg}`
+      }
+    }
+  },
   MuiButtonBase: {
     defaultProps: {
       disableRipple: true

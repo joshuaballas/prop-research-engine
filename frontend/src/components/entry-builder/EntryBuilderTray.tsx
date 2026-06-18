@@ -39,7 +39,7 @@ export function EntryBuilderTray({
         </Stack>
       </Stack>
 
-      <Stack spacing={2} sx={{ p: 2, overflowY: 'auto', flex: 1 }}>
+      <Stack className="app-scrollbar" spacing={2} sx={{ p: 2, overflowY: 'auto', flex: 1 }}>
         <EntryBuilderSummary legs={legs} rules={rules} amount={amount} />
 
         <TextField
