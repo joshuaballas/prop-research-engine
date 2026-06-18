@@ -43,6 +43,8 @@ public static partial class TheOddsApiDebugEndpoints
         ApplicationDbContext dbContext,
         IApplicationErrorLogger errorLogger) : ITheOddsMlbRefreshService
     {
+        private static readonly SemaphoreSlim LiveRefreshGate = new(1, 1);
+
         public async Task<IResult> RefreshCurrentAsync(
             TheOddsMlbRefreshRequest request,
             HttpContext? httpContext,
@@ -215,30 +217,33 @@ public static partial class TheOddsApiDebugEndpoints
                 });
             }
 
-            var refreshRun = new TheOddsRefreshRun
-            {
-                Id = Guid.NewGuid(),
-                Provider = "The Odds API",
-                Sport = "MLB",
-                SlateDate = slateDate,
-                StartedAtUtc = DateTimeOffset.UtcNow,
-                Succeeded = false,
-                Failed = false,
-                Blocked = false,
-                DryRun = false,
-                ForceLive = true,
-                BookmakerPreset = preset,
-                ProviderCategoriesIncluded = string.Join(",", providerCategoriesIncluded),
-                SportsbookBookmakersRequested = string.Join(",", requestedBookmakers),
-                DfsBookmakersRequested = string.Join(",", requestedDfsBookmakers),
-                MarketsRequested = string.Join(",", requestedMarkets),
-                EstimatedApiCalls = estimatedApiCalls
-            };
-            dbContext.TheOddsRefreshRuns.Add(refreshRun);
-            await dbContext.SaveChangesAsync(cancellationToken);
-
+            await LiveRefreshGate.WaitAsync(cancellationToken);
             try
             {
+                var refreshRun = new TheOddsRefreshRun
+                {
+                    Id = Guid.NewGuid(),
+                    Provider = "The Odds API",
+                    Sport = "MLB",
+                    SlateDate = slateDate,
+                    StartedAtUtc = DateTimeOffset.UtcNow,
+                    Succeeded = false,
+                    Failed = false,
+                    Blocked = false,
+                    DryRun = false,
+                    ForceLive = true,
+                    BookmakerPreset = preset,
+                    ProviderCategoriesIncluded = string.Join(",", providerCategoriesIncluded),
+                    SportsbookBookmakersRequested = string.Join(",", requestedBookmakers),
+                    DfsBookmakersRequested = string.Join(",", requestedDfsBookmakers),
+                    MarketsRequested = string.Join(",", requestedMarkets),
+                    EstimatedApiCalls = estimatedApiCalls
+                };
+                dbContext.TheOddsRefreshRuns.Add(refreshRun);
+                await dbContext.SaveChangesAsync(cancellationToken);
+
+                try
+                {
                 stepStopwatch.Restart();
                 var beforePlatformPropIds = await LoadTheOddsPlatformPropIdsAsync(dbContext, cancellationToken);
                 var loadBeforePlatformPropsMs = stepStopwatch.ElapsedMilliseconds;
@@ -619,7 +624,7 @@ public static partial class TheOddsApiDebugEndpoints
             }
             catch (TheOddsApiProviderException exception)
             {
-                DetachPendingMarketSnapshots(dbContext);
+                DetachRefreshFailureSideEffects(dbContext, refreshRun);
                 refreshRun.CompletedAtUtc = DateTimeOffset.UtcNow;
                 refreshRun.Succeeded = false;
                 refreshRun.Failed = true;
@@ -660,7 +665,7 @@ public static partial class TheOddsApiDebugEndpoints
             }
             catch (Exception exception)
             {
-                DetachPendingMarketSnapshots(dbContext);
+                DetachRefreshFailureSideEffects(dbContext, refreshRun);
                 refreshRun.CompletedAtUtc = DateTimeOffset.UtcNow;
                 refreshRun.Succeeded = false;
                 refreshRun.Failed = true;
@@ -674,12 +679,19 @@ public static partial class TheOddsApiDebugEndpoints
                 await dbContext.SaveChangesAsync(CancellationToken.None);
                 throw;
             }
+            }
+            finally
+            {
+                LiveRefreshGate.Release();
+            }
         }
 
-        private static void DetachPendingMarketSnapshots(ApplicationDbContext dbContext)
+        private static void DetachRefreshFailureSideEffects(ApplicationDbContext dbContext, TheOddsRefreshRun refreshRun)
         {
             foreach (var entry in dbContext.ChangeTracker.Entries()
-                .Where(entry => entry.Entity is MarketTopPickSnapshot or MarketLineShoppingSnapshot)
+                .Where(entry =>
+                    entry.State is EntityState.Added or EntityState.Modified or EntityState.Deleted &&
+                    !ReferenceEquals(entry.Entity, refreshRun))
                 .ToArray())
             {
                 entry.State = EntityState.Detached;
