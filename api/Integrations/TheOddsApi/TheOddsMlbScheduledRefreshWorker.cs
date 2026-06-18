@@ -29,18 +29,23 @@ public sealed class TheOddsMlbScheduledRefreshWorker(
             options.Value.RequireForceLive,
             options.Value.AllowScheduledLiveRefresh);
 
-        using var timer = new PeriodicTimer(interval);
-
         try
         {
-            logger.LogInformation("The Odds API MLB scheduled refresh worker running startup planning cycle.");
-            await RunGuardedCycleAsync(stoppingToken);
-            state.MarkWaiting(DateTimeOffset.UtcNow, DateTimeOffset.UtcNow.Add(interval));
-
-            while (await timer.WaitForNextTickAsync(stoppingToken))
+            while (!stoppingToken.IsCancellationRequested)
             {
-                await RunGuardedCycleAsync(stoppingToken);
-                state.MarkWaiting(DateTimeOffset.UtcNow, DateTimeOffset.UtcNow.Add(interval));
+                logger.LogInformation("The Odds API MLB scheduled refresh worker running planning cycle.");
+                var plan = await RunGuardedCycleAsync(stoppingToken);
+                var observedAt = DateTimeOffset.UtcNow;
+                var nextWakeAt = ResolveNextWakeAt(plan, observedAt, interval);
+                state.MarkWaiting(observedAt, nextWakeAt);
+
+                var delay = nextWakeAt - DateTimeOffset.UtcNow;
+                if (delay < TimeSpan.FromSeconds(1))
+                {
+                    delay = TimeSpan.FromSeconds(1);
+                }
+
+                await Task.Delay(delay, stoppingToken);
             }
         }
         catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
@@ -49,7 +54,21 @@ public sealed class TheOddsMlbScheduledRefreshWorker(
         }
     }
 
-    private async Task RunGuardedCycleAsync(CancellationToken cancellationToken)
+    private static DateTimeOffset ResolveNextWakeAt(
+        TheOddsRefreshPlanResult plan,
+        DateTimeOffset observedAt,
+        TimeSpan interval)
+    {
+        if (plan.SkipReason == "CadenceNotDue" &&
+            plan.NextEligibleRefreshUtc > observedAt)
+        {
+            return plan.NextEligibleRefreshUtc;
+        }
+
+        return observedAt.Add(interval);
+    }
+
+    private async Task<TheOddsRefreshPlanResult> RunGuardedCycleAsync(CancellationToken cancellationToken)
     {
         var startedAt = DateTimeOffset.UtcNow;
         state.MarkStarted(startedAt);
@@ -70,7 +89,7 @@ public sealed class TheOddsMlbScheduledRefreshWorker(
                 plan.EstimatedApiCalls,
                 plan.Budget.BudgetAllowed,
                 plan.ProviderAvailable);
-            return;
+            return plan;
         }
 
         if (!plan.ProviderAvailable)
@@ -78,7 +97,7 @@ public sealed class TheOddsMlbScheduledRefreshWorker(
             const string reason = "Scheduled refresh skipped because provider status is unavailable.";
             state.MarkSkipped(DateTimeOffset.UtcNow, reason);
             logger.LogWarning("{Reason}", reason);
-            return;
+            return plan;
         }
 
         if (!plan.Budget.BudgetAllowed)
@@ -86,7 +105,7 @@ public sealed class TheOddsMlbScheduledRefreshWorker(
             const string reason = "Scheduled refresh skipped because planner credit budget is not allowed.";
             state.MarkSkipped(DateTimeOffset.UtcNow, reason);
             logger.LogWarning("{Reason}", reason);
-            return;
+            return plan;
         }
 
         if (!options.Value.AllowScheduledLiveRefresh)
@@ -94,7 +113,7 @@ public sealed class TheOddsMlbScheduledRefreshWorker(
             const string reason = "Scheduled live refresh is blocked because TheOddsScheduledRefresh:AllowScheduledLiveRefresh is false.";
             state.MarkBlocked(DateTimeOffset.UtcNow, reason);
             logger.LogWarning("{Reason}", reason);
-            return;
+            return plan;
         }
 
         if (options.Value.RequireForceLive && !options.Value.AllowScheduledLiveRefresh)
@@ -102,10 +121,11 @@ public sealed class TheOddsMlbScheduledRefreshWorker(
             const string reason = "Scheduled live refresh is blocked because TheOddsScheduledRefresh:RequireForceLive is true. Set it false only in explicit local/production ops config after credit policy is approved.";
             state.MarkBlocked(DateTimeOffset.UtcNow, reason);
             logger.LogWarning("{Reason}", reason);
-            return;
+            return plan;
         }
 
         await RunRefreshCycleAsync(cancellationToken);
+        return plan;
     }
 
     private async Task RunRefreshCycleAsync(CancellationToken cancellationToken)

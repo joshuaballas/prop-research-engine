@@ -6,33 +6,25 @@ import { mockUser } from '../../data/mockUser';
 import { useMarketFreshnessData, useProviderStatusData, useScheduledRefreshStatusData } from '../../hooks/useMarketData';
 import { bumpMarketDataRefreshVersion } from '../../hooks/useMarketDataRefresh';
 
-interface SyncWatchState {
-  active: boolean;
-  startedAt: number;
-  exhausted: boolean;
-}
-
 export function AppTopBar() {
   const [now, setNow] = useState(() => Date.now());
   const [queryTick, setQueryTick] = useState(0);
-  const [syncWatch, setSyncWatch] = useState<SyncWatchState | null>(null);
-  const lastBroadcastRefreshMarkerRef = useRef<string | null>(null);
+  const lastDueFetchTargetRef = useRef<number | null>(null);
   const freshnessQuery = useMarketFreshnessData([queryTick]);
   const providerStatusQuery = useProviderStatusData([queryTick]);
   const scheduledRefreshQuery = useScheduledRefreshStatusData([queryTick]);
   const freshness = freshnessQuery.data;
   const providerStatus = providerStatusQuery.data;
   const scheduledRefresh = scheduledRefreshQuery.data;
-  const successfulRefreshMarker = useMemo(
-    () => getSuccessfulRefreshMarker(scheduledRefresh, freshness),
-    [freshness, scheduledRefresh]
+  const currentDueFetchTargetMs = useMemo(
+    () => getCurrentDueFetchTargetMs(scheduledRefresh, freshness, now),
+    [freshness, now, scheduledRefresh]
   );
   const syncDisplay = useMemo(
     () => buildSyncDisplay({
       now,
       scheduledRefresh,
       freshness,
-      syncWatch,
       hasStatusError: Boolean(freshnessQuery.error || providerStatusQuery.error || scheduledRefreshQuery.error),
       providerRejectedKeyDetected: providerStatus?.providerRejectedKeyDetected,
     }),
@@ -43,77 +35,26 @@ export function AppTopBar() {
       providerStatus?.providerRejectedKeyDetected,
       providerStatusQuery.error,
       scheduledRefresh,
-      scheduledRefreshQuery.error,
-      syncWatch
+      scheduledRefreshQuery.error
     ]
   );
 
   useEffect(() => {
     const countdownTimer = window.setInterval(() => setNow(Date.now()), 1000);
-    const queryTimer = window.setInterval(() => setQueryTick((value) => value + 1), 60000);
 
     return () => {
       window.clearInterval(countdownTimer);
-      window.clearInterval(queryTimer);
     };
   }, []);
 
   useEffect(() => {
-    if (!syncDisplay.shouldStartSyncWatch || syncWatch?.active) return;
+    if (currentDueFetchTargetMs === null) return;
+    if (lastDueFetchTargetRef.current === currentDueFetchTargetMs) return;
 
-    setSyncWatch({
-      active: true,
-      startedAt: now,
-      exhausted: false
-    });
+    lastDueFetchTargetRef.current = currentDueFetchTargetMs;
     setQueryTick((value) => value + 1);
-  }, [now, syncDisplay.shouldStartSyncWatch, syncWatch?.active]);
-
-  useEffect(() => {
-    if (!syncWatch?.active) return;
-
-    const pollTimer = window.setInterval(() => setQueryTick((value) => value + 1), 5000);
-    return () => window.clearInterval(pollTimer);
-  }, [syncWatch?.active]);
-
-  useEffect(() => {
-    if (!syncWatch?.active) return;
-
-    if (isScheduledRefreshSkipped(scheduledRefresh)) {
-      setSyncWatch(null);
-      return;
-    }
-
-    if (now - syncWatch.startedAt >= 60000) {
-      setSyncWatch((current) => current?.active ? { ...current, active: false, exhausted: true } : current);
-    }
-  }, [now, scheduledRefresh, syncWatch]);
-
-  useEffect(() => {
-    if (!successfulRefreshMarker) return;
-
-    const nextReadableAtMs = getLatestSuccessfulRefreshReadableAtMs(scheduledRefresh, freshness);
-    if (syncWatch?.active && nextReadableAtMs !== null && now < nextReadableAtMs) {
-      return;
-    }
-
-    if (lastBroadcastRefreshMarkerRef.current === null) {
-      lastBroadcastRefreshMarkerRef.current = successfulRefreshMarker;
-      if (!syncWatch?.active) return;
-
-      bumpMarketDataRefreshVersion();
-      setSyncWatch(null);
-      setQueryTick((value) => value + 1);
-      return;
-    }
-
-    if (lastBroadcastRefreshMarkerRef.current !== successfulRefreshMarker) {
-      lastBroadcastRefreshMarkerRef.current = successfulRefreshMarker;
-      bumpMarketDataRefreshVersion();
-      setSyncWatch(null);
-      setQueryTick((value) => value + 1);
-    }
-  }, [freshness, now, scheduledRefresh, successfulRefreshMarker, syncWatch?.active]);
+    bumpMarketDataRefreshVersion();
+  }, [currentDueFetchTargetMs]);
 
   return (
     <Stack
@@ -168,14 +109,12 @@ function buildSyncDisplay({
   now,
   scheduledRefresh,
   freshness,
-  syncWatch,
   hasStatusError,
   providerRejectedKeyDetected,
 }: {
   now: number;
   scheduledRefresh?: ScheduledRefreshStatusDto;
   freshness?: MarketFreshnessDto;
-  syncWatch: SyncWatchState | null;
   hasStatusError: boolean;
   providerRejectedKeyDetected?: boolean;
 }) {
@@ -185,8 +124,7 @@ function buildSyncDisplay({
       primary,
       secondary: 'Provider unavailable',
       tone: 'warning' as const,
-      detail: undefined,
-      shouldStartSyncWatch: false
+      detail: undefined
     };
   }
 
@@ -198,8 +136,7 @@ function buildSyncDisplay({
       primary,
       secondary: 'Provider unavailable',
       tone: 'warning' as const,
-      detail: currentPlan?.recommendedAction ?? currentPlan?.RecommendedAction ?? undefined,
-      shouldStartSyncWatch: false
+      detail: currentPlan?.recommendedAction ?? currentPlan?.RecommendedAction ?? undefined
     };
   }
 
@@ -210,8 +147,7 @@ function buildSyncDisplay({
       primary,
       secondary: 'Auto-sync off',
       tone: 'default' as const,
-      detail: undefined,
-      shouldStartSyncWatch: false
+      detail: undefined
     };
   }
 
@@ -229,8 +165,7 @@ function buildSyncDisplay({
       primary,
       secondary: 'No enabled refresh targets',
       tone: 'default' as const,
-      detail: currentPlan?.recommendedAction ?? currentPlan?.RecommendedAction ?? skipReason,
-      shouldStartSyncWatch: false
+      detail: currentPlan?.recommendedAction ?? currentPlan?.RecommendedAction ?? skipReason
     };
   }
 
@@ -239,63 +174,47 @@ function buildSyncDisplay({
       primary,
       secondary: formatSkipReason(skipReason),
       tone: 'warning' as const,
-      detail: currentPlan?.recommendedAction ?? currentPlan?.RecommendedAction ?? skipReason ?? undefined,
-      shouldStartSyncWatch: false
+      detail: currentPlan?.recommendedAction ?? currentPlan?.RecommendedAction ?? skipReason ?? undefined
     };
   }
 
-  if (syncWatch?.active) {
-    return {
-      primary,
-      secondary: 'Syncing...',
-      tone: 'default' as const,
-      detail: undefined,
-      shouldStartSyncWatch: false
-    };
-  }
-
-  if (syncWatch?.exhausted) {
-    return {
-      primary,
-      secondary: 'Sync delayed',
-      tone: 'default' as const,
-      detail: 'Waiting for a completed scheduled refresh.',
-      shouldStartSyncWatch: false
-    };
-  }
-
-  const nextRunMs = getNextSyncMs(scheduledRefresh, freshness);
+  const nextRunMs = getNextSyncMs(scheduledRefresh, freshness, now);
   if (nextRunMs === null) {
     return {
       primary,
       secondary: 'Checking...',
       tone: 'default' as const,
-      detail: undefined,
-      shouldStartSyncWatch: true
+      detail: undefined
     };
   }
 
-  const remainingMs = nextRunMs - now;
-  if (remainingMs <= 0) {
-    return {
-      primary,
-      secondary: 'Syncing...',
-      tone: 'default' as const,
-      detail: undefined,
-      shouldStartSyncWatch: true
-    };
-  }
-
+  const remainingMs = Math.max(0, nextRunMs - now);
   return {
     primary,
     secondary: `Next sync in ${formatSyncCountdown(remainingMs)}`,
     tone: 'success' as const,
-    detail: undefined,
-    shouldStartSyncWatch: false
+    detail: undefined
   };
 }
 
-function getNextSyncMs(scheduledRefresh?: ScheduledRefreshStatusDto, freshness?: MarketFreshnessDto) {
+function getNextSyncMs(scheduledRefresh: ScheduledRefreshStatusDto | undefined, freshness: MarketFreshnessDto | undefined, now: number) {
+  const dueSyncMs = getDueSyncMs(scheduledRefresh, freshness);
+  if (dueSyncMs === null) return null;
+  if (dueSyncMs > now) return dueSyncMs;
+
+  const syncCycleMs = getSyncCycleMs(scheduledRefresh);
+  return dueSyncMs + Math.ceil((now - dueSyncMs + 1) / syncCycleMs) * syncCycleMs;
+}
+
+function getCurrentDueFetchTargetMs(scheduledRefresh: ScheduledRefreshStatusDto | undefined, freshness: MarketFreshnessDto | undefined, now: number) {
+  const dueSyncMs = getDueSyncMs(scheduledRefresh, freshness);
+  if (dueSyncMs === null || now < dueSyncMs) return null;
+
+  const syncCycleMs = getSyncCycleMs(scheduledRefresh);
+  return dueSyncMs + Math.floor((now - dueSyncMs) / syncCycleMs) * syncCycleMs;
+}
+
+function getDueSyncMs(scheduledRefresh?: ScheduledRefreshStatusDto, freshness?: MarketFreshnessDto) {
   const nextDataAvailableEstimateUtc =
     scheduledRefresh?.nextDataAvailableEstimateUtc ?? scheduledRefresh?.NextDataAvailableEstimateUtc;
   if (nextDataAvailableEstimateUtc) {
@@ -322,14 +241,9 @@ function getNextSyncMs(scheduledRefresh?: ScheduledRefreshStatusDto, freshness?:
   return completedAtMs + effectiveIntervalMinutes * 60000 + postRefreshReadBufferSeconds * 1000;
 }
 
-function getLatestSuccessfulRefreshReadableAtMs(scheduledRefresh?: ScheduledRefreshStatusDto, freshness?: MarketFreshnessDto) {
-  const completedAt = getLatestSuccessfulRefreshCompletedAt(scheduledRefresh, freshness);
-  if (!completedAt) return null;
-
-  const completedAtMs = Date.parse(completedAt);
-  if (Number.isNaN(completedAtMs)) return null;
-
-  return completedAtMs + getPostRefreshReadBufferSeconds(scheduledRefresh) * 1000;
+function getSyncCycleMs(scheduledRefresh?: ScheduledRefreshStatusDto) {
+  const effectiveIntervalMinutes = readNumber(scheduledRefresh, 'effectiveIntervalMinutes', 'EffectiveIntervalMinutes') ?? 15;
+  return Math.max(1, effectiveIntervalMinutes * 60000 + getPostRefreshReadBufferSeconds(scheduledRefresh) * 1000);
 }
 
 function getLatestSuccessfulRefreshCompletedAt(scheduledRefresh?: ScheduledRefreshStatusDto, freshness?: MarketFreshnessDto) {
@@ -340,40 +254,6 @@ function getLatestSuccessfulRefreshCompletedAt(scheduledRefresh?: ScheduledRefre
     getRefreshCompletedAt(freshness?.latestSuccessfulRefresh ?? freshness?.LatestSuccessfulRefresh) ??
     null
   );
-}
-
-function getSuccessfulRefreshMarker(scheduledRefresh?: ScheduledRefreshStatusDto, freshness?: MarketFreshnessDto) {
-  const latestRefreshRunId = readString(
-    scheduledRefresh,
-    'latestSuccessfulRefreshRunId',
-    'LatestSuccessfulRefreshRunId',
-    'latestRefreshRunId',
-    'LatestRefreshRunId'
-  );
-  const latestSuccessfulRefresh = scheduledRefresh?.latestSuccessfulRefresh ?? scheduledRefresh?.LatestSuccessfulRefresh;
-  const latestSuccessfulRefreshId = latestRefreshRunId ?? latestSuccessfulRefresh?.id ?? latestSuccessfulRefresh?.Id ?? null;
-  const latestSuccessfulCompletedAt = getLatestSuccessfulRefreshCompletedAt(scheduledRefresh, freshness);
-
-  if (latestSuccessfulRefreshId || latestSuccessfulCompletedAt) {
-    return `${latestSuccessfulRefreshId ?? 'latest-success'}|${latestSuccessfulCompletedAt ?? 'no-completed-at'}`;
-  }
-
-  const lastRunSucceeded = readBoolean(scheduledRefresh, 'lastRunSucceeded', 'LastRunSucceeded');
-  const lastRunCompletedAt = scheduledRefresh?.lastRunCompletedAtUtc ?? scheduledRefresh?.LastRunCompletedAtUtc ?? null;
-  if (lastRunSucceeded && lastRunCompletedAt) {
-    return `last-run-success|${lastRunCompletedAt}`;
-  }
-
-  return null;
-}
-
-function isScheduledRefreshSkipped(scheduledRefresh?: ScheduledRefreshStatusDto) {
-  if (!scheduledRefresh) return false;
-  const status = readString(scheduledRefresh, 'status', 'Status')?.toLowerCase();
-  const lastRunSkipped = readBoolean(scheduledRefresh, 'lastRunSkipped', 'LastRunSkipped');
-  const skipReason = readString(scheduledRefresh, 'lastSkipReason', 'LastSkipReason', 'lastPlanSkipReason', 'LastPlanSkipReason');
-  if (skipReason === 'CadenceNotDue') return false;
-  return status === 'skipped' || lastRunSkipped === true;
 }
 
 function formatSyncCountdown(diffMs: number) {
@@ -451,14 +331,4 @@ function readNumber(record: object | undefined, ...keys: string[]) {
 
 function getPostRefreshReadBufferSeconds(scheduledRefresh?: ScheduledRefreshStatusDto) {
   return readNumber(scheduledRefresh, 'postRefreshReadBufferSeconds', 'PostRefreshReadBufferSeconds') ?? 30;
-}
-
-function readBoolean(record: object | undefined, ...keys: string[]) {
-  if (!record) return undefined;
-  const source = record as Record<string, unknown>;
-  for (const key of keys) {
-    const value = source[key];
-    if (typeof value === 'boolean') return value;
-  }
-  return undefined;
 }
