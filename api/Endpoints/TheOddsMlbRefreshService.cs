@@ -4,6 +4,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 using System.Diagnostics;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using SportsBetting.Api.Data;
 using SportsBetting.Api.Integrations.TheOddsApi;
 using SportsBetting.Api.Models;
@@ -594,7 +595,9 @@ public static partial class TheOddsApiDebugEndpoints
                     dbContext,
                     cancellationToken);
                 await dbContext.SaveChangesAsync(cancellationToken);
-                await providerLineLifecycleService.TrackRefreshAsync(refreshRun.Id, cancellationToken);
+                var lifecycleTracking = await providerLineLifecycleService.TrackRefreshAsync(refreshRun.Id, cancellationToken);
+                refreshRun.DiagnosticsJson = BuildRefreshDiagnosticsDocument(diagnostics, lifecycleTracking);
+                await dbContext.SaveChangesAsync(cancellationToken);
 
                 return Results.Ok(new
                 {
@@ -617,6 +620,7 @@ public static partial class TheOddsApiDebugEndpoints
                     dfsCandidateCount = activeCandidates.Count(group => string.Equals(group.ProviderCategory, "DFS", StringComparison.OrdinalIgnoreCase)),
                     activeWatchlistCount = activeWatchlist.Length,
                     activeAvoidCount = activeAvoid.Length,
+                    lifecycleTracking,
                     topActiveCandidates,
                     topWatchlist,
                     diagnostics
@@ -684,6 +688,22 @@ public static partial class TheOddsApiDebugEndpoints
             {
                 LiveRefreshGate.Release();
             }
+        }
+
+        private static JsonDocument BuildRefreshDiagnosticsDocument(object diagnostics, ProviderLineLifecycleTrackingResult lifecycleTracking)
+        {
+            var node = JsonSerializer.SerializeToNode(diagnostics) as JsonObject ?? [];
+            node["lifecycleTrackingSucceeded"] = lifecycleTracking.Succeeded;
+            node["lifecycleTrackingError"] = lifecycleTracking.Error;
+            node["lifecycleRowsInserted"] = lifecycleTracking.LifecycleRowsInserted;
+            node["lifecycleRowsUpdated"] = lifecycleTracking.LifecycleRowsUpdated;
+            node["lifecycleEventsInserted"] = lifecycleTracking.LifecycleEventsInserted;
+            node["lifecycleSnapshotsRead"] = lifecycleTracking.SnapshotsRead;
+            node["lifecycleSeenLines"] = lifecycleTracking.SeenLines;
+            node["lifecycleDuplicateKeys"] = lifecycleTracking.DuplicateLifecycleKeys;
+            node["lifecycleConcurrencyRetryAttempted"] = lifecycleTracking.ConcurrencyRetryAttempted;
+            node["lifecycleConcurrencyRetrySucceeded"] = lifecycleTracking.ConcurrencyRetrySucceeded;
+            return JsonSerializer.SerializeToDocument(node);
         }
 
         private static void DetachRefreshFailureSideEffects(ApplicationDbContext dbContext, TheOddsRefreshRun refreshRun)

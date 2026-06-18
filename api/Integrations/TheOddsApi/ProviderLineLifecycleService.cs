@@ -8,23 +8,99 @@ namespace SportsBetting.Api.Integrations.TheOddsApi;
 
 public interface IProviderLineLifecycleService
 {
-    Task TrackRefreshAsync(Guid refreshRunId, CancellationToken cancellationToken);
+    Task<ProviderLineLifecycleTrackingResult> TrackRefreshAsync(Guid refreshRunId, CancellationToken cancellationToken);
 }
+
+public sealed record ProviderLineLifecycleTrackingResult(
+    bool Succeeded,
+    int SnapshotsRead,
+    int SeenLines,
+    int LifecycleRowsInserted,
+    int LifecycleRowsUpdated,
+    int LifecycleEventsInserted,
+    int DuplicateLifecycleKeys,
+    bool ConcurrencyRetryAttempted,
+    bool ConcurrencyRetrySucceeded,
+    string? Error);
 
 public sealed class ProviderLineLifecycleService(
     ApplicationDbContext dbContext,
-    IOptions<ProviderLineLifecycleOptions> options) : IProviderLineLifecycleService
+    IOptions<ProviderLineLifecycleOptions> options,
+    ILogger<ProviderLineLifecycleService> logger) : IProviderLineLifecycleService
 {
-    public async Task TrackRefreshAsync(Guid refreshRunId, CancellationToken cancellationToken)
+    public async Task<ProviderLineLifecycleTrackingResult> TrackRefreshAsync(Guid refreshRunId, CancellationToken cancellationToken)
     {
+        var retryAttempted = false;
+        ProviderLineLifecycleTrackingResult? firstFailure = null;
+
+        for (var attempt = 1; attempt <= 2; attempt++)
+        {
+            try
+            {
+                return await TrackRefreshAttemptAsync(
+                    refreshRunId,
+                    retryAttempted,
+                    retrySucceeded: retryAttempted,
+                    cancellationToken);
+            }
+            catch (DbUpdateConcurrencyException exception)
+            {
+                LogLifecycleConcurrencyException(exception, refreshRunId, attempt);
+                firstFailure ??= BuildConcurrencyFailure(exception, retryAttempted: false);
+                DetachLifecycleEntries();
+
+                if (attempt == 1)
+                {
+                    retryAttempted = true;
+                    continue;
+                }
+
+                return firstFailure with
+                {
+                    ConcurrencyRetryAttempted = true,
+                    ConcurrencyRetrySucceeded = false,
+                    Error = exception.Message
+                };
+            }
+            catch (Exception exception)
+            {
+                logger.LogError(exception, "Provider line lifecycle tracking failed for refresh {RefreshRunId}.", refreshRunId);
+                DetachLifecycleEntries();
+                return new ProviderLineLifecycleTrackingResult(
+                    Succeeded: false,
+                    SnapshotsRead: 0,
+                    SeenLines: 0,
+                    LifecycleRowsInserted: 0,
+                    LifecycleRowsUpdated: 0,
+                    LifecycleEventsInserted: 0,
+                    DuplicateLifecycleKeys: 0,
+                    ConcurrencyRetryAttempted: retryAttempted,
+                    ConcurrencyRetrySucceeded: false,
+                    Error: exception.Message);
+            }
+        }
+
+        return firstFailure ?? new ProviderLineLifecycleTrackingResult(false, 0, 0, 0, 0, 0, 0, retryAttempted, false, "Lifecycle tracking did not complete.");
+    }
+
+    private async Task<ProviderLineLifecycleTrackingResult> TrackRefreshAttemptAsync(
+        Guid refreshRunId,
+        bool retryAttempted,
+        bool retrySucceeded,
+        CancellationToken cancellationToken)
+    {
+        DetachLifecycleEntries();
+
         var refreshRun = await dbContext.TheOddsRefreshRuns
+            .AsNoTracking()
             .FirstOrDefaultAsync(row => row.Id == refreshRunId, cancellationToken);
         if (refreshRun is null || !refreshRun.Succeeded)
         {
-            return;
+            return new ProviderLineLifecycleTrackingResult(true, 0, 0, 0, 0, 0, 0, retryAttempted, retrySucceeded, null);
         }
 
         var snapshots = await dbContext.MarketLineShoppingSnapshots
+            .AsNoTracking()
             .Where(row => row.TheOddsRefreshRunId == refreshRunId)
             .OrderBy(row => row.ProviderCategory)
             .ThenBy(row => row.Provider)
@@ -35,7 +111,7 @@ public sealed class ProviderLineLifecycleService(
 
         if (snapshots.Count == 0)
         {
-            return;
+            return new ProviderLineLifecycleTrackingResult(true, 0, 0, 0, 0, 0, 0, retryAttempted, retrySucceeded, null);
         }
 
         var now = refreshRun.CompletedAtUtc ?? DateTimeOffset.UtcNow;
@@ -53,7 +129,12 @@ public sealed class ProviderLineLifecycleService(
             .Where(row => row.Sport == refreshRun.Sport && row.SlateDate == refreshRun.SlateDate)
             .Where(row => seenProviderKeys.Contains(row.ProviderKey))
             .ToListAsync(cancellationToken);
-        var lifecycleByKey = lifecycleRows.ToDictionary(ToLifecycleKey, LifecycleKey.Comparer);
+        var lifecycleGroupsByKey = lifecycleRows.GroupBy(ToLifecycleKey, LifecycleKey.Comparer).ToArray();
+        var duplicateLifecycleKeys = lifecycleGroupsByKey.Sum(group => Math.Max(0, group.Count() - 1));
+        var lifecycleByKey = lifecycleGroupsByKey.ToDictionary(
+            group => group.Key,
+            group => group.OrderByDescending(row => row.LastSeenUtc).ThenByDescending(row => row.UpdatedAtUtc).First(),
+            LifecycleKey.Comparer);
         var seenKeys = new HashSet<LifecycleKey>(LifecycleKey.Comparer);
 
         foreach (var seenLine in seenRows)
@@ -78,6 +159,11 @@ public sealed class ProviderLineLifecycleService(
                 continue;
             }
 
+            if (lifecycle.LastRefreshRunId == refreshRun.Id && lifecycle.LastSnapshotId == seenLine.SnapshotId)
+            {
+                continue;
+            }
+
             UpdateSeenLifecycle(lifecycle, refreshRun, seenLine, now);
         }
 
@@ -92,7 +178,112 @@ public sealed class ProviderLineLifecycleService(
             UpdateMissingLifecycle(lifecycle, refreshRun, now);
         }
 
+        var lifecycleRowsInserted = dbContext.ChangeTracker.Entries<ProviderLineLifecycle>().Count(entry => entry.State == EntityState.Added);
+        var lifecycleRowsUpdated = dbContext.ChangeTracker.Entries<ProviderLineLifecycle>().Count(entry => entry.State == EntityState.Modified);
+        var lifecycleEventsInserted = dbContext.ChangeTracker.Entries<ProviderLineLifecycleEvent>().Count(entry => entry.State == EntityState.Added);
+
         await dbContext.SaveChangesAsync(cancellationToken);
+
+        return new ProviderLineLifecycleTrackingResult(
+            Succeeded: true,
+            SnapshotsRead: snapshots.Count,
+            SeenLines: seenRows.Length,
+            LifecycleRowsInserted: lifecycleRowsInserted,
+            LifecycleRowsUpdated: lifecycleRowsUpdated,
+            LifecycleEventsInserted: lifecycleEventsInserted,
+            DuplicateLifecycleKeys: duplicateLifecycleKeys,
+            ConcurrencyRetryAttempted: retryAttempted,
+            ConcurrencyRetrySucceeded: retrySucceeded,
+            Error: null);
+    }
+
+    private static ProviderLineLifecycleTrackingResult BuildConcurrencyFailure(DbUpdateConcurrencyException exception, bool retryAttempted) =>
+        new(
+            Succeeded: false,
+            SnapshotsRead: 0,
+            SeenLines: 0,
+            LifecycleRowsInserted: 0,
+            LifecycleRowsUpdated: 0,
+            LifecycleEventsInserted: 0,
+            DuplicateLifecycleKeys: 0,
+            ConcurrencyRetryAttempted: retryAttempted,
+            ConcurrencyRetrySucceeded: false,
+            Error: exception.Message);
+
+    private void DetachLifecycleEntries()
+    {
+        foreach (var entry in dbContext.ChangeTracker.Entries()
+            .Where(entry => entry.Entity is ProviderLineLifecycle or ProviderLineLifecycleEvent)
+            .ToArray())
+        {
+            entry.State = EntityState.Detached;
+        }
+    }
+
+    private void LogLifecycleConcurrencyException(DbUpdateConcurrencyException exception, Guid refreshRunId, int attempt)
+    {
+        var trackedCounts = dbContext.ChangeTracker.Entries()
+            .GroupBy(entry => entry.Metadata.ClrType.Name)
+            .ToDictionary(group => group.Key, group => group.Count(), StringComparer.OrdinalIgnoreCase);
+        var failingEntries = exception.Entries.Select(BuildConcurrencyEntryLog).ToArray();
+
+        logger.LogWarning(
+            exception,
+            "Provider line lifecycle concurrency conflict while tracking refresh {RefreshRunId}. Attempt {Attempt}. FailingEntries: {FailingEntries}. TrackedCounts: {TrackedCounts}",
+            refreshRunId,
+            attempt,
+            JsonSerializer.Serialize(failingEntries),
+            JsonSerializer.Serialize(trackedCounts));
+    }
+
+    private static object BuildConcurrencyEntryLog(Microsoft.EntityFrameworkCore.ChangeTracking.EntityEntry entry)
+    {
+        var primaryKey = entry.Metadata.FindPrimaryKey();
+        var primaryKeyValues = primaryKey?.Properties.ToDictionary(
+            property => property.Name,
+            property => entry.Property(property.Name).CurrentValue?.ToString() ?? string.Empty,
+            StringComparer.OrdinalIgnoreCase);
+
+        return entry.Entity switch
+        {
+            ProviderLineLifecycle lifecycle => new
+            {
+                entityType = entry.Metadata.ClrType.Name,
+                state = entry.State.ToString(),
+                primaryKey = primaryKeyValues,
+                lifecycle.ProviderKey,
+                lifecycle.ProviderDisplayName,
+                lifecycle.ProviderCategory,
+                lifecycle.EventId,
+                lifecycle.NormalizedPlayerName,
+                lifecycle.PropType,
+                lifecycle.MarketKey,
+                lifecycle.Side,
+                line = lifecycle.CurrentLine,
+                lifecycle.LastRefreshRunId,
+                lifecycle.LastSnapshotId,
+                lifecycle.CurrentStatus
+            },
+            ProviderLineLifecycleEvent lifecycleEvent => new
+            {
+                entityType = entry.Metadata.ClrType.Name,
+                state = entry.State.ToString(),
+                primaryKey = primaryKeyValues,
+                lifecycleEvent.ProviderLineLifecycleId,
+                lifecycleEvent.RefreshRunId,
+                lifecycleEvent.EventType,
+                lifecycleEvent.PreviousStatus,
+                lifecycleEvent.NewStatus,
+                previousLine = lifecycleEvent.PreviousLine,
+                newLine = lifecycleEvent.NewLine
+            },
+            _ => new
+            {
+                entityType = entry.Metadata.ClrType.Name,
+                state = entry.State.ToString(),
+                primaryKey = primaryKeyValues
+            }
+        };
     }
 
     private void UpdateSeenLifecycle(
