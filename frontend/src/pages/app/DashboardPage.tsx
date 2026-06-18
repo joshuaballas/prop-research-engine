@@ -98,16 +98,16 @@ export function DashboardPage() {
       ) : null}
 
       <Grid container spacing={2}>
-        <Grid size={{ xs: 12, sm: 6, lg: 2.4 }}>
+        <Grid size={{ xs: 6, sm: 6, lg: 2.4 }}>
           <MetricCard label="Top Picks" value={`${returnedTopPicks}`} helper="Current opportunities" />
         </Grid>
-        <Grid size={{ xs: 12, sm: 6, lg: 2.4 }}>
+        <Grid size={{ xs: 6, sm: 6, lg: 2.4 }}>
           <MetricCard label="Best EV" value={formatPercent(bestEvMarket?.estimatedEv ?? 0, { signed: true })} helper={bestEvMarket?.player ?? 'No active row'} />
         </Grid>
-        <Grid size={{ xs: 12, sm: 6, lg: 2.4 }}>
+        <Grid size={{ xs: 6, sm: 6, lg: 2.4 }}>
           <MetricCard label="DFS Providers" value={`${new Set(activeDfs.map((market) => market.provider)).size}`} helper="Live providers" />
         </Grid>
-        <Grid size={{ xs: 12, sm: 6, lg: 2.4 }}>
+        <Grid size={{ xs: 6, sm: 6, lg: 2.4 }}>
           <MetricCard label="Entry Builder" value={`${entryLegs.length} legs`} helper={entryProvider} />
         </Grid>
         <Grid size={{ xs: 12, sm: 6, lg: 2.4 }}>
@@ -119,34 +119,38 @@ export function DashboardPage() {
         </Grid>
       </Grid>
 
-      <SectionHeader
-        title="Top opportunities"
-        description="A quick view of the best current DFS rows without the full research table."
-        action={
-          <Button component={RouterLink} to="/app/top-picks" variant="outlined">
-            View all picks
-          </Button>
-        }
-      />
-      <Grid container spacing={2}>
-        {topPicksQuery.loading ? (
-          <Grid size={12}>
-            <ApiStateCard message="Loading top opportunities..." />
+      <Box>
+        <SectionHeader
+          title="Top opportunities"
+          description="A quick view of the best current DFS rows without the full research table."
+          action={
+            <Button component={RouterLink} to="/app/top-picks" variant="outlined">
+              View all picks
+            </Button>
+          }
+        />
+        <Box mt={2}>
+          <Grid container spacing={2}>
+            {topPicksQuery.loading ? (
+              <Grid size={12}>
+                <ApiStateCard message="Loading top opportunities..." />
+              </Grid>
+            ) : topPicksQuery.error ? (
+              <Grid size={12}>
+                <ApiStateCard tone="error" message="Top opportunities could not be loaded." />
+              </Grid>
+            ) : filtered.length ? filtered.slice(0, 3).map((market) => (
+              <Grid key={market.id} size={{ xs: 12, lg: 4 }}>
+                <DashboardOpportunityCard market={market} builder={builder} />
+              </Grid>
+            )) : (
+              <Grid size={12}>
+                <ApiStateCard message="No top opportunities are available for the selected sports." />
+              </Grid>
+            )}
           </Grid>
-        ) : topPicksQuery.error ? (
-          <Grid size={12}>
-            <ApiStateCard tone="error" message="Top opportunities could not be loaded." />
-          </Grid>
-        ) : filtered.length ? filtered.slice(0, 3).map((market) => (
-          <Grid key={market.id} size={{ xs: 12, lg: 4 }}>
-            <DashboardOpportunityCard market={market} builder={builder} />
-          </Grid>
-        )) : (
-          <Grid size={12}>
-            <ApiStateCard message="No top opportunities are available for the selected sports." />
-          </Grid>
-        )}
-      </Grid>
+        </Box>
+      </Box>
 
       <Grid container spacing={2}>
         <Grid size={{ xs: 12, lg: 7 }}>
@@ -174,16 +178,18 @@ export function DashboardPage() {
         </Grid>
       </Grid>
 
-      <SectionHeader
-        title="Completed slate performance"
-        description="Reviews the latest imported result date and grades captured picks when matches are available."
-        action={!performanceIsSparse ? (
-          <Button component={RouterLink} to="/app/performance" variant="outlined">
-            View performance
-          </Button>
-        ) : undefined}
-      />
-      {performanceIsSparse ? (
+      <Box>
+        <SectionHeader
+          title="Completed slate performance"
+          description="Reviews the latest imported result date and grades captured picks when matches are available."
+          action={!performanceIsSparse ? (
+            <Button component={RouterLink} to="/app/performance" variant="outlined">
+              View performance
+            </Button>
+          ) : undefined}
+        />
+        <Box mt={2}>
+          {performanceIsSparse ? (
         <SparsePerformancePanel availability={performanceAvailability} />
       ) : (
       <Grid container spacing={2}>
@@ -209,6 +215,8 @@ export function DashboardPage() {
         </Grid>
       </Grid>
       )}
+        </Box>
+      </Box>
     </Stack>
   );
 }
