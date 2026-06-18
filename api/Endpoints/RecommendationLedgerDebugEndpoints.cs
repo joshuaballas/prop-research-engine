@@ -12,6 +12,7 @@ public static class RecommendationLedgerDebugEndpoints
         endpoints.MapGet("/api/debug/recommendations/ledger/audit", async (
             DateOnly? fromDate,
             DateOnly? toDate,
+            bool? includeFunnel,
             ApplicationDbContext dbContext,
             CancellationToken cancellationToken) =>
         {
@@ -115,21 +116,359 @@ public static class RecommendationLedgerDebugEndpoints
                 .OrderBy(row => row.date)
                 .ToArrayAsync(cancellationToken);
 
+            var refreshRunRows = await dbContext.TheOddsRefreshRuns
+                .AsNoTracking()
+                .Where(row => row.SlateDate >= from && row.SlateDate <= to)
+                .Select(row => new
+                {
+                    row.Id,
+                    row.SlateDate,
+                    row.StartedAtUtc,
+                    row.CompletedAtUtc,
+                    row.Succeeded,
+                    row.Failed,
+                    row.Blocked,
+                    row.DryRun,
+                    row.ForceLive,
+                    row.BookmakerPreset,
+                    row.ProviderCategoriesIncluded,
+                    row.DfsBookmakersRequested,
+                    row.EstimatedApiCalls,
+                    row.ActualApiCalls,
+                    row.PlatformPropsCreated,
+                    row.PlatformPropsUpdated,
+                    row.PlatformPropsUpserted,
+                    row.PredictionCount,
+                    row.LineShoppingGroupCount,
+                    row.ActiveCandidateCount,
+                    row.ActiveWatchlistCount,
+                    row.ActiveAvoidCount,
+                    row.ErrorMessage
+                })
+                .ToArrayAsync(cancellationToken);
+
+            var predictionRunRows = await dbContext.PredictionRuns
+                .AsNoTracking()
+                .Where(row => DateOnly.FromDateTime(row.CreatedAt.UtcDateTime) >= from && DateOnly.FromDateTime(row.CreatedAt.UtcDateTime) <= to)
+                .Select(row => new
+                {
+                    row.Id,
+                    date = DateOnly.FromDateTime(row.CreatedAt.UtcDateTime),
+                    row.CreatedAt,
+                    row.CompletedAt,
+                    predictionCount = row.Predictions.Count,
+                    candidateCount = row.Predictions.Count(prediction => prediction.Recommendation == "OVER" || prediction.Recommendation == "UNDER"),
+                    passCount = row.Predictions.Count(prediction => prediction.Recommendation == "PASS")
+                })
+                .ToArrayAsync(cancellationToken);
+
+            var topPickRows = await dbContext.MarketTopPickSnapshots
+                .AsNoTracking()
+                .Where(row => row.SlateDate >= from && row.SlateDate <= to)
+                .Select(row => new
+                {
+                    row.Id,
+                    row.SlateDate,
+                    row.GeneratedAtUtc,
+                    row.TheOddsRefreshRunId,
+                    row.PredictionRunId,
+                    row.ProviderCategory,
+                    row.Provider,
+                    row.EntryProvider,
+                    row.Bookmaker,
+                    row.Player,
+                    row.PropType,
+                    row.StrategyClassification,
+                    row.StrategyTier,
+                    row.IsCandidate,
+                    IsTopPick = true,
+                    row.IsWatchlist,
+                    row.IsResearchOnly,
+                    row.EntryActionableForUser,
+                    row.LifecycleStatus,
+                    row.EventStartTime
+                })
+                .ToArrayAsync(cancellationToken);
+
+            var lineShoppingRows = await dbContext.MarketLineShoppingSnapshots
+                .AsNoTracking()
+                .Where(row => row.SlateDate >= from && row.SlateDate <= to)
+                .Select(row => new
+                {
+                    row.Id,
+                    row.SlateDate,
+                    row.GeneratedAtUtc,
+                    row.TheOddsRefreshRunId,
+                    row.PredictionRunId,
+                    row.ProviderCategory,
+                    row.Provider,
+                    row.EntryProvider,
+                    row.Bookmaker,
+                    row.Player,
+                    row.PropType,
+                    row.StrategyClassification,
+                    row.StrategyTier,
+                    row.IsCandidate,
+                    row.IsWatchlist,
+                    row.IsResearchOnly,
+                    row.EntryActionableForUser,
+                    row.LifecycleStatus,
+                    row.EventStartTime
+                })
+                .ToArrayAsync(cancellationToken);
+
+            var ledgerRows = await dbContext.RecommendationSnapshots
+                .AsNoTracking()
+                .Where(row => row.ExpectedResultDate >= from && row.ExpectedResultDate <= to)
+                .Select(row => new
+                {
+                    row.Id,
+                    row.FirstSeenAtUtc,
+                    row.LastSeenAtUtc,
+                    row.SeenCount,
+                    row.CapturedAtUtc,
+                    row.RefreshRunId,
+                    row.PredictionRunId,
+                    row.Sport,
+                    row.SlateDate,
+                    row.ExpectedResultDate,
+                    row.ResultDateSource,
+                    row.EventStartTimeUtc,
+                    row.CanonicalPlayerId,
+                    row.PlayerName,
+                    row.PropTypeId,
+                    row.PropType,
+                    row.Side,
+                    row.Line,
+                    row.Provider,
+                    row.Bookmaker,
+                    row.ProviderCategory,
+                    row.EntryProvider,
+                    row.StrategyClassification,
+                    row.StrategyTier,
+                    row.IsCandidate,
+                    row.IsTopPick,
+                    row.IsWatchlist,
+                    row.IsActionableForUser,
+                    row.LifecycleStatus,
+                    row.GradeStatus,
+                    row.GradingFailureReason,
+                    isBackfilled = !row.RefreshRunId.HasValue && !row.PredictionRunId.HasValue
+                })
+                .ToArrayAsync(cancellationToken);
+
+            var auditDates = refreshRunRows.Select(row => row.SlateDate)
+                .Concat(predictionRunRows.Select(row => row.date))
+                .Concat(topPickRows.Select(row => row.SlateDate))
+                .Concat(lineShoppingRows.Select(row => row.SlateDate))
+                .Concat(ledgerRows.Select(row => row.ExpectedResultDate))
+                .Concat(propResults.Select(row => row.date))
+                .Distinct()
+                .Order()
+                .ToArray();
+
+            static object[] CountBy<T>(IEnumerable<T> rows, Func<T, string?> keySelector)
+            {
+                return rows
+                    .GroupBy(row => string.IsNullOrWhiteSpace(keySelector(row)) ? "(blank)" : keySelector(row)!.Trim())
+                    .Select(group => new { key = group.Key, count = group.Count() })
+                    .OrderByDescending(row => row.count)
+                    .ThenBy(row => row.key)
+                    .Cast<object>()
+                    .ToArray();
+            }
+
+            static object BuildSnapshotBreakdown<T>(
+                IReadOnlyCollection<T> rows,
+                Func<T, bool> isCandidate,
+                Func<T, bool> isWatchlist,
+                Func<T, bool> isActionable,
+                Func<T, string?> provider,
+                Func<T, string?> propType,
+                Func<T, string?> lifecycleStatus,
+                Func<T, string?> strategyClassification,
+                Func<T, string?> strategyTier,
+                Func<T, Guid> refreshRunId,
+                Func<T, DateTimeOffset> generatedAtUtc)
+            {
+                return new
+                {
+                    rows = rows.Count,
+                    candidateRows = rows.Count(isCandidate),
+                    watchlistRows = rows.Count(isWatchlist),
+                    actionableRows = rows.Count(isActionable),
+                    distinctRefreshRuns = rows.Select(refreshRunId).Distinct().Count(),
+                    earliestGeneratedAtUtc = rows.Count == 0 ? (DateTimeOffset?)null : rows.Min(generatedAtUtc),
+                    latestGeneratedAtUtc = rows.Count == 0 ? (DateTimeOffset?)null : rows.Max(generatedAtUtc),
+                    byProvider = CountBy(rows, provider),
+                    byPropType = CountBy(rows, propType),
+                    byLifecycleStatus = CountBy(rows, lifecycleStatus),
+                    byStrategyClassification = CountBy(rows, strategyClassification),
+                    byStrategyTier = CountBy(rows, strategyTier)
+                };
+            }
+
+            var funnelByDate = auditDates.Select(date =>
+            {
+                var dateRefreshRuns = refreshRunRows.Where(row => row.SlateDate == date).ToArray();
+                var datePredictionRuns = predictionRunRows.Where(row => row.date == date).ToArray();
+                var dateTopPicks = topPickRows.Where(row => row.SlateDate == date).ToArray();
+                var dateLineShopping = lineShoppingRows.Where(row => row.SlateDate == date).ToArray();
+                var dateLedger = ledgerRows.Where(row => row.ExpectedResultDate == date).ToArray();
+                var datePropResults = propResults.FirstOrDefault(row => row.date == date);
+                var currentPerformanceCandidateFilterRows = dateLedger.Where(row => row.IsCandidate).ToArray();
+                var candidateOrSurfacedRows = dateLedger.Where(row => row.IsCandidate || row.IsTopPick || row.IsWatchlist).ToArray();
+                var backfilledRows = dateLedger.Where(row => row.isBackfilled).ToArray();
+                var sourceLineShoppingRowsFound = dateLineShopping.Count(row => row.IsCandidate || row.IsWatchlist);
+                var sourceTopPickRowsFound = dateTopPicks.Length;
+                var sourceRowsFound = sourceLineShoppingRowsFound + sourceTopPickRowsFound;
+
+                return new
+                {
+                    date,
+                    theOddsRefreshRuns = new
+                    {
+                        totalRuns = dateRefreshRuns.Length,
+                        successfulRuns = dateRefreshRuns.Count(row => row.Succeeded),
+                        failedRuns = dateRefreshRuns.Count(row => row.Failed),
+                        blockedRuns = dateRefreshRuns.Count(row => row.Blocked),
+                        dryRuns = dateRefreshRuns.Count(row => row.DryRun),
+                        earliestStartedAtUtc = dateRefreshRuns.Length == 0 ? (DateTimeOffset?)null : dateRefreshRuns.Min(row => row.StartedAtUtc),
+                        earliestCompletedAtUtc = dateRefreshRuns.Length == 0 ? null : dateRefreshRuns.Min(row => row.CompletedAtUtc),
+                        latestStartedAtUtc = dateRefreshRuns.Length == 0 ? (DateTimeOffset?)null : dateRefreshRuns.Max(row => row.StartedAtUtc),
+                        latestCompletedAtUtc = dateRefreshRuns.Length == 0 ? null : dateRefreshRuns.Max(row => row.CompletedAtUtc),
+                        predictionCount = dateRefreshRuns.Sum(row => row.PredictionCount),
+                        lineShoppingGroupCount = dateRefreshRuns.Sum(row => row.LineShoppingGroupCount),
+                        topPickSnapshotCount = dateTopPicks.Length,
+                        activeCandidateCount = dateRefreshRuns.Sum(row => row.ActiveCandidateCount),
+                        activeWatchlistCount = dateRefreshRuns.Sum(row => row.ActiveWatchlistCount),
+                        platformPropsCreated = dateRefreshRuns.Sum(row => row.PlatformPropsCreated),
+                        platformPropsUpdated = dateRefreshRuns.Sum(row => row.PlatformPropsUpdated),
+                        platformPropsUpserted = dateRefreshRuns.Sum(row => row.PlatformPropsUpserted),
+                        bookmakerPresets = CountBy(dateRefreshRuns, row => row.BookmakerPreset),
+                        providerCategoriesIncluded = CountBy(dateRefreshRuns, row => row.ProviderCategoriesIncluded),
+                        runIds = includeFunnel == true ? dateRefreshRuns.OrderBy(row => row.StartedAtUtc).Select(row => row.Id).ToArray() : []
+                    },
+                    predictionRuns = new
+                    {
+                        predictionRunCount = datePredictionRuns.Length,
+                        predictionCount = datePredictionRuns.Sum(row => row.predictionCount),
+                        candidateCount = datePredictionRuns.Sum(row => row.candidateCount),
+                        passCount = datePredictionRuns.Sum(row => row.passCount),
+                        earliestCreatedAtUtc = datePredictionRuns.Length == 0 ? (DateTimeOffset?)null : datePredictionRuns.Min(row => row.CreatedAt),
+                        latestCreatedAtUtc = datePredictionRuns.Length == 0 ? (DateTimeOffset?)null : datePredictionRuns.Max(row => row.CreatedAt),
+                        runIds = includeFunnel == true ? datePredictionRuns.OrderBy(row => row.CreatedAt).Select(row => row.Id).ToArray() : []
+                    },
+                    marketTopPickSnapshots = BuildSnapshotBreakdown(
+                        dateTopPicks,
+                        row => row.IsCandidate,
+                        row => row.IsWatchlist,
+                        row => row.EntryActionableForUser,
+                        row => row.EntryProvider,
+                        row => row.PropType,
+                        row => row.LifecycleStatus,
+                        row => row.StrategyClassification,
+                        row => row.StrategyTier,
+                        row => row.TheOddsRefreshRunId,
+                        row => row.GeneratedAtUtc),
+                    marketLineShoppingSnapshots = BuildSnapshotBreakdown(
+                        dateLineShopping,
+                        row => row.IsCandidate,
+                        row => row.IsWatchlist,
+                        row => row.EntryActionableForUser,
+                        row => row.EntryProvider,
+                        row => row.PropType,
+                        row => row.LifecycleStatus,
+                        row => row.StrategyClassification,
+                        row => row.StrategyTier,
+                        row => row.TheOddsRefreshRunId,
+                        row => row.GeneratedAtUtc),
+                    recommendationSnapshots = new
+                    {
+                        rows = dateLedger.Length,
+                        candidateRows = dateLedger.Count(row => row.IsCandidate),
+                        candidateOrSurfacedRows = candidateOrSurfacedRows.Length,
+                        topPickRows = dateLedger.Count(row => row.IsTopPick),
+                        watchlistRows = dateLedger.Count(row => row.IsWatchlist),
+                        actionableRows = dateLedger.Count(row => row.IsActionableForUser),
+                        gradedRows = dateLedger.Count(row => row.GradeStatus is "Won" or "Lost" or "Pushed"),
+                        noResultRows = dateLedger.Count(row => row.GradeStatus == "NoResult"),
+                        unmatchedRows = dateLedger.Count(row => row.GradeStatus == "Unmatched"),
+                        pendingRows = dateLedger.Count(row => row.GradeStatus == "Pending"),
+                        earliestCapturedAtUtc = dateLedger.Length == 0 ? (DateTimeOffset?)null : dateLedger.Min(row => row.CapturedAtUtc),
+                        latestCapturedAtUtc = dateLedger.Length == 0 ? (DateTimeOffset?)null : dateLedger.Max(row => row.CapturedAtUtc),
+                        firstSeenAtUtc = dateLedger.Length == 0 ? (DateTimeOffset?)null : dateLedger.Min(row => row.FirstSeenAtUtc),
+                        lastSeenAtUtc = dateLedger.Length == 0 ? (DateTimeOffset?)null : dateLedger.Max(row => row.LastSeenAtUtc),
+                        byProvider = CountBy(dateLedger, row => row.EntryProvider),
+                        byPropType = CountBy(dateLedger, row => row.PropType),
+                        byStrategyClassification = CountBy(dateLedger, row => row.StrategyClassification),
+                        byStrategyTier = CountBy(dateLedger, row => row.StrategyTier),
+                        bySource = CountBy(dateLedger, row => row.RefreshRunId.HasValue ? "the_odds_refresh" : row.PredictionRunId.HasValue ? "prediction_run" : "backfill_or_unknown"),
+                        byIsBackfilled = CountBy(dateLedger, row => row.isBackfilled ? "true" : "false"),
+                        byGradeStatus = CountBy(dateLedger, row => row.GradeStatus),
+                        byResultDateSource = CountBy(dateLedger, row => row.ResultDateSource),
+                        backfilledRows = backfilledRows.Length
+                    },
+                    backfillDiagnostics = new
+                    {
+                        sourceRowsFound,
+                        sourceRowsFoundBySource = new
+                        {
+                            marketLineShoppingSnapshots = sourceLineShoppingRowsFound,
+                            marketTopPickSnapshots = sourceTopPickRowsFound
+                        },
+                        persistedBackfilledRows = backfilledRows.Length,
+                        sourceRowsMinusLedgerRows = Math.Max(0, sourceRowsFound - dateLedger.Length),
+                        interpretation = sourceRowsFound > dateLedger.Length
+                            ? "More source snapshot rows exist than persisted ledger rows for this date. Use the dry-run backfill endpoint for row-level skip reasons before changing grading."
+                            : "Persisted ledger rows are not fewer than candidate/watchlist/top-pick snapshot source rows for this date."
+                    },
+                    dateAlignmentDiagnostics = new
+                    {
+                        rowsBySlateDate = CountBy(dateLedger, row => row.SlateDate.ToString("yyyy-MM-dd")),
+                        rowsByExpectedResultDate = CountBy(dateLedger, row => row.ExpectedResultDate.ToString("yyyy-MM-dd")),
+                        rowsByEventUtcDate = CountBy(dateLedger, row => row.EventStartTimeUtc.HasValue ? DateOnly.FromDateTime(row.EventStartTimeUtc.Value.UtcDateTime).ToString("yyyy-MM-dd") : "(blank)"),
+                        rowsByEventEasternDate = CountBy(dateLedger, row => row.EventStartTimeUtc.HasValue ? ToEasternDate(row.EventStartTimeUtc.Value).ToString("yyyy-MM-dd") : "(blank)"),
+                        utcDateDiffersFromExpectedResultDate = dateLedger.Count(row => row.EventStartTimeUtc.HasValue && DateOnly.FromDateTime(row.EventStartTimeUtc.Value.UtcDateTime) != row.ExpectedResultDate),
+                        easternDateMatchesExpectedResultDate = dateLedger.Count(row => row.EventStartTimeUtc.HasValue && ToEasternDate(row.EventStartTimeUtc.Value) == row.ExpectedResultDate)
+                    },
+                    candidateFilterDiagnostics = new
+                    {
+                        ledgerRows = dateLedger.Length,
+                        candidateOrSurfacedRows = candidateOrSurfacedRows.Length,
+                        currentPerformanceCandidateOnlyRows = currentPerformanceCandidateFilterRows.Length,
+                        excludedByCurrentCandidateOnlyFilter = dateLedger.Length - currentPerformanceCandidateFilterRows.Length,
+                        excludedBecauseNotIsCandidate = dateLedger.Count(row => !row.IsCandidate),
+                        note = "Performance candidateOnly=true currently filters recommendation_snapshots by IsCandidate only. IsTopPick or IsWatchlist rows are counted separately unless IsCandidate is also true."
+                    },
+                    propResults = new
+                    {
+                        rows = datePropResults?.rows ?? 0,
+                        distinctPlayers = datePropResults?.distinctPlayers ?? 0,
+                        distinctPropTypes = datePropResults?.distinctPropTypes ?? 0
+                    }
+                };
+            }).ToArray();
+
             return Results.Ok(new
             {
                 fromDate = fromDate,
                 toDate = toDate,
                 callsExternalApis = false,
+                includeFunnel = includeFunnel == true,
                 refreshRuns,
                 predictionRuns,
                 topPickSnapshots,
                 lineShoppingSnapshots,
                 recommendationLedger = ledger,
                 propResults,
+                funnelByDate,
                 notes = new[]
                 {
                     "market_*_snapshots are read snapshots keyed by refresh run and are replaced per run before insert.",
-                    "recommendation_snapshots is the durable gradeable ledger used by Performance Summary when populated."
+                    "recommendation_snapshots is the durable gradeable ledger used by Performance Summary when populated.",
+                    "Performance candidateOnly=true filters recommendation_snapshots by IsCandidate only; top-pick/watchlist flags are diagnostic unless IsCandidate is also true.",
+                    "This endpoint is read-only and does not call external APIs."
                 }
             });
         });
@@ -350,6 +689,12 @@ public static class RecommendationLedgerDebugEndpoints
         });
 
         return endpoints;
+    }
+
+    private static DateOnly ToEasternDate(DateTimeOffset value)
+    {
+        var easternZone = TimeZoneInfo.FindSystemTimeZoneById("Eastern Standard Time");
+        return DateOnly.FromDateTime(TimeZoneInfo.ConvertTime(value, easternZone).DateTime);
     }
 
     private static object BuildResultCoverageExample(
