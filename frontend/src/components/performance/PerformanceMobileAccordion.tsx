@@ -22,10 +22,12 @@ export function PerformanceMobileAccordion({ rows, category }: { rows: Performan
       {rows.map((row) => {
         const sampleStatus = getSampleStatus(row);
         const isLimited = sampleStatus !== 'Stable sample';
+        const hasDecisions = row.wins + row.losses > 0;
         const stats = [
-          ['Hit rate', formatPercent(row.hitRate), palette.text],
+          ['Hit rate', hasDecisions ? formatPercent(row.hitRate) : '-', palette.text],
           ['Simulated ROI', formatPercent(row.roi, { signed: true }), row.roi < 0 ? palette.danger : palette.success],
           ['Avg EV', formatPercent(row.averageEv, { signed: true }), palette.text],
+          ['No result', `${row.noResults ?? 0}`, palette.text],
           ['Sample status', sampleStatus, isLimited ? palette.warning : palette.text]
         ];
 
@@ -45,7 +47,7 @@ export function PerformanceMobileAccordion({ rows, category }: { rows: Performan
               <Stack spacing={0.3} sx={{ minWidth: 0 }}>
                 <Typography fontWeight={950}>{row.groupKey.replace(/([a-z])([A-Z])/g, '$1 $2')}</Typography>
                 <Typography variant="body2" color="text.secondary">
-                  {row.groupType} - {row.gradedPicks} graded - {row.wins}-{row.losses}-{row.pushes}
+                  {row.groupType} - {row.gradedPicks} graded - {row.noResults ?? 0} no result
                 </Typography>
               </Stack>
             </AccordionSummary>

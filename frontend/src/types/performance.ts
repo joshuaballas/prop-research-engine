@@ -5,6 +5,9 @@ export interface PerformanceGroup {
   wins: number;
   losses: number;
   pushes: number;
+  noResults?: number;
+  unmatched?: number;
+  pending?: number;
   hitRate: number;
   roi: number;
   averageEv: number;

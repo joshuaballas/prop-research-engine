@@ -69,6 +69,7 @@ export function PerformanceSummaryCards({ rows }: { rows: PerformanceGroup[] }) 
     .filter((row) => row.groupType === 'Strategy')
     .sort((a, b) => b.roi - a.roi)[0];
   const limitedHistoryCount = rows.filter((row) => row.warning || row.gradedPicks < 30).length;
+  const hasDecisions = overall.wins + overall.losses > 0;
   const metrics: SummaryMetric[] = [
     {
       label: 'Simulated ROI',
@@ -78,7 +79,7 @@ export function PerformanceSummaryCards({ rows }: { rows: PerformanceGroup[] }) 
     },
     {
       label: 'Hit Rate',
-      value: formatPercent(overall.hitRate),
+      value: hasDecisions ? formatPercent(overall.hitRate) : '-',
       helper: `${overall.wins}-${overall.losses}-${overall.pushes} graded`
     },
     {

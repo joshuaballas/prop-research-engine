@@ -787,6 +787,8 @@ public static class PublicMlbDfsEndpoints
             minSampleSize,
             normalizedGradingMode,
             latestRefresh,
+            includeDiagnostics,
+            diagnosticSampleSize,
             dbContext,
             cancellationToken);
         if (ledgerResponse is not null)
@@ -1143,6 +1145,8 @@ public static class PublicMlbDfsEndpoints
         int? minSampleSize,
         string normalizedGradingMode,
         TheOddsApiDebugEndpoints.MlbRefreshFreshnessResponse latestRefresh,
+        bool includeDiagnostics,
+        int? diagnosticSampleSize,
         ApplicationDbContext dbContext,
         CancellationToken cancellationToken)
     {
@@ -1271,13 +1275,36 @@ public static class PublicMlbDfsEndpoints
                     row.PropTypeId,
                     row.ActualResultValue))
                 .ToArrayAsync(cancellationToken);
+        var diagnosticResultDates = includeDiagnostics
+            ? resultDates.SelectMany(date => new[] { date.AddDays(-1), date, date.AddDays(1) }).Distinct().ToArray()
+            : resultDates;
+        var diagnosticResultRows = diagnosticResultDates.Length == 0
+            ? []
+            : await dbContext.PropResults
+                .AsNoTracking()
+                .Where(row => diagnosticResultDates.Contains(row.EventDate))
+                .Select(row => new LedgerDiagnosticResultRow(
+                    row.Id,
+                    row.EventDate,
+                    row.PlayerId,
+                    row.PlayerId,
+                    row.Player != null ? row.Player.DisplayName : string.Empty,
+                    row.PropTypeId,
+                    row.PropType != null ? row.PropType.Name : string.Empty,
+                    row.ActualResultValue))
+                .ToArrayAsync(cancellationToken);
         var resultLookup = resultRows
             .GroupBy(row => new LedgerResultLookupKey(row.EventDate, row.PlayerId, row.PropTypeId))
             .ToDictionary(group => group.Key, group => group.First().ActualResultValue);
         var gradedRows = selectedRows
-            .Select(row => GradeLedgerPerformanceRow(row, resultLookup))
+            .Select(row => GradeLedgerPerformanceRow(row, resultLookup, diagnosticResultRows))
             .ToArray();
         var totalGraded = gradedRows.Count(row => IsGradedOutcome(row.Outcome));
+        var wonRows = gradedRows.Count(row => row.Outcome == "Win");
+        var lostRows = gradedRows.Count(row => row.Outcome == "Loss");
+        var pushedRows = gradedRows.Count(row => row.Outcome == "Push");
+        var noResultRows = gradedRows.Count(row => IsNoResultFailure(row.MatchFailureReason));
+        var pendingRows = gradedRows.Count(row => IsPendingFailure(row.MatchFailureReason));
         var latestGradedDate = ledgerTotalAfterFilters == 0
             ? null
             : gradedRows
@@ -1285,12 +1312,17 @@ public static class PublicMlbDfsEndpoints
                 .Select(row => (DateOnly?)row.Snapshot.ExpectedResultDate)
                 .DefaultIfEmpty()
                 .Max();
-        var unmatchedRows = gradedRows.Count(row => row.Outcome is null);
+        var unmatchedRows = gradedRows.Count(row =>
+            row.Outcome is null &&
+            !IsNoResultFailure(row.MatchFailureReason) &&
+            !IsPendingFailure(row.MatchFailureReason));
         var warning = totalGraded == 0
             ? selectedRows.Length == 0 && latestCompletedDate.HasValue
                 ? $"No captured recommendations exist for the latest completed result date ({latestCompletedDate.Value:MMM d})."
                 : selectedRows.Length > 0
-                    ? $"Captured recommendations exist for {selectedDate:MMM d}, but none safely matched imported results."
+                    ? noResultRows > 0 && unmatchedRows == 0
+                        ? $"Captured recommendations exist for {selectedDate:MMM d}, but none had gradeable result rows."
+                        : $"Captured recommendations exist for {selectedDate:MMM d}, but none safely matched imported results."
                     : "No captured recommendations exist yet."
             : totalGraded < 30
                 ? "Small graded sample. Treat ROI and hit-rate as directional only."
@@ -1325,12 +1357,14 @@ public static class PublicMlbDfsEndpoints
             {
                 ledgerRowsLoaded = selectedRows.Length,
                 gradedLedgerRows = totalGraded,
-                pendingLedgerRows = gradedRows.Count(row => row.MatchFailureReason == "ResultNotImported"),
+                pendingLedgerRows = pendingRows,
+                noResultLedgerRows = noResultRows,
                 unmatchedLedgerRows = unmatchedRows,
                 snapshotRowsLoaded = 0,
                 picksAfterFilters = selectedRows.Length,
                 totalPicksAfterFilters = ledgerTotalAfterFilters,
                 gradedPicks = totalGraded,
+                noResultPicks = noResultRows,
                 hasEnoughData = totalGraded >= 30,
                 warning,
                 latestCompletedDate,
@@ -1346,8 +1380,12 @@ public static class PublicMlbDfsEndpoints
                 candidateLedgerRowsForCompletedDate = candidateLedgerRowsForLatestCompleted,
                 filteredRowsForCompletedDate = filteredLedgerRowsForLatestCompleted,
                 gradedRowsForCompletedDate = totalGraded,
+                noResultRowsForCompletedDate = noResultRows,
                 unmatchedRowsForCompletedDate = unmatchedRows,
-                pendingRowsForCompletedDate = Math.Max(0, filteredLedgerRowsForLatestCompleted - totalGraded - unmatchedRows),
+                pendingRowsForCompletedDate = pendingRows,
+                wonRowsForCompletedDate = wonRows,
+                lostRowsForCompletedDate = lostRows,
+                pushedRowsForCompletedDate = pushedRows,
                 importedResultsForCompletedDate = latestCompletedPropResultsCount,
                 propResultsForCompletedDate = latestCompletedPropResultsCount,
                 unmatchedPicks = unmatchedRows,
@@ -1381,7 +1419,13 @@ public static class PublicMlbDfsEndpoints
                         expectedResultDate = group.Key,
                         ledgerRows = group.Count(),
                         gradedRows = gradedRows.Count(row => row.Snapshot.ExpectedResultDate == group.Key && IsGradedOutcome(row.Outcome)),
-                        unmatchedRows = gradedRows.Count(row => row.Snapshot.ExpectedResultDate == group.Key && row.Outcome is null),
+                        noResultRows = gradedRows.Count(row => row.Snapshot.ExpectedResultDate == group.Key && IsNoResultFailure(row.MatchFailureReason)),
+                        unmatchedRows = gradedRows.Count(row =>
+                            row.Snapshot.ExpectedResultDate == group.Key &&
+                            row.Outcome is null &&
+                            !IsNoResultFailure(row.MatchFailureReason) &&
+                            !IsPendingFailure(row.MatchFailureReason)),
+                        pendingRows = gradedRows.Count(row => row.Snapshot.ExpectedResultDate == group.Key && IsPendingFailure(row.MatchFailureReason)),
                         importedResultRows = latestCompletedDate == group.Key ? latestCompletedPropResultsCount : resultRows.Count(row => row.EventDate == group.Key)
                     })
                     .ToArray(),
@@ -1389,6 +1433,18 @@ public static class PublicMlbDfsEndpoints
                     .Where(row => row.Outcome is null)
                     .GroupBy(row => row.MatchFailureReason ?? "Unknown")
                     .ToDictionary(group => group.Key, group => group.Count()),
+                noResultLedgerExamples = includeDiagnostics
+                    ? BuildLedgerNoResultExamples(
+                        gradedRows,
+                        diagnosticResultRows,
+                        Math.Clamp(diagnosticSampleSize ?? 5, 1, 25))
+                    : [],
+                unmatchedLedgerExamples = includeDiagnostics
+                    ? BuildLedgerUnmatchedExamples(
+                        gradedRows,
+                        diagnosticResultRows,
+                        Math.Clamp(diagnosticSampleSize ?? 5, 1, 25))
+                    : [],
                 matchingStrategy = "recommendation_snapshots matched to prop_results by expected result date, canonical player id, and prop type id."
             },
             groups = new
@@ -1408,6 +1464,16 @@ public static class PublicMlbDfsEndpoints
     private static bool IsGradedOutcome(string? outcome)
     {
         return outcome is "Win" or "Loss" or "Push";
+    }
+
+    private static bool IsNoResultFailure(string? reason)
+    {
+        return reason is "ProviderLineForInactivePlayer" or "NoResultForPlayerPropOnDate" or "NoResultForPlayerOnDate";
+    }
+
+    private static bool IsPendingFailure(string? reason)
+    {
+        return reason is "NoPropResultsForDate";
     }
 
     private static (string? Blocker, string? Detail) BuildLatestGradedBlocker(
@@ -1976,20 +2042,239 @@ public static class PublicMlbDfsEndpoints
             .ToArray();
     }
 
+    private static object[] BuildLedgerNoResultExamples(
+        IReadOnlyCollection<LedgerPerformanceRow> gradedRows,
+        IReadOnlyCollection<LedgerDiagnosticResultRow> diagnosticResultRows,
+        int take)
+    {
+        return BuildLedgerResultDiagnosticExamples(
+            gradedRows.Where(row => row.Outcome is null && IsNoResultFailure(row.MatchFailureReason)),
+            diagnosticResultRows,
+            take);
+    }
+
+    private static object[] BuildLedgerUnmatchedExamples(
+        IReadOnlyCollection<LedgerPerformanceRow> gradedRows,
+        IReadOnlyCollection<LedgerDiagnosticResultRow> diagnosticResultRows,
+        int take)
+    {
+        return BuildLedgerResultDiagnosticExamples(
+            gradedRows.Where(row =>
+                row.Outcome is null &&
+                !IsNoResultFailure(row.MatchFailureReason) &&
+                !IsPendingFailure(row.MatchFailureReason)),
+            diagnosticResultRows,
+            take);
+    }
+
+    private static object[] BuildLedgerResultDiagnosticExamples(
+        IEnumerable<LedgerPerformanceRow> rows,
+        IReadOnlyCollection<LedgerDiagnosticResultRow> diagnosticResultRows,
+        int take)
+    {
+        return rows
+            .OrderByDescending(row => row.Snapshot.ExpectedResultDate)
+            .ThenBy(row => row.Snapshot.PlayerName)
+            .Take(take)
+            .Select(row =>
+            {
+                var snapshot = row.Snapshot;
+                var normalizedPlayerName = string.IsNullOrWhiteSpace(snapshot.NormalizedPlayerName)
+                    ? NormalizePerformanceKey(snapshot.PlayerName)
+                    : snapshot.NormalizedPlayerName;
+                var normalizedPropType = string.IsNullOrWhiteSpace(snapshot.NormalizedPropType)
+                    ? NormalizePerformancePropTypeKey(snapshot.PropType)
+                    : NormalizePerformancePropTypeKey(snapshot.NormalizedPropType);
+                var nearbyDates = new[] { snapshot.ExpectedResultDate.AddDays(-1), snapshot.ExpectedResultDate, snapshot.ExpectedResultDate.AddDays(1) };
+                var nearbyRows = diagnosticResultRows
+                    .Where(result => nearbyDates.Contains(result.EventDate))
+                    .ToArray();
+                var aliasEquivalentPlayerIds = nearbyRows
+                    .Where(result => !string.IsNullOrWhiteSpace(normalizedPlayerName)
+                        && string.Equals(result.NormalizedPlayerName, normalizedPlayerName, StringComparison.OrdinalIgnoreCase))
+                    .Select(result => result.PlayerId)
+                    .Concat(snapshot.CanonicalPlayerId.HasValue ? [snapshot.CanonicalPlayerId.Value] : [])
+                    .Distinct()
+                    .ToArray();
+                var sameDateRows = nearbyRows
+                    .Where(result => result.EventDate == snapshot.ExpectedResultDate)
+                    .ToArray();
+                var sameDateSamePropTypeCount = sameDateRows.Count(result =>
+                    LedgerPropTypesMatch(snapshot, result, normalizedPropType));
+                var sameDateSamePlayerIdCount = snapshot.CanonicalPlayerId.HasValue
+                    ? sameDateRows.Count(result => result.PlayerId == snapshot.CanonicalPlayerId.Value)
+                    : 0;
+                var sameDateSamePlayerNameCount = sameDateRows.Count(result =>
+                    !string.IsNullOrWhiteSpace(normalizedPlayerName)
+                    && string.Equals(result.NormalizedPlayerName, normalizedPlayerName, StringComparison.OrdinalIgnoreCase));
+                var sameDateSamePlayerAndPropTypeCount = sameDateRows.Count(result =>
+                    LedgerPlayersMatch(snapshot, result, aliasEquivalentPlayerIds, normalizedPlayerName)
+                    && LedgerPropTypesMatch(snapshot, result, normalizedPropType));
+                var samePlayerIdNearbyDatesCount = snapshot.CanonicalPlayerId.HasValue
+                    ? nearbyRows.Count(result => result.PlayerId == snapshot.CanonicalPlayerId.Value)
+                    : 0;
+                var samePlayerNameNearbyDatesCount = nearbyRows.Count(result =>
+                    !string.IsNullOrWhiteSpace(normalizedPlayerName)
+                    && string.Equals(result.NormalizedPlayerName, normalizedPlayerName, StringComparison.OrdinalIgnoreCase));
+                var samePlayerAndPropNearbyDatesCount = nearbyRows.Count(result =>
+                    LedgerPlayersMatch(snapshot, result, aliasEquivalentPlayerIds, normalizedPlayerName)
+                    && LedgerPropTypesMatch(snapshot, result, normalizedPropType));
+                var samePropTypeNearbyDatesCount = nearbyRows.Count(result =>
+                    LedgerPropTypesMatch(snapshot, result, normalizedPropType));
+                var eventUtcDate = snapshot.EventStartTimeUtc.HasValue
+                    ? DateOnly.FromDateTime(snapshot.EventStartTimeUtc.Value.UtcDateTime)
+                    : (DateOnly?)null;
+                var eventEasternDate = snapshot.EventStartTimeUtc.HasValue
+                    ? ResolveEasternDate(snapshot.EventStartTimeUtc.Value)
+                    : null;
+
+                return new
+                {
+                    recommendationSnapshotId = snapshot.Id,
+                    snapshot.IdempotencyKey,
+                    snapshot.CapturedAtUtc,
+                    snapshot.FirstSeenAtUtc,
+                    snapshot.LastSeenAtUtc,
+                    snapshot.ExpectedResultDate,
+                    snapshot.SlateDate,
+                    snapshot.EventId,
+                    snapshot.EventStartTimeUtc,
+                    eventUtcDate,
+                    eventEasternDate,
+                    eventUtcDateDiffersFromExpectedResultDate = eventUtcDate.HasValue && eventUtcDate.Value != snapshot.ExpectedResultDate,
+                    eventEasternDateDiffersFromExpectedResultDate = eventEasternDate.HasValue && eventEasternDate.Value != snapshot.ExpectedResultDate,
+                    playerName = snapshot.PlayerName,
+                    playerId = snapshot.CanonicalPlayerId,
+                    canonicalPlayerId = snapshot.CanonicalPlayerId,
+                    normalizedPlayerName,
+                    snapshot.Provider,
+                    snapshot.EntryProvider,
+                    snapshot.Bookmaker,
+                    propType = snapshot.PropType,
+                    propTypeId = snapshot.PropTypeId,
+                    normalizedPropType,
+                    snapshot.Side,
+                    snapshot.Line,
+                    snapshot.StrategyClassification,
+                    snapshot.StrategyTier,
+                    snapshot.IsCandidate,
+                    snapshot.IsTopPick,
+                    isBackfilled = !snapshot.RefreshRunId.HasValue && !snapshot.PredictionRunId.HasValue,
+                    sourceTable = "recommendation_snapshots",
+                    source = snapshot.RefreshRunId.HasValue
+                        ? "the_odds_refresh"
+                        : snapshot.PredictionRunId.HasValue
+                            ? "prediction_run"
+                            : "unknown_or_backfill",
+                    resultDateSearched = snapshot.ExpectedResultDate,
+                    expectedResultDateSource = snapshot.ResultDateSource ?? "recommendation_snapshots.expected_result_date",
+                    propResultDateSource = "prop_results.event_date",
+                    propResultsForDateCount = sameDateRows.Length,
+                    sameDateSamePropTypeCount,
+                    sameDateSamePlayerIdCount,
+                    sameDateSamePlayerNameCount,
+                    sameDateSamePlayerAndPropTypeCount,
+                    samePlayerIdNearbyDatesCount,
+                    samePlayerNameNearbyDatesCount,
+                    samePlayerAndPropNearbyDatesCount,
+                    samePropTypeNearbyDatesCount,
+                    aliasEquivalentPlayerIds,
+                    likelyFailureReason = row.MatchFailureReason ?? BuildLedgerMatchFailureReason(snapshot, diagnosticResultRows),
+                    closestResultCandidates = BuildLedgerClosestResultCandidates(snapshot, nearbyRows, aliasEquivalentPlayerIds, normalizedPlayerName, normalizedPropType)
+                };
+            })
+            .Cast<object>()
+            .ToArray();
+    }
+
+    private static object[] BuildLedgerClosestResultCandidates(
+        RecommendationSnapshot snapshot,
+        IReadOnlyCollection<LedgerDiagnosticResultRow> nearbyRows,
+        IReadOnlyCollection<Guid> aliasEquivalentPlayerIds,
+        string normalizedPlayerName,
+        string normalizedPropType)
+    {
+        var candidates = nearbyRows
+            .Select(result =>
+            {
+                var datesMatch = result.EventDate == snapshot.ExpectedResultDate;
+                var playerIdsMatch = snapshot.CanonicalPlayerId.HasValue && result.PlayerId == snapshot.CanonicalPlayerId.Value;
+                var playerIdsAliasEquivalent = aliasEquivalentPlayerIds.Contains(result.PlayerId);
+                var namesMatch = !string.IsNullOrWhiteSpace(normalizedPlayerName)
+                    && string.Equals(result.NormalizedPlayerName, normalizedPlayerName, StringComparison.OrdinalIgnoreCase);
+                var propTypesMatch = LedgerPropTypesMatch(snapshot, result, normalizedPropType);
+                var priority =
+                    datesMatch && playerIdsMatch ? 1 :
+                    datesMatch && namesMatch ? 2 :
+                    datesMatch && propTypesMatch ? 3 :
+                    !datesMatch && playerIdsMatch && propTypesMatch ? 4 :
+                    !datesMatch && namesMatch && propTypesMatch ? 5 :
+                    99;
+
+                return new
+                {
+                    priority,
+                    result.PropResultId,
+                    resultDate = result.EventDate,
+                    result.PlayerName,
+                    result.PlayerId,
+                    result.CanonicalPlayerId,
+                    result.NormalizedPlayerName,
+                    result.PropType,
+                    result.PropTypeId,
+                    result.NormalizedPropType,
+                    value = result.ActualResultValue,
+                    namesMatch,
+                    playerIdsMatch,
+                    playerIdsAliasEquivalent,
+                    propTypesMatch,
+                    datesMatch
+                };
+            })
+            .Where(candidate => candidate.priority < 99)
+            .OrderBy(candidate => candidate.priority)
+            .ThenBy(candidate => Math.Abs(candidate.resultDate.DayNumber - snapshot.ExpectedResultDate.DayNumber))
+            .ThenBy(candidate => candidate.PlayerName)
+            .Take(10)
+            .Select(candidate => new
+            {
+                candidate.PropResultId,
+                candidate.resultDate,
+                candidate.PlayerName,
+                candidate.PlayerId,
+                candidate.CanonicalPlayerId,
+                candidate.NormalizedPlayerName,
+                candidate.PropType,
+                candidate.PropTypeId,
+                candidate.NormalizedPropType,
+                candidate.value,
+                candidate.namesMatch,
+                candidate.playerIdsMatch,
+                candidate.playerIdsAliasEquivalent,
+                candidate.propTypesMatch,
+                candidate.datesMatch
+            })
+            .Cast<object>()
+            .ToArray();
+
+        return candidates;
+    }
+
     private static LedgerPerformanceRow GradeLedgerPerformanceRow(
         RecommendationSnapshot row,
-        IReadOnlyDictionary<LedgerResultLookupKey, decimal> actualResults)
+        IReadOnlyDictionary<LedgerResultLookupKey, decimal> actualResults,
+        IReadOnlyCollection<LedgerDiagnosticResultRow> diagnosticResultRows)
     {
         decimal? actualResult = null;
         string? matchFailureReason = null;
 
         if (!row.CanonicalPlayerId.HasValue)
         {
-            matchFailureReason = "MissingCanonicalPlayerId";
+            matchFailureReason = "MissingLedgerPlayerId";
         }
         else if (!row.PropTypeId.HasValue)
         {
-            matchFailureReason = "MissingPropTypeId";
+            matchFailureReason = "MissingLedgerPropType";
         }
         else
         {
@@ -2003,7 +2288,7 @@ public static class PublicMlbDfsEndpoints
             }
             else
             {
-                matchFailureReason = "ResultNotImported";
+                matchFailureReason = BuildLedgerMatchFailureReason(row, diagnosticResultRows);
             }
         }
 
@@ -2017,6 +2302,124 @@ public static class PublicMlbDfsEndpoints
         };
 
         return new LedgerPerformanceRow(row, actualResult, outcome, profit, matchFailureReason);
+    }
+
+    private static string BuildLedgerMatchFailureReason(
+        RecommendationSnapshot row,
+        IReadOnlyCollection<LedgerDiagnosticResultRow> diagnosticResultRows)
+    {
+        if (!row.CanonicalPlayerId.HasValue)
+        {
+            return "MissingLedgerPlayerId";
+        }
+
+        if (!row.PropTypeId.HasValue)
+        {
+            return "MissingLedgerPropType";
+        }
+
+        var normalizedPlayerName = string.IsNullOrWhiteSpace(row.NormalizedPlayerName)
+            ? NormalizePerformanceKey(row.PlayerName)
+            : row.NormalizedPlayerName;
+        var normalizedPropType = string.IsNullOrWhiteSpace(row.NormalizedPropType)
+            ? NormalizePerformancePropTypeKey(row.PropType)
+            : NormalizePerformancePropTypeKey(row.NormalizedPropType);
+        var sameDateRows = diagnosticResultRows
+            .Where(result => result.EventDate == row.ExpectedResultDate)
+            .ToArray();
+        if (sameDateRows.Length == 0)
+        {
+            return "NoPropResultsForDate";
+        }
+
+        var nearbyDates = new[] { row.ExpectedResultDate.AddDays(-1), row.ExpectedResultDate, row.ExpectedResultDate.AddDays(1) };
+        var nearbyRows = diagnosticResultRows
+            .Where(result => nearbyDates.Contains(result.EventDate))
+            .ToArray();
+        var aliasEquivalentPlayerIds = nearbyRows
+            .Where(result => !string.IsNullOrWhiteSpace(normalizedPlayerName)
+                && string.Equals(result.NormalizedPlayerName, normalizedPlayerName, StringComparison.OrdinalIgnoreCase))
+            .Select(result => result.PlayerId)
+            .Append(row.CanonicalPlayerId.Value)
+            .Distinct()
+            .ToArray();
+        var hasSameDateSamePlayerId = sameDateRows.Any(result => result.PlayerId == row.CanonicalPlayerId.Value);
+        var hasSameDateSamePlayerName = sameDateRows.Any(result =>
+            !string.IsNullOrWhiteSpace(normalizedPlayerName)
+            && string.Equals(result.NormalizedPlayerName, normalizedPlayerName, StringComparison.OrdinalIgnoreCase));
+        var hasSameDateSamePropType = sameDateRows.Any(result => LedgerPropTypesMatch(row, result, normalizedPropType));
+        var hasSameDatePlayerAndProp = sameDateRows.Any(result =>
+            LedgerPlayersMatch(row, result, aliasEquivalentPlayerIds, normalizedPlayerName)
+            && LedgerPropTypesMatch(row, result, normalizedPropType));
+        var hasNearbyPlayerAndProp = nearbyRows.Any(result =>
+            result.EventDate != row.ExpectedResultDate
+            && LedgerPlayersMatch(row, result, aliasEquivalentPlayerIds, normalizedPlayerName)
+            && LedgerPropTypesMatch(row, result, normalizedPropType));
+
+        if (hasNearbyPlayerAndProp)
+        {
+            return "ResultDateMismatch";
+        }
+
+        if ((hasSameDateSamePlayerId || hasSameDateSamePlayerName) && !hasSameDatePlayerAndProp)
+        {
+            return "PropTypeMismatch";
+        }
+
+        if (hasSameDateSamePropType && !hasSameDateSamePlayerId && hasSameDateSamePlayerName)
+        {
+            return "PlayerIdMismatch";
+        }
+
+        if (hasSameDateSamePropType)
+        {
+            return "ProviderLineForInactivePlayer";
+        }
+
+        if (!hasSameDateSamePlayerId && !hasSameDateSamePlayerName)
+        {
+            return "NoResultForPlayerOnDate";
+        }
+
+        return "Unknown";
+    }
+
+    private static bool LedgerPlayersMatch(
+        RecommendationSnapshot snapshot,
+        LedgerDiagnosticResultRow result,
+        IReadOnlyCollection<Guid> aliasEquivalentPlayerIds,
+        string normalizedPlayerName)
+    {
+        return (snapshot.CanonicalPlayerId.HasValue && result.PlayerId == snapshot.CanonicalPlayerId.Value)
+            || aliasEquivalentPlayerIds.Contains(result.PlayerId)
+            || (!string.IsNullOrWhiteSpace(normalizedPlayerName)
+                && string.Equals(result.NormalizedPlayerName, normalizedPlayerName, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static bool LedgerPropTypesMatch(
+        RecommendationSnapshot snapshot,
+        LedgerDiagnosticResultRow result,
+        string normalizedPropType)
+    {
+        return (snapshot.PropTypeId.HasValue && result.PropTypeId == snapshot.PropTypeId.Value)
+            || string.Equals(result.NormalizedPropType, normalizedPropType, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static DateOnly? ResolveEasternDate(DateTimeOffset value)
+    {
+        try
+        {
+            var eastern = TimeZoneInfo.FindSystemTimeZoneById("Eastern Standard Time");
+            return DateOnly.FromDateTime(TimeZoneInfo.ConvertTime(value, eastern).DateTime);
+        }
+        catch (TimeZoneNotFoundException)
+        {
+            return DateOnly.FromDateTime(value.UtcDateTime);
+        }
+        catch (InvalidTimeZoneException)
+        {
+            return DateOnly.FromDateTime(value.UtcDateTime);
+        }
     }
 
     private static object[] BuildLedgerPerformanceGroups(
@@ -2042,6 +2445,12 @@ public static class PublicMlbDfsEndpoints
         var wins = graded.Count(row => row.Outcome == "Win");
         var losses = graded.Count(row => row.Outcome == "Loss");
         var pushes = graded.Count(row => row.Outcome == "Push");
+        var noResults = rows.Count(row => IsNoResultFailure(row.MatchFailureReason));
+        var pending = rows.Count(row => IsPendingFailure(row.MatchFailureReason));
+        var unmatched = rows.Count(row =>
+            row.Outcome is null &&
+            !IsNoResultFailure(row.MatchFailureReason) &&
+            !IsPendingFailure(row.MatchFailureReason));
         var decisions = wins + losses;
         var profit = graded.Sum(row => row.Profit ?? 0m);
         var roi = graded.Length == 0 ? 0m : Math.Round(profit / graded.Length, 4);
@@ -2063,6 +2472,9 @@ public static class PublicMlbDfsEndpoints
             wins,
             losses,
             pushes,
+            noResults,
+            unmatched,
+            pending,
             hitRate = decisions == 0 ? 0m : Math.Round(wins / (decimal)decisions, 4),
             averageEstimatedEv = AverageNullable(rows.Select(row => row.Snapshot.EstimatedEv)),
             averageModelProbability = AverageNullable(rows.Select(row => row.Snapshot.HitChance)),
@@ -2973,6 +3385,20 @@ public static class PublicMlbDfsEndpoints
         Guid PlayerId,
         Guid PropTypeId,
         decimal ActualResultValue);
+
+    private sealed record LedgerDiagnosticResultRow(
+        Guid PropResultId,
+        DateOnly EventDate,
+        Guid PlayerId,
+        Guid CanonicalPlayerId,
+        string PlayerName,
+        Guid PropTypeId,
+        string PropType,
+        decimal ActualResultValue)
+    {
+        public string NormalizedPlayerName { get; } = NormalizePerformanceKey(PlayerName);
+        public string NormalizedPropType { get; } = NormalizePerformancePropTypeKey(PropType);
+    }
 
     private sealed record LedgerPerformanceRow(
         RecommendationSnapshot Snapshot,

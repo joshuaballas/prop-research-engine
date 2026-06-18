@@ -586,9 +586,12 @@ function SparsePerformancePanel({
     snapshotRowsForCompletedDate?: number;
     filteredRowsForCompletedDate?: number;
     gradedRowsForCompletedDate?: number;
+    noResultRowsForCompletedDate?: number;
     unmatchedRowsForCompletedDate?: number;
+    pendingRowsForCompletedDate?: number;
     importedResultsForCompletedDate?: number;
     propResultsForCompletedDate?: number;
+    noResultPicks?: number;
     unmatchedPicks?: number;
     gradedPicks?: number;
     hasFilteredRowsForCompletedDate?: boolean;
@@ -604,14 +607,16 @@ function SparsePerformancePanel({
     ?? 0;
   const importedResults = availability?.importedResultsForCompletedDate ?? availability?.propResultsForCompletedDate ?? 0;
   const gradedRows = availability?.gradedRowsForCompletedDate ?? availability?.gradedPicks ?? 0;
+  const noResultRows = availability?.noResultRowsForCompletedDate ?? availability?.noResultPicks ?? 0;
   const unmatchedRows = availability?.unmatchedRowsForCompletedDate ?? availability?.unmatchedPicks ?? 0;
+  const pendingRows = availability?.pendingRowsForCompletedDate ?? 0;
   const hasCapturedRows = capturedRows > 0 || availability?.hasFilteredRowsForCompletedDate === true;
   const hasImportedResults = importedResults > 0;
   const title = gradedRows > 0
     ? latestCompletedDateLabel
       ? `Latest completed slate: ${latestCompletedDateLabel}`
       : 'Latest completed slate'
-    : hasCapturedRows && unmatchedRows > 0
+    : hasCapturedRows && (noResultRows > 0 || unmatchedRows > 0 || pendingRows > 0)
       ? latestCompletedDateLabel
         ? `No graded picks for ${latestCompletedDateLabel} yet.`
         : 'No graded picks yet.'
@@ -624,10 +629,10 @@ function SparsePerformancePanel({
           : 'No completed results imported yet.';
   const message = gradedRows > 0
     ? 'Recent performance is based on the latest completed result date.'
+    : hasCapturedRows && noResultRows > 0 && unmatchedRows === 0
+      ? 'Captured picks were found for this completed slate, but none had gradeable result rows.'
     : hasCapturedRows && unmatchedRows > 0
-      ? latestCompletedDateLabel
-        ? 'Captured picks were found for this completed slate, but none safely matched imported result rows.'
-        : 'Captured picks were found for this completed slate, but none safely matched imported result rows.'
+      ? 'Captured picks were found for this completed slate, but some could not be matched safely.'
       : hasImportedResults
         ? 'Results are imported for this completed slate, but no captured picks were available to grade.'
         : 'Performance appears after completed games are imported and matched to captured picks.';
@@ -635,7 +640,10 @@ function SparsePerformancePanel({
     ? [
         `${capturedRows} captured picks`,
         `${formatInteger(importedResults)} imported results`,
-        hasCapturedRows && unmatchedRows > 0 ? `${unmatchedRows} unmatched` : null
+        gradedRows > 0 ? `${gradedRows} graded` : null,
+        hasCapturedRows && noResultRows > 0 ? `${noResultRows} no result` : null,
+        hasCapturedRows && unmatchedRows > 0 ? `${unmatchedRows} unmatched` : null,
+        hasCapturedRows && pendingRows > 0 ? `${pendingRows} pending` : null
       ].filter(Boolean)
     : [];
 

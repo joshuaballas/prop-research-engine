@@ -346,10 +346,15 @@ export interface MarketPerformanceSummaryDto {
     candidateLedgerRowsForCompletedDate?: number;
     filteredRowsForCompletedDate?: number;
     gradedRowsForCompletedDate?: number;
+    noResultRowsForCompletedDate?: number;
     unmatchedRowsForCompletedDate?: number;
     pendingRowsForCompletedDate?: number;
+    wonRowsForCompletedDate?: number;
+    lostRowsForCompletedDate?: number;
+    pushedRowsForCompletedDate?: number;
     importedResultsForCompletedDate?: number;
     propResultsForCompletedDate?: number;
+    noResultPicks?: number;
     unmatchedPicks?: number;
     hasLedgerRowsForCompletedDate?: boolean;
     hasFilteredRowsForCompletedDate?: boolean;
@@ -381,6 +386,9 @@ export interface PerformanceGroupDto {
   wins?: number;
   losses?: number;
   pushes?: number;
+  noResults?: number;
+  unmatched?: number;
+  pending?: number;
   hitRate?: number;
   averageEstimatedEv?: number | null;
   simulatedRoi?: number;

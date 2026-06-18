@@ -20,6 +20,7 @@ export function PerformanceTable({ rows, category }: { rows: PerformanceGroup[];
           <TableRow>
             <TableCell>Group</TableCell>
             <TableCell align="right">Graded</TableCell>
+            <TableCell align="right">No Result</TableCell>
             <TableCell align="right">W-L-P</TableCell>
             <TableCell align="right">Hit Rate</TableCell>
             <TableCell align="right">Simulated ROI</TableCell>
@@ -48,10 +49,11 @@ export function PerformanceTable({ rows, category }: { rows: PerformanceGroup[];
                     </Stack>
                   </TableCell>
                   <TableCell align="right">{row.gradedPicks}</TableCell>
+                  <TableCell align="right">{row.noResults ?? 0}</TableCell>
                   <TableCell align="right">
                     {row.wins}-{row.losses}-{row.pushes}
                   </TableCell>
-                  <TableCell align="right">{formatPercent(row.hitRate)}</TableCell>
+                  <TableCell align="right">{row.wins + row.losses > 0 ? formatPercent(row.hitRate) : '-'}</TableCell>
                   <TableCell
                     align="right"
                     sx={{ color: row.roi >= 0 ? palette.success : palette.danger, fontWeight: 900 }}
@@ -67,7 +69,7 @@ export function PerformanceTable({ rows, category }: { rows: PerformanceGroup[];
             })
           ) : (
             <TableRow>
-              <TableCell colSpan={7}>
+              <TableCell colSpan={8}>
                 <Typography color="text.secondary">No {category.toLowerCase()} performance rows yet.</Typography>
               </TableCell>
             </TableRow>
