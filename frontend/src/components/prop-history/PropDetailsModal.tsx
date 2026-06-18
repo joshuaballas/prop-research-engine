@@ -6,7 +6,6 @@ import type { PropHistoryResponseDto } from '../../api/types';
 import { isDemoDataMode } from '../../config/dataMode';
 import { mockPlayerResearchPlayers } from '../../data/mockPlayerResearch';
 import { formatPercent } from '../../utils/formatters';
-import { renderWarningText } from '../../utils/warnings';
 import { MetricLabelWithHelp } from '../metrics/MetricLabelWithHelp';
 import { TrustValue } from '../metrics/TrustValue';
 import { ProviderLabel } from '../providers/ProviderLabel';
@@ -23,7 +22,6 @@ interface PropDetailsModalProps {
 export function PropDetailsModal({ market, open, onClose }: PropDetailsModalProps) {
   const demoHistory = market ? findHistoryForMarket(market) : null;
   const { data: apiHistory, loading, error } = usePropHistory(market, open && !isDemoDataMode);
-  const warning = renderWarningText(market?.warnings);
   const hasApiHistory = Boolean(apiHistory?.games?.length);
 
   return (
@@ -71,7 +69,7 @@ export function PropDetailsModal({ market, open, onClose }: PropDetailsModalProp
       <DialogContent sx={{ pt: 1, pb: 3 }}>
         {market ? (
           <Stack spacing={1.5}>
-            <MetricStrip market={market} warning={warning} />
+            <MetricStrip market={market} />
             {isDemoDataMode && demoHistory ? (
               <AppCard contentSx={{ p: { xs: 1.5, md: 2 } }}>
                 <PropHistoryCard stat={demoHistory.stat} selectedOffering={market} allLines={demoHistory.allLines} />
@@ -155,12 +153,12 @@ function usePropHistory(market: MarketOpportunity | null, enabled: boolean) {
   return state;
 }
 
-function MetricStrip({ market, warning }: { market: MarketOpportunity; warning: string }) {
+function MetricStrip({ market }: { market: MarketOpportunity }) {
   return (
     <Box
       sx={{
         display: 'grid',
-        gridTemplateColumns: { xs: 'repeat(2, minmax(0, 1fr))', md: warning ? 'repeat(5, minmax(0, 1fr))' : 'repeat(4, minmax(0, 1fr))' },
+        gridTemplateColumns: { xs: 'repeat(2, minmax(0, 1fr))', md: 'repeat(4, minmax(0, 1fr))' },
         gap: 1,
         p: 1.2,
         borderRadius: 2.5,
@@ -172,7 +170,6 @@ function MetricStrip({ market, warning }: { market: MarketOpportunity; warning: 
       <DetailMetric metric="edge" value={formatPercent(market.probabilityEdge, { signed: true })} />
       <DetailMetric metric="ev" value={formatPercent(market.estimatedEv, { signed: true })} tone={market.estimatedEv >= 0 ? 'success.main' : 'error.main'} />
       <DetailMetric metric="trust" value={market.trustLevel === 'Research' ? 'Weak' : market.trustLevel} />
-      {warning ? <DetailMetric metric="warning" value={warning} tone="warning.main" /> : null}
     </Box>
   );
 }
@@ -182,7 +179,7 @@ function DetailMetric({
   value,
   tone = 'text.primary'
 }: {
-  metric: 'ev' | 'edge' | 'hitChance' | 'trust' | 'warning';
+  metric: 'ev' | 'edge' | 'hitChance' | 'trust';
   value: string;
   tone?: string;
 }) {
@@ -192,7 +189,7 @@ function DetailMetric({
       {metric === 'trust' ? (
         <TrustValue level={value} />
       ) : (
-        <Typography fontWeight={900} sx={{ color: tone }} noWrap={metric !== 'warning'}>
+        <Typography fontWeight={900} sx={{ color: tone }} noWrap>
           {value}
         </Typography>
       )}

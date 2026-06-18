@@ -1,4 +1,4 @@
-export type MetricHelpKey = 'ev' | 'edge' | 'hitChance' | 'trust' | 'warning';
+export type MetricHelpKey = 'ev' | 'edge' | 'hitChance' | 'trust' | 'warning' | 'caution';
 
 export const metricHelp: Record<MetricHelpKey, { label: string; description: string }> = {
   ev: {
@@ -20,5 +20,9 @@ export const metricHelp: Record<MetricHelpKey, { label: string; description: str
   warning: {
     label: 'Warning',
     description: 'Caution flags that may make the pick less reliable, such as low sample size.'
+  },
+  caution: {
+    label: 'Caution',
+    description: 'Short reasons this line may need extra review or may not be addable.'
   }
 };

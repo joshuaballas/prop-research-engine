@@ -89,6 +89,27 @@ export const components: Components<Omit<Theme, 'components'>> = {
       }
     }
   },
+  MuiTooltip: {
+    styleOverrides: {
+      tooltip: {
+        backgroundColor: palette.surfaceRaised,
+        color: palette.text,
+        border: `1px solid ${palette.border}`,
+        borderRadius: 8,
+        boxShadow: '0 14px 34px rgba(0,0,0,.34)',
+        padding: '8px 10px',
+        fontSize: 12,
+        lineHeight: 1.45,
+        maxWidth: 360
+      },
+      arrow: {
+        color: palette.surfaceRaised,
+        '&::before': {
+          border: `1px solid ${palette.border}`
+        }
+      }
+    }
+  },
   MuiTableCell: {
     styleOverrides: {
       root: {
