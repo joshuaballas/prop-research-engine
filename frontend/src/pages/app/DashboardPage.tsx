@@ -229,72 +229,77 @@ function DashboardOpportunityCard({ market, builder }: { market: MarketOpportuni
   const canAdd = market.canAddToEntry && market.estimatedEv > 0 && !incompatible;
 
   return (
-    <AppCard sx={{ height: '100%' }}>
-      <Stack spacing={1.35}>
-        <Stack direction="row" justifyContent="space-between" gap={1.5} alignItems="flex-start">
-          <Box minWidth={0}>
-            <Typography fontWeight={950} noWrap>
-              {market.player}
+    <AppCard
+      sx={{ height: '100%', display: 'flex', flexDirection: 'column' }}
+      contentSx={{ flex: 1, display: 'grid', gridTemplateRows: '1fr auto', rowGap: 1.35 }}
+    >
+      <Box>
+        <Stack spacing={1.35}>
+          <Stack direction="row" justifyContent="space-between" gap={1.5} alignItems="flex-start">
+            <Box minWidth={0}>
+              <Typography fontWeight={950} noWrap>
+                {market.player}
+              </Typography>
+              <Typography variant="body2" color="text.secondary">
+                {market.side} {market.propType} {market.line}
+              </Typography>
+            </Box>
+            <EvValue value={market.estimatedEv} />
+          </Stack>
+
+          <ProviderLabel provider={market.provider} category={market.providerCategory} compact />
+
+          <Stack direction="row" gap={0.75} flexWrap="wrap">
+            <StatusPill label={market.strategyClassification} />
+            <ProjectionModifierBadge modifier={market.projectionModifier} />
+          </Stack>
+
+          <Divider />
+
+          <Grid container spacing={1.2}>
+            <Grid size={{ xs: 4 }}>
+              <CompactMetric label="Edge" value={formatPercent(market.probabilityEdge, { signed: true })} metric="edge" />
+            </Grid>
+            <Grid size={{ xs: 4 }}>
+              <CompactMetric label="Hit chance" value={formatPercent(market.modelProbability)} metric="hitChance" />
+            </Grid>
+            <Grid size={{ xs: 4 }}>
+              <CompactMetric label="Trust" value={market.trustLevel} metric="trust" />
+            </Grid>
+          </Grid>
+
+          {warning ? (
+            <Typography variant="body2" color="warning.main">
+              {warning}
             </Typography>
+          ) : getDashboardReason(market) ? (
             <Typography variant="body2" color="text.secondary">
-              {market.side} {market.propType} {market.line}
+              {getDashboardReason(market)}
             </Typography>
-          </Box>
-          <EvValue value={market.estimatedEv} />
+          ) : null}
+
+          {market.historicalSampleSize > 0 ? (
+            <Typography variant="caption" color="text.secondary">
+              Based on {market.historicalSampleSize} results
+            </Typography>
+          ) : null}
         </Stack>
+      </Box>
 
-        <ProviderLabel provider={market.provider} category={market.providerCategory} compact />
-
-        <Stack direction="row" gap={0.75} flexWrap="wrap">
-          <StatusPill label={market.strategyClassification} />
-          <ProjectionModifierBadge modifier={market.projectionModifier} />
-        </Stack>
-
-        <Divider />
-
-        <Grid container spacing={1.2}>
-          <Grid size={{ xs: 4 }}>
-            <CompactMetric label="Edge" value={formatPercent(market.probabilityEdge, { signed: true })} metric="edge" />
-          </Grid>
-          <Grid size={{ xs: 4 }}>
-            <CompactMetric label="Hit chance" value={formatPercent(market.modelProbability)} metric="hitChance" />
-          </Grid>
-          <Grid size={{ xs: 4 }}>
-            <CompactMetric label="Trust" value={market.trustLevel} metric="trust" />
-          </Grid>
-        </Grid>
-
-        {warning ? (
-          <Typography variant="body2" color="warning.main">
-            {warning}
-          </Typography>
-        ) : getDashboardReason(market) ? (
-          <Typography variant="body2" color="text.secondary">
-            {getDashboardReason(market)}
-          </Typography>
-        ) : null}
-
-        {market.historicalSampleSize > 0 ? (
-          <Typography variant="caption" color="text.secondary">
-            Based on {market.historicalSampleSize} results
-          </Typography>
-        ) : null}
-
-        <Stack direction="row" spacing={1}>
-          <Button
-            size="small"
-            variant="contained"
-            startIcon={selected ? <RemoveCircleOutlineRoundedIcon /> : incompatible ? <LockRoundedIcon /> : <AddCircleOutlineRoundedIcon />}
-            disabled={!selected && !canAdd}
-            onClick={() => (selected || canAdd ? builder.toggleLeg(market) : undefined)}
-            sx={entryButtonSx(selected, incompatible)}
-          >
-            {selected ? 'Remove' : incompatible ? 'Locked' : 'Add leg'}
-          </Button>
-          <Button size="small" variant="outlined" onClick={() => setDetailsOpen(true)} sx={compareButtonSx}>
-            Details
-          </Button>
-        </Stack>
+      <Stack direction="row" spacing={1}>
+        <Button
+          size="small"
+          variant="contained"
+          startIcon={selected ? <RemoveCircleOutlineRoundedIcon /> : incompatible ? <LockRoundedIcon /> : <AddCircleOutlineRoundedIcon />}
+          disabled={!selected && !canAdd}
+          onClick={() => (selected || canAdd ? builder.toggleLeg(market) : undefined)}
+          sx={entryButtonSx(selected, incompatible)}
+        >
+          {selected ? 'Remove' : incompatible ? 'Locked' : 'Add leg'}
+        </Button>
+        <Button size="small" variant="outlined" onClick={() => setDetailsOpen(true)} sx={compareButtonSx}>
+          Details
+        </Button>
       </Stack>
       <PropDetailsModal market={market} open={detailsOpen} onClose={() => setDetailsOpen(false)} />
     </AppCard>
