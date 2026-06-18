@@ -2,11 +2,14 @@ import { apiGet, buildQuery } from './client';
 import type {
   MarketFreshnessDto,
   MarketPerformanceSummaryDto,
+  PropHistoryResponseDto,
   ProviderStatusDto,
   PublicLineShoppingResponseDto,
   PublicTopPicksResponseDto,
   ScheduledRefreshStatusDto
 } from './types';
+
+export type PerformanceGradingMode = 'latestGraded' | 'latestCompleted' | 'currentSlate' | 'rollingWindow';
 
 export function getMarketFreshness(signal?: AbortSignal) {
   return apiGet<MarketFreshnessDto>('/api/markets/freshness', signal);
@@ -40,9 +43,38 @@ export function getLineShopping(signal?: AbortSignal, take = 50, topOnly = true)
   ).then(normalizeLineShoppingResponse);
 }
 
-export function getPerformanceSummary(signal?: AbortSignal) {
+export function getPerformanceSummary(signal?: AbortSignal, gradingMode: PerformanceGradingMode = 'latestGraded') {
   return apiGet<MarketPerformanceSummaryDto>(
-    `/api/markets/performance-summary${buildQuery({ sport: 'MLB', candidateOnly: true })}`,
+    `/api/markets/performance-summary${buildQuery({ sport: 'MLB', candidateOnly: true, gradingMode })}`,
+    signal
+  );
+}
+
+export interface PropHistoryRequest {
+  sport?: string;
+  playerId?: string;
+  playerName?: string;
+  propType: string;
+  side: string;
+  line: number;
+  provider?: string;
+  take?: number;
+  season?: number;
+}
+
+export function getPropHistory(request: PropHistoryRequest, signal?: AbortSignal) {
+  return apiGet<PropHistoryResponseDto>(
+    `/api/markets/prop-history${buildQuery({
+      sport: request.sport ?? 'MLB',
+      playerId: request.playerId,
+      playerName: request.playerName,
+      propType: request.propType,
+      side: request.side,
+      line: request.line,
+      provider: request.provider,
+      take: request.take ?? 10,
+      season: request.season
+    })}`,
     signal
   );
 }

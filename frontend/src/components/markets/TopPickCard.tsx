@@ -1,17 +1,20 @@
 import AddCircleOutlineRoundedIcon from '@mui/icons-material/AddCircleOutlineRounded';
-import CompareArrowsRoundedIcon from '@mui/icons-material/CompareArrowsRounded';
+import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
 import LockRoundedIcon from '@mui/icons-material/LockRounded';
 import RemoveCircleOutlineRoundedIcon from '@mui/icons-material/RemoveCircleOutlineRounded';
 import { Box, Button, Divider, Stack, Typography } from '@mui/material';
-import { useToast } from '../../hooks/useToast';
+import { useState } from 'react';
 import { formatAmericanOdds, formatDecimal, formatPercent, formatRiskToWin } from '../../utils/formatters';
 import type { MarketOpportunity } from '../../types/markets';
 import { MetricLabelWithHelp } from '../metrics/MetricLabelWithHelp';
+import { TrustValue } from '../metrics/TrustValue';
+import { PropDetailsModal } from '../prop-history/PropDetailsModal';
 import { AppCard } from '../ui/AppCard';
 import { StatusPill } from '../ui/StatusPill';
 import { ProjectionModifierBadge } from './ProjectionModifierBadge';
 import { ProviderLabel } from '../providers/ProviderLabel';
 import { compactActionButtonSx, lockedActionButtonSx, removeActionButtonSx, secondaryGhostButtonSx } from '../ui/buttonStyles';
+import { hasRenderableWarning, renderWarningText } from '../../utils/warnings';
 
 interface TopPickCardProps {
   market: MarketOpportunity;
@@ -23,8 +26,8 @@ interface TopPickCardProps {
 }
 
 export function TopPickCard({ market, onAdd, hideActions = false, variant = 'default', selected = false, incompatible = false }: TopPickCardProps) {
-  const { showToast } = useToast();
-  const handleCompare = () => showToast('Line comparison is available inside the app workspace.', 'info');
+  const [detailsOpen, setDetailsOpen] = useState(false);
+  const warningText = renderWarningText(market.warnings);
   const confidence = resolveConfidence(market);
 
   if (variant === 'featured') {
@@ -61,7 +64,7 @@ export function TopPickCard({ market, onAdd, hideActions = false, variant = 'def
               <ProviderLabel provider={market.provider} category={market.providerCategory} compact />
               <Stack direction="row" spacing={0.7} alignItems="center">
                 <MetricLabelWithHelp metric="trust" />
-                <StatusPill label={confidence} />
+                <TrustValue level={confidence} variant="badge" size="small" />
               </Stack>
             </Stack>
 
@@ -83,9 +86,9 @@ export function TopPickCard({ market, onAdd, hideActions = false, variant = 'def
                   {cleanReasons(market.reasons).slice(0, 2).join(' - ')}
                 </Typography>
               ) : null}
-              {market.warnings.length ? (
+              {warningText ? (
                 <Typography variant="body2" color="warning.main" sx={{ lineHeight: 1.45 }}>
-                  {market.warnings.map(cleanWarning).join(' - ')}
+                  {warningText}
                 </Typography>
               ) : null}
             </Stack>
@@ -104,11 +107,12 @@ export function TopPickCard({ market, onAdd, hideActions = false, variant = 'def
             >
               {selected ? 'Remove' : incompatible ? 'Locked' : 'Add leg'}
             </Button>
-            <Button startIcon={<CompareArrowsRoundedIcon />} variant="outlined" onClick={handleCompare} sx={compareButtonSx}>
-              Compare
+            <Button startIcon={<InfoOutlinedIcon />} variant="outlined" onClick={() => setDetailsOpen(true)} sx={compareButtonSx}>
+              Details
             </Button>
           </Stack>
         )}
+        <PropDetailsModal market={market} open={detailsOpen} onClose={() => setDetailsOpen(false)} />
       </AppCard>
     );
   }
@@ -143,9 +147,7 @@ export function TopPickCard({ market, onAdd, hideActions = false, variant = 'def
 
           <Stack direction="row" justifyContent="space-between" alignItems="center" gap={1} flexWrap="wrap">
             <ProviderLabel provider={market.provider} category={market.providerCategory} compact />
-            <Typography variant="caption" color={confidenceTone[confidence]} fontWeight={900}>
-              {confidence} trust
-            </Typography>
+            <TrustValue level={confidence} showSuffix size="small" />
           </Stack>
 
           <Divider />
@@ -156,9 +158,9 @@ export function TopPickCard({ market, onAdd, hideActions = false, variant = 'def
             <Metric label="Sample" value={`${market.historicalSampleSize}`} compact />
           </Stack>
 
-          {market.warnings.length ? (
+          {warningText ? (
             <Typography variant="body2" color="warning.main" sx={{ lineHeight: 1.45 }}>
-              {market.warnings.map(cleanWarning).join(' - ')}
+              {warningText}
             </Typography>
           ) : null}
 
@@ -173,11 +175,12 @@ export function TopPickCard({ market, onAdd, hideActions = false, variant = 'def
               >
                 {selected ? 'Remove' : incompatible ? 'Locked' : 'Add leg'}
               </Button>
-              <Button startIcon={<CompareArrowsRoundedIcon />} variant="outlined" onClick={handleCompare} sx={compareButtonSx}>
-                Compare
+              <Button startIcon={<InfoOutlinedIcon />} variant="outlined" onClick={() => setDetailsOpen(true)} sx={compareButtonSx}>
+                Details
               </Button>
             </Stack>
           )}
+          <PropDetailsModal market={market} open={detailsOpen} onClose={() => setDetailsOpen(false)} />
         </Stack>
       </AppCard>
     );
@@ -212,7 +215,7 @@ export function TopPickCard({ market, onAdd, hideActions = false, variant = 'def
         <Stack direction="row" flexWrap="wrap" gap={1}>
           <StatusPill label={market.providerCategory} />
           <ProviderLabel provider={market.provider} category={market.providerCategory} compact />
-          <StatusPill label={market.trustLevel} />
+          <TrustValue level={market.trustLevel} variant="badge" size="small" />
           <StatusPill label={market.marketShape} />
         </Stack>
 
@@ -231,9 +234,9 @@ export function TopPickCard({ market, onAdd, hideActions = false, variant = 'def
         <Typography variant="body2" color="text.secondary">
           {market.reasons.join(' - ')}
         </Typography>
-        {market.warnings.length ? (
+        {warningText ? (
           <Typography variant="body2" color="warning.main">
-            {market.warnings.join(' - ')}
+            {warningText}
           </Typography>
         ) : null}
 
@@ -248,11 +251,12 @@ export function TopPickCard({ market, onAdd, hideActions = false, variant = 'def
             >
               {selected ? 'Remove' : incompatible ? 'Locked' : 'Add leg'}
             </Button>
-            <Button startIcon={<CompareArrowsRoundedIcon />} variant="outlined" onClick={handleCompare} sx={compareButtonSx}>
-              Compare
+            <Button startIcon={<InfoOutlinedIcon />} variant="outlined" onClick={() => setDetailsOpen(true)} sx={compareButtonSx}>
+              Details
             </Button>
           </Stack>
         )}
+        <PropDetailsModal market={market} open={detailsOpen} onClose={() => setDetailsOpen(false)} />
       </Stack>
     </AppCard>
   );
@@ -276,7 +280,7 @@ function Metric({ label, value, compact = false, metric }: { label: string; valu
 }
 
 function resolveConfidence(market: MarketOpportunity): 'Strong' | 'Medium' | 'Weak' {
-  const warningText = market.warnings.join(' ').toLowerCase();
+  const warningText = renderWarningText(market.warnings).toLowerCase();
   const hasMajorCaution =
     market.estimatedEv <= 0 ||
     market.freshness === 'Unavailable' ||
@@ -288,7 +292,7 @@ function resolveConfidence(market: MarketOpportunity): 'Strong' | 'Medium' | 'We
     return 'Weak';
   }
 
-  const hasModerateCaution = market.warnings.length > 0 || market.projectionModifier !== 'Normal' || market.historicalSampleSize < 90;
+  const hasModerateCaution = hasRenderableWarning(market.warnings) || market.projectionModifier !== 'Normal' || market.historicalSampleSize < 90;
 
   if (market.estimatedEv > 0.1 && market.historicalSampleSize >= 90 && !hasModerateCaution) {
     return 'Strong';
@@ -325,14 +329,8 @@ export function getTopPickConfidence(market: MarketOpportunity): 'Strong' | 'Med
 }
 
 export function formatTopPickWarning(market: MarketOpportunity) {
-  return market.warnings.map(cleanWarning).join(' - ') || '-';
+  return renderWarningText(market.warnings, '-');
 }
-
-const confidenceTone = {
-  Strong: 'success.main',
-  Medium: 'warning.main',
-  Weak: 'error.main'
-} as const;
 
 const actionButtonSx = {
   ...compactActionButtonSx,

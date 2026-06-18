@@ -91,11 +91,11 @@ Normal public/future API routes are not meant to be protected by this middleware
 
 ### Underdog
 
-Underdog is currently supported as a direct source and has an enabled ingestion worker. It fetches over/under lines, resolves players and prop types, persists platform props, and stores line snapshots.
+Underdog is supported as a DFS provider through The Odds API `us_dfs` feed. Direct Underdog ingestion remains in the codebase for explicit debug/audit checks only and is disabled by default.
 
-This is useful free development and supplemental coverage, but it is not the desired long-term production dependency. The production strategy is provider-feed-first: The Odds API or another paid/allowed provider feed should be the source of truth once scheduled refreshes are implemented and coverage is proven adequate.
+The production strategy is provider-feed-first: The Odds API or another paid/allowed provider feed should be the source of truth for customer-facing provider rows.
 
-Keep direct Underdog configurable. In production it should eventually be disabled by default, then removed if The Odds API scheduled coverage is sufficient. Do not describe it as "retired but still present"; if direct Underdog becomes fully deprecated, remove it rather than keeping a stale fallback path.
+Keep direct Underdog disabled unless an explicit debug/audit comparison is being run. It must not feed public `/api/markets/*` read models.
 
 ### The Odds API
 
@@ -177,7 +177,7 @@ Backtests are read-only. They do not persist grading or ROI yet.
 
 Hosted workers:
 
-- `UnderdogIngestionWorker`: enabled by default.
+- `UnderdogIngestionWorker`: registered for debug/audit visibility but disabled by default.
 - `MlbResultImportWorker`: enabled by default.
 - `TheOddsMlbIngestionWorker`: registered but disabled by default, dry-run-first skeleton.
 - `TheOddsMlbScheduledRefreshWorker`: registered but disabled by default. It is the foundation for production scheduled The Odds refreshes and exposes read-only status at `/api/debug/the-odds/mlb/scheduled-refresh/status`. It will not call The Odds API unless explicitly enabled and live execution is unblocked in local/ops config.
@@ -206,9 +206,9 @@ Target flow:
 
 The existing `refresh-current` debug/admin endpoint remains useful for manual controlled refreshes and requires `forceLive=true` for live provider calls. It is not the target frontend data path.
 
-The scheduled refresh worker foundation stays disabled in base config, defaults to `BookmakerPreset=dfsOnly`, clamps cadence to at least 15 minutes, and is guarded by `TheOddsScheduledRefresh:RequireForceLive=true`. Development/local config may enable the MLB DFS-only worker with explicit scheduled live execution at the 15-minute cadence. When enabled, it runs a guarded startup cycle immediately so overdue refreshes are not stuck waiting for the first timer tick, then records the next wake estimate before sleeping. If no persisted slate events are available, `TheOddsScheduledRefresh:AllowEventDiscoveryWhenNoPersistedEvents=true` lets the planner use the configured fallback call estimate and let the shared refresh service discover events from The Odds. Scheduled status separates worker heartbeat timing (`nextWakeEstimateUtc`) from frontend data-read timing (`nextDataAvailableEstimateUtc`), which is computed from the latest successful refresh completion plus the scheduled interval plus `PostRefreshReadBufferSeconds`. `TheOddsRefreshPlanner:StopAfterEventStart=false` by default so provider polling can continue after first pitch; rows/events can still be marked locked/non-actionable through lifecycle/actionability fields. If enabled without explicit live unblocking, it logs a warning and marks the cycle blocked. The debug/admin `refresh-current` endpoint and scheduled worker share `ITheOddsMlbRefreshService`, so scheduled execution reuses the same ingestion, prediction, line-shopping, classification, and diagnostics path rather than duplicating logic.
+The scheduled refresh worker foundation stays disabled in base config, defaults to `BookmakerPreset=dfsOnly`, clamps cadence to at least 15 minutes, and is guarded by `TheOddsScheduledRefresh:RequireForceLive=true`. Development/local config may enable the MLB DFS-only worker with explicit scheduled live execution at the 15-minute cadence. Base planner budget defaults remain conservative for safety, but Development/local config sets the monthly planner budget to `100000` to match the current paid The Odds quota while keeping the 500-credit daily guardrail and provider-remaining hard stop. When enabled, it runs a guarded startup cycle immediately so overdue refreshes are not stuck waiting for the first timer tick, then records the next wake estimate before sleeping. If no persisted slate events are available, `TheOddsScheduledRefresh:AllowEventDiscoveryWhenNoPersistedEvents=true` lets the planner use the configured fallback call estimate and let the shared refresh service discover events from The Odds. Scheduled status separates worker heartbeat timing (`nextWakeEstimateUtc`) from frontend data-read timing (`nextDataAvailableEstimateUtc`), which is computed from the latest successful refresh completion plus the scheduled interval plus `PostRefreshReadBufferSeconds`. `TheOddsRefreshPlanner:StopAfterEventStart=false` by default so provider polling can continue after first pitch; rows/events can still be marked locked/non-actionable through lifecycle/actionability fields. If enabled without explicit live unblocking, it logs a warning and marks the cycle blocked. The debug/admin `refresh-current` endpoint and scheduled worker share `ITheOddsMlbRefreshService`, so scheduled execution reuses the same ingestion, prediction, line-shopping, classification, and diagnostics path rather than duplicating logic.
 
-The Underdog source coverage audit is cadence-sensitive. Direct Underdog currently has more persisted coverage partly because it runs continuously, while The Odds API Underdog DFS rows may only be refreshed manually. Do not interpret a one-off audit as proof that The Odds API coverage is worse unless both sources are refreshed on comparable intervals and markets.
+The Underdog source coverage audit is retained for explicit comparisons against persisted The Odds API `us_dfs` Underdog rows. Direct Underdog should not run continuously or supply customer-facing market data.
 
 ## Error Logging
 

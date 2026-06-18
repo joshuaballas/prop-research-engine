@@ -19,7 +19,7 @@ This is not yet a public betting product. It is a research cockpit for validatin
 
 Working today:
 
-- Underdog ingestion worker is enabled by default.
+- Direct Underdog ingestion is disabled by default and retained only for explicit debug/audit checks.
 - MLB result import worker is enabled by default.
 - The Odds API MLB manual event ingest works through debug endpoints and the `/research` dashboard.
 - The Odds API MLB current refresh can optionally include DFS/pick'em books through region `us_dfs`.
@@ -31,10 +31,10 @@ Working today:
 
 Provider notes:
 
-- PrizePicks support comes only through The Odds API `us_dfs` feed when configured.
-- The Odds API is the desired production source of truth for odds and DFS pick'em rows.
-- Direct Underdog remains supported because it works and does not spend The Odds API credits, but it is temporary/supplemental coverage, not the desired long-term production dependency.
-- Use the Underdog source coverage audit to compare direct Underdog against The Odds API `us_dfs` Underdog rows, but remember the audit is cadence-sensitive. It is not an apples-to-apples comparison unless both sources run on comparable refresh intervals.
+- PrizePicks, Underdog, DraftKings Pick6, and Betr Picks support comes through The Odds API `us_dfs` feed when configured.
+- The Odds API is the active production source of truth for odds and DFS pick'em rows.
+- Direct Underdog is debug/audit only. It should not run automatically or feed customer-facing `/api/markets/*` reads.
+- Use the Underdog source coverage audit only for explicit comparisons against The Odds API `us_dfs` Underdog rows.
 - The Odds API automated ingestion worker exists only as a guarded skeleton and is disabled by default.
 - Production direction is scheduled backend The Odds refreshes plus read-only frontend endpoints. Public frontend users should not trigger provider refreshes or spend provider credits.
 - EV persistence is not implemented. EV diagnostics are research-only.
@@ -77,12 +77,12 @@ Do not commit real API keys. Keep local secrets in `api/appsettings.Local.json` 
 Key config sections:
 
 - `DebugAdmin`: protects `/research` and `/api/debug/*` outside Development.
-- `UnderdogIngestion`: controls Underdog worker.
+- `UnderdogIngestion`: controls the direct Underdog debug/audit worker. It is disabled by default and should not be enabled as a customer-facing provider source.
 - `MlbResultImportWorker`: controls MLB result import worker.
 - `TheOddsApi`: API key, base URL, sport key, regions, odds format, markets, and `MaxConcurrentRequests` for bounded parallel event-odds requests during explicit current-slate refreshes.
 - `TheOddsIngestionWorker`: disabled, dry-run-first worker skeleton. Its `Bookmakers` value is the conservative sportsbook context list used by manual/current The Odds MLB refresh workflows. `ExpandedBookmakers` is an opt-in expanded US sportsbook preset used only by `bookmakerPreset=expanded` or `bookmakerPreset=all`. `DfsRegion`, `DfsBookmakers`, and `IncludeDfsBookmakers` control optional DFS/pick'em rows through The Odds API `us_dfs`.
 - `TheOddsScheduledRefresh`: scheduled refresh worker foundation. Base config stays production-safe with `Enabled=false`, `IntervalMinutes=15`, `BookmakerPreset=dfsOnly`, `RequireForceLive=true`, and `AllowScheduledLiveRefresh=false`; Development/local config can enable MLB DFS-only auto-sync with `AllowScheduledLiveRefresh=true` at the same 15-minute minimum cadence. The status endpoint is read-only and does not call external APIs. When enabled, the worker runs one guarded startup planning cycle immediately, then wakes every effective interval; each live attempt still consults the read-only refresh planner first. `AllowEventDiscoveryWhenNoPersistedEvents=true` allows the scheduler to use `FallbackEstimatedApiCalls` for budget checks and discover events live instead of skipping solely because no persisted slate events exist. `PostRefreshReadBufferSeconds=30` controls the buffer added to the next data-available estimate used by the frontend countdown.
-- `TheOddsRefreshPlanner`: planning/budget configuration for `/api/markets/refresh-plan`. It estimates cadence and credit budget from persisted metadata only and does not enable scheduled live refreshes. Manual reads are read-only by default; scheduled worker planning cycles persist audit rows in `the_odds_refresh_planner_decisions`. `StopAfterEventStart=false` by default so event start affects DFS entry actionability, not whether provider polling/lifecycle tracking can continue.
+- `TheOddsRefreshPlanner`: planning/budget configuration for `/api/markets/refresh-plan`. It estimates cadence and credit budget from persisted metadata only and does not enable scheduled live refreshes. Manual reads are read-only by default; scheduled worker planning cycles persist audit rows in `the_odds_refresh_planner_decisions`. Base config keeps conservative 500-credit daily/monthly limits; Development/local config keeps the 500 daily guardrail but sets `MaxMonthlyCredits=100000` for the current paid provider quota. Planner responses report configured daily/monthly budgets alongside provider-reported usage/remaining credits. `StopAfterEventStart=false` by default so event start affects DFS entry actionability, not whether provider polling/lifecycle tracking can continue.
 - `ProviderLineLifecycle`: line lifecycle thresholds. Defaults keep active lines fresh for 15 minutes, mark pulled after 2 successful missing refreshes, and expire old event lines after 12 hours.
 - `PredictionGeneration`: recommendation thresholds and enabled prop types.
 
@@ -111,17 +111,17 @@ Refreshability is not the same as actionability. Provider polling may continue a
 
 Frontend users should only call read-only endpoints that return the latest persisted odds, predictions, line-shopping groups, top picks, and freshness state. All users should see the same latest persisted data. The UI should show last refreshed time, stale-data warnings, and game-started/expired lifecycle labels.
 
-The current production-safe read endpoints are `/api/markets/freshness`, `/api/markets/top-picks`, `/api/markets/line-shopping`, `/api/markets/performance-summary`, and `/api/dfs/entry-rules`. They do not call provider APIs and do not write rows. `/api/mlb/*` remains as compatibility aliases for MLB-specific reads, but future frontend work should prefer `/api/markets/*` with filters instead of adding duplicated endpoint families per sport. The generic market routes currently support MLB only and report that limitation in response metadata.
+The current production-safe read endpoints are `/api/markets/freshness`, `/api/markets/top-picks`, `/api/markets/line-shopping`, `/api/markets/performance-summary`, and `/api/dfs/entry-rules`. They do not call provider APIs and do not write rows. `/api/mlb/*` remains as compatibility aliases for MLB-specific reads, but future frontend work should prefer `/api/markets/*` with filters instead of adding duplicated endpoint families per sport. The generic market routes currently support MLB only and report that limitation in response metadata. Performance summary is based on the durable `recommendation_snapshots` ledger, not the generic current read snapshots. The Odds refresh writes ledger rows for surfaced candidate/watchlist/top-pick opportunities with canonical player id and expected result date, while `market_top_pick_snapshots` and `market_line_shopping_snapshots` remain current UI read models. Performance summary supports `gradingMode=latestCompleted` for customer Dashboard-style summaries, `gradingMode=latestGraded` for the newest safely matched slate, and `gradingMode=currentSlate` for pending/current slate visibility on deeper diagnostics. Pending picks are reported separately and are not counted in wins, losses, hit rate, or ROI. Customer Dashboard performance should use the latest completed/imported result date; it should not foreground current-day pending candidates.
 
 The existing debug/admin `refresh-current` endpoint remains for manual controlled refreshes and requires `forceLive=true` for live provider calls. It should not be called by a public frontend.
 
-Direct Underdog should remain configurable while it is useful for development and supplemental coverage. In production it should eventually be disabled by default once The Odds API scheduled refresh coverage is proven adequate, then removed if it is redundant.
+Direct Underdog remains configurable only for explicit debug/audit work. The Odds API `us_dfs` is the active provider source for customer-facing rows, including Underdog.
 
 ## Automatic Vs Manual
 
 Automatic:
 
-- Underdog ingestion worker.
+- The Odds scheduled refresh worker when explicitly enabled by config.
 - MLB result import worker.
 - Database migrations are applied during startup when pending migrations exist.
 - Application errors are persisted through middleware and worker logging.

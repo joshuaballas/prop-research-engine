@@ -49,12 +49,13 @@ Invoke-RestMethod -Uri "http://localhost:5299/api/debug/errors/recent?take=5"
 
 | Method | Path | Purpose | Writes | External API | Credits |
 | --- | --- | --- | --- | --- | --- |
-| GET | `/api/debug/underdog` | Fetch and normalize current Underdog lines for inspection. | No | Yes, Underdog | No |
-| POST | `/api/debug/underdog/ingest` | Manual Underdog ingestion. | Yes | Yes, Underdog | No |
+| GET | `/api/debug/underdog` | Debug-only direct Underdog fetch for inspection. Not used by customer-facing market reads. | No | Yes, Underdog | No |
+| POST | `/api/debug/underdog/ingest` | Debug-only manual direct Underdog ingestion. Disabled as an active provider source by default. | Yes | Yes, Underdog | No |
 | GET | `/api/debug/underdog/source-coverage-audit` | Read-only persisted-row audit comparing direct Underdog coverage with The Odds API `us_dfs` Underdog rows. Returns overlap, unique rows, freshness, sport/prop/event breakdowns, match/failure samples, and a keep/remove/more-data recommendation. | No | No | No |
-| GET | `/api/health/underdog-ingestion` | Underdog worker status. | No | No | No |
+| GET | `/api/debug/underdog/ingestion-health` | Debug/audit direct Underdog worker health. Reports The Odds API as the active provider source, direct Underdog status, background worker enabled state, interval, and read-only/no-external-call status. | No | No | No |
+| GET | `/api/health/underdog-ingestion` | Compatibility health route for the same direct Underdog worker status payload. | No | No | No |
 
-Underdog ingestion worker is enabled by default.
+Direct Underdog ingestion is disabled by default and should remain debug/audit only. Customer-facing market rows should come from persisted The Odds API `us_dfs` snapshots.
 
 Example:
 
@@ -67,7 +68,7 @@ Invoke-RestMethod "http://localhost:5299/api/debug/underdog/source-coverage-audi
 
 | Method | Path | Purpose | Writes | External API | Credits |
 | --- | --- | --- | --- | --- | --- |
-| GET | `/api/debug/dfs/provider-expansion-plan` | Lightweight DFS/pick'em provider status and expansion plan. Shows direct Underdog as supported, PrizePicks as supported only through The Odds API `us_dfs`, DraftKings Pick6/Betr Picks as `us_dfs` candidates, and sportsbook rows as market context. | No | No | No |
+| GET | `/api/debug/dfs/provider-expansion-plan` | Lightweight DFS/pick'em provider status and expansion plan. Shows Underdog, PrizePicks, DraftKings Pick6, and Betr Picks through The Odds API `us_dfs`, with direct Underdog disabled as an active source. | No | No | No |
 | GET | `/api/debug/dfs/entry-rules` | Read-only provider-scoped entry compatibility rules for PrizePicks, Underdog, DraftKings Pick6, Betr Picks, and sportsbook context providers. Rules are conservative and marked `NeedsVerification` where production details still need confirmation. | No | No | No |
 | GET | `/api/dfs/entry-rules` | Production-safe provider-scoped DFS entry compatibility rules. Same persisted/read-only catalog as the debug route, without `/api/debug`. | No | No | No |
 
@@ -86,7 +87,7 @@ Invoke-RestMethod "http://localhost:5299/api/dfs/entry-rules" |
 
 ## PrizePicks Through The Odds API DFS
 
-PrizePicks is supported only as a The Odds API DFS bookmaker through region `us_dfs` with bookmaker key `prizepicks`. There are no direct PrizePicks ingestion, scraping, worker, or health endpoints.
+PrizePicks and Underdog are supported as The Odds API DFS bookmakers through region `us_dfs` with bookmaker keys `prizepicks` and `underdog`. DraftKings Pick6 and Betr Picks use `pick6` and `betr_us_dfs`. Direct provider scrapers should not feed customer-facing market rows.
 
 ## The Odds API MLB
 
@@ -94,7 +95,7 @@ The Odds API is a data provider/aggregator. Persist actual bookmakers as platfor
 
 ## Production-Safe Market Read Endpoints
 
-These routes are intended for a future frontend/public surface. They never call The Odds API, never call Underdog, and never write rows. They read the latest persisted odds, prediction, line-shopping, top-pick, and refresh metadata populated by debug/admin refreshes today and by the scheduled refresh worker later.
+These routes are intended for the customer frontend/public surface. They never call The Odds API, never call direct Underdog, and never write rows. They read the latest persisted odds, prediction, line-shopping, top-pick, and refresh metadata populated by controlled backend refreshes.
 
 Prefer `/api/markets/*` for frontend work. `/api/mlb/*` remains as compatibility wrappers around the same implementation with `sport=MLB`. Do not add separate duplicated endpoint families such as `/api/nba/*` or `/api/ufc/*` unless there is a specific reason; add new sports behind `/api/markets/*` with sport filters instead.
 
@@ -104,11 +105,14 @@ Current limitation: only MLB persisted market read models are implemented. When 
 | --- | --- | --- | --- | --- | --- |
 | GET | `/api/markets/freshness` | Preferred production-safe freshness metadata route. Supports optional `sport`, `freshnessMinutes`, `slateDate`, and `bookmakerPreset`. Returns supported/effective sport metadata, latest successful refresh, stale flags, `hasUsableMarketData`, snapshot counts, active/stale group counts, provider ingestion success/failure counts, provider rejected-key detection, usability warning, and threshold. `isFresh` means a successful refresh is recent; `hasUsableMarketData` says whether it produced usable market snapshots/data. | No | No | No |
 | GET | `/api/markets/provider-status` | Production-safe provider/API-key/credit status from persisted refresh metadata. Returns The Odds API health status, latest refresh metadata, persisted credit usage fields when available, rejected-key detection, ingestion success/failure counts, usable-data flags, status reason, and recommended action. This endpoint does not call providers. | No | No | No |
-| GET | `/api/markets/refresh-plan` | Production-safe refresh planner and credit budget estimator. By default it is read-only and uses persisted refresh metadata, provider status, snapshots, and configured planning budgets/cadence rules to estimate whether a scheduled The Odds refresh would run now or skip. Event start is not a global polling stop unless `TheOddsRefreshPlanner:StopAfterEventStart=true`; started events can still be refreshed for lifecycle tracking while remaining non-actionable for entries. If no persisted events are available and scheduled event discovery fallback is enabled, the plan uses `estimateSource=EventDiscoveryFallback` plus the configured fallback call estimate instead of skipping solely for missing slate events. Returns estimated slate events/API calls, estimate source, daily/monthly budget usage, provider availability, cadence rule, skip reason, next eligible refresh, and recommended action. Optional `persistDecision=true` writes one manual planner decision audit row. | Optional, only with `persistDecision=true` | No | No |
+| GET | `/api/markets/refresh-plan` | Production-safe refresh planner and credit budget estimator. By default it is read-only and uses persisted refresh metadata, provider status, snapshots, and configured planning budgets/cadence rules to estimate whether a scheduled The Odds refresh would run now or skip. Event start is not a global polling stop unless `TheOddsRefreshPlanner:StopAfterEventStart=true`; started events can still be refreshed for lifecycle tracking while remaining non-actionable for entries. If no persisted events are available and scheduled event discovery fallback is enabled, the plan uses `estimateSource=EventDiscoveryFallback` plus the configured fallback call estimate instead of skipping solely for missing slate events. Returns estimated slate events/API calls, estimate source, configured daily/monthly budget limits, daily/monthly budget usage, provider-reported usage/remaining credits, provider availability, cadence rule, skip reason, next eligible refresh, and recommended action. Optional `persistDecision=true` writes one manual planner decision audit row. | Optional, only with `persistDecision=true` | No | No |
 | GET | `/api/markets/refresh-plan/history` | Production-safe read-only planner decision history. Supports `take`, `sport`, `skipped`, and `source`. Returns persisted manual/scheduled planner decisions, including skip reason, budget state, provider state, estimated calls, and recommended action. | No | No | No |
-| GET | `/api/markets/top-picks` | Preferred production-safe persisted Top Picks route. Supports optional `sport`, `take`, `freshnessMinutes`, optional `runId`, optional `providerCategory`, and optional `bookmakerPreset` for freshness filtering. Returns `snapshotBacked=true` only when snapshot rows exist for the requested filters; otherwise falls back to dynamic persisted-row calculation with `snapshotBacked=false` and `fallbackReason`. | No | No | No |
-| GET | `/api/markets/line-shopping` | Preferred production-safe persisted line-shopping route. Supports optional `sport`, `runId`, `take`, `topOnly`, `freshnessMinutes`, `providerCategory`, and `bookmakerPreset`. Defaults to `topOnly=true`, `take=25`, and `includeBookmakerPrices=false`. Returns `snapshotBacked=true` only when snapshot rows exist for the requested filters/view; otherwise falls back dynamically with a clear reason. | No | No | No |
-| GET | `/api/markets/performance-summary` | Production-safe read-only strategy/provider performance summary from persisted line-shopping snapshots and MLB `prop_results`. Supports `sport`, `providerCategory`, `provider`, `bookmaker`, `propType`, `strategyClassification`, `strategyTier`, `candidateOnly`, `fromDate`, `toDate`, and `minSampleSize`. Current implementation supports MLB snapshots only and grades conservatively by normalized player name, prop type, and slate date until snapshot rows persist canonical ids. If the latest refresh produced no line-shopping snapshots, the response reports that directly. | No | No | No |
+| GET | `/api/markets/top-picks` | Preferred production-safe persisted Top Picks route. Supports optional `sport`, `take`, `freshnessMinutes`, optional `runId`, optional `providerCategory`, and optional `bookmakerPreset` for freshness filtering. Returns `snapshotBacked=true` only when snapshot rows exist for the requested filters; otherwise falls back to dynamic persisted-row calculation with `snapshotBacked=false` and `fallbackReason`. Market rows include additive `playerId`/`canonicalPlayerId` when a unique canonical MLB player can be resolved. | No | No | No |
+| GET | `/api/markets/line-shopping` | Preferred production-safe persisted line-shopping route. Supports optional `sport`, `runId`, `take`, `topOnly`, `freshnessMinutes`, `providerCategory`, and `bookmakerPreset`. Defaults to `topOnly=true`, `take=25`, and `includeBookmakerPrices=false`. Returns `snapshotBacked=true` only when snapshot rows exist for the requested filters/view; otherwise falls back dynamically with a clear reason. Market rows include additive `playerId`/`canonicalPlayerId` when a unique canonical MLB player can be resolved. | No | No | No |
+| GET | `/api/markets/performance-summary` | Production-safe read-only strategy/provider performance summary from the durable `recommendation_snapshots` ledger and MLB `prop_results`. Supports `sport`, `providerCategory`, `provider`, `bookmaker`, `propType`, `strategyClassification`, `strategyTier`, `candidateOnly`, `fromDate`, `toDate`, `minSampleSize`, `gradingMode=latestCompleted|latestGraded|currentSlate|rollingWindow`, `includeDiagnostics`, and `diagnosticSampleSize`. `latestCompleted` uses only the latest imported result date and does not report current-slate pending rows; this is the Dashboard mode. `dataAvailability` exposes explicit completed-date counts such as `importedResultsForCompletedDate`, `ledgerRowsForCompletedDate`, `candidateLedgerRowsForCompletedDate`, `filteredRowsForCompletedDate`, `gradedRowsForCompletedDate`, and `unmatchedRowsForCompletedDate`. `currentSlate` is for pending/current slate diagnostics. If no ledger rows exist yet for non-Dashboard modes, legacy market snapshot diagnostics may still be used as fallback. Pending/no-result/unmatched rows are not counted as wins, losses, hit rate, or ROI. The ledger is written during The Odds refresh from surfaced candidate/watchlist/top-pick line-shopping groups and grades by expected result date, canonical `players.id`, prop type id, side, and line. | No | No | No |
+| GET | `/api/debug/recommendations/ledger/audit` | Debug-only read audit for recommendation history. Supports `fromDate` and `toDate`. Reports counts by date for The Odds refresh runs, prediction runs, market top-pick snapshots, market line-shopping snapshots, recommendation ledger rows, and `prop_results`. Does not call providers. | No | No | No |
+| POST | `/api/debug/recommendations/ledger/backfill` | Debug-only ledger backfill from existing persisted market snapshots. Supports `fromDate`, `toDate`, `source=marketSnapshots|both`, `dryRun=true` by default, and `execute=true` to write idempotently. Reports eligible rows, existing rows, rows to create, and skipped reasons such as missing canonical player id, missing prop type id, or missing expected result date. Does not call providers. | Optional, only with `execute=true` and `dryRun!=true` | No | No |
+| GET | `/api/markets/prop-history` | Production-safe read-only prop history for Details modals. Supports `sport=MLB`, production `playerId`, manual/debug `playerName` fallback, `propType` (`pitcher_strikeouts`, `batter_hits`, `batter_total_bases`, or display names), `side`, `line`, `take`, `season`, and `provider`. Uses persisted MLB `prop_results` through the same equivalent player/prop-type lookup pattern as prediction feature generation; no provider calls and no live MLB calls. Returns chart-ready games, summary stats, push-aware results, `emptyReason`, and diagnostics including lookup mode, resolved player id, history source, and observation counts. | No | No | No |
 | GET | `/api/mlb/freshness` | Compatibility wrapper for `/api/markets/freshness?sport=MLB`. | No | No | No |
 | GET | `/api/mlb/top-picks` | Compatibility wrapper for `/api/markets/top-picks?sport=MLB`. | No | No | No |
 | GET | `/api/mlb/line-shopping` | Compatibility wrapper for `/api/markets/line-shopping?sport=MLB`. | No | No | No |
@@ -137,7 +141,29 @@ Invoke-RestMethod "http://localhost:5299/api/markets/top-picks?sport=MLB&take=10
 Invoke-RestMethod "http://localhost:5299/api/markets/line-shopping?sport=MLB&take=10&freshnessMinutes=30&includeBookmakerPrices=false" |
   ConvertTo-Json -Depth 20
 
-Invoke-RestMethod "http://localhost:5299/api/markets/performance-summary?sport=MLB&candidateOnly=true" |
+Invoke-RestMethod "http://localhost:5299/api/markets/performance-summary?sport=MLB&candidateOnly=true&gradingMode=latestCompleted" |
+  ConvertTo-Json -Depth 20
+
+Invoke-RestMethod "http://localhost:5299/api/markets/performance-summary?sport=MLB&candidateOnly=true&gradingMode=latestCompleted&includeDiagnostics=true&diagnosticSampleSize=10" |
+  ConvertTo-Json -Depth 20
+
+Invoke-RestMethod "http://localhost:5299/api/markets/performance-summary?sport=MLB&candidateOnly=true&gradingMode=currentSlate" |
+  ConvertTo-Json -Depth 20
+
+Invoke-RestMethod "http://localhost:5299/api/debug/recommendations/ledger/audit?fromDate=2026-06-17&toDate=2026-06-18" |
+  ConvertTo-Json -Depth 40
+
+Invoke-RestMethod -Method Post "http://localhost:5299/api/debug/recommendations/ledger/backfill?fromDate=2026-06-17&toDate=2026-06-18&source=both&dryRun=true" |
+  ConvertTo-Json -Depth 40
+
+$top = Invoke-RestMethod "http://localhost:5299/api/markets/top-picks?sport=MLB&take=10&freshnessMinutes=30"
+$row = $top.topPicks | Select-Object -First 1
+$playerId = if ($row.playerId) { $row.playerId } else { $row.canonicalPlayerId }
+Invoke-RestMethod "http://localhost:5299/api/markets/prop-history?sport=MLB&playerId=$playerId&propType=pitcher_strikeouts&side=Over&line=4.5&take=10" |
+  ConvertTo-Json -Depth 20
+
+# Manual/debug fallback only. Diagnostics will report lookupMode=playerNameFallback.
+Invoke-RestMethod "http://localhost:5299/api/markets/prop-history?sport=MLB&playerName=Landen%20Roupp&propType=pitcher_strikeouts&side=Over&line=4.5&take=10" |
   ConvertTo-Json -Depth 20
 ```
 

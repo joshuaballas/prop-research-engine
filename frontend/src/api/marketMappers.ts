@@ -48,6 +48,7 @@ function mapMarketGroupToOpportunity(group: MarketGroupDto, index: number, sourc
   const isFresh = readBoolean(group, 'isFresh', 'IsFresh') ?? lifecycleStatusNormalized === 'active';
   const isStale = readBoolean(group, 'isStale', 'IsStale') ?? lifecycleStatusNormalized === 'stale';
   const line = readNumber(group, 'line', 'Line') ?? 0;
+  const playerId = readString(group, 'playerId', 'PlayerId', 'canonicalPlayerId', 'CanonicalPlayerId');
   const player = readString(group, 'player', 'Player') ?? 'Unknown player';
   const eventId = readString(group, 'eventId', 'EventId');
   const bookmakerPrices = readArray<BookmakerPriceDto>(group, 'bookmakerPrices', 'BookmakerPrices') ?? [];
@@ -55,11 +56,15 @@ function mapMarketGroupToOpportunity(group: MarketGroupDto, index: number, sourc
     ...strategyWarnings,
     ...(sampleWarning ? [sampleWarning] : []),
     ...(entryRuleWarning && providerCategory !== 'DFS' ? [entryRuleWarning] : [])
-  ].map(cleanWarning);
+  ]
+    .map(cleanWarning)
+    .filter(Boolean);
 
   return {
     id: `${eventId ?? event}-${player}-${propType}-${line || index}-${side}-${provider}`.replace(/\s+/g, '-').toLowerCase(),
     rank: index + 1,
+    playerId,
+    canonicalPlayerId: playerId,
     player,
     team: readString(group, 'awayTeam', 'AwayTeam') ?? undefined,
     opponent: readString(group, 'homeTeam', 'HomeTeam') ?? undefined,
@@ -230,7 +235,12 @@ function formatReferenceContext(lines?: MarketGroupDto['bookmakerPrices']) {
 }
 
 function cleanWarning(value: string) {
+  if (/^(none|null|n\/a)$/i.test(value.trim())) {
+    return '';
+  }
+
   return value
+    .replace('LowSample', 'Low sample')
     .replace('Sportsbook rows are market context for this DFS-only user. Do not mix sportsbook legs across books.', 'Reference lines are not entry legs.')
     .replace('SmallSample', 'Limited history')
     .replace('Low sample size', 'Low sample')

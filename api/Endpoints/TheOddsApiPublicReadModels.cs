@@ -402,6 +402,98 @@ public static partial class TheOddsApiDebugEndpoints
             BuildLineShoppingSnapshot(refreshRun, predictionRunId, generatedAtUtc, group)));
         dbContext.MarketTopPickSnapshots.AddRange(topPickGroups.Select(group =>
             BuildTopPickSnapshot(refreshRun, predictionRunId, generatedAtUtc, group)));
+
+        var topPickKeys = topPickGroups
+            .Select(BuildRecommendationLedgerGroupIdentity)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var ledgerCandidates = lineShoppingGroups
+            .Where(group =>
+            {
+                var strategy = ClassifyTheOddsLineShoppingStrategy(group);
+                return strategy.IsCandidate || strategy.IsWatchlist || topPickKeys.Contains(BuildRecommendationLedgerGroupIdentity(group));
+            })
+            .Select(group => BuildRecommendationLedgerCandidate(
+                refreshRun,
+                predictionRunId,
+                generatedAtUtc,
+                group,
+                topPickKeys.Contains(BuildRecommendationLedgerGroupIdentity(group))))
+            .ToArray();
+
+        await RecommendationLedgerWriter.UpsertAsync(
+            dbContext,
+            ledgerCandidates,
+            execute: true,
+            cancellationToken);
+    }
+
+    private static RecommendationLedgerCandidate BuildRecommendationLedgerCandidate(
+        TheOddsRefreshRun refreshRun,
+        Guid? predictionRunId,
+        DateTimeOffset generatedAtUtc,
+        TheOddsLineShoppingGroup group,
+        bool isTopPick)
+    {
+        var strategy = ClassifyTheOddsLineShoppingStrategy(group);
+        var entry = BuildTheOddsEntryCompatibility(group);
+        var selectedProbability = string.Equals(group.BestSide, "Under", StringComparison.OrdinalIgnoreCase)
+            ? group.ModelProbabilityUnder
+            : group.ModelProbabilityOver;
+        var warning = strategy.StrategyWarnings.FirstOrDefault()
+            ?? (string.IsNullOrWhiteSpace(group.SampleWarning) ? null : group.SampleWarning);
+
+        return new RecommendationLedgerCandidate(
+            CapturedAtUtc: generatedAtUtc,
+            RefreshRunId: refreshRun.Id,
+            PredictionRunId: predictionRunId,
+            Sport: refreshRun.Sport,
+            SlateDate: refreshRun.SlateDate,
+            ExpectedResultDate: group.ExpectedResultDate,
+            ResultDateSource: group.ResultDateSource,
+            EventId: group.EventId,
+            EventStartTimeUtc: group.EventStartTimeUtc ?? group.EventStartTime,
+            CanonicalPlayerId: group.PlayerId,
+            PlayerName: group.Player,
+            PropTypeId: group.PropTypeId,
+            PropType: group.NormalizedPropType,
+            Side: group.BestSide,
+            Line: group.Line,
+            Provider: entry.EntryProvider,
+            Bookmaker: group.BestBookmaker,
+            ProviderCategory: group.ProviderCategory,
+            EntryProvider: entry.EntryProvider,
+            EntryCompatibilityGroup: entry.EntryCompatibilityGroup,
+            HitChance: selectedProbability,
+            ImpliedProbability: group.BestImpliedProbability,
+            ProbabilityEdge: group.BestProbabilityEdge,
+            EstimatedEv: group.BestEstimatedEv,
+            TrustLevel: group.TrustLevel,
+            SampleWarning: string.IsNullOrWhiteSpace(group.SampleWarning) ? null : group.SampleWarning,
+            Warning: warning,
+            HistoricalSampleSize: group.HistoricalSampleSize,
+            StrategyClassification: strategy.StrategyClassification,
+            StrategyTier: strategy.StrategyTier,
+            RankingScore: group.RankingScore,
+            IsCandidate: strategy.IsCandidate,
+            IsTopPick: isTopPick,
+            IsWatchlist: strategy.IsWatchlist,
+            IsActionableForUser: entry.EntryActionableForUser,
+            LifecycleStatus: group.LifecycleStatus);
+    }
+
+    private static string BuildRecommendationLedgerGroupIdentity(TheOddsLineShoppingGroup group)
+    {
+        return string.Join("|", new[]
+        {
+            group.ExpectedResultDate.ToString("yyyy-MM-dd"),
+            group.EventId ?? string.Empty,
+            group.PlayerId.ToString("D"),
+            group.PropTypeId.ToString("D"),
+            group.BestSide,
+            group.Line.ToString("0.####"),
+            group.ProviderCategory,
+            group.BestBookmaker ?? string.Empty
+        });
     }
 
     private static MarketTopPickSnapshot BuildTopPickSnapshot(
@@ -545,6 +637,7 @@ public static partial class TheOddsApiDebugEndpoints
         var refreshRun = await dbContext.TheOddsRefreshRuns
             .AsNoTracking()
             .FirstAsync(row => row.Id == refreshRunId.Value, cancellationToken);
+        var playerIdsBySnapshotId = await ResolveTopPickSnapshotPlayerIdsAsync(dbContext, rows, cancellationToken);
 
         return new MlbTopPicksReadResponse(
             rows.FirstOrDefault()?.GeneratedAtUtc ?? refreshRun.CompletedAtUtc ?? refreshRun.StartedAtUtc,
@@ -555,7 +648,9 @@ public static partial class TheOddsApiDebugEndpoints
             Run: new { runId = rows.FirstOrDefault()?.PredictionRunId, predictionCount = refreshRun.PredictionCount },
             Summary: BuildSnapshotSummary(rows),
             StrategyClassificationSummary: BuildSnapshotStrategySummary(rows),
-            TopPicks: rows.Select(row => (object)row.DetailsJson.RootElement.Clone()).ToArray());
+            TopPicks: rows
+                .Select(row => BuildSnapshotDetailsWithPlayerId(row.DetailsJson.RootElement, playerIdsBySnapshotId.GetValueOrDefault(row.Id)))
+                .ToArray());
     }
 
     private static async Task<MlbLineShoppingReadResponse?> TryBuildLineShoppingSnapshotResponseAsync(
@@ -606,6 +701,7 @@ public static partial class TheOddsApiDebugEndpoints
         var refreshRun = await dbContext.TheOddsRefreshRuns
             .AsNoTracking()
             .FirstAsync(row => row.Id == refreshRunId.Value, cancellationToken);
+        var playerIdsBySnapshotId = await ResolveLineShoppingSnapshotPlayerIdsAsync(dbContext, rows, cancellationToken);
 
         return new MlbLineShoppingReadResponse(
             rows.FirstOrDefault()?.GeneratedAtUtc ?? refreshRun.CompletedAtUtc ?? refreshRun.StartedAtUtc,
@@ -617,9 +713,9 @@ public static partial class TheOddsApiDebugEndpoints
             Summary: BuildSnapshotSummary(rows),
             StrategyClassificationSummary: BuildSnapshotStrategySummary(rows),
             ComparisonGroups: rows
-                .Select(row => (object)(includeBookmakerPrices
+                .Select(row => BuildSnapshotDetailsWithPlayerId(includeBookmakerPrices
                     ? row.DetailsJson.RootElement.Clone()
-                    : StripBookmakerPrices(row.DetailsJson)))
+                    : StripBookmakerPrices(row.DetailsJson), playerIdsBySnapshotId.GetValueOrDefault(row.Id)))
                 .ToArray());
     }
 
@@ -822,6 +918,122 @@ public static partial class TheOddsApiDebugEndpoints
         return document.RootElement.Clone();
     }
 
+    private static object BuildSnapshotDetailsWithPlayerId(JsonElement detailsJson, Guid? playerId)
+    {
+        var node = JsonSerializer.SerializeToNode(detailsJson);
+        if (node is not JsonObject obj)
+        {
+            return detailsJson.Clone();
+        }
+
+        if (playerId.HasValue && playerId.Value != Guid.Empty)
+        {
+            obj["playerId"] = playerId.Value;
+            obj["canonicalPlayerId"] = playerId.Value;
+        }
+
+        return obj;
+    }
+
+    private static Task<IReadOnlyDictionary<Guid, Guid?>> ResolveTopPickSnapshotPlayerIdsAsync(
+        ApplicationDbContext dbContext,
+        IReadOnlyCollection<MarketTopPickSnapshot> rows,
+        CancellationToken cancellationToken)
+    {
+        return ResolveSnapshotPlayerIdsAsync(
+            dbContext,
+            rows.Select(row => new SnapshotPlayerLookup(row.Id, row.Player)).ToArray(),
+            cancellationToken);
+    }
+
+    private static Task<IReadOnlyDictionary<Guid, Guid?>> ResolveLineShoppingSnapshotPlayerIdsAsync(
+        ApplicationDbContext dbContext,
+        IReadOnlyCollection<MarketLineShoppingSnapshot> rows,
+        CancellationToken cancellationToken)
+    {
+        return ResolveSnapshotPlayerIdsAsync(
+            dbContext,
+            rows.Select(row => new SnapshotPlayerLookup(row.Id, row.Player)).ToArray(),
+            cancellationToken);
+    }
+
+    private static async Task<IReadOnlyDictionary<Guid, Guid?>> ResolveSnapshotPlayerIdsAsync(
+        ApplicationDbContext dbContext,
+        IReadOnlyCollection<SnapshotPlayerLookup> snapshots,
+        CancellationToken cancellationToken)
+    {
+        if (snapshots.Count == 0)
+        {
+            return new Dictionary<Guid, Guid?>();
+        }
+
+        var requestedNames = snapshots
+            .Select(row => NormalizeSnapshotLookupText(row.Player))
+            .Where(value => !string.IsNullOrWhiteSpace(value))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        if (requestedNames.Count == 0)
+        {
+            return snapshots.ToDictionary(row => row.SnapshotId, _ => (Guid?)null);
+        }
+
+        var playerRows = await dbContext.Players
+            .AsNoTracking()
+            .Where(player => player.League != null && player.League.Code == "MLB")
+            .Select(player => new { player.Id, player.DisplayName })
+            .ToArrayAsync(cancellationToken);
+        var candidatePlayerIds = playerRows
+            .Where(player => requestedNames.Contains(NormalizeSnapshotLookupText(player.DisplayName)))
+            .Select(player => player.Id)
+            .Distinct()
+            .ToArray();
+        var resultCountsByPlayerId = await dbContext.PropResults
+            .AsNoTracking()
+            .Where(result => candidatePlayerIds.Contains(result.PlayerId) && result.ExternalSource == "mlb")
+            .GroupBy(result => result.PlayerId)
+            .Select(group => new { PlayerId = group.Key, Count = group.Count() })
+            .ToDictionaryAsync(row => row.PlayerId, row => row.Count, cancellationToken);
+        var playersByName = playerRows
+            .GroupBy(player => NormalizeSnapshotLookupText(player.DisplayName), StringComparer.OrdinalIgnoreCase)
+            .Where(group => requestedNames.Contains(group.Key))
+            .ToDictionary(
+                group => group.Key,
+                group => ResolveSnapshotPlayerId(group.Select(player => player.Id), resultCountsByPlayerId),
+                StringComparer.OrdinalIgnoreCase);
+
+        return snapshots.ToDictionary(
+            row => row.SnapshotId,
+            row => playersByName.GetValueOrDefault(NormalizeSnapshotLookupText(row.Player)));
+    }
+
+    private static Guid? ResolveSnapshotPlayerId(
+        IEnumerable<Guid> playerIds,
+        IReadOnlyDictionary<Guid, int> resultCountsByPlayerId)
+    {
+        var ranked = playerIds
+            .Select(playerId => new { PlayerId = playerId, ResultCount = resultCountsByPlayerId.GetValueOrDefault(playerId) })
+            .OrderByDescending(row => row.ResultCount)
+            .ToArray();
+        if (ranked.Length == 0)
+        {
+            return null;
+        }
+
+        if (ranked.Length == 1 || ranked[0].ResultCount > ranked[1].ResultCount)
+        {
+            return ranked[0].ResultCount > 0 ? ranked[0].PlayerId : null;
+        }
+
+        return null;
+    }
+
+    private static string NormalizeSnapshotLookupText(string? value)
+    {
+        return string.IsNullOrWhiteSpace(value)
+            ? string.Empty
+            : string.Concat(value.Trim().ToLowerInvariant().Where(char.IsLetterOrDigit));
+    }
+
     private static RefreshDiagnosticsSummary ExtractRefreshDiagnostics(JsonDocument? diagnosticsJson)
     {
         if (diagnosticsJson is null)
@@ -1014,4 +1226,6 @@ public static partial class TheOddsApiDebugEndpoints
             probabilityAnalysis.PredictionCount
         };
     }
+
+    private sealed record SnapshotPlayerLookup(Guid SnapshotId, string Player);
 }

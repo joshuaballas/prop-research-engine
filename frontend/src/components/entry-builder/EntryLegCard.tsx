@@ -2,11 +2,12 @@ import DeleteOutlineRoundedIcon from '@mui/icons-material/DeleteOutlineRounded';
 import { Box, IconButton, Stack, Typography } from '@mui/material';
 import type { EntryLeg } from '../../types/entryBuilder';
 import { palette } from '../../theme/palette';
+import { renderWarningText } from '../../utils/warnings';
 import { ProjectionModifierBadge } from '../markets/ProjectionModifierBadge';
 import { ProviderLabel } from '../providers/ProviderLabel';
 
 export function EntryLegCard({ leg, onRemove }: { leg: EntryLeg; onRemove?: (id: string) => void }) {
-  const warning = normalizeWarning(leg.warnings[0]);
+  const warning = renderWarningText(leg.warnings);
 
   return (
     <Box
@@ -56,12 +57,4 @@ export function EntryLegCard({ leg, onRemove }: { leg: EntryLeg; onRemove?: (id:
 function formatSignedPercent(value: number) {
   const formatted = `${Math.abs(value * 100).toFixed(2)}%`;
   return value >= 0 ? `+${formatted}` : `-${formatted}`;
-}
-
-function normalizeWarning(value?: string) {
-  if (!value) return '';
-  return value
-    .replace('Confirm final payout in provider app', 'Payout may vary')
-    .replace('Sportsbook context rows cannot be added', 'Reference lines are not entry legs')
-    .replace('Provider limited for this sport', 'Limited coverage for this sport');
 }

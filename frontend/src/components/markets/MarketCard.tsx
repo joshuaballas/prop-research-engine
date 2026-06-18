@@ -2,10 +2,14 @@ import AddCircleOutlineRoundedIcon from '@mui/icons-material/AddCircleOutlineRou
 import LockRoundedIcon from '@mui/icons-material/LockRounded';
 import RemoveCircleOutlineRoundedIcon from '@mui/icons-material/RemoveCircleOutlineRounded';
 import { Button, Stack, Typography } from '@mui/material';
+import { useState } from 'react';
 import { useEntryBuilder } from '../../hooks/useEntryBuilder';
 import type { MarketOpportunity } from '../../types/markets';
 import { formatPercent } from '../../utils/formatters';
+import { hasRenderableWarning, renderWarningText } from '../../utils/warnings';
 import { MetricLabelWithHelp } from '../metrics/MetricLabelWithHelp';
+import { TrustValue } from '../metrics/TrustValue';
+import { PropDetailsModal } from '../prop-history/PropDetailsModal';
 import { ProviderLabel } from '../providers/ProviderLabel';
 import { AppCard } from '../ui/AppCard';
 import { StatusPill } from '../ui/StatusPill';
@@ -13,6 +17,7 @@ import { ProjectionModifierBadge } from './ProjectionModifierBadge';
 import { compactActionButtonSx, lockedActionButtonSx, removeActionButtonSx, secondaryGhostButtonSx } from '../ui/buttonStyles';
 
 export function MarketCard({ market }: { market: MarketOpportunity }) {
+  const [detailsOpen, setDetailsOpen] = useState(false);
   const builder = useEntryBuilder();
   const addable = isScannerAddable(market);
   const selected = builder.isSelected(market.id);
@@ -48,9 +53,7 @@ export function MarketCard({ market }: { market: MarketOpportunity }) {
           ) : (
             <ProviderLabel provider={market.provider} category={market.providerCategory} compact />
           )}
-          <Typography color={confidenceColor(market.trustLevel)} fontWeight={950} variant="body2">
-            {market.trustLevel === 'Research' ? 'Weak' : market.trustLevel}
-          </Typography>
+          <TrustValue level={market.trustLevel} size="small" />
         </Stack>
 
         <Stack direction="row" gap={0.6} flexWrap="wrap" useFlexGap>
@@ -65,7 +68,7 @@ export function MarketCard({ market }: { market: MarketOpportunity }) {
           <Metric label="Line" value={String(market.line)} />
         </Stack>
 
-        <Typography variant="body2" color={market.warnings.length || !addable ? 'warning.main' : 'text.secondary'}>
+        <Typography variant="body2" color={hasRenderableWarning(market.warnings) || !addable ? 'warning.main' : 'text.secondary'}>
           {formatWarning(market, addable)}
         </Typography>
 
@@ -75,16 +78,17 @@ export function MarketCard({ market }: { market: MarketOpportunity }) {
             variant={canAddFromScanner || selected ? 'contained' : 'outlined'}
             startIcon={selected ? <RemoveCircleOutlineRoundedIcon /> : incompatible && addable ? <LockRoundedIcon /> : canAddFromScanner ? <AddCircleOutlineRoundedIcon /> : undefined}
             disabled={incompatible && addable}
-            onClick={() => (canAddFromScanner || selected ? builder.toggleLeg(market) : undefined)}
+            onClick={() => (canAddFromScanner || selected ? builder.toggleLeg(market) : setDetailsOpen(true))}
             sx={entryButtonSx(selected, incompatible && addable, canAddFromScanner)}
           >
             {selected ? 'Remove' : incompatible && addable ? 'Locked' : canAddFromScanner ? 'Add leg' : 'Details'}
           </Button>
-          <Button size="small" variant="outlined" sx={{ ...secondaryActionButtonSx, display: canAddFromScanner || selected ? 'inline-flex' : 'none' }}>
+          <Button size="small" variant="outlined" onClick={() => setDetailsOpen(true)} sx={{ ...secondaryActionButtonSx, display: canAddFromScanner || selected ? 'inline-flex' : 'none' }}>
             Details
           </Button>
         </Stack>
       </Stack>
+      <PropDetailsModal market={market} open={detailsOpen} onClose={() => setDetailsOpen(false)} />
     </AppCard>
   );
 }
@@ -148,20 +152,10 @@ function Metric({ label, value, metric }: { label: string; value: string; metric
   );
 }
 
-function confidenceColor(level: MarketOpportunity['trustLevel']) {
-  if (level === 'Strong') return 'success.main';
-  if (level === 'Medium') return 'warning.main';
-  return 'error.main';
-}
-
 function formatWarning(market: MarketOpportunity, addable: boolean) {
   if (market.providerCategory === 'Sportsbook') return 'Reference lines are not entry legs.';
   if (market.estimatedEv <= 0) return 'Non-positive EV. Review details only.';
   if (market.freshness === 'Unavailable') return 'Limited coverage.';
   if (!addable && market.strategyClassification === 'Research') return 'Research row. Review before adding.';
-  if (!market.warnings.length) return market.reasons[0] ?? 'Active DFS row';
-  return market.warnings[0]
-    .replace('Provider limited for this sport', 'Limited coverage')
-    .replace('Low sample size', 'Low sample')
-    .replace('Confirm final payout in provider app', 'Payout may vary');
+  return renderWarningText(market.warnings, market.reasons[0] ?? 'Active DFS row');
 }

@@ -6,13 +6,16 @@ import { palette } from '../../theme/palette';
 interface SportToggleRailProps {
   selectedSports: SportCode[];
   onToggle: (sport: SportCode) => void;
+  compact?: boolean;
+  sports?: typeof mockSports;
+  hideStatuses?: boolean;
 }
 
-export function SportToggleRail({ selectedSports, onToggle }: SportToggleRailProps) {
+export function SportToggleRail({ selectedSports, onToggle, compact = false, sports = mockSports, hideStatuses = false }: SportToggleRailProps) {
   return (
     <Box sx={{ overflowX: 'auto', pb: 0.5 }}>
       <Stack direction="row" spacing={1} minWidth="max-content">
-        {mockSports.map((sport) => {
+        {sports.map((sport) => {
           const active = selectedSports.includes(sport.code);
           return (
             <Button
@@ -20,11 +23,11 @@ export function SportToggleRail({ selectedSports, onToggle }: SportToggleRailPro
               variant="outlined"
               onClick={() => onToggle(sport.code)}
               sx={{
-                minWidth: 122,
-                px: 1.4,
-                py: 1,
+                minWidth: compact ? 104 : 122,
+                px: compact ? 1.15 : 1.4,
+                py: compact ? 0.72 : 1,
                 justifyContent: 'flex-start',
-                borderRadius: 2.25,
+                borderRadius: compact ? 1.75 : 2.25,
                 borderColor: active ? 'rgba(34,211,238,.58)' : palette.border,
                 bgcolor: active ? 'rgba(34,211,238,.12)' : 'rgba(15,23,42,.55)',
                 color: active ? 'primary.main' : 'text.secondary',
@@ -39,8 +42,8 @@ export function SportToggleRail({ selectedSports, onToggle }: SportToggleRailPro
                 <Box
                   component="span"
                   sx={{
-                    width: 26,
-                    height: 26,
+                    width: compact ? 22 : 26,
+                    height: compact ? 22 : 26,
                     borderRadius: 1.5,
                     display: 'grid',
                     placeItems: 'center',
@@ -53,9 +56,11 @@ export function SportToggleRail({ selectedSports, onToggle }: SportToggleRailPro
                   <Typography variant="body2" fontWeight={900} lineHeight={1.1}>
                     {sport.label}
                   </Typography>
-                  <Typography variant="caption" color="text.secondary" lineHeight={1}>
-                    {(sport.status === 'No data' ? 'No markets' : sport.status) ?? `${sport.candidateCount} candidates`}
-                  </Typography>
+                  {!hideStatuses ? (
+                    <Typography variant="caption" color="text.secondary" lineHeight={1} sx={{ display: compact ? { xs: 'none', sm: 'block' } : 'block' }}>
+                      {(sport.status === 'No data' ? 'No markets' : sport.status) ?? `${sport.candidateCount} candidates`}
+                    </Typography>
+                  ) : null}
                 </Box>
               </Stack>
             </Button>

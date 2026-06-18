@@ -226,6 +226,10 @@ export interface MarketGroupDto {
   HomeTeam?: string | null;
   awayTeam?: string | null;
   AwayTeam?: string | null;
+  playerId?: string | null;
+  PlayerId?: string | null;
+  canonicalPlayerId?: string | null;
+  CanonicalPlayerId?: string | null;
   player?: string;
   Player?: string;
   normalizedPropType?: string;
@@ -319,12 +323,43 @@ export interface BookmakerPriceDto {
 
 export interface MarketPerformanceSummaryDto {
   generatedAtUtc: string;
+  gradingMode?: 'latestGraded' | 'latestCompleted' | 'currentSlate' | 'rollingWindow' | string;
   dataAvailability?: {
     snapshotRowsLoaded?: number;
     picksAfterFilters?: number;
+    totalPicksAfterFilters?: number;
     gradedPicks?: number;
     hasEnoughData?: boolean;
     warning?: string | null;
+    latestGradedBlocker?: string | null;
+    latestGradedBlockerDetail?: string | null;
+    latestSnapshotDate?: string | null;
+    latestGradedDate?: string | null;
+    latestCompletedDate?: string | null;
+    latestResultsImportDate?: string | null;
+    currentSlateDate?: string | null;
+    currentSlateTotalPicks?: number;
+    currentSlateGradedPicks?: number;
+    currentSlatePendingPicks?: number;
+    snapshotRowsForCompletedDate?: number;
+    ledgerRowsForCompletedDate?: number;
+    candidateLedgerRowsForCompletedDate?: number;
+    filteredRowsForCompletedDate?: number;
+    gradedRowsForCompletedDate?: number;
+    unmatchedRowsForCompletedDate?: number;
+    pendingRowsForCompletedDate?: number;
+    importedResultsForCompletedDate?: number;
+    propResultsForCompletedDate?: number;
+    unmatchedPicks?: number;
+    hasLedgerRowsForCompletedDate?: boolean;
+    hasFilteredRowsForCompletedDate?: boolean;
+    hasGradedData?: boolean;
+    hasPendingCurrentSlate?: boolean;
+    pendingReason?: string | null;
+    usedDateRange?: {
+      fromDate?: string | null;
+      toDate?: string | null;
+    } | null;
   };
   groups?: {
     overall?: PerformanceGroupDto[];
@@ -351,4 +386,64 @@ export interface PerformanceGroupDto {
   simulatedRoi?: number;
   sampleSizeWarning?: string | null;
   notes?: string[];
+}
+
+export interface PropHistoryResponseDto {
+  sport?: string;
+  playerId?: string | null;
+  player?: string | null;
+  propType?: string | null;
+  displayPropType?: string;
+  side?: 'Over' | 'Under' | string;
+  line?: number | null;
+  provider?: string | null;
+  season?: number | null;
+  games?: PropHistoryGameDto[];
+  summary?: PropHistorySummaryDto;
+  warning?: string | null;
+  emptyReason?: string | null;
+  diagnostics?: PropHistoryDiagnosticsDto;
+}
+
+export interface PropHistoryGameDto {
+  date?: string;
+  dateLabel?: string;
+  event?: string;
+  gameLabel?: string;
+  value?: number;
+  line?: number;
+  selectedLine?: number;
+  side?: 'Over' | 'Under' | string;
+  clearedSelectedSide?: boolean | null;
+  result?: 'Cleared' | 'Missed' | 'Push' | 'cleared' | 'missed' | 'pushed' | string;
+  externalSourceIdentifier?: string;
+}
+
+export interface PropHistorySummaryDto {
+  sampleSize?: number;
+  gradedResults?: number;
+  cleared?: number;
+  missed?: number;
+  pushed?: number;
+  hitRate?: number | null;
+  last5Average?: number | null;
+  last10Average?: number | null;
+  seasonAverage?: number | null;
+  bestValue?: number | null;
+  bestLabel?: string | null;
+  bestRecentResult?: string | null;
+}
+
+export interface PropHistoryDiagnosticsDto {
+  lookupMode?: string;
+  playerResolved?: boolean;
+  resolvedPlayerId?: string | null;
+  playerNameFallbackUsed?: boolean;
+  warning?: string | null;
+  propTypeResolved?: string | null;
+  historySource?: string;
+  equivalentPlayerCount?: number;
+  candidateObservationCount?: number;
+  observationCountAfterPropType?: number;
+  observationCountAfterSeason?: number;
 }

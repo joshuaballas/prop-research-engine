@@ -3,6 +3,7 @@ using SportsBetting.Api.Integrations.TheOddsApi;
 using SportsBetting.Api.Models;
 using SportsBetting.Api.Predictions;
 using Microsoft.EntityFrameworkCore;
+using System.Globalization;
 using System.Text;
 using System.Text.Json;
 
@@ -268,6 +269,10 @@ public static class PublicMlbDfsEndpoints
             DateOnly? fromDate,
             DateOnly? toDate,
             int? minSampleSize,
+            string? gradingMode,
+            bool? includeDiagnostics,
+            int? diagnosticSampleSize,
+            IPlayerIdentityAliasService playerIdentityAliasService,
             ApplicationDbContext dbContext,
             CancellationToken cancellationToken) =>
         {
@@ -290,6 +295,10 @@ public static class PublicMlbDfsEndpoints
                 fromDate,
                 toDate,
                 minSampleSize,
+                gradingMode,
+                includeDiagnostics ?? false,
+                diagnosticSampleSize,
+                playerIdentityAliasService,
                 dbContext,
                 cancellationToken);
 
@@ -297,6 +306,37 @@ public static class PublicMlbDfsEndpoints
         })
         .WithName("MarketsPerformanceSummary")
         .WithSummary("Production-safe read-only market recommendation performance summary.");
+
+        endpoints.MapGet("/api/markets/prop-history", async (
+            string? sport,
+            Guid? playerId,
+            string? playerName,
+            string? propType,
+            string? side,
+            decimal? line,
+            int? take,
+            int? season,
+            string? provider,
+            ApplicationDbContext dbContext,
+            IPlayerIdentityAliasService playerIdentityAliasService,
+            CancellationToken cancellationToken) =>
+        {
+            return Results.Ok(await BuildMarketPropHistoryResponseAsync(
+                sport,
+                playerId,
+                playerName,
+                propType,
+                side,
+                line,
+                take,
+                season,
+                provider,
+                dbContext,
+                playerIdentityAliasService,
+                cancellationToken));
+        })
+        .WithName("MarketsPropHistory")
+        .WithSummary("Production-safe read-only historical prop results for selected market lines.");
 
         endpoints.MapGet("/api/mlb/line-shopping", async (
             Guid? runId,
@@ -717,16 +757,43 @@ public static class PublicMlbDfsEndpoints
         DateOnly? fromDate,
         DateOnly? toDate,
         int? minSampleSize,
+        string? gradingMode,
+        bool includeDiagnostics,
+        int? diagnosticSampleSize,
+        IPlayerIdentityAliasService playerIdentityAliasService,
         ApplicationDbContext dbContext,
         CancellationToken cancellationToken)
     {
         var generatedAtUtc = DateTimeOffset.UtcNow;
+        var normalizedGradingMode = NormalizePerformanceGradingMode(gradingMode);
         var latestRefresh = await TheOddsApiDebugEndpoints.BuildMlbRefreshFreshnessResponseAsync(
             slateDate: null,
             bookmakerPreset: null,
             freshnessMinutes: null,
             dbContext,
             cancellationToken);
+        var ledgerResponse = await TryBuildLedgerPerformanceSummaryResponseAsync(
+            requestedSport,
+            effectiveSport,
+            providerCategory,
+            provider,
+            bookmaker,
+            propType,
+            strategyClassification,
+            strategyTier,
+            candidateOnly,
+            fromDate,
+            toDate,
+            minSampleSize,
+            normalizedGradingMode,
+            latestRefresh,
+            dbContext,
+            cancellationToken);
+        if (ledgerResponse is not null)
+        {
+            return ledgerResponse;
+        }
+
         var snapshotQuery = dbContext.MarketLineShoppingSnapshots
             .AsNoTracking()
             .Where(row => row.Sport == effectiveSport);
@@ -780,35 +847,158 @@ public static class PublicMlbDfsEndpoints
             .OrderByDescending(row => row.GeneratedAtUtc)
             .Take(5000)
             .ToListAsync(cancellationToken);
+        var snapshotPlayerResolutions = await ResolvePerformanceSnapshotPlayerIdsAsync(
+            dbContext,
+            snapshots,
+            cancellationToken);
         var scoredSnapshots = snapshots
-            .Select(row => new PerformancePickRow(row, ExtractHistoricalSampleSize(row.DetailsJson)))
+            .Select(row =>
+            {
+                var resolution = snapshotPlayerResolutions.TryGetValue(row.Id, out var value)
+                    ? value
+                    : new PerformanceSnapshotPlayerResolution(null, "NormalizedNameFallback", "Snapshot player id was not available.");
+                return new PerformancePickRow(
+                    row,
+                    ExtractHistoricalSampleSize(row.DetailsJson),
+                    resolution.PlayerId,
+                    resolution.PlayerId.HasValue ? [resolution.PlayerId.Value] : [],
+                    resolution.LookupMode,
+                    resolution.FailureReason);
+            })
             .Where(row => !minSampleSize.HasValue || row.HistoricalSampleSize >= minSampleSize.Value)
+            .ToArray();
+        var equivalentPlayerIdsByResolvedId = await LoadPerformanceEquivalentPlayerIdsAsync(
+            scoredSnapshots,
+            playerIdentityAliasService,
+            cancellationToken);
+        scoredSnapshots = scoredSnapshots
+            .Select(row => row.ResolvedPlayerId.HasValue
+                ? row with { EquivalentPlayerIds = equivalentPlayerIdsByResolvedId.GetValueOrDefault(row.ResolvedPlayerId.Value, [row.ResolvedPlayerId.Value]) }
+                : row)
             .ToArray();
 
         var resultDates = scoredSnapshots.Select(row => row.Snapshot.SlateDate).Distinct().ToArray();
-        var actualResultRows = resultDates.Length == 0
+        var diagnosticResultDates = resultDates
+            .SelectMany(date => new[] { date.AddDays(-1), date, date.AddDays(1) })
+            .Distinct()
+            .ToArray();
+        var actualResultRows = diagnosticResultDates.Length == 0
             ? []
             : await dbContext.PropResults
                 .AsNoTracking()
                 .Include(row => row.Player)
                 .Include(row => row.PropType)
-                .Where(row => resultDates.Contains(row.EventDate))
+                .Where(row => diagnosticResultDates.Contains(row.EventDate))
                 .Select(row => new ActualResultLookupRow(
                     row.EventDate,
+                    row.PlayerId,
                     row.Player == null ? string.Empty : row.Player.DisplayName,
+                    row.PropTypeId,
                     row.PropType == null ? string.Empty : row.PropType.Name,
                     row.ActualResultValue))
                 .ToListAsync(cancellationToken);
-        var actualResults = actualResultRows
-            .GroupBy(row => new ActualResultLookupKey(
+        var actualResultsByPlayerId = actualResultRows
+            .GroupBy(row => new ActualResultPlayerLookupKey(
                 row.EventDate,
-                NormalizePerformanceKey(row.PlayerName),
-                NormalizePerformanceKey(row.PropType)))
+                row.PlayerId,
+                NormalizePerformancePropTypeKey(row.PropType)))
+            .Where(group => !string.IsNullOrWhiteSpace(group.Key.PropType))
             .ToDictionary(group => group.Key, group => group.First().ActualResultValue);
         var gradedRows = scoredSnapshots
-            .Select(row => GradePerformancePick(row, actualResults))
+            .Select(row => GradePerformancePick(row, actualResultsByPlayerId, actualResultRows))
             .ToArray();
-        var totalGraded = gradedRows.Count(row => row.Outcome is "Win" or "Loss" or "Push");
+        var dateDiagnostics = gradedRows
+            .GroupBy(row => row.Snapshot.SlateDate)
+            .Select(group =>
+            {
+                var rows = group.ToArray();
+                var gradedCount = rows.Count(row => IsGradedOutcome(row.Outcome));
+                var resultRowsForDate = actualResultRows
+                    .Where(row => row.EventDate == group.Key)
+                    .ToArray();
+                return new PerformanceDateDiagnostics(
+                    group.Key,
+                    rows.Length,
+                    gradedCount,
+                    rows.Length - gradedCount,
+                    resultRowsForDate.Length,
+                    resultRowsForDate.Select(row => row.PlayerId).Distinct().Count(),
+                    resultRowsForDate.Select(row => NormalizePerformancePropTypeKey(row.PropType)).Where(value => !string.IsNullOrWhiteSpace(value)).Distinct(StringComparer.OrdinalIgnoreCase).Count(),
+                    rows
+                        .Where(row => !IsGradedOutcome(row.Outcome))
+                        .GroupBy(row => string.IsNullOrWhiteSpace(row.MatchFailureReason) ? "Unknown" : row.MatchFailureReason!)
+                        .ToDictionary(failureGroup => failureGroup.Key, failureGroup => failureGroup.Count()),
+                    BuildPerformanceDateMatchStrategy(rows));
+            })
+            .OrderByDescending(row => row.SlateDate)
+            .ToArray();
+        var latestSnapshotDate = scoredSnapshots.Select(row => (DateOnly?)row.Snapshot.SlateDate).Max();
+        var latestResultsImportDate = await dbContext.PropResults
+            .AsNoTracking()
+            .Select(row => (DateOnly?)row.EventDate)
+            .MaxAsync(cancellationToken);
+        var latestCompletedDate = latestResultsImportDate;
+        var latestCompletedPropResultsCount = latestCompletedDate.HasValue
+            ? await dbContext.PropResults
+                .AsNoTracking()
+                .CountAsync(row => row.EventDate == latestCompletedDate.Value, cancellationToken)
+            : 0;
+        var latestGradedDate = dateDiagnostics
+            .Where(row => row.GradedPicks > 0)
+            .Select(row => (DateOnly?)row.SlateDate)
+            .Max();
+        var selectedDate = normalizedGradingMode switch
+        {
+            "currentSlate" => latestSnapshotDate,
+            "latestGraded" => latestGradedDate,
+            "latestCompleted" => latestCompletedDate,
+            _ => null
+        };
+        var selectedRows = selectedDate.HasValue
+            ? gradedRows.Where(row => row.Snapshot.SlateDate == selectedDate.Value).ToArray()
+            : normalizedGradingMode == "rollingWindow"
+                ? gradedRows
+                : [];
+        var totalGraded = selectedRows.Count(row => IsGradedOutcome(row.Outcome));
+        var currentSlateDate = latestSnapshotDate;
+        var includeCurrentSlateAvailability = !string.Equals(normalizedGradingMode, "latestCompleted", StringComparison.OrdinalIgnoreCase);
+        var currentSlateRows = includeCurrentSlateAvailability && currentSlateDate.HasValue
+            ? gradedRows.Where(row => row.Snapshot.SlateDate == currentSlateDate.Value).ToArray()
+            : [];
+        var currentSlateDiagnostics = includeCurrentSlateAvailability && currentSlateDate.HasValue
+            ? dateDiagnostics.FirstOrDefault(row => row.SlateDate == currentSlateDate.Value)
+            : null;
+        var currentSlateTotalPicks = currentSlateRows.Length;
+        var currentSlateGradedPicks = currentSlateRows.Count(row => IsGradedOutcome(row.Outcome));
+        var currentSlatePendingPicks = Math.Max(0, currentSlateTotalPicks - currentSlateGradedPicks);
+        var hasPendingCurrentSlate = currentSlatePendingPicks > 0;
+        var noSnapshotWarning = snapshots.Count == 0
+            ? latestRefresh.LineShoppingSnapshotCount == 0 && latestRefresh.LatestSuccessfulRun is not null
+                ? "Latest refresh produced no line-shopping snapshots."
+                : latestRefresh.LineShoppingSnapshotCount > 0 && latestRefresh.HasUsableMarketData == false
+                    ? "Latest refresh produced line-shopping snapshots, but none are usable active market data."
+                    : "No line-shopping snapshots exist yet. Run a successful live refresh with forceLive=true to create snapshots."
+            : null;
+        var latestCompletedDateLabel = latestCompletedDate?.ToString("MMM d", CultureInfo.InvariantCulture);
+        var warning = noSnapshotWarning
+            ?? (totalGraded == 0
+                ? normalizedGradingMode == "latestCompleted" && latestCompletedDate.HasValue && selectedRows.Length > 0
+                    ? $"Captured recommendations exist for {latestCompletedDateLabel}, but none safely matched imported results."
+                    : normalizedGradingMode == "latestCompleted" && latestCompletedDate.HasValue
+                        ? $"Imported results exist for {latestCompletedDateLabel}, but no captured recommendations were found for that completed date."
+                        : normalizedGradingMode == "latestGraded" && scoredSnapshots.Length > 0
+                            ? "No graded recommendations have been matched yet."
+                            : "No matching graded prop_results were found for the filtered snapshot rows."
+                : totalGraded < 30
+                    ? "Small graded sample. Treat ROI and hit-rate as directional only."
+                    : null);
+        var latestGradedBlocker = BuildLatestGradedBlocker(
+            normalizedGradingMode,
+            selectedDate,
+            totalGraded,
+            scoredSnapshots,
+            actualResultRows,
+            dateDiagnostics);
 
         return new
         {
@@ -818,7 +1008,8 @@ public static class PublicMlbDfsEndpoints
             supportedSports = SupportedMarketSports,
             requestedSport,
             effectiveSport,
-            limitation = "Performance summary currently supports MLB snapshots only. Grading uses market_line_shopping_snapshots matched to prop_results by normalized player name, prop type, and slate date until snapshot rows persist canonical ids.",
+            gradingMode = normalizedGradingMode,
+            limitation = "Performance summary currently supports MLB snapshots only. Grading uses market_line_shopping_snapshots matched to prop_results by slate date, normalized prop type, and canonical player id when the snapshot can be resolved; otherwise it falls back to normalized player name.",
             filters = new
             {
                 providerCategory,
@@ -830,25 +1021,48 @@ public static class PublicMlbDfsEndpoints
                 candidateOnly,
                 fromDate,
                 toDate,
-                minSampleSize
+                minSampleSize,
+                gradingMode = normalizedGradingMode,
+                includeDiagnostics,
+                diagnosticSampleSize = Math.Clamp(diagnosticSampleSize ?? 5, 1, 25)
             },
             dataAvailability = new
             {
                 snapshotRowsLoaded = snapshots.Count,
-                picksAfterFilters = scoredSnapshots.Length,
+                picksAfterFilters = selectedRows.Length,
+                totalPicksAfterFilters = scoredSnapshots.Length,
                 gradedPicks = totalGraded,
                 hasEnoughData = totalGraded >= 30,
-                warning = snapshots.Count == 0
-                    ? latestRefresh.LineShoppingSnapshotCount == 0 && latestRefresh.LatestSuccessfulRun is not null
-                        ? "Latest refresh produced no line-shopping snapshots."
-                        : latestRefresh.LineShoppingSnapshotCount > 0 && latestRefresh.HasUsableMarketData == false
-                            ? "Latest refresh produced line-shopping snapshots, but none are usable active market data."
-                        : "No line-shopping snapshots exist yet. Run a successful live refresh with forceLive=true to create snapshots."
-                    : totalGraded == 0
-                        ? "No matching graded prop_results were found for the filtered snapshot rows."
-                        : totalGraded < 30
-                            ? "Small graded sample. Treat ROI and hit-rate as directional only."
-                            : null,
+                warning,
+                latestGradedBlocker = latestGradedBlocker.Blocker,
+                latestGradedBlockerDetail = latestGradedBlocker.Detail,
+                latestSnapshotDate,
+                latestGradedDate,
+                latestCompletedDate,
+                latestResultsImportDate,
+                currentSlateDate = includeCurrentSlateAvailability ? currentSlateDate : null,
+                currentSlateTotalPicks = includeCurrentSlateAvailability ? currentSlateTotalPicks : (int?)null,
+                currentSlateGradedPicks = includeCurrentSlateAvailability ? currentSlateGradedPicks : (int?)null,
+                currentSlatePendingPicks = includeCurrentSlateAvailability ? currentSlatePendingPicks : (int?)null,
+                snapshotRowsForCompletedDate = latestCompletedDate.HasValue
+                    ? dateDiagnostics.FirstOrDefault(row => row.SlateDate == latestCompletedDate.Value)?.TotalPicks ?? 0
+                    : 0,
+                propResultsForCompletedDate = latestCompletedDate.HasValue
+                    ? dateDiagnostics.FirstOrDefault(row => row.SlateDate == latestCompletedDate.Value)?.PropResultsAvailableForDate ?? latestCompletedPropResultsCount
+                    : 0,
+                unmatchedPicks = selectedRows.Length - totalGraded,
+                hasGradedData = totalGraded > 0,
+                hasPendingCurrentSlate = includeCurrentSlateAvailability ? hasPendingCurrentSlate : (bool?)null,
+                pendingReason = hasPendingCurrentSlate
+                    ? currentSlateDiagnostics?.PropResultsAvailableForDate > 0
+                        ? "Current slate has imported prop_results, but selected snapshot rows did not match player/prop results. Check diagnostics.matchFailureCounts."
+                        : "Current slate has not been fully graded because results are not imported yet."
+                    : null,
+                usedDateRange = normalizedGradingMode == "rollingWindow"
+                    ? new { fromDate, toDate }
+                    : selectedDate.HasValue
+                        ? new { fromDate = selectedDate, toDate = selectedDate }
+                        : null,
                 latestRefresh.HasUsableMarketData,
                 latestRefresh.LineShoppingSnapshotCount,
                 latestRefresh.TopPickSnapshotCount,
@@ -859,40 +1073,893 @@ public static class PublicMlbDfsEndpoints
                 latestRefresh.ProviderRejectedKeyDetected,
                 latestRefresh.UsabilityWarning
             },
+            diagnostics = new
+            {
+                snapshotDatesConsidered = dateDiagnostics.Select(row => row.SlateDate).ToArray(),
+                resultDatesAvailable = actualResultRows.Select(row => row.EventDate).Distinct().OrderByDescending(date => date).ToArray(),
+                rowsByDate = dateDiagnostics.Select(row => new
+                {
+                    slateDate = row.SlateDate,
+                    snapshotRows = row.TotalPicks,
+                    matchedGradedRows = row.GradedPicks,
+                    ungradedPendingRows = row.PendingPicks,
+                    propResultsAvailableForDate = row.PropResultsAvailableForDate,
+                    distinctPropResultPlayers = row.DistinctPropResultPlayers,
+                    distinctPropResultPropTypes = row.DistinctPropResultPropTypes,
+                    matchFailureCounts = row.MatchFailureCounts,
+                    matchStrategyUsed = row.MatchStrategyUsed
+                }).ToArray(),
+                matchingStrategy = "market_line_shopping_snapshots matched to prop_results by slate date, canonical player id when resolvable, normalized prop type, then normalized player-name fallback.",
+                snapshotPlayerIdSource = "MarketLineShoppingSnapshot does not persist canonical player ids; performance summary resolves ids from DetailsJson playerId/canonicalPlayerId when present, otherwise by unique MLB display-name lookup.",
+                matchStrategyCounts = gradedRows
+                    .GroupBy(row => IsGradedOutcome(row.Outcome)
+                        ? row.MatchLookupMode
+                        : string.IsNullOrWhiteSpace(row.MatchFailureReason) ? "Unknown" : row.MatchFailureReason!)
+                    .ToDictionary(group => group.Key, group => group.Count()),
+                unmatchedExamples = includeDiagnostics
+                    ? BuildPerformanceUnmatchedExamples(
+                        gradedRows,
+                        actualResultRows,
+                        Math.Clamp(diagnosticSampleSize ?? 5, 1, 25))
+                    : []
+            },
             groups = new
             {
-                overall = BuildPerformanceGroups(gradedRows, "overall", row => "All"),
-                byProviderCategory = BuildPerformanceGroups(gradedRows, "providerCategory", row => row.Snapshot.ProviderCategory),
-                byProvider = BuildPerformanceGroups(gradedRows, "provider", row => row.Snapshot.EntryProvider),
-                byBookmaker = BuildPerformanceGroups(gradedRows, "bookmaker", row => row.Snapshot.BestBookmaker ?? row.Snapshot.Bookmaker ?? "Unknown"),
-                byPropType = BuildPerformanceGroups(gradedRows, "propType", row => row.Snapshot.PropType),
-                byStrategyClassification = BuildPerformanceGroups(gradedRows, "strategyClassification", row => row.Snapshot.StrategyClassification),
-                byStrategyTier = BuildPerformanceGroups(gradedRows, "strategyTier", row => row.Snapshot.StrategyTier),
-                byProviderAndPropType = BuildPerformanceGroups(gradedRows, "providerAndPropType", row => $"{row.Snapshot.EntryProvider} | {row.Snapshot.PropType}")
+                overall = BuildPerformanceGroups(selectedRows, "overall", row => "All"),
+                byProviderCategory = BuildPerformanceGroups(selectedRows, "providerCategory", row => row.Snapshot.ProviderCategory),
+                byProvider = BuildPerformanceGroups(selectedRows, "provider", row => row.Snapshot.EntryProvider),
+                byBookmaker = BuildPerformanceGroups(selectedRows, "bookmaker", row => row.Snapshot.BestBookmaker ?? row.Snapshot.Bookmaker ?? "Unknown"),
+                byPropType = BuildPerformanceGroups(selectedRows, "propType", row => row.Snapshot.PropType),
+                byStrategyClassification = BuildPerformanceGroups(selectedRows, "strategyClassification", row => row.Snapshot.StrategyClassification),
+                byStrategyTier = BuildPerformanceGroups(selectedRows, "strategyTier", row => row.Snapshot.StrategyTier),
+                byProviderAndPropType = BuildPerformanceGroups(selectedRows, "providerAndPropType", row => $"{row.Snapshot.EntryProvider} | {row.Snapshot.PropType}")
             }
         };
     }
 
+    private static string NormalizePerformanceGradingMode(string? gradingMode)
+    {
+        return gradingMode?.Trim().ToLowerInvariant() switch
+        {
+            "currentslate" or "current-slate" or "current_slate" => "currentSlate",
+            "latestcompleted" or "latest-completed" or "latest_completed" or "previouscompleted" or "previous-completed" or "previous_completed" => "latestCompleted",
+            "rollingwindow" or "rolling-window" or "rolling_window" => "rollingWindow",
+            _ => "latestGraded"
+        };
+    }
+
+    private static async Task<object?> TryBuildLedgerPerformanceSummaryResponseAsync(
+        string? requestedSport,
+        string effectiveSport,
+        string? providerCategory,
+        string? provider,
+        string? bookmaker,
+        string? propType,
+        string? strategyClassification,
+        string? strategyTier,
+        bool candidateOnly,
+        DateOnly? fromDate,
+        DateOnly? toDate,
+        int? minSampleSize,
+        string normalizedGradingMode,
+        TheOddsApiDebugEndpoints.MlbRefreshFreshnessResponse latestRefresh,
+        ApplicationDbContext dbContext,
+        CancellationToken cancellationToken)
+    {
+        var generatedAtUtc = DateTimeOffset.UtcNow;
+        var latestCompletedDate = await dbContext.PropResults
+            .AsNoTracking()
+            .Select(row => (DateOnly?)row.EventDate)
+            .MaxAsync(cancellationToken);
+        var latestCompletedPropResultsCount = latestCompletedDate.HasValue
+            ? await dbContext.PropResults
+                .AsNoTracking()
+                .CountAsync(row => row.EventDate == latestCompletedDate.Value, cancellationToken)
+            : 0;
+
+        var allLedgerQuery = dbContext.RecommendationSnapshots
+            .AsNoTracking()
+            .Where(row => row.Sport == effectiveSport);
+        var ledgerQuery = allLedgerQuery;
+
+        if (!string.IsNullOrWhiteSpace(providerCategory))
+        {
+            ledgerQuery = ledgerQuery.Where(row => row.ProviderCategory == providerCategory);
+        }
+
+        if (!string.IsNullOrWhiteSpace(provider))
+        {
+            ledgerQuery = ledgerQuery.Where(row => row.Provider == provider || row.EntryProvider == provider);
+        }
+
+        if (!string.IsNullOrWhiteSpace(bookmaker))
+        {
+            ledgerQuery = ledgerQuery.Where(row => row.Bookmaker == bookmaker);
+        }
+
+        if (!string.IsNullOrWhiteSpace(propType))
+        {
+            var normalizedPropType = RecommendationLedgerWriter.NormalizeKey(propType);
+            ledgerQuery = ledgerQuery.Where(row => row.PropType == propType || row.NormalizedPropType == normalizedPropType);
+        }
+
+        if (!string.IsNullOrWhiteSpace(strategyClassification))
+        {
+            ledgerQuery = ledgerQuery.Where(row => row.StrategyClassification == strategyClassification);
+        }
+
+        if (!string.IsNullOrWhiteSpace(strategyTier))
+        {
+            ledgerQuery = ledgerQuery.Where(row => row.StrategyTier == strategyTier);
+        }
+
+        if (candidateOnly)
+        {
+            ledgerQuery = ledgerQuery.Where(row => row.IsCandidate);
+        }
+
+        if (fromDate.HasValue)
+        {
+            ledgerQuery = ledgerQuery.Where(row => row.ExpectedResultDate >= fromDate.Value);
+        }
+
+        if (toDate.HasValue)
+        {
+            ledgerQuery = ledgerQuery.Where(row => row.ExpectedResultDate <= toDate.Value);
+        }
+
+        if (minSampleSize.HasValue)
+        {
+            ledgerQuery = ledgerQuery.Where(row => row.HistoricalSampleSize >= minSampleSize.Value);
+        }
+
+        var ledgerTotalAfterFilters = await ledgerQuery.CountAsync(cancellationToken);
+        if (ledgerTotalAfterFilters == 0 && !string.Equals(normalizedGradingMode, "latestCompleted", StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+
+        var latestLedgerDate = ledgerTotalAfterFilters == 0
+            ? null
+            : await ledgerQuery.Select(row => (DateOnly?)row.ExpectedResultDate).MaxAsync(cancellationToken);
+        var ledgerRowsForLatestCompleted = latestCompletedDate.HasValue
+            ? await allLedgerQuery.CountAsync(row => row.ExpectedResultDate == latestCompletedDate.Value, cancellationToken)
+            : 0;
+        var candidateLedgerRowsForLatestCompleted = latestCompletedDate.HasValue
+            ? await allLedgerQuery.CountAsync(row =>
+                row.ExpectedResultDate == latestCompletedDate.Value &&
+                (row.IsCandidate || row.IsTopPick || row.IsWatchlist), cancellationToken)
+            : 0;
+        var filteredLedgerRowsForLatestCompleted = latestCompletedDate.HasValue
+            ? await ledgerQuery.CountAsync(row => row.ExpectedResultDate == latestCompletedDate.Value, cancellationToken)
+            : 0;
+        var selectedDate = normalizedGradingMode switch
+        {
+            "currentSlate" => latestLedgerDate,
+            "latestCompleted" => latestCompletedDate,
+            _ => null
+        };
+        var baseSelectedQuery = selectedDate.HasValue
+            ? ledgerQuery.Where(row => row.ExpectedResultDate == selectedDate.Value)
+            : ledgerQuery;
+        var selectedRows = await baseSelectedQuery
+            .OrderByDescending(row => row.RankingScore)
+            .ThenByDescending(row => row.EstimatedEv)
+            .Take(5000)
+            .ToArrayAsync(cancellationToken);
+        var resultDates = selectedRows.Select(row => row.ExpectedResultDate).Distinct().ToArray();
+        var playerIds = selectedRows
+            .Where(row => row.CanonicalPlayerId.HasValue)
+            .Select(row => row.CanonicalPlayerId!.Value)
+            .Distinct()
+            .ToArray();
+        var propTypeIds = selectedRows
+            .Where(row => row.PropTypeId.HasValue)
+            .Select(row => row.PropTypeId!.Value)
+            .Distinct()
+            .ToArray();
+        var resultRows = resultDates.Length == 0 || playerIds.Length == 0 || propTypeIds.Length == 0
+            ? []
+            : await dbContext.PropResults
+                .AsNoTracking()
+                .Where(row => resultDates.Contains(row.EventDate)
+                    && playerIds.Contains(row.PlayerId)
+                    && propTypeIds.Contains(row.PropTypeId))
+                .Select(row => new LedgerActualResultLookupRow(
+                    row.EventDate,
+                    row.PlayerId,
+                    row.PropTypeId,
+                    row.ActualResultValue))
+                .ToArrayAsync(cancellationToken);
+        var resultLookup = resultRows
+            .GroupBy(row => new LedgerResultLookupKey(row.EventDate, row.PlayerId, row.PropTypeId))
+            .ToDictionary(group => group.Key, group => group.First().ActualResultValue);
+        var gradedRows = selectedRows
+            .Select(row => GradeLedgerPerformanceRow(row, resultLookup))
+            .ToArray();
+        var totalGraded = gradedRows.Count(row => IsGradedOutcome(row.Outcome));
+        var latestGradedDate = ledgerTotalAfterFilters == 0
+            ? null
+            : gradedRows
+                .Where(row => IsGradedOutcome(row.Outcome))
+                .Select(row => (DateOnly?)row.Snapshot.ExpectedResultDate)
+                .DefaultIfEmpty()
+                .Max();
+        var unmatchedRows = gradedRows.Count(row => row.Outcome is null);
+        var warning = totalGraded == 0
+            ? selectedRows.Length == 0 && latestCompletedDate.HasValue
+                ? $"No captured recommendations exist for the latest completed result date ({latestCompletedDate.Value:MMM d})."
+                : selectedRows.Length > 0
+                    ? $"Captured recommendations exist for {selectedDate:MMM d}, but none safely matched imported results."
+                    : "No captured recommendations exist yet."
+            : totalGraded < 30
+                ? "Small graded sample. Treat ROI and hit-rate as directional only."
+                : null;
+
+        return new
+        {
+            generatedAtUtc,
+            callsExternalApis = false,
+            readOnly = true,
+            supportedSports = SupportedMarketSports,
+            requestedSport,
+            effectiveSport,
+            gradingMode = normalizedGradingMode,
+            performanceSource = "recommendationLedger",
+            limitation = "Performance summary uses recommendation_snapshots as the gradeable ledger and matches rows to prop_results by expected result date, canonical player id, prop type id, side, and line.",
+            filters = new
+            {
+                providerCategory,
+                provider,
+                bookmaker,
+                propType,
+                strategyClassification,
+                strategyTier,
+                candidateOnly,
+                fromDate,
+                toDate,
+                minSampleSize,
+                gradingMode = normalizedGradingMode
+            },
+            dataAvailability = new
+            {
+                ledgerRowsLoaded = selectedRows.Length,
+                gradedLedgerRows = totalGraded,
+                pendingLedgerRows = gradedRows.Count(row => row.MatchFailureReason == "ResultNotImported"),
+                unmatchedLedgerRows = unmatchedRows,
+                snapshotRowsLoaded = 0,
+                picksAfterFilters = selectedRows.Length,
+                totalPicksAfterFilters = ledgerTotalAfterFilters,
+                gradedPicks = totalGraded,
+                hasEnoughData = totalGraded >= 30,
+                warning,
+                latestCompletedDate,
+                latestResultsImportDate = latestCompletedDate,
+                latestLedgerDate,
+                latestGradedDate,
+                currentSlateDate = normalizedGradingMode == "currentSlate" ? latestLedgerDate : null,
+                currentSlateTotalPicks = normalizedGradingMode == "currentSlate" ? selectedRows.Length : (int?)null,
+                currentSlateGradedPicks = normalizedGradingMode == "currentSlate" ? totalGraded : (int?)null,
+                currentSlatePendingPicks = normalizedGradingMode == "currentSlate" ? Math.Max(0, selectedRows.Length - totalGraded) : (int?)null,
+                snapshotRowsForCompletedDate = filteredLedgerRowsForLatestCompleted,
+                ledgerRowsForCompletedDate = ledgerRowsForLatestCompleted,
+                candidateLedgerRowsForCompletedDate = candidateLedgerRowsForLatestCompleted,
+                filteredRowsForCompletedDate = filteredLedgerRowsForLatestCompleted,
+                gradedRowsForCompletedDate = totalGraded,
+                unmatchedRowsForCompletedDate = unmatchedRows,
+                pendingRowsForCompletedDate = Math.Max(0, filteredLedgerRowsForLatestCompleted - totalGraded - unmatchedRows),
+                importedResultsForCompletedDate = latestCompletedPropResultsCount,
+                propResultsForCompletedDate = latestCompletedPropResultsCount,
+                unmatchedPicks = unmatchedRows,
+                hasLedgerRowsForCompletedDate = ledgerRowsForLatestCompleted > 0,
+                hasFilteredRowsForCompletedDate = filteredLedgerRowsForLatestCompleted > 0,
+                hasGradedData = totalGraded > 0,
+                hasPendingCurrentSlate = normalizedGradingMode == "currentSlate" ? selectedRows.Length > totalGraded : (bool?)null,
+                pendingReason = null as string,
+                usedDateRange = normalizedGradingMode == "rollingWindow"
+                    ? new { fromDate, toDate }
+                    : selectedDate.HasValue
+                        ? new { fromDate = selectedDate, toDate = selectedDate }
+                        : null,
+                latestRefresh.HasUsableMarketData,
+                latestRefresh.LineShoppingSnapshotCount,
+                latestRefresh.TopPickSnapshotCount,
+                latestRefresh.ActiveGroupCount,
+                latestRefresh.StaleOrExpiredGroupCount,
+                latestRefresh.ProviderIngestionFailureCount,
+                latestRefresh.ProviderIngestionSuccessCount,
+                latestRefresh.ProviderRejectedKeyDetected,
+                latestRefresh.UsabilityWarning
+            },
+            diagnostics = new
+            {
+                ledgerRowsByDate = selectedRows
+                    .GroupBy(row => row.ExpectedResultDate)
+                    .OrderByDescending(group => group.Key)
+                    .Select(group => new
+                    {
+                        expectedResultDate = group.Key,
+                        ledgerRows = group.Count(),
+                        gradedRows = gradedRows.Count(row => row.Snapshot.ExpectedResultDate == group.Key && IsGradedOutcome(row.Outcome)),
+                        unmatchedRows = gradedRows.Count(row => row.Snapshot.ExpectedResultDate == group.Key && row.Outcome is null),
+                        importedResultRows = latestCompletedDate == group.Key ? latestCompletedPropResultsCount : resultRows.Count(row => row.EventDate == group.Key)
+                    })
+                    .ToArray(),
+                matchFailureCounts = gradedRows
+                    .Where(row => row.Outcome is null)
+                    .GroupBy(row => row.MatchFailureReason ?? "Unknown")
+                    .ToDictionary(group => group.Key, group => group.Count()),
+                matchingStrategy = "recommendation_snapshots matched to prop_results by expected result date, canonical player id, and prop type id."
+            },
+            groups = new
+            {
+                overall = BuildLedgerPerformanceGroups(gradedRows, "overall", row => "All"),
+                byProviderCategory = BuildLedgerPerformanceGroups(gradedRows, "providerCategory", row => row.Snapshot.ProviderCategory),
+                byProvider = BuildLedgerPerformanceGroups(gradedRows, "provider", row => row.Snapshot.EntryProvider),
+                byBookmaker = BuildLedgerPerformanceGroups(gradedRows, "bookmaker", row => row.Snapshot.Bookmaker),
+                byPropType = BuildLedgerPerformanceGroups(gradedRows, "propType", row => row.Snapshot.PropType),
+                byStrategyClassification = BuildLedgerPerformanceGroups(gradedRows, "strategyClassification", row => row.Snapshot.StrategyClassification),
+                byStrategyTier = BuildLedgerPerformanceGroups(gradedRows, "strategyTier", row => row.Snapshot.StrategyTier),
+                byProviderAndPropType = BuildLedgerPerformanceGroups(gradedRows, "providerAndPropType", row => $"{row.Snapshot.EntryProvider} | {row.Snapshot.PropType}")
+            }
+        };
+    }
+
+    private static bool IsGradedOutcome(string? outcome)
+    {
+        return outcome is "Win" or "Loss" or "Push";
+    }
+
+    private static (string? Blocker, string? Detail) BuildLatestGradedBlocker(
+        string gradingMode,
+        DateOnly? selectedDate,
+        int totalGraded,
+        IReadOnlyCollection<PerformancePickRow> scoredSnapshots,
+        IReadOnlyCollection<ActualResultLookupRow> actualResultRows,
+        IReadOnlyCollection<PerformanceDateDiagnostics> dateDiagnostics)
+    {
+        if ((!string.Equals(gradingMode, "latestGraded", StringComparison.OrdinalIgnoreCase)
+                && !string.Equals(gradingMode, "latestCompleted", StringComparison.OrdinalIgnoreCase))
+            || totalGraded > 0)
+        {
+            return (null, null);
+        }
+
+        if (scoredSnapshots.Count == 0)
+        {
+            return (
+                "NoCapturedRecommendations",
+                "No captured recommendation snapshots are available for the requested filters.");
+        }
+
+        if (actualResultRows.Count == 0)
+        {
+            return (
+                "NoImportedResults",
+                "No imported prop_results are available for the captured recommendation dates.");
+        }
+
+        var diagnosticsToInspect = selectedDate.HasValue
+            ? dateDiagnostics.Where(row => row.SlateDate == selectedDate.Value).ToArray()
+            : dateDiagnostics;
+        var datesWithResults = diagnosticsToInspect
+            .Where(row => row.PropResultsAvailableForDate > 0)
+            .ToArray();
+        if (datesWithResults.Length == 0)
+        {
+            return (
+                "NoResultForSnapshotDates",
+                "Captured recommendations exist, but imported results do not cover their slate dates yet.");
+        }
+
+        var combinedFailures = datesWithResults
+            .SelectMany(row => row.MatchFailureCounts)
+            .GroupBy(row => row.Key)
+            .OrderByDescending(group => group.Sum(row => row.Value))
+            .Select(group => $"{group.Key}: {group.Sum(row => row.Value)}")
+            .ToArray();
+
+        return (
+            "NoSafeMatchesForSnapshotPlayers",
+            $"Imported results exist through {datesWithResults.Max(row => row.SlateDate):MMM d}, but captured recommendations did not safely match result rows by canonical id, alias-equivalent id, or unique normalized-name fallback. Failure counts: {string.Join(", ", combinedFailures)}.");
+    }
+
     private static PerformanceGradedPickRow GradePerformancePick(
         PerformancePickRow row,
-        IReadOnlyDictionary<ActualResultLookupKey, decimal> actualResults)
+        IReadOnlyDictionary<ActualResultPlayerLookupKey, decimal> actualResultsByPlayerId,
+        IReadOnlyCollection<ActualResultLookupRow> actualResultRows)
     {
-        var key = new ActualResultLookupKey(
-            row.Snapshot.SlateDate,
-            NormalizePerformanceKey(row.Snapshot.Player),
-            NormalizePerformanceKey(row.Snapshot.PropType));
-        var actualResult = actualResults.TryGetValue(key, out var value)
-            ? value
-            : (decimal?)null;
+        var normalizedPropType = NormalizePerformancePropTypeKey(row.Snapshot.PropType);
+        decimal? actualResult = null;
+        var matchLookupMode = "Unmatched";
+        string? matchFailureReason = null;
+
+        if (string.IsNullOrWhiteSpace(normalizedPropType))
+        {
+            matchFailureReason = "UnsupportedPropType";
+        }
+
+        if (matchFailureReason is null && row.ResolvedPlayerId.HasValue)
+        {
+            foreach (var playerId in row.EquivalentPlayerIds.Prepend(row.ResolvedPlayerId.Value).Distinct())
+            {
+                var playerIdKey = new ActualResultPlayerLookupKey(
+                    row.Snapshot.SlateDate,
+                    playerId,
+                    normalizedPropType);
+                if (!actualResultsByPlayerId.TryGetValue(playerIdKey, out var value))
+                {
+                    continue;
+                }
+
+                actualResult = value;
+                matchLookupMode = playerId == row.ResolvedPlayerId.Value
+                    ? "CanonicalPlayerId"
+                    : "AliasEquivalentPlayerId";
+                break;
+            }
+        }
+
+        if (actualResult is null && matchFailureReason is null)
+        {
+            var uniqueFallback = TryResolveUniquePerformanceNameFallback(
+                row,
+                normalizedPropType,
+                actualResultRows);
+            if (uniqueFallback.HasValue)
+            {
+                actualResult = uniqueFallback.Value;
+                matchLookupMode = "NormalizedNameUniqueFallback";
+            }
+        }
+
+        if (actualResult is null && matchFailureReason is null)
+        {
+            matchFailureReason = DeterminePerformanceMatchFailureReason(row, normalizedPropType, actualResultRows);
+        }
+
         var outcome = GradePerformanceOutcome(row.Snapshot.BestSide, row.Snapshot.Line, actualResult);
         var profit = CalculatePerformanceProfit(outcome, row.Snapshot.BestDecimalPrice);
 
         return new PerformanceGradedPickRow(
             row.Snapshot,
             row.HistoricalSampleSize,
+            row.ResolvedPlayerId,
+            row.EquivalentPlayerIds,
+            row.PlayerResolutionMode,
+            row.PlayerResolutionFailureReason,
             actualResult,
             outcome,
-            profit);
+            profit,
+            matchLookupMode,
+            matchFailureReason);
+    }
+
+    private static string DeterminePerformanceMatchFailureReason(
+        PerformancePickRow row,
+        string normalizedPropType,
+        IReadOnlyCollection<ActualResultLookupRow> actualResultRows)
+    {
+        var dateRows = actualResultRows
+            .Where(result => result.EventDate == row.Snapshot.SlateDate)
+            .ToArray();
+        if (dateRows.Length == 0)
+        {
+            return "NoResultForDate";
+        }
+
+        if (string.IsNullOrWhiteSpace(normalizedPropType))
+        {
+            return "UnsupportedPropType";
+        }
+
+        var propRows = dateRows
+            .Where(result => string.Equals(
+                NormalizePerformancePropTypeKey(result.PropType),
+                normalizedPropType,
+                StringComparison.OrdinalIgnoreCase))
+            .ToArray();
+        if (propRows.Length == 0)
+        {
+            return "PropTypeMismatch";
+        }
+
+        if (row.ResolvedPlayerId.HasValue)
+        {
+            var equivalentIds = row.EquivalentPlayerIds.Prepend(row.ResolvedPlayerId.Value).Distinct().ToHashSet();
+            return propRows.Any(result => equivalentIds.Contains(result.PlayerId))
+                ? "MatchedPlayerAndPropButNoResult"
+                : "PlayerIdMismatch";
+        }
+
+        var normalizedSnapshotPlayer = NormalizePerformanceKey(row.Snapshot.Player);
+        var normalizedNameMatches = propRows
+            .Where(result => NormalizePerformanceKey(result.PlayerName) == normalizedSnapshotPlayer)
+            .Select(result => result.PlayerId)
+            .Distinct()
+            .Count();
+        if (normalizedNameMatches > 1)
+        {
+            return "AmbiguousNameFallback";
+        }
+
+        if (normalizedNameMatches == 0)
+        {
+            return row.ResolvedPlayerId.HasValue ? "PlayerIdMismatch" : "PlayerIdMissingOnSnapshot";
+        }
+
+        return row.ResolvedPlayerId.HasValue ? "PlayerIdMismatch" : "Unknown";
+    }
+
+    private static string BuildPerformanceDateMatchStrategy(IReadOnlyCollection<PerformanceGradedPickRow> rows)
+    {
+        var gradedRows = rows.Where(row => IsGradedOutcome(row.Outcome)).ToArray();
+        if (gradedRows.Length == 0)
+        {
+            return "No matched rows.";
+        }
+
+        var modes = gradedRows
+            .Select(row => row.MatchLookupMode)
+            .Where(value => !string.IsNullOrWhiteSpace(value))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+        return modes.Length == 0
+            ? "Matched rows."
+            : string.Join(" + ", modes);
+    }
+
+    private static async Task<IReadOnlyDictionary<Guid, Guid[]>> LoadPerformanceEquivalentPlayerIdsAsync(
+        IReadOnlyCollection<PerformancePickRow> rows,
+        IPlayerIdentityAliasService playerIdentityAliasService,
+        CancellationToken cancellationToken)
+    {
+        var resolvedPlayerIds = rows
+            .Where(row => row.ResolvedPlayerId.HasValue)
+            .Select(row => row.ResolvedPlayerId!.Value)
+            .Distinct()
+            .ToArray();
+        var result = new Dictionary<Guid, Guid[]>();
+
+        foreach (var playerId in resolvedPlayerIds)
+        {
+            var equivalentIds = await playerIdentityAliasService.GetEquivalentPlayerIdsAsync(
+                playerId,
+                "MLB",
+                cancellationToken);
+            result[playerId] = equivalentIds
+                .Append(playerId)
+                .Distinct()
+                .OrderBy(id => id)
+                .ToArray();
+        }
+
+        return result;
+    }
+
+    private static decimal? TryResolveUniquePerformanceNameFallback(
+        PerformancePickRow row,
+        string normalizedPropType,
+        IReadOnlyCollection<ActualResultLookupRow> actualResultRows)
+    {
+        if (string.IsNullOrWhiteSpace(normalizedPropType))
+        {
+            return null;
+        }
+
+        var normalizedSnapshotPlayer = NormalizePerformanceKey(row.Snapshot.Player);
+        var candidates = actualResultRows
+            .Where(result => result.EventDate == row.Snapshot.SlateDate
+                && string.Equals(NormalizePerformancePropTypeKey(result.PropType), normalizedPropType, StringComparison.OrdinalIgnoreCase)
+                && NormalizePerformanceKey(result.PlayerName) == normalizedSnapshotPlayer)
+            .GroupBy(result => result.PlayerId)
+            .ToArray();
+
+        return candidates.Length == 1
+            ? candidates[0].First().ActualResultValue
+            : null;
+    }
+
+    private static async Task<IReadOnlyDictionary<Guid, PerformanceSnapshotPlayerResolution>> ResolvePerformanceSnapshotPlayerIdsAsync(
+        ApplicationDbContext dbContext,
+        IReadOnlyCollection<Models.MarketLineShoppingSnapshot> snapshots,
+        CancellationToken cancellationToken)
+    {
+        if (snapshots.Count == 0)
+        {
+            return new Dictionary<Guid, PerformanceSnapshotPlayerResolution>();
+        }
+
+        var result = new Dictionary<Guid, PerformanceSnapshotPlayerResolution>();
+        foreach (var snapshot in snapshots)
+        {
+            var detailsPlayerId = ExtractPerformanceSnapshotPlayerId(snapshot.DetailsJson);
+            if (detailsPlayerId.HasValue)
+            {
+                result[snapshot.Id] = new PerformanceSnapshotPlayerResolution(detailsPlayerId.Value, "DetailsJsonCanonicalPlayerId", null);
+            }
+        }
+
+        var unresolvedNames = snapshots
+            .Where(snapshot => !result.ContainsKey(snapshot.Id))
+            .Select(snapshot => snapshot.Player)
+            .Where(player => !string.IsNullOrWhiteSpace(player))
+            .Select(player => new { Player = player, Normalized = NormalizePerformanceKey(player) })
+            .Where(row => !string.IsNullOrWhiteSpace(row.Normalized))
+            .DistinctBy(row => row.Normalized)
+            .ToArray();
+
+        if (unresolvedNames.Length == 0)
+        {
+            foreach (var snapshot in snapshots.Where(snapshot => !result.ContainsKey(snapshot.Id)))
+            {
+                result[snapshot.Id] = new PerformanceSnapshotPlayerResolution(null, "NormalizedNameFallback", "Snapshot did not include a player name.");
+            }
+
+            return result;
+        }
+
+        var players = await dbContext.Players
+            .AsNoTracking()
+            .Where(player => player.League != null && player.League.Code == "MLB")
+            .Select(player => new { player.Id, player.DisplayName })
+            .ToArrayAsync(cancellationToken);
+        var playerIds = players.Select(player => player.Id).ToArray();
+        var resultCounts = playerIds.Length == 0
+            ? new Dictionary<Guid, int>()
+            : await dbContext.PropResults
+                .AsNoTracking()
+                .Where(row => playerIds.Contains(row.PlayerId))
+                .GroupBy(row => row.PlayerId)
+                .Select(group => new { PlayerId = group.Key, Count = group.Count() })
+                .ToDictionaryAsync(row => row.PlayerId, row => row.Count, cancellationToken);
+
+        var playersByNormalizedName = players
+            .GroupBy(player => NormalizePerformanceKey(player.DisplayName))
+            .Where(group => !string.IsNullOrWhiteSpace(group.Key))
+            .ToDictionary(group => group.Key, group => group.ToArray(), StringComparer.OrdinalIgnoreCase);
+        var resolvedByName = new Dictionary<string, PerformanceSnapshotPlayerResolution>(StringComparer.OrdinalIgnoreCase);
+        foreach (var unresolvedName in unresolvedNames)
+        {
+            if (!playersByNormalizedName.TryGetValue(unresolvedName.Normalized, out var candidates))
+            {
+                resolvedByName[unresolvedName.Normalized] = new PerformanceSnapshotPlayerResolution(
+                    null,
+                    "NormalizedNameFallback",
+                    "No canonical MLB player matched the snapshot player name.");
+                continue;
+            }
+
+            var ranked = candidates
+                .Select(candidate => new
+                {
+                    candidate.Id,
+                    ResultCount = resultCounts.TryGetValue(candidate.Id, out var count) ? count : 0
+                })
+                .OrderByDescending(candidate => candidate.ResultCount)
+                .ThenBy(candidate => candidate.Id)
+                .ToArray();
+            if (ranked.Length == 1 || ranked[0].ResultCount > ranked.Skip(1).Select(candidate => candidate.ResultCount).DefaultIfEmpty(0).Max())
+            {
+                resolvedByName[unresolvedName.Normalized] = new PerformanceSnapshotPlayerResolution(
+                    ranked[0].Id,
+                    "ResolvedByNormalizedName",
+                    ranked[0].ResultCount == 0 ? "Player resolved by name but has no prop_results rows." : null);
+            }
+            else
+            {
+                resolvedByName[unresolvedName.Normalized] = new PerformanceSnapshotPlayerResolution(
+                    null,
+                    "NormalizedNameFallback",
+                    "Multiple canonical MLB players matched the snapshot player name.");
+            }
+        }
+
+        foreach (var snapshot in snapshots.Where(snapshot => !result.ContainsKey(snapshot.Id)))
+        {
+            var normalized = NormalizePerformanceKey(snapshot.Player);
+            result[snapshot.Id] = resolvedByName.TryGetValue(normalized, out var resolution)
+                ? resolution
+                : new PerformanceSnapshotPlayerResolution(null, "NormalizedNameFallback", "Snapshot player could not be resolved.");
+        }
+
+        return result;
+    }
+
+    private static Guid? ExtractPerformanceSnapshotPlayerId(JsonDocument detailsJson)
+    {
+        var root = detailsJson.RootElement;
+        if (TryReadGuidProperty(root, "canonicalPlayerId", out var canonicalPlayerId)
+            || TryReadGuidProperty(root, "playerId", out canonicalPlayerId))
+        {
+            return canonicalPlayerId;
+        }
+
+        if (TryGetPropertyIgnoreCase(root, "bestLine", out var bestLine)
+            && (TryReadGuidProperty(bestLine, "canonicalPlayerId", out canonicalPlayerId)
+                || TryReadGuidProperty(bestLine, "playerId", out canonicalPlayerId)))
+        {
+            return canonicalPlayerId;
+        }
+
+        return null;
+    }
+
+    private static bool TryReadGuidProperty(JsonElement element, string propertyName, out Guid value)
+    {
+        value = Guid.Empty;
+        if (!TryGetPropertyIgnoreCase(element, propertyName, out var property))
+        {
+            return false;
+        }
+
+        if (property.ValueKind == JsonValueKind.String
+            && Guid.TryParse(property.GetString(), out value)
+            && value != Guid.Empty)
+        {
+            return true;
+        }
+
+        return false;
+    }
+
+    private static object[] BuildPerformanceUnmatchedExamples(
+        IReadOnlyCollection<PerformanceGradedPickRow> gradedRows,
+        IReadOnlyCollection<ActualResultLookupRow> actualResultRows,
+        int take)
+    {
+        return gradedRows
+            .Where(row => !IsGradedOutcome(row.Outcome))
+            .OrderByDescending(row => row.Snapshot.SlateDate)
+            .ThenBy(row => row.Snapshot.Player)
+            .Take(take)
+            .Select(row =>
+            {
+                var normalizedPropType = NormalizePerformancePropTypeKey(row.Snapshot.PropType);
+                var normalizedPlayer = NormalizePerformanceKey(row.Snapshot.Player);
+                var equivalentIds = row.EquivalentPlayerIds
+                    .Concat(row.ResolvedPlayerId.HasValue ? [row.ResolvedPlayerId.Value] : [])
+                    .Distinct()
+                    .ToHashSet();
+                var candidates = actualResultRows
+                    .Where(result => result.EventDate == row.Snapshot.SlateDate
+                        || equivalentIds.Contains(result.PlayerId)
+                        || NormalizePerformanceKey(result.PlayerName) == normalizedPlayer)
+                    .Select(result => new
+                    {
+                        result.EventDate,
+                        result.PlayerId,
+                        canonicalPlayerId = result.PlayerId,
+                        playerIdSource = "prop_results.PlayerId -> canonical players.id from MLB player_external_refs",
+                        result.PlayerName,
+                        result.PropType,
+                        normalizedResultPropType = NormalizePerformancePropTypeKey(result.PropType),
+                        result.ActualResultValue,
+                        namesMatch = NormalizePerformanceKey(result.PlayerName) == normalizedPlayer,
+                        propTypesMatch = NormalizePerformancePropTypeKey(result.PropType) == normalizedPropType,
+                        datesMatch = result.EventDate == row.Snapshot.SlateDate,
+                        playerIdsEquivalent = equivalentIds.Contains(result.PlayerId),
+                        score =
+                            (NormalizePerformanceKey(result.PlayerName) == normalizedPlayer ? 16 : 0)
+                            + (equivalentIds.Contains(result.PlayerId) ? 8 : 0)
+                            + (NormalizePerformancePropTypeKey(result.PropType) == normalizedPropType ? 4 : 0)
+                            + (result.EventDate == row.Snapshot.SlateDate ? 2 : 0)
+                    })
+                    .OrderByDescending(candidate => candidate.score)
+                    .ThenByDescending(candidate => candidate.EventDate)
+                    .ThenBy(candidate => candidate.PlayerName)
+                    .Take(3)
+                    .ToArray();
+
+                return new
+                {
+                    snapshotId = row.Snapshot.Id,
+                    snapshotCreatedAtUtc = row.Snapshot.GeneratedAtUtc,
+                    slateDate = row.Snapshot.SlateDate,
+                    expectedResultDate = ResolveSnapshotExpectedResultDate(row.Snapshot),
+                    eventStartTimeUtc = row.Snapshot.EventStartTime,
+                    player = row.Snapshot.Player,
+                    provider = row.Snapshot.EntryProvider,
+                    bookmaker = row.Snapshot.BestBookmaker ?? row.Snapshot.Bookmaker,
+                    snapshotPlayerId = row.ResolvedPlayerId,
+                    canonicalPlayerId = row.ResolvedPlayerId,
+                    snapshotPlayerIdSource = BuildSnapshotPlayerIdSource(row.PlayerResolutionMode),
+                    resolvedPlayerId = row.ResolvedPlayerId,
+                    resolvedPlayerIdSource = BuildSnapshotPlayerIdSource(row.PlayerResolutionMode),
+                    equivalentPlayerIds = row.EquivalentPlayerIds,
+                    playerResolutionMode = row.PlayerResolutionMode,
+                    playerResolutionFailureReason = row.PlayerResolutionFailureReason,
+                    propType = row.Snapshot.PropType,
+                    normalizedPropType,
+                    side = row.Snapshot.BestSide,
+                    line = row.Snapshot.Line,
+                    matchFailureReason = row.MatchFailureReason,
+                    likelyFailureReason = BuildPerformanceLikelyFailureReason(row, candidates.Any(candidate => candidate.namesMatch), candidates.Any(candidate => candidate.propTypesMatch), candidates.Any(candidate => candidate.datesMatch)),
+                    nearbyDateDiagnostics = BuildPerformanceNearbyDateDiagnostics(row, normalizedPropType, normalizedPlayer, equivalentIds, actualResultRows),
+                    closestResultCandidates = candidates
+                };
+            })
+            .Cast<object>()
+            .ToArray();
+    }
+
+    private static string NormalizePerformancePropTypeKey(string? propType)
+    {
+        return ResolveResultPropTypeKey(propType) ?? NormalizePropTypeKey(propType);
+    }
+
+    private static DateOnly? ResolveSnapshotExpectedResultDate(Models.MarketLineShoppingSnapshot snapshot)
+    {
+        return snapshot.EventStartTime.HasValue
+            ? DateOnly.FromDateTime(snapshot.EventStartTime.Value.UtcDateTime)
+            : snapshot.SlateDate;
+    }
+
+    private static string BuildSnapshotPlayerIdSource(string playerResolutionMode)
+    {
+        return playerResolutionMode switch
+        {
+            "DetailsJsonCanonicalPlayerId" => "canonical players.id from snapshot DetailsJson",
+            "ResolvedByNormalizedName" => "canonical players.id resolved by normalized MLB display name",
+            "NormalizedNameFallback" => "unknown",
+            _ => "unknown"
+        };
+    }
+
+    private static object[] BuildPerformanceNearbyDateDiagnostics(
+        PerformanceGradedPickRow row,
+        string normalizedPropType,
+        string normalizedPlayer,
+        IReadOnlySet<Guid> equivalentIds,
+        IReadOnlyCollection<ActualResultLookupRow> actualResultRows)
+    {
+        return new[] { row.Snapshot.SlateDate.AddDays(-1), row.Snapshot.SlateDate, row.Snapshot.SlateDate.AddDays(1) }
+            .Select(date =>
+            {
+                var rowsForDate = actualResultRows.Where(result => result.EventDate == date).ToArray();
+                return new
+                {
+                    date,
+                    sameDateAndPropTypeCount = rowsForDate.Count(result =>
+                        string.Equals(NormalizePerformancePropTypeKey(result.PropType), normalizedPropType, StringComparison.OrdinalIgnoreCase)),
+                    sameNormalizedPlayerNameCount = rowsForDate.Count(result =>
+                        NormalizePerformanceKey(result.PlayerName) == normalizedPlayer),
+                    samePlayerIdOrAliasEquivalentCount = rowsForDate.Count(result => equivalentIds.Contains(result.PlayerId))
+                };
+            })
+            .Cast<object>()
+            .ToArray();
+    }
+
+    private static string BuildPerformanceLikelyFailureReason(
+        PerformanceGradedPickRow row,
+        bool hasNameCandidate,
+        bool hasPropTypeCandidate,
+        bool hasDateCandidate)
+    {
+        if (string.Equals(row.MatchFailureReason, "PlayerIdMismatch", StringComparison.OrdinalIgnoreCase)
+            && hasNameCandidate)
+        {
+            return "Snapshot player resolved to a different internal player id than the matching MLB result row. Alias/external-ref reconciliation is missing or ambiguous.";
+        }
+
+        if (string.Equals(row.MatchFailureReason, "PlayerIdMismatch", StringComparison.OrdinalIgnoreCase))
+        {
+            return "Imported results exist for the date and prop type, but no safe player identity match was found.";
+        }
+
+        if (!hasDateCandidate)
+        {
+            return "No imported result row exists for this slate date.";
+        }
+
+        if (!hasPropTypeCandidate)
+        {
+            return "Imported result rows exist for the date, but not for this normalized prop type.";
+        }
+
+        return row.MatchFailureReason ?? "Unknown";
     }
 
     private static object[] BuildPerformanceGroups(
@@ -907,6 +1974,107 @@ public static class PublicMlbDfsEndpoints
             .ThenBy(row => row.groupKey)
             .Cast<object>()
             .ToArray();
+    }
+
+    private static LedgerPerformanceRow GradeLedgerPerformanceRow(
+        RecommendationSnapshot row,
+        IReadOnlyDictionary<LedgerResultLookupKey, decimal> actualResults)
+    {
+        decimal? actualResult = null;
+        string? matchFailureReason = null;
+
+        if (!row.CanonicalPlayerId.HasValue)
+        {
+            matchFailureReason = "MissingCanonicalPlayerId";
+        }
+        else if (!row.PropTypeId.HasValue)
+        {
+            matchFailureReason = "MissingPropTypeId";
+        }
+        else
+        {
+            var key = new LedgerResultLookupKey(
+                row.ExpectedResultDate,
+                row.CanonicalPlayerId.Value,
+                row.PropTypeId.Value);
+            if (actualResults.TryGetValue(key, out var value))
+            {
+                actualResult = value;
+            }
+            else
+            {
+                matchFailureReason = "ResultNotImported";
+            }
+        }
+
+        var outcome = GradePerformanceOutcome(row.Side, row.Line, actualResult);
+        decimal? profit = outcome switch
+        {
+            "Win" => 1m,
+            "Loss" => -1m,
+            "Push" => 0m,
+            _ => null
+        };
+
+        return new LedgerPerformanceRow(row, actualResult, outcome, profit, matchFailureReason);
+    }
+
+    private static object[] BuildLedgerPerformanceGroups(
+        IReadOnlyCollection<LedgerPerformanceRow> rows,
+        string groupType,
+        Func<LedgerPerformanceRow, string?> keySelector)
+    {
+        return rows
+            .GroupBy(row => string.IsNullOrWhiteSpace(keySelector(row)) ? "Unknown" : keySelector(row)!)
+            .Select(group => BuildLedgerPerformanceGroup(groupType, group.Key, group.ToArray()))
+            .OrderByDescending(row => row.gradedPicks)
+            .ThenBy(row => row.groupKey)
+            .Cast<object>()
+            .ToArray();
+    }
+
+    private static dynamic BuildLedgerPerformanceGroup(
+        string groupType,
+        string groupKey,
+        IReadOnlyCollection<LedgerPerformanceRow> rows)
+    {
+        var graded = rows.Where(row => IsGradedOutcome(row.Outcome)).ToArray();
+        var wins = graded.Count(row => row.Outcome == "Win");
+        var losses = graded.Count(row => row.Outcome == "Loss");
+        var pushes = graded.Count(row => row.Outcome == "Push");
+        var decisions = wins + losses;
+        var profit = graded.Sum(row => row.Profit ?? 0m);
+        var roi = graded.Length == 0 ? 0m : Math.Round(profit / graded.Length, 4);
+        var first = rows.FirstOrDefault()?.Snapshot;
+
+        return new
+        {
+            groupType,
+            groupKey,
+            sport = first?.Sport ?? "MLB",
+            providerCategory = FirstDistinctOrNull(rows.Select(row => row.Snapshot.ProviderCategory)),
+            provider = FirstDistinctOrNull(rows.Select(row => row.Snapshot.EntryProvider)),
+            bookmaker = FirstDistinctOrNull(rows.Select(row => row.Snapshot.Bookmaker)),
+            propType = FirstDistinctOrNull(rows.Select(row => row.Snapshot.PropType)),
+            strategyClassification = FirstDistinctOrNull(rows.Select(row => row.Snapshot.StrategyClassification)),
+            strategyTier = FirstDistinctOrNull(rows.Select(row => row.Snapshot.StrategyTier)),
+            totalPicks = rows.Count,
+            gradedPicks = graded.Length,
+            wins,
+            losses,
+            pushes,
+            hitRate = decisions == 0 ? 0m : Math.Round(wins / (decimal)decisions, 4),
+            averageEstimatedEv = AverageNullable(rows.Select(row => row.Snapshot.EstimatedEv)),
+            averageModelProbability = AverageNullable(rows.Select(row => row.Snapshot.HitChance)),
+            averageImpliedProbability = AverageNullable(rows.Select(row => row.Snapshot.ImpliedProbability)),
+            averageProbabilityEdge = AverageNullable(rows.Select(row => row.Snapshot.ProbabilityEdge)),
+            simulatedProfit = Math.Round(profit, 4),
+            simulatedRoi = roi,
+            averagePrice = null as decimal?,
+            latestPickDate = rows.Select(row => (DateOnly?)row.Snapshot.ExpectedResultDate).Max(),
+            notes = BuildPerformanceNotes(graded.Length),
+            sampleSizeWarning = graded.Length < 30 ? "SmallSample" : null
+        };
     }
 
     private static dynamic BuildPerformanceGroup(
@@ -1021,6 +2189,473 @@ public static class PublicMlbDfsEndpoints
             < 30 => ["Small graded sample; use as research only."],
             _ => []
         };
+    }
+
+    private static async Task<PropHistoryResponse> BuildMarketPropHistoryResponseAsync(
+        string? sport,
+        Guid? playerId,
+        string? playerName,
+        string? propType,
+        string? side,
+        decimal? line,
+        int? take,
+        int? season,
+        string? provider,
+        ApplicationDbContext dbContext,
+        IPlayerIdentityAliasService playerIdentityAliasService,
+        CancellationToken cancellationToken)
+    {
+        var requestedSport = string.IsNullOrWhiteSpace(sport) ? "MLB" : sport.Trim().ToUpperInvariant();
+        var displayPropType = ResolveDisplayPropType(propType);
+        var normalizedPropType = ResolveResultPropTypeKey(propType);
+        var normalizedSide = NormalizeResultSide(side);
+        var requestedTake = Math.Clamp(take ?? 10, 1, 50);
+
+        if (!string.Equals(requestedSport, "MLB", StringComparison.OrdinalIgnoreCase))
+        {
+            return EmptyPropHistory(requestedSport, playerId, playerName, propType, displayPropType, normalizedSide, line, provider, season, $"Prop history currently supports MLB only. Requested sport: {requestedSport}.");
+        }
+
+        if (string.IsNullOrWhiteSpace(normalizedPropType))
+        {
+            return EmptyPropHistory("MLB", playerId, playerName, propType, displayPropType, normalizedSide, line, provider, season, "Unsupported or missing prop type.");
+        }
+
+        if (line is null)
+        {
+            return EmptyPropHistory("MLB", playerId, playerName, normalizedPropType, displayPropType, normalizedSide, null, provider, season, "Line is required to evaluate historical results.");
+        }
+
+        var playerResolution = await ResolvePropHistoryPlayerAsync(playerId, playerName, dbContext, cancellationToken);
+        if (playerResolution.ResolvedPlayerId is null)
+        {
+            return EmptyPropHistory(
+                "MLB",
+                playerId,
+                playerName,
+                normalizedPropType,
+                displayPropType,
+                normalizedSide,
+                line,
+                provider,
+                season,
+                string.IsNullOrWhiteSpace(playerName)
+                    ? "Player id or player name is required."
+                    : $"No mapped MLB player was found for '{playerName}'.",
+                playerResolution);
+        }
+
+        var equivalentPlayerIds = (await playerIdentityAliasService.GetEquivalentPlayerIdsAsync(
+                playerResolution.ResolvedPlayerId.Value,
+                "MLB",
+                cancellationToken))
+            .Append(playerResolution.ResolvedPlayerId.Value)
+            .Distinct()
+            .ToArray();
+        var propTypeResolution = await ResolvePropHistoryPropTypesAsync(normalizedPropType, dbContext, cancellationToken);
+        if (propTypeResolution.PropTypeIds.Length == 0)
+        {
+            return EmptyPropHistory(
+                "MLB",
+                playerResolution.ResolvedPlayerId,
+                playerResolution.ResolvedPlayerName ?? playerName,
+                normalizedPropType,
+                displayPropType,
+                normalizedSide,
+                line,
+                provider,
+                season,
+                $"No persisted prop type mapping exists for '{displayPropType}'.",
+                playerResolution,
+                propTypeResolution,
+                equivalentPlayerIds.Length);
+        }
+
+        var candidateObservationCount = await dbContext.PropResults
+            .AsNoTracking()
+            .CountAsync(result => equivalentPlayerIds.Contains(result.PlayerId), cancellationToken);
+        var observationCountAfterPropType = await dbContext.PropResults
+            .AsNoTracking()
+            .CountAsync(result => equivalentPlayerIds.Contains(result.PlayerId)
+                && propTypeResolution.PropTypeIds.Contains(result.PropTypeId), cancellationToken);
+        var query = dbContext.PropResults
+            .AsNoTracking()
+            .Include(result => result.Player)
+            .Include(result => result.PropType)
+            .Where(result => equivalentPlayerIds.Contains(result.PlayerId)
+                && result.ExternalSource == "mlb"
+                && propTypeResolution.PropTypeIds.Contains(result.PropTypeId));
+
+        if (season.HasValue)
+        {
+            query = query.Where(result => result.EventDate.Year == season.Value);
+        }
+
+        var observationCountAfterSeason = await query.CountAsync(cancellationToken);
+        var resultRows = await query
+            .OrderByDescending(result => result.EventDate)
+            .Take(requestedTake)
+            .Select(result => new
+            {
+                result.Id,
+                result.PlayerId,
+                Player = result.Player == null ? playerResolution.ResolvedPlayerName ?? playerName ?? string.Empty : result.Player.DisplayName,
+                result.EventDate,
+                result.ActualResultValue,
+                result.ExternalSourceIdentifier
+            })
+            .ToArrayAsync(cancellationToken);
+
+        if (resultRows.Length == 0)
+        {
+            return EmptyPropHistory(
+                "MLB",
+                playerResolution.ResolvedPlayerId,
+                playerResolution.ResolvedPlayerName ?? playerName,
+                normalizedPropType,
+                displayPropType,
+                normalizedSide,
+                line,
+                provider,
+                season,
+                "No persisted MLB result history exists for this player and prop type.",
+                playerResolution,
+                propTypeResolution,
+                equivalentPlayerIds.Length,
+                candidateObservationCount,
+                observationCountAfterPropType,
+                observationCountAfterSeason);
+        }
+
+        var chronologicalRows = resultRows.OrderBy(result => result.EventDate).ThenBy(result => result.Id).ToArray();
+        var games = chronologicalRows
+            .Select(result =>
+            {
+                var outcome = EvaluateSelectedSide(result.ActualResultValue, line.Value, normalizedSide);
+                return new PropHistoryGame(
+                    result.EventDate,
+                    result.EventDate.ToString("MMM d", CultureInfo.InvariantCulture),
+                    "MLB game",
+                    "MLB game",
+                    result.ActualResultValue,
+                    line.Value,
+                    normalizedSide,
+                    outcome.ClearedSelectedSide,
+                    outcome.Result,
+                    result.ExternalSourceIdentifier);
+            })
+            .ToArray();
+
+        var newestValues = resultRows.Select(result => result.ActualResultValue).ToArray();
+        var gradedGames = games.Where(game => game.ClearedSelectedSide.HasValue).ToArray();
+        var clears = gradedGames.Count(game => game.ClearedSelectedSide == true);
+        var misses = gradedGames.Count(game => game.ClearedSelectedSide == false);
+        var pushes = games.Length - gradedGames.Length;
+        var bestGame = chronologicalRows.OrderByDescending(result => result.ActualResultValue).First();
+        var warning = gradedGames.Length < 10 ? "LowSample" : null;
+
+        return new PropHistoryResponse(
+            Sport: "MLB",
+            PlayerId: playerResolution.ResolvedPlayerId,
+            Player: playerResolution.ResolvedPlayerName ?? chronologicalRows[0].Player,
+            PropType: normalizedPropType,
+            DisplayPropType: displayPropType,
+            Side: normalizedSide,
+            Line: line.Value,
+            Provider: provider,
+            Season: season,
+            Games: games,
+            Summary: new PropHistorySummary(
+                SampleSize: games.Length,
+                GradedResults: gradedGames.Length,
+                Cleared: clears,
+                Missed: misses,
+                Pushed: pushes,
+                HitRate: gradedGames.Length == 0 ? null : Math.Round((decimal)clears / gradedGames.Length, 4),
+                Last5Average: AverageLatest(newestValues, 5),
+                Last10Average: AverageLatest(newestValues, 10),
+                SeasonAverage: Math.Round(newestValues.Average(), 2),
+                BestValue: bestGame.ActualResultValue,
+                BestLabel: $"{FormatDecimal(bestGame.ActualResultValue)} {displayPropType.ToLowerInvariant()} on {bestGame.EventDate.ToString("MMM d", CultureInfo.InvariantCulture)}",
+                BestRecentResult: $"{FormatDecimal(bestGame.ActualResultValue)} {displayPropType.ToLowerInvariant()} on {bestGame.EventDate.ToString("MMM d", CultureInfo.InvariantCulture)}"),
+            Warning: warning,
+            EmptyReason: null,
+            Diagnostics: BuildPropHistoryDiagnostics(
+                playerResolution,
+                propTypeResolution,
+                equivalentPlayerIds.Length,
+                candidateObservationCount,
+                observationCountAfterPropType,
+                observationCountAfterSeason));
+    }
+
+    private static async Task<PropHistoryPlayerResolution> ResolvePropHistoryPlayerAsync(
+        Guid? playerId,
+        string? playerName,
+        ApplicationDbContext dbContext,
+        CancellationToken cancellationToken)
+    {
+        if (playerId.HasValue && playerId.Value != Guid.Empty)
+        {
+            var player = await dbContext.Players
+                .AsNoTracking()
+                .Where(row => row.Id == playerId.Value)
+                .Select(row => new { row.Id, row.DisplayName })
+                .SingleOrDefaultAsync(cancellationToken);
+
+            return new PropHistoryPlayerResolution("playerId", player is not null, player?.Id, player?.DisplayName, false, null);
+        }
+
+        if (string.IsNullOrWhiteSpace(playerName))
+        {
+            return new PropHistoryPlayerResolution("none", false, null, null, false, null);
+        }
+
+        var normalizedPlayerName = NormalizeLookupText(playerName);
+        var candidates = await dbContext.Players
+            .AsNoTracking()
+            .Where(player => player.League != null && player.League.Code == "MLB")
+            .Select(player => new { player.Id, player.DisplayName })
+            .ToArrayAsync(cancellationToken);
+        var matches = candidates
+            .Where(player => NormalizeLookupText(player.DisplayName) == normalizedPlayerName)
+            .DefaultIfEmpty()
+            .ToArray();
+        var resolved = matches.FirstOrDefault()
+            ?? candidates.FirstOrDefault(player => NormalizeLookupText(player.DisplayName).Contains(normalizedPlayerName, StringComparison.OrdinalIgnoreCase));
+
+        return new PropHistoryPlayerResolution(
+            "playerNameFallback",
+            resolved is not null,
+            resolved?.Id,
+            resolved?.DisplayName,
+            true,
+            resolved is null
+                ? "Player name fallback was used but no player was resolved. Frontend should pass playerId."
+                : "Player name fallback was used; results may be ambiguous. Frontend should pass playerId.");
+    }
+
+    private static string ResolveDisplayPropType(string? propType)
+    {
+        return ResolveResultPropTypeKey(propType) switch
+        {
+            "PITCHER_STRIKEOUTS" => "Pitcher Strikeouts",
+            "HITS" => "Hits",
+            "TOTAL_BASES" => "Total Bases",
+            "RUNS" => "Runs",
+            "RBIS" => "RBIs",
+            "HOME_RUNS" => "Home Runs",
+            "STOLEN_BASES" => "Stolen Bases",
+            "HITS_RUNS_RBIS" => "Hits + Runs + RBIs",
+            "PITCHER_WALKS" => "Pitcher Walks",
+            "PITCHER_HITS_ALLOWED" => "Pitcher Hits Allowed",
+            "PITCHER_EARNED_RUNS" => "Pitcher Earned Runs",
+            "PITCHER_OUTS" => "Pitcher Outs",
+            _ => string.IsNullOrWhiteSpace(propType) ? "Prop" : HumanizePropType(propType)
+        };
+    }
+
+    private static string? ResolveResultPropTypeKey(string? propType)
+    {
+        var normalized = NormalizePropTypeKey(propType);
+        return normalized switch
+        {
+            "PITCHER_STRIKEOUTS" or "PITCHER_STRIKE_OUTS" or "STRIKEOUTS_PITCHER" or "PITCHER_KS" or "KS" => "PITCHER_STRIKEOUTS",
+            "HITS" or "BATTER_HITS" => "HITS",
+            "TOTAL_BASES" or "BATTER_TOTAL_BASES" => "TOTAL_BASES",
+            "RUNS" or "BATTER_RUNS" or "RUNS_SCORED" or "BATTER_RUNS_SCORED" => "RUNS",
+            "RBI" or "RBIS" or "BATTER_RBI" or "BATTER_RBIS" => "RBIS",
+            "HOME_RUN" or "HOME_RUNS" or "HOMERUNS" or "BATTER_HOME_RUN" or "BATTER_HOME_RUNS" => "HOME_RUNS",
+            "STOLEN_BASE" or "STOLEN_BASES" or "BATTER_STOLEN_BASE" or "BATTER_STOLEN_BASES" => "STOLEN_BASES",
+            "HITS_RUNS_RBI" or "HITS_RUNS_RBIS" or "BATTER_HITS_RUNS_RBI" or "BATTER_HITS_RUNS_RBIS" => "HITS_RUNS_RBIS",
+            "BATTER_STRIKEOUTS" or "BATTER_STRIKE_OUTS" => "BATTER_STRIKEOUTS",
+            "WALK" or "WALKS" or "BATTER_WALK" or "BATTER_WALKS" => "WALKS",
+            "DOUBLE" or "DOUBLES" or "BATTER_DOUBLE" or "BATTER_DOUBLES" => "DOUBLES",
+            "SINGLE" or "SINGLES" or "BATTER_SINGLE" or "BATTER_SINGLES" => "SINGLES",
+            "PITCHER_WALK" or "PITCHER_WALKS" => "PITCHER_WALKS",
+            "PITCHER_HITS_ALLOWED" or "PITCHER_HIT_ALLOWED" => "PITCHER_HITS_ALLOWED",
+            "PITCHER_EARNED_RUN" or "PITCHER_EARNED_RUNS" => "PITCHER_EARNED_RUNS",
+            "PITCHER_OUT" or "PITCHER_OUTS" => "PITCHER_OUTS",
+            _ => null
+        };
+    }
+
+    private static string NormalizeResultSide(string? side)
+    {
+        return side?.Trim().ToLowerInvariant() switch
+        {
+            "under" or "lower" => "Under",
+            _ => "Over"
+        };
+    }
+
+    private static (bool? ClearedSelectedSide, string Result) EvaluateSelectedSide(decimal value, decimal line, string side)
+    {
+        if (value == line)
+        {
+            return (null, "Push");
+        }
+
+        var cleared = string.Equals(side, "Under", StringComparison.OrdinalIgnoreCase)
+            ? value < line
+            : value > line;
+
+        return (cleared, cleared ? "Cleared" : "Missed");
+    }
+
+    private static decimal AverageLatest(decimal[] newestValues, int count)
+    {
+        if (newestValues.Length == 0)
+        {
+            return 0;
+        }
+
+        return Math.Round(newestValues.Take(count).Average(), 2);
+    }
+
+    private static PropHistoryResponse EmptyPropHistory(
+        string sport,
+        Guid? playerId,
+        string? player,
+        string? propType,
+        string displayPropType,
+        string side,
+        decimal? line,
+        string? provider,
+        int? season,
+        string emptyReason,
+        PropHistoryPlayerResolution? playerResolution = null,
+        PropHistoryPropTypeResolution? propTypeResolution = null,
+        int equivalentPlayerCount = 0,
+        int candidateObservationCount = 0,
+        int observationCountAfterPropType = 0,
+        int observationCountAfterSeason = 0)
+    {
+        return new PropHistoryResponse(
+            Sport: sport,
+            PlayerId: playerId,
+            Player: player,
+            PropType: propType,
+            DisplayPropType: displayPropType,
+            Side: side,
+            Line: line,
+            Provider: provider,
+            Season: season,
+            Games: [],
+            Summary: new PropHistorySummary(0, 0, 0, 0, 0, null, null, null, null, null, null, null),
+            Warning: null,
+            EmptyReason: emptyReason,
+            Diagnostics: BuildPropHistoryDiagnostics(
+                playerResolution,
+                propTypeResolution,
+                equivalentPlayerCount,
+                candidateObservationCount,
+                observationCountAfterPropType,
+                observationCountAfterSeason));
+    }
+
+    private static async Task<PropHistoryPropTypeResolution> ResolvePropHistoryPropTypesAsync(
+        string normalizedPropType,
+        ApplicationDbContext dbContext,
+        CancellationToken cancellationToken)
+    {
+        var requestedCanonicalName = CanonicalPropTypeName(normalizedPropType);
+        var propTypes = await dbContext.PropTypes
+            .AsNoTracking()
+            .Select(propType => new { propType.Id, propType.Name, propType.StatKey })
+            .ToArrayAsync(cancellationToken);
+        var matches = propTypes
+            .Where(propType =>
+                string.Equals(CanonicalPropTypeName(propType.Name), requestedCanonicalName, StringComparison.OrdinalIgnoreCase)
+                || string.Equals(NormalizePropTypeKey(propType.StatKey), normalizedPropType, StringComparison.OrdinalIgnoreCase)
+                || string.Equals(CanonicalPropTypeName(propType.StatKey), requestedCanonicalName, StringComparison.OrdinalIgnoreCase))
+            .ToArray();
+
+        return new PropHistoryPropTypeResolution(
+            PropTypeResolved: matches.Select(propType => propType.StatKey ?? propType.Name).FirstOrDefault(),
+            PropTypeIds: matches.Select(propType => propType.Id).Distinct().ToArray(),
+            PropTypeNames: matches.Select(propType => propType.Name).Distinct(StringComparer.OrdinalIgnoreCase).ToArray());
+    }
+
+    private static PropHistoryDiagnostics BuildPropHistoryDiagnostics(
+        PropHistoryPlayerResolution? playerResolution,
+        PropHistoryPropTypeResolution? propTypeResolution,
+        int equivalentPlayerCount,
+        int candidateObservationCount,
+        int observationCountAfterPropType,
+        int observationCountAfterSeason)
+    {
+        return new PropHistoryDiagnostics(
+            LookupMode: playerResolution?.LookupMode ?? "none",
+            PlayerResolved: playerResolution?.PlayerResolved ?? false,
+            ResolvedPlayerId: playerResolution?.ResolvedPlayerId,
+            PlayerNameFallbackUsed: playerResolution?.PlayerNameFallbackUsed ?? false,
+            Warning: playerResolution?.Warning,
+            PropTypeResolved: propTypeResolution?.PropTypeResolved,
+            HistorySource: "PropResults via PredictionFeatureService equivalent player/prop lookup",
+            EquivalentPlayerCount: equivalentPlayerCount,
+            CandidateObservationCount: candidateObservationCount,
+            ObservationCountAfterPropType: observationCountAfterPropType,
+            ObservationCountAfterSeason: observationCountAfterSeason);
+    }
+
+    private static string CanonicalPropTypeName(string? propTypeName)
+    {
+        var normalized = NormalizeCompactLookupText(propTypeName);
+        return string.Equals(normalized, "RBI", StringComparison.OrdinalIgnoreCase) ? "RBIS" : normalized;
+    }
+
+    private static string NormalizeCompactLookupText(string? value)
+    {
+        return string.IsNullOrWhiteSpace(value)
+            ? string.Empty
+            : string.Concat(value.Trim().ToUpperInvariant().Where(char.IsLetterOrDigit));
+    }
+
+    private static string NormalizePropTypeKey(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return string.Empty;
+        }
+
+        var builder = new StringBuilder(value.Length);
+        var previousUnderscore = false;
+
+        foreach (var character in value.Trim().ToUpperInvariant())
+        {
+            if (char.IsLetterOrDigit(character))
+            {
+                builder.Append(character);
+                previousUnderscore = false;
+            }
+            else if (!previousUnderscore)
+            {
+                builder.Append('_');
+                previousUnderscore = true;
+            }
+        }
+
+        return builder.ToString().Trim('_');
+    }
+
+    private static string NormalizeLookupText(string value)
+    {
+        return string.Concat(value.Trim().ToLowerInvariant().Where(char.IsLetterOrDigit));
+    }
+
+    private static string HumanizePropType(string value)
+    {
+        return string.Join(' ', NormalizePropTypeKey(value)
+            .Split('_', StringSplitOptions.RemoveEmptyEntries)
+            .Select(part => CultureInfo.InvariantCulture.TextInfo.ToTitleCase(part.ToLowerInvariant())));
+    }
+
+    private static string FormatDecimal(decimal value)
+    {
+        return value % 1 == 0
+            ? value.ToString("0", CultureInfo.InvariantCulture)
+            : value.ToString("0.##", CultureInfo.InvariantCulture);
     }
 
     private static string NormalizePerformanceKey(string? value)
@@ -1309,23 +2944,137 @@ public static class PublicMlbDfsEndpoints
 
     private sealed record PerformancePickRow(
         Models.MarketLineShoppingSnapshot Snapshot,
-        int? HistoricalSampleSize);
+        int? HistoricalSampleSize,
+        Guid? ResolvedPlayerId,
+        IReadOnlyCollection<Guid> EquivalentPlayerIds,
+        string PlayerResolutionMode,
+        string? PlayerResolutionFailureReason);
 
     private sealed record PerformanceGradedPickRow(
         Models.MarketLineShoppingSnapshot Snapshot,
         int? HistoricalSampleSize,
+        Guid? ResolvedPlayerId,
+        IReadOnlyCollection<Guid> EquivalentPlayerIds,
+        string PlayerResolutionMode,
+        string? PlayerResolutionFailureReason,
         decimal? ActualResult,
         string? Outcome,
-        decimal? Profit);
+        decimal? Profit,
+        string MatchLookupMode,
+        string? MatchFailureReason);
+
+    private readonly record struct LedgerResultLookupKey(
+        DateOnly EventDate,
+        Guid PlayerId,
+        Guid PropTypeId);
+
+    private sealed record LedgerActualResultLookupRow(
+        DateOnly EventDate,
+        Guid PlayerId,
+        Guid PropTypeId,
+        decimal ActualResultValue);
+
+    private sealed record LedgerPerformanceRow(
+        RecommendationSnapshot Snapshot,
+        decimal? ActualResult,
+        string? Outcome,
+        decimal? Profit,
+        string? MatchFailureReason);
+
+    private sealed record PerformanceDateDiagnostics(
+        DateOnly SlateDate,
+        int TotalPicks,
+        int GradedPicks,
+        int PendingPicks,
+        int PropResultsAvailableForDate,
+        int DistinctPropResultPlayers,
+        int DistinctPropResultPropTypes,
+        IReadOnlyDictionary<string, int> MatchFailureCounts,
+        string MatchStrategyUsed);
+
+    private sealed record PerformanceSnapshotPlayerResolution(
+        Guid? PlayerId,
+        string LookupMode,
+        string? FailureReason);
 
     private sealed record ActualResultLookupRow(
         DateOnly EventDate,
+        Guid PlayerId,
         string PlayerName,
+        Guid PropTypeId,
         string PropType,
         decimal ActualResultValue);
 
-    private readonly record struct ActualResultLookupKey(
+    private readonly record struct ActualResultPlayerLookupKey(
         DateOnly EventDate,
-        string PlayerName,
+        Guid PlayerId,
         string PropType);
+
+    private sealed record PropHistoryResponse(
+        string Sport,
+        Guid? PlayerId,
+        string? Player,
+        string? PropType,
+        string DisplayPropType,
+        string Side,
+        decimal? Line,
+        string? Provider,
+        int? Season,
+        IReadOnlyList<PropHistoryGame> Games,
+        PropHistorySummary Summary,
+        string? Warning,
+        string? EmptyReason,
+        PropHistoryDiagnostics Diagnostics);
+
+    private sealed record PropHistoryGame(
+        DateOnly Date,
+        string DateLabel,
+        string Event,
+        string GameLabel,
+        decimal Value,
+        decimal SelectedLine,
+        string Side,
+        bool? ClearedSelectedSide,
+        string Result,
+        string ExternalSourceIdentifier);
+
+    private sealed record PropHistorySummary(
+        int SampleSize,
+        int GradedResults,
+        int Cleared,
+        int Missed,
+        int Pushed,
+        decimal? HitRate,
+        decimal? Last5Average,
+        decimal? Last10Average,
+        decimal? SeasonAverage,
+        decimal? BestValue,
+        string? BestLabel,
+        string? BestRecentResult);
+
+    private sealed record PropHistoryPlayerResolution(
+        string LookupMode,
+        bool PlayerResolved,
+        Guid? ResolvedPlayerId,
+        string? ResolvedPlayerName,
+        bool PlayerNameFallbackUsed,
+        string? Warning);
+
+    private sealed record PropHistoryPropTypeResolution(
+        string? PropTypeResolved,
+        Guid[] PropTypeIds,
+        string[] PropTypeNames);
+
+    private sealed record PropHistoryDiagnostics(
+        string LookupMode,
+        bool PlayerResolved,
+        Guid? ResolvedPlayerId,
+        bool PlayerNameFallbackUsed,
+        string? Warning,
+        string? PropTypeResolved,
+        string HistorySource,
+        int EquivalentPlayerCount,
+        int CandidateObservationCount,
+        int ObservationCountAfterPropType,
+        int ObservationCountAfterSeason);
 }

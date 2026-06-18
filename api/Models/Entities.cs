@@ -507,6 +507,62 @@ public sealed class MarketLineShoppingSnapshot
     public PredictionRun? PredictionRun { get; set; }
 }
 
+public sealed class RecommendationSnapshot
+{
+    public Guid Id { get; set; }
+    public string IdempotencyKey { get; set; } = string.Empty;
+    public DateTimeOffset FirstSeenAtUtc { get; set; }
+    public DateTimeOffset LastSeenAtUtc { get; set; }
+    public int SeenCount { get; set; }
+    public DateTimeOffset CapturedAtUtc { get; set; }
+    public Guid? RefreshRunId { get; set; }
+    public Guid? PredictionRunId { get; set; }
+    public string Sport { get; set; } = "MLB";
+    public DateOnly SlateDate { get; set; }
+    public DateOnly ExpectedResultDate { get; set; }
+    public string? ResultDateSource { get; set; }
+    public string? EventId { get; set; }
+    public DateTimeOffset? EventStartTimeUtc { get; set; }
+    public Guid? CanonicalPlayerId { get; set; }
+    public string PlayerName { get; set; } = string.Empty;
+    public string NormalizedPlayerName { get; set; } = string.Empty;
+    public Guid? PropTypeId { get; set; }
+    public string PropType { get; set; } = string.Empty;
+    public string NormalizedPropType { get; set; } = string.Empty;
+    public string Side { get; set; } = string.Empty;
+    public decimal Line { get; set; }
+    public string Provider { get; set; } = string.Empty;
+    public string? Bookmaker { get; set; }
+    public string ProviderCategory { get; set; } = string.Empty;
+    public string EntryProvider { get; set; } = string.Empty;
+    public string EntryCompatibilityGroup { get; set; } = string.Empty;
+    public decimal? HitChance { get; set; }
+    public decimal? ImpliedProbability { get; set; }
+    public decimal? ProbabilityEdge { get; set; }
+    public decimal? EstimatedEv { get; set; }
+    public string TrustLevel { get; set; } = string.Empty;
+    public string? SampleWarning { get; set; }
+    public string? Warning { get; set; }
+    public int? HistoricalSampleSize { get; set; }
+    public string StrategyClassification { get; set; } = string.Empty;
+    public string StrategyTier { get; set; } = string.Empty;
+    public decimal RankingScore { get; set; }
+    public bool IsCandidate { get; set; }
+    public bool IsTopPick { get; set; }
+    public bool IsWatchlist { get; set; }
+    public bool IsActionableForUser { get; set; }
+    public string LifecycleStatus { get; set; } = string.Empty;
+    public decimal? ResultValue { get; set; }
+    public string GradeStatus { get; set; } = "Pending";
+    public DateTimeOffset? GradedAtUtc { get; set; }
+    public string? GradingFailureReason { get; set; }
+
+    public TheOddsRefreshRun? RefreshRun { get; set; }
+    public PredictionRun? PredictionRun { get; set; }
+    public Player? CanonicalPlayer { get; set; }
+    public PropType? PropTypeRecord { get; set; }
+}
+
 public sealed class ProviderLineLifecycle
 {
     public Guid Id { get; set; }

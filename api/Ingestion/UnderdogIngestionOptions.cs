@@ -4,8 +4,8 @@ public sealed class UnderdogIngestionOptions
 {
     public const string SectionName = "UnderdogIngestion";
 
-    public bool Enabled { get; set; } = true;
-    public int IntervalMinutes { get; set; } = 5;
+    public bool Enabled { get; set; }
+    public int IntervalMinutes { get; set; } = 15;
 
     public TimeSpan GetInterval()
     {

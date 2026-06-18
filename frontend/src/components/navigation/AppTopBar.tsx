@@ -1,6 +1,8 @@
-import { Avatar, Box, Stack, Tooltip, Typography } from '@mui/material';
+import HelpOutlineRoundedIcon from '@mui/icons-material/HelpOutlineRounded';
+import { Avatar, Button, Stack, Tooltip, Typography } from '@mui/material';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { MarketFreshnessDto, ScheduledRefreshStatusDto } from '../../api/types';
+import { GlossaryDialog } from '../glossary/GlossaryDialog';
 import { isDemoDataMode } from '../../config/dataMode';
 import { mockUser } from '../../data/mockUser';
 import { useMarketFreshnessData, useProviderStatusData, useScheduledRefreshStatusData } from '../../hooks/useMarketData';
@@ -9,6 +11,7 @@ import { bumpMarketDataRefreshVersion } from '../../hooks/useMarketDataRefresh';
 export function AppTopBar() {
   const [now, setNow] = useState(() => Date.now());
   const [queryTick, setQueryTick] = useState(0);
+  const [glossaryOpen, setGlossaryOpen] = useState(false);
   const lastDueFetchTargetRef = useRef<number | null>(null);
   const freshnessQuery = useMarketFreshnessData([queryTick]);
   const providerStatusQuery = useProviderStatusData([queryTick]);
@@ -57,51 +60,69 @@ export function AppTopBar() {
   }, [currentDueFetchTargetMs]);
 
   return (
-    <Stack
-      direction="row"
-      alignItems="center"
-      justifyContent="space-between"
-      gap={2}
-      sx={{ py: 1.35, px: { xs: 2, md: 3 }, borderBottom: '1px solid rgba(148,163,184,.12)', bgcolor: 'rgba(7,11,20,.76)', backdropFilter: 'blur(18px)', position: 'sticky', top: 0, zIndex: 10 }}
-    >
-      <Stack direction="row" alignItems="center" spacing={1.5}>
-        <Box>
-          <Typography fontWeight={900}>DFS research dashboard</Typography>
-          <Typography variant="caption" color="text.secondary">
-            Line comparison and entry building
-          </Typography>
-        </Box>
-      </Stack>
-      <Stack direction="row" spacing={{ xs: 1.25, sm: 2 }} alignItems="center" minWidth={0}>
-        <Stack spacing={0.1} alignItems="flex-end" sx={{ display: { xs: 'none', sm: 'flex' } }}>
-          <Stack direction="row" spacing={1} alignItems="center">
-            {isDemoDataMode ? (
-              <Typography
-                variant="caption"
-                sx={{
-                  color: 'warning.main',
-                  fontWeight: 850
-                }}
-              >
-                Demo data
+    <>
+      <Stack
+        direction="row"
+        alignItems="center"
+        justifyContent="space-between"
+        gap={2}
+        sx={{ py: 1.1, px: { xs: 2, md: 3 }, borderBottom: '1px solid rgba(148,163,184,.12)', bgcolor: 'rgba(7,11,20,.76)', backdropFilter: 'blur(18px)', position: 'sticky', top: 0, zIndex: 10 }}
+      >
+        <Button
+          variant="outlined"
+          size="small"
+          startIcon={<HelpOutlineRoundedIcon />}
+          onClick={() => setGlossaryOpen(true)}
+          sx={{
+            minHeight: 34,
+            px: 1.2,
+            borderRadius: 1.5,
+            borderColor: 'rgba(148,163,184,.18)',
+            bgcolor: 'rgba(15,23,42,.52)',
+            color: 'text.secondary',
+            fontWeight: 800,
+            '& .MuiButton-startIcon': { color: 'primary.main' },
+            '&:hover': {
+              borderColor: 'rgba(34,211,238,.38)',
+              bgcolor: 'rgba(15,23,42,.78)',
+              color: 'text.primary'
+            }
+          }}
+        >
+          Glossary
+        </Button>
+        <Stack direction="row" spacing={{ xs: 1.25, sm: 2 }} alignItems="center" minWidth={0}>
+          <Stack spacing={0.1} alignItems="flex-end" sx={{ display: { xs: 'none', sm: 'flex' } }}>
+            <Stack direction="row" spacing={1} alignItems="center">
+              {isDemoDataMode ? (
+                <Typography
+                  variant="caption"
+                  sx={{
+                    color: 'warning.main',
+                    fontWeight: 850
+                  }}
+                >
+                  Demo data
+                </Typography>
+              ) : null}
+              <Typography variant="caption" color="text.secondary">
+                {syncDisplay.primary}
               </Typography>
-            ) : null}
-            <Typography variant="caption" color="text.secondary">
-              {syncDisplay.primary}
-            </Typography>
+            </Stack>
+            <Tooltip title={syncDisplay.detail ?? ''} disableHoverListener={!syncDisplay.detail} arrow>
+              <Typography
+                color={syncDisplay.tone === 'success' ? 'success.main' : syncDisplay.tone === 'warning' ? 'warning.main' : 'text.secondary'}
+                sx={{ fontVariantNumeric: 'tabular-nums', fontWeight: 900, lineHeight: 1 }}
+              >
+                {syncDisplay.secondary}
+              </Typography>
+            </Tooltip>
           </Stack>
-          <Tooltip title={syncDisplay.detail ?? ''} disableHoverListener={!syncDisplay.detail} arrow>
-            <Typography
-              color={syncDisplay.tone === 'success' ? 'success.main' : syncDisplay.tone === 'warning' ? 'warning.main' : 'text.secondary'}
-              sx={{ fontVariantNumeric: 'tabular-nums', fontWeight: 900, lineHeight: 1 }}
-            >
-              {syncDisplay.secondary}
-            </Typography>
-          </Tooltip>
+          <Avatar sx={{ width: 34, height: 34 }}>{mockUser.name[0]}</Avatar>
         </Stack>
-        <Avatar sx={{ width: 34, height: 34 }}>{mockUser.name[0]}</Avatar>
       </Stack>
-    </Stack>
+      <GlossaryDialog open={glossaryOpen} onClose={() => setGlossaryOpen(false)} />
+    </>
   );
 }
 

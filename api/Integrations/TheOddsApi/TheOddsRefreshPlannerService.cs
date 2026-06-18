@@ -161,6 +161,8 @@ public sealed class TheOddsRefreshPlannerService(
                 diagnostics.RequestsRemaining.Value < estimatedApiCalls);
 
         return new TheOddsRefreshBudgetSummary(
+            plannerOptions.MaxDailyCredits,
+            plannerOptions.MaxMonthlyCredits,
             dailyUsedCredits,
             monthlyUsedCredits,
             persistedMonthlyUsedCredits,
@@ -551,6 +553,8 @@ public sealed record PlannerCadenceRule(
     string Description);
 
 public sealed record TheOddsRefreshBudgetSummary(
+    int ConfiguredDailyCreditBudget,
+    int ConfiguredMonthlyCreditBudget,
     int DailyUsedCredits,
     int MonthlyUsedCredits,
     int PersistedMonthlyUsedCredits,

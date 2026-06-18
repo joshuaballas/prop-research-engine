@@ -34,6 +34,7 @@ public sealed class ApplicationDbContext(DbContextOptions<ApplicationDbContext> 
     public DbSet<TheOddsRefreshPlannerDecision> TheOddsRefreshPlannerDecisions => Set<TheOddsRefreshPlannerDecision>();
     public DbSet<MarketTopPickSnapshot> MarketTopPickSnapshots => Set<MarketTopPickSnapshot>();
     public DbSet<MarketLineShoppingSnapshot> MarketLineShoppingSnapshots => Set<MarketLineShoppingSnapshot>();
+    public DbSet<RecommendationSnapshot> RecommendationSnapshots => Set<RecommendationSnapshot>();
     public DbSet<ProviderLineLifecycle> ProviderLineLifecycles => Set<ProviderLineLifecycle>();
     public DbSet<ProviderLineLifecycleEvent> ProviderLineLifecycleEvents => Set<ProviderLineLifecycleEvent>();
     public DbSet<IngestionRun> IngestionRuns => Set<IngestionRun>();
@@ -58,6 +59,7 @@ public sealed class ApplicationDbContext(DbContextOptions<ApplicationDbContext> 
         ConfigurePropTables(modelBuilder);
         ConfigureResultTables(modelBuilder);
         ConfigurePredictionTables(modelBuilder);
+        ConfigureRecommendationSnapshotTables(modelBuilder);
         ConfigureProviderLineLifecycleTables(modelBuilder);
         ConfigureIngestionTables(modelBuilder);
         ConfigureCorrelationTables(modelBuilder);
@@ -604,6 +606,67 @@ public sealed class ApplicationDbContext(DbContextOptions<ApplicationDbContext> 
             entity.HasIndex("GeneratedAtUtc").HasDatabaseName($"{indexPrefix}_generated_at_utc");
             entity.HasIndex("ProviderCategory", "IsCandidate").HasDatabaseName($"{indexPrefix}_provider_category_candidate");
             entity.HasIndex("BestEstimatedEv").HasDatabaseName($"{indexPrefix}_best_estimated_ev");
+        });
+    }
+
+    private static void ConfigureRecommendationSnapshotTables(ModelBuilder modelBuilder)
+    {
+        modelBuilder.Entity<RecommendationSnapshot>(entity =>
+        {
+            entity.ToTable("recommendation_snapshots");
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.IdempotencyKey).HasMaxLength(128).IsRequired();
+            entity.Property(x => x.Sport).HasMaxLength(50).IsRequired();
+            entity.Property(x => x.ResultDateSource).HasMaxLength(100);
+            entity.Property(x => x.EventId).HasMaxLength(200);
+            entity.Property(x => x.PlayerName).HasMaxLength(300).IsRequired();
+            entity.Property(x => x.NormalizedPlayerName).HasMaxLength(300).IsRequired();
+            entity.Property(x => x.PropType).HasMaxLength(200).IsRequired();
+            entity.Property(x => x.NormalizedPropType).HasMaxLength(200).IsRequired();
+            entity.Property(x => x.Side).HasMaxLength(20).IsRequired();
+            entity.Property(x => x.Line).HasPrecision(12, 4);
+            entity.Property(x => x.Provider).HasMaxLength(200).IsRequired();
+            entity.Property(x => x.Bookmaker).HasMaxLength(200);
+            entity.Property(x => x.ProviderCategory).HasMaxLength(50).IsRequired();
+            entity.Property(x => x.EntryProvider).HasMaxLength(200).IsRequired();
+            entity.Property(x => x.EntryCompatibilityGroup).HasMaxLength(200).IsRequired();
+            entity.Property(x => x.HitChance).HasPrecision(8, 6);
+            entity.Property(x => x.ImpliedProbability).HasPrecision(8, 6);
+            entity.Property(x => x.ProbabilityEdge).HasPrecision(8, 6);
+            entity.Property(x => x.EstimatedEv).HasPrecision(12, 6);
+            entity.Property(x => x.TrustLevel).HasMaxLength(50).IsRequired();
+            entity.Property(x => x.SampleWarning).HasMaxLength(1000);
+            entity.Property(x => x.Warning).HasMaxLength(1000);
+            entity.Property(x => x.StrategyClassification).HasMaxLength(50).IsRequired();
+            entity.Property(x => x.StrategyTier).HasMaxLength(100).IsRequired();
+            entity.Property(x => x.RankingScore).HasPrecision(18, 6);
+            entity.Property(x => x.LifecycleStatus).HasMaxLength(50).IsRequired();
+            entity.Property(x => x.ResultValue).HasPrecision(12, 4);
+            entity.Property(x => x.GradeStatus).HasMaxLength(50).IsRequired();
+            entity.Property(x => x.GradingFailureReason).HasMaxLength(500);
+            entity.HasOne(x => x.RefreshRun)
+                .WithMany()
+                .HasForeignKey(x => x.RefreshRunId)
+                .OnDelete(DeleteBehavior.SetNull);
+            entity.HasOne(x => x.PredictionRun)
+                .WithMany()
+                .HasForeignKey(x => x.PredictionRunId)
+                .OnDelete(DeleteBehavior.SetNull);
+            entity.HasOne(x => x.CanonicalPlayer)
+                .WithMany()
+                .HasForeignKey(x => x.CanonicalPlayerId)
+                .OnDelete(DeleteBehavior.SetNull);
+            entity.HasOne(x => x.PropTypeRecord)
+                .WithMany()
+                .HasForeignKey(x => x.PropTypeId)
+                .OnDelete(DeleteBehavior.SetNull);
+            entity.HasIndex(x => x.IdempotencyKey).IsUnique().HasDatabaseName("ix_recommendation_snapshots_idempotency_key");
+            entity.HasIndex(x => new { x.Sport, x.ExpectedResultDate }).HasDatabaseName("ix_recommendation_snapshots_sport_expected_result_date");
+            entity.HasIndex(x => new { x.ExpectedResultDate, x.CanonicalPlayerId, x.PropTypeId }).HasDatabaseName("ix_recommendation_snapshots_grade_lookup");
+            entity.HasIndex(x => x.RefreshRunId).HasDatabaseName("ix_recommendation_snapshots_refresh_run_id");
+            entity.HasIndex(x => x.PredictionRunId).HasDatabaseName("ix_recommendation_snapshots_prediction_run_id");
+            entity.HasIndex(x => new { x.ProviderCategory, x.IsCandidate }).HasDatabaseName("ix_recommendation_snapshots_provider_candidate");
+            entity.HasIndex(x => x.GradeStatus).HasDatabaseName("ix_recommendation_snapshots_grade_status");
         });
     }
 

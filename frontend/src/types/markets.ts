@@ -7,6 +7,8 @@ export type ProjectionModifier = 'Normal' | 'Demon' | 'Goblin' | 'Discount' | 'P
 export interface MarketOpportunity {
   id: string;
   rank?: number;
+  playerId?: string;
+  canonicalPlayerId?: string;
   player: string;
   team?: string;
   opponent?: string;

@@ -1,5 +1,6 @@
 import { useMemo } from 'react';
 import { getLineShopping, getMarketFreshness, getPerformanceSummary, getProviderStatus, getScheduledRefreshStatus, getTopPicks } from '../api/markets';
+import type { PerformanceGradingMode } from '../api/markets';
 import { mapMarketGroupsToOpportunities, mapPerformanceSummaryToGroups } from '../api/marketMappers';
 import { useApiQuery } from '../api/useApiQuery';
 import { isDemoDataMode } from '../config/dataMode';
@@ -103,25 +104,25 @@ export function useEntryCandidateData(take = 40) {
   return { ...query, markets };
 }
 
-export function usePerformanceData() {
+export function usePerformanceData(gradingMode: PerformanceGradingMode = 'latestGraded') {
   const refreshVersion = useMarketDataRefreshVersion();
   const query = useApiQuery(
     async (signal) => {
       if (isDemoDataMode) {
-        return demoPerformance;
+        return { rows: demoPerformance, summary: undefined };
       }
 
-      const response = await getPerformanceSummary(signal);
-      return mapPerformanceSummaryToGroups(response);
+      const response = await getPerformanceSummary(signal, gradingMode);
+      return { rows: mapPerformanceSummaryToGroups(response), summary: response };
     },
-    [refreshVersion]
+    [gradingMode, refreshVersion]
   );
   const rows = useMemo(
-    () => query.data ?? [],
+    () => query.data?.rows ?? [],
     [query.data]
   );
 
-  return { ...query, rows };
+  return { ...query, rows, summary: query.data?.summary };
 }
 
 function mapDemoMarketsToOpportunities(markets: MarketOpportunity[] | undefined, sourcePrefix: string) {

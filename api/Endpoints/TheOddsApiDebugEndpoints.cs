@@ -1050,6 +1050,7 @@ public static partial class TheOddsApiDebugEndpoints
                     currentPlan.ProviderAvailable,
                     currentPlan.ProviderStatus,
                     currentPlan.ProviderRejectedKeyDetected,
+                    budgetSummary = currentPlan.Budget,
                     recommendedAction = currentPlanRecommendedAction
                 },
                 nextRefreshDueUtc,
@@ -3782,6 +3783,8 @@ public static partial class TheOddsApiDebugEndpoints
             group.HomeTeam,
             group.AwayTeam,
             player = group.Player,
+            playerId = group.PlayerId,
+            canonicalPlayerId = group.PlayerId,
             normalizedPropType = group.NormalizedPropType,
             line = group.Line,
             group.MarketClassification,

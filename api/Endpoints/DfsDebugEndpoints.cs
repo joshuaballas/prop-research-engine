@@ -10,17 +10,17 @@ public static class DfsDebugEndpoints
             {
                 BuildProvider(
                     "Underdog",
-                    "Supported",
+                    "SupportedViaTheOddsApiDfs",
                     actionable: true,
-                    "Direct Underdog ingestion works today; The Odds API `us_dfs` can also provide Underdog market context when configured.",
-                    "Direct Underdog API plus optional The Odds API us_dfs feed",
+                    "Underdog should be requested through The Odds API region `us_dfs` with bookmaker key `underdog` for customer-facing market data.",
+                    "The Odds API us_dfs feed only",
                     blocker: null,
-                    antiBotRisk: "Low for current direct integration; The Odds API handles provider access for us_dfs.",
-                    recommendedNextStep: "Keep direct Underdog running. Use The Odds API DFS rows as comparison/context if enabled.",
+                    antiBotRisk: "Low through The Odds API provider feed.",
+                    recommendedNextStep: "Keep direct Underdog disabled except for explicit debug/audit comparisons.",
                     priority: "High",
                     notes: new[]
                     {
-                        "Current working DFS provider.",
+                        "Active customer-facing Underdog rows come through The Odds API.",
                         "Actionable for the user."
                     }),
                 BuildProvider(

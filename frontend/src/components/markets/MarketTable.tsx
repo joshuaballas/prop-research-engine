@@ -2,10 +2,14 @@ import AddCircleOutlineRoundedIcon from '@mui/icons-material/AddCircleOutlineRou
 import LockRoundedIcon from '@mui/icons-material/LockRounded';
 import RemoveCircleOutlineRoundedIcon from '@mui/icons-material/RemoveCircleOutlineRounded';
 import { Box, Button, Stack, Table, TableBody, TableCell, TableHead, TableRow, Typography } from '@mui/material';
+import { useState } from 'react';
 import { useEntryBuilder } from '../../hooks/useEntryBuilder';
 import type { MarketOpportunity } from '../../types/markets';
 import { formatPercent } from '../../utils/formatters';
+import { hasRenderableWarning, renderWarningText } from '../../utils/warnings';
 import { MetricLabelWithHelp } from '../metrics/MetricLabelWithHelp';
+import { TrustValue } from '../metrics/TrustValue';
+import { PropDetailsModal } from '../prop-history/PropDetailsModal';
 import { StatusPill } from '../ui/StatusPill';
 import { ProjectionModifierBadge } from './ProjectionModifierBadge';
 import { ProviderLabel } from '../providers/ProviderLabel';
@@ -13,9 +17,11 @@ import { compactActionButtonSx, lockedActionButtonSx, removeActionButtonSx, seco
 
 export function MarketTable({ markets }: { markets: MarketOpportunity[] }) {
   const builder = useEntryBuilder();
+  const [detailsMarket, setDetailsMarket] = useState<MarketOpportunity | null>(null);
   return (
-    <Box sx={{ overflowX: 'auto', border: '1px solid rgba(148,163,184,.16)', borderRadius: 3 }}>
-      <Table size="small" stickyHeader>
+    <>
+      <Box sx={{ overflowX: 'auto', border: '1px solid rgba(148,163,184,.16)', borderRadius: 3 }}>
+        <Table size="small" stickyHeader>
         <TableHead>
           <TableRow>
             <TableCell>Market</TableCell>
@@ -79,7 +85,7 @@ export function MarketTable({ markets }: { markets: MarketOpportunity[] }) {
                 <TableCell align="right">
                   <Typography fontWeight={900}>{formatPercent(market.modelProbability)}</Typography>
                 </TableCell>
-                <TableCell><ConfidenceLabel level={market.trustLevel} /></TableCell>
+                <TableCell><TrustValue level={market.trustLevel} /></TableCell>
                 <TableCell>
                   <Stack direction="row" gap={0.6} flexWrap="wrap" useFlexGap>
                     <StatusPill label={market.strategyClassification} />
@@ -87,7 +93,7 @@ export function MarketTable({ markets }: { markets: MarketOpportunity[] }) {
                   </Stack>
                 </TableCell>
                 <TableCell sx={{ minWidth: 170 }}>
-                  <Typography variant="body2" color={market.warnings.length || !addable ? 'warning.main' : 'text.secondary'}>
+                  <Typography variant="body2" color={hasRenderableWarning(market.warnings) || !addable ? 'warning.main' : 'text.secondary'}>
                     {formatWarning(market, addable)}
                   </Typography>
                 </TableCell>
@@ -97,7 +103,7 @@ export function MarketTable({ markets }: { markets: MarketOpportunity[] }) {
                     variant={canAddFromScanner || selected ? 'contained' : 'outlined'}
                     startIcon={selected ? <RemoveCircleOutlineRoundedIcon /> : incompatible && addable ? <LockRoundedIcon /> : canAddFromScanner ? <AddCircleOutlineRoundedIcon /> : undefined}
                     disabled={incompatible && addable}
-                    onClick={() => (canAddFromScanner || selected ? builder.toggleLeg(market) : undefined)}
+                    onClick={() => (canAddFromScanner || selected ? builder.toggleLeg(market) : setDetailsMarket(market))}
                     sx={entryButtonSx(selected, incompatible && addable, canAddFromScanner)}
                   >
                     {selected ? 'Remove' : incompatible && addable ? 'Locked' : canAddFromScanner ? 'Add leg' : 'Details'}
@@ -107,8 +113,10 @@ export function MarketTable({ markets }: { markets: MarketOpportunity[] }) {
             );
           })}
         </TableBody>
-      </Table>
-    </Box>
+        </Table>
+      </Box>
+      <PropDetailsModal market={detailsMarket} open={Boolean(detailsMarket)} onClose={() => setDetailsMarket(null)} />
+    </>
   );
 }
 
@@ -158,25 +166,10 @@ function isScannerAddable(market: MarketOpportunity) {
   );
 }
 
-function ConfidenceLabel({ level }: { level: MarketOpportunity['trustLevel'] }) {
-  const label = level === 'Research' ? 'Weak' : level;
-  const color = label === 'Strong' ? 'success.main' : label === 'Medium' ? 'warning.main' : 'error.main';
-  return (
-    <Typography color={color} fontWeight={950}>
-      {label}
-    </Typography>
-  );
-}
-
 function formatWarning(market: MarketOpportunity, addable: boolean) {
   if (market.providerCategory === 'Sportsbook') return 'Reference lines are not entry legs.';
   if (market.estimatedEv <= 0) return 'Non-positive EV. Review details only.';
   if (market.freshness === 'Unavailable') return 'Limited coverage.';
   if (!addable && market.strategyClassification === 'Research') return 'Research row. Review before adding.';
-  if (!market.warnings.length) return 'None';
-  return market.warnings[0]
-    .replace('Sportsbook context rows cannot be added', 'Reference lines are not entry legs')
-    .replace('Provider limited for this sport', 'Limited coverage')
-    .replace('Low sample size', 'Low sample')
-    .replace('Confirm final payout in provider app', 'Payout may vary');
+  return renderWarningText(market.warnings, '-');
 }

@@ -113,9 +113,22 @@ Use the production-safe performance summary to inspect provider, prop-type, and 
 Invoke-RestMethod -Uri "http://localhost:5299/api/markets/performance-summary?sport=MLB&candidateOnly=true"
 Invoke-RestMethod -Uri "http://localhost:5299/api/markets/performance-summary?sport=MLB&providerCategory=DFS&candidateOnly=true"
 Invoke-RestMethod -Uri "http://localhost:5299/api/markets/performance-summary?sport=MLB&propType=Total%20Bases&candidateOnly=true"
+Invoke-RestMethod -Uri "http://localhost:5299/api/markets/performance-summary?sport=MLB&candidateOnly=true&gradingMode=latestCompleted&includeDiagnostics=true&diagnosticSampleSize=10"
 ```
 
-The summary is read-only and currently uses MLB snapshot rows plus `prop_results`. If snapshots or graded result matches are missing, the response reports that limitation instead of implying confidence.
+The summary is read-only and now prefers the durable `recommendation_snapshots` ledger plus `prop_results`. The ledger is written during The Odds refresh from surfaced candidate/watchlist/top-pick line-shopping groups, while `market_*_snapshots` remain current read models for Top Picks and Line Shopping. Ledger grading uses expected result date, canonical `players.id`, prop type id, side, and line. If no ledger rows exist yet for non-Dashboard modes, legacy snapshot diagnostics may still be used as fallback. Customer Dashboard performance should use `gradingMode=latestCompleted`, which uses only the latest imported result date and suppresses current-slate pending counts; use `currentSlate` only when you explicitly need pending/current slate diagnostics.
+
+Audit/backfill recommendation history without provider calls:
+
+```powershell
+Invoke-RestMethod -Uri "http://localhost:5299/api/debug/recommendations/ledger/audit?fromDate=2026-06-17&toDate=2026-06-18" |
+  ConvertTo-Json -Depth 40
+
+Invoke-RestMethod -Method Post -Uri "http://localhost:5299/api/debug/recommendations/ledger/backfill?fromDate=2026-06-17&toDate=2026-06-18&source=both&dryRun=true" |
+  ConvertTo-Json -Depth 40
+```
+
+The ledger idempotency key is one row per unique opportunity per result date/provider/line/side: sport, expected result date, event id, canonical player id, normalized prop type, side, line, provider/bookmaker, strategy classification, and candidate flag. Repeated sightings update latest model metrics, `LastSeenAtUtc`, and `SeenCount` while preserving `FirstSeenAtUtc`.
 
 The current refresh endpoint supports profiling options:
 
@@ -223,7 +236,8 @@ PrizePicks DFS support comes from The Odds API region `us_dfs` with bookmaker ke
 
 ## Compare Direct Underdog Versus The Odds Underdog DFS
 
-Direct Underdog ingestion is still useful unless persisted data proves it is redundant or worse. It does not spend The Odds API credits, while The Odds API `us_dfs` Underdog rows do depend on the provider feed. Treat direct Underdog as temporary/supplemental coverage, not the final production architecture.
+Direct Underdog ingestion is disabled by default and should be used only for explicit debug/audit comparisons. Customer-facing Underdog rows should come from persisted The Odds API `us_dfs` snapshots.
+Use `GET /api/debug/underdog/ingestion-health` for the direct Underdog worker/source status. `GET /api/health/underdog-ingestion` remains as a compatibility health route with the same read-only payload.
 
 Use the read-only coverage audit before making any removal decision:
 
@@ -236,7 +250,7 @@ Invoke-RestMethod "$base/api/debug/underdog/source-coverage-audit" |
 
 The audit uses persisted DB rows only. It compares normalized player, sport/league, prop type, line, side availability, and event/date context, then returns overlap, unique rows, freshness, breakdowns, match samples, failed-match samples, and a recommendation.
 
-Important: the audit is cadence-sensitive. Direct Underdog currently runs continuously, while The Odds API Underdog DFS rows may only be refreshed manually/debug-style. Do not interpret a one-off coverage audit as proof that The Odds API is worse unless both sources are refreshed on comparable intervals and markets.
+Important: the audit uses persisted rows only and does not call providers. It should not be treated as an active ingestion path or a reason to re-enable continuous direct Underdog polling.
 
 ## Expand The Odds Bookmaker Coverage Safely
 

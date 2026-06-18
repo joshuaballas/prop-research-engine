@@ -1,5 +1,5 @@
 import AddCircleOutlineRoundedIcon from '@mui/icons-material/AddCircleOutlineRounded';
-import CompareArrowsRoundedIcon from '@mui/icons-material/CompareArrowsRounded';
+import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
 import LockRoundedIcon from '@mui/icons-material/LockRounded';
 import RemoveCircleOutlineRoundedIcon from '@mui/icons-material/RemoveCircleOutlineRounded';
 import TuneRoundedIcon from '@mui/icons-material/TuneRounded';
@@ -8,6 +8,8 @@ import { useState } from 'react';
 import { ProjectionModifierBadge } from '../../components/markets/ProjectionModifierBadge';
 import { formatTopPickWarning, getTopPickConfidence, TopPickCard } from '../../components/markets/TopPickCard';
 import { MetricLabelWithHelp } from '../../components/metrics/MetricLabelWithHelp';
+import { TrustValue } from '../../components/metrics/TrustValue';
+import { PropDetailsModal } from '../../components/prop-history/PropDetailsModal';
 import { ProviderLabel } from '../../components/providers/ProviderLabel';
 import { PageHeader } from '../../components/ui/PageHeader';
 import { StatusPill } from '../../components/ui/StatusPill';
@@ -17,6 +19,7 @@ import { useTopPicksData } from '../../hooks/useMarketData';
 import { useResponsiveView } from '../../hooks/useResponsiveView';
 import type { MarketOpportunity } from '../../types/markets';
 import { formatPercent } from '../../utils/formatters';
+import { hasRenderableWarning } from '../../utils/warnings';
 
 export function TopPicksPage() {
   const builder = useEntryBuilder();
@@ -231,28 +234,32 @@ function TopPickControls({ isMobile }: { isMobile: boolean }) {
 }
 
 function RankedPicksTable({ markets, builder }: { markets: MarketOpportunity[]; builder: ReturnType<typeof useEntryBuilder> }) {
+  const [detailsMarket, setDetailsMarket] = useState<MarketOpportunity | null>(null);
+
   return (
-    <Box sx={{ overflowX: 'auto', border: '1px solid rgba(148,163,184,.16)', borderRadius: 4, bgcolor: 'rgba(8,13,26,.28)' }}>
-      <Table size="small" stickyHeader sx={{ minWidth: 1040 }}>
-        <TableHead>
-          <TableRow>
-            <TableCell>Rank</TableCell>
-            <TableCell>Market</TableCell>
-            <TableCell>Provider</TableCell>
-            <TableCell align="right"><MetricLabelWithHelp metric="ev" align="right" variant="table" /></TableCell>
-            <TableCell align="right"><MetricLabelWithHelp metric="edge" align="right" variant="table" /></TableCell>
-            <TableCell align="right"><MetricLabelWithHelp metric="hitChance" align="right" variant="table" /></TableCell>
-            <TableCell><MetricLabelWithHelp metric="trust" variant="table" /></TableCell>
-            <TableCell><MetricLabelWithHelp metric="warning" variant="table" /></TableCell>
-            <TableCell align="center">Action</TableCell>
-          </TableRow>
-        </TableHead>
-        <TableBody>
-          {markets.map((market) => {
-            const confidence = getTopPickConfidence(market);
-            const selected = builder.isSelected(market.id);
-            const incompatible = !selected && !builder.isCompatible(market);
-            return (
+    <>
+      <Box sx={{ overflowX: 'auto', border: '1px solid rgba(148,163,184,.16)', borderRadius: 4, bgcolor: 'rgba(8,13,26,.28)' }}>
+        <Table size="small" stickyHeader sx={{ minWidth: 1040 }}>
+          <TableHead>
+            <TableRow>
+              <TableCell>Rank</TableCell>
+              <TableCell>Market</TableCell>
+              <TableCell>Provider</TableCell>
+              <TableCell align="right"><MetricLabelWithHelp metric="ev" align="right" variant="table" /></TableCell>
+              <TableCell align="right"><MetricLabelWithHelp metric="edge" align="right" variant="table" /></TableCell>
+              <TableCell align="right"><MetricLabelWithHelp metric="hitChance" align="right" variant="table" /></TableCell>
+              <TableCell><MetricLabelWithHelp metric="trust" variant="table" /></TableCell>
+              <TableCell><MetricLabelWithHelp metric="warning" variant="table" /></TableCell>
+              <TableCell align="center">Action</TableCell>
+            </TableRow>
+          </TableHead>
+          <TableBody>
+            {markets.map((market) => {
+              const confidence = getTopPickConfidence(market);
+              const selected = builder.isSelected(market.id);
+              const incompatible = !selected && !builder.isCompatible(market);
+              const hasWarning = hasRenderableWarning(market.warnings);
+              return (
               <TableRow key={market.id} hover sx={{ '& td': { borderColor: 'rgba(148,163,184,.12)', py: 1.25 } }}>
                 <TableCell>
                   <Typography fontWeight={950}>#{market.rank ?? '-'}</Typography>
@@ -282,10 +289,10 @@ function RankedPicksTable({ markets, builder }: { markets: MarketOpportunity[]; 
                 <TableCell align="right">{formatPercent(market.probabilityEdge, { signed: true })}</TableCell>
                 <TableCell align="right">{formatPercent(market.modelProbability)}</TableCell>
                 <TableCell>
-                  <StatusPill label={confidence} />
+                  <TrustValue level={confidence} variant="badge" size="small" />
                 </TableCell>
                 <TableCell sx={{ minWidth: 180, maxWidth: 240 }}>
-                  <Typography variant="body2" color={market.warnings.length ? 'warning.main' : 'text.secondary'} sx={{ lineHeight: 1.4 }}>
+                  <Typography variant="body2" color={hasWarning ? 'warning.main' : 'text.secondary'} sx={{ lineHeight: 1.4 }}>
                     {formatTopPickWarning(market)}
                   </Typography>
                 </TableCell>
@@ -301,17 +308,19 @@ function RankedPicksTable({ markets, builder }: { markets: MarketOpportunity[]; 
                     >
                       {selected ? 'Remove' : incompatible ? 'Locked' : 'Add leg'}
                     </Button>
-                    <Button startIcon={<CompareArrowsRoundedIcon />} size="small" variant="outlined" sx={compareButtonSx}>
-                      Compare
+                    <Button startIcon={<InfoOutlinedIcon />} size="small" variant="outlined" onClick={() => setDetailsMarket(market)} sx={compareButtonSx}>
+                      Details
                     </Button>
                   </Stack>
                 </TableCell>
               </TableRow>
-            );
-          })}
-        </TableBody>
-      </Table>
-    </Box>
+              );
+            })}
+          </TableBody>
+        </Table>
+      </Box>
+      <PropDetailsModal market={detailsMarket} open={Boolean(detailsMarket)} onClose={() => setDetailsMarket(null)} />
+    </>
   );
 }
 

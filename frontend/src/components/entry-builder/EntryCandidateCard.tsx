@@ -1,11 +1,15 @@
 import AddCircleOutlineRoundedIcon from '@mui/icons-material/AddCircleOutlineRounded';
-import CompareArrowsRoundedIcon from '@mui/icons-material/CompareArrowsRounded';
+import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
 import LockRoundedIcon from '@mui/icons-material/LockRounded';
 import RemoveCircleOutlineRoundedIcon from '@mui/icons-material/RemoveCircleOutlineRounded';
 import { Box, Button, Stack, Typography } from '@mui/material';
+import { useState } from 'react';
 import type { MarketOpportunity } from '../../types/markets';
 import { palette } from '../../theme/palette';
+import { renderWarningText } from '../../utils/warnings';
 import { MetricLabelWithHelp } from '../metrics/MetricLabelWithHelp';
+import { TrustValue } from '../metrics/TrustValue';
+import { PropDetailsModal } from '../prop-history/PropDetailsModal';
 import { AppCard } from '../ui/AppCard';
 import { ProjectionModifierBadge } from '../markets/ProjectionModifierBadge';
 import { ProviderLabel } from '../providers/ProviderLabel';
@@ -20,8 +24,9 @@ interface EntryCandidateCardProps {
 }
 
 export function EntryCandidateCard({ market, lockedProvider, selected = false, onAdd }: EntryCandidateCardProps) {
+  const [detailsOpen, setDetailsOpen] = useState(false);
   const incompatible = Boolean(lockedProvider && lockedProvider !== market.entryProvider);
-  const warning = normalizeWarning(market.warnings[0]);
+  const warning = renderWarningText(market.warnings);
 
   return (
     <AppCard
@@ -73,13 +78,7 @@ export function EntryCandidateCard({ market, lockedProvider, selected = false, o
 
         <Stack direction="row" alignItems="center" justifyContent="space-between" gap={1} flexWrap="wrap">
           <ProviderLabel provider={market.entryProvider} category={market.providerCategory} compact />
-          <Typography
-            variant="body2"
-            fontWeight={900}
-            color={market.trustLevel === 'Strong' ? 'success.main' : market.trustLevel === 'Medium' ? 'warning.main' : 'error.main'}
-          >
-            {market.trustLevel} trust
-          </Typography>
+          <TrustValue level={market.trustLevel} showSuffix size="small" />
         </Stack>
 
         <Box
@@ -148,13 +147,15 @@ export function EntryCandidateCard({ market, lockedProvider, selected = false, o
           <Button
             variant="outlined"
             size="small"
-            startIcon={<CompareArrowsRoundedIcon />}
+            startIcon={<InfoOutlinedIcon />}
+            onClick={() => setDetailsOpen(true)}
             sx={{ ...secondaryGhostButtonSx, minWidth: 106 }}
           >
-            Compare
+            Details
           </Button>
         </Stack>
       </Stack>
+      <PropDetailsModal market={market} open={detailsOpen} onClose={() => setDetailsOpen(false)} />
     </AppCard>
   );
 }
@@ -186,12 +187,4 @@ function formatSignedPercent(value: number) {
 function normalizeReason(value?: string) {
   if (!value) return 'Positive model edge';
   return value.replace('Line 1.5 profile', 'Line shape matches strategy').replace('Discount projection', 'Discounted line context');
-}
-
-function normalizeWarning(value?: string) {
-  if (!value) return '';
-  return value
-    .replace('Confirm final payout in provider app', 'Payout may vary')
-    .replace('Sportsbook context rows cannot be added', 'Reference lines are not entry legs')
-    .replace('Provider limited for this sport', 'Limited coverage for this sport');
 }

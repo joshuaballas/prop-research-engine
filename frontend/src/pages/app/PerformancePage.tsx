@@ -23,6 +23,7 @@ export function PerformancePage() {
   const [selectedTab, setSelectedTab] = useState(breakdownTabs[0].label);
   const performanceQuery = usePerformanceData();
   const performanceRows = performanceQuery.rows;
+  const pendingCurrentSlatePicks = performanceQuery.summary?.dataAvailability?.currentSlatePendingPicks ?? 0;
   const activeTab = breakdownTabs.find((tab) => tab.label === selectedTab) ?? breakdownTabs[0];
   const visibleRows = useMemo(
     () => performanceRows.filter((row) => activeTab.types.includes(row.groupType)),
@@ -59,7 +60,13 @@ export function PerformancePage() {
       ) : performanceRows.length ? (
         <PerformanceSummaryCards rows={performanceRows} />
       ) : (
-        <ApiStateCard message="No graded performance summary is available yet." />
+        <ApiStateCard
+          message={
+            pendingCurrentSlatePicks > 0
+              ? `No graded recommendations yet. Today: ${pendingCurrentSlatePicks} candidates pending results.`
+              : 'No graded performance summary is available yet.'
+          }
+        />
       )}
 
       <Stack spacing={1.5}>

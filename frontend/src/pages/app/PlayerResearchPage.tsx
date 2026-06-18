@@ -9,18 +9,8 @@ import {
   Typography
 } from '@mui/material';
 import { useEffect, useMemo, useState } from 'react';
-import {
-  Bar,
-  BarChart,
-  CartesianGrid,
-  Cell,
-  ReferenceLine,
-  ResponsiveContainer,
-  Tooltip,
-  XAxis,
-  YAxis
-} from 'recharts';
 import { ProjectionModifierBadge } from '../../components/markets/ProjectionModifierBadge';
+import { PropHistoryCard } from '../../components/prop-history/PropHistoryCard';
 import { ProviderLabel } from '../../components/providers/ProviderLabel';
 import { AppCard } from '../../components/ui/AppCard';
 import { PageHeader } from '../../components/ui/PageHeader';
@@ -436,85 +426,8 @@ function PropHistoryTile({
 }) {
   return (
     <DashboardTile>
-      <Stack direction="row" justifyContent="space-between" alignItems="flex-start" gap={1}>
-        <SectionHeader title="Prop history" description="Recent stat values against the selected line." />
-        <Typography color="warning.main" variant="body2" fontWeight={900} textAlign="right">
-          {formatOfferingLabel(selectedOffering)}
-        </Typography>
-      </Stack>
-      <PropHistoryBarChart stat={stat} selectedOffering={selectedOffering} />
-      <StatSummary stat={stat} selectedOffering={selectedOffering} allLines={allLines} />
+      <PropHistoryCard stat={stat} selectedOffering={selectedOffering} allLines={allLines} />
     </DashboardTile>
-  );
-}
-
-function PropHistoryBarChart({ stat, selectedOffering }: { stat: PlayerResearchStat; selectedOffering: MarketOpportunity }) {
-  const lineValue = selectedOffering.line;
-  const data: ChartDatum[] = stat.log
-    .map((row) => {
-      const value = parseStatNumber(row.value) ?? 0;
-      const result = deriveResult(value, lineValue, selectedOffering.side);
-      return {
-        date: row.date,
-        event: row.event,
-        value,
-        valueLabel: row.value,
-        line: lineValue,
-        lineLabel: formatLineLabel(selectedOffering),
-        result
-      };
-    })
-    .reverse();
-
-  return (
-    <Box
-      sx={{
-        width: '100%',
-        height: { xs: 250, md: 'auto' },
-        minHeight: { md: 250, xl: 280 },
-        minWidth: 0,
-        flex: { md: '1 1 auto' },
-        flexShrink: 0,
-        position: 'relative',
-        zIndex: 0
-      }}
-    >
-      <ResponsiveContainer width="100%" height="100%">
-        <BarChart data={data} margin={{ top: 12, right: 12, bottom: 2, left: -10 }}>
-          <CartesianGrid vertical={false} stroke="rgba(148,163,184,.12)" />
-          <XAxis
-            dataKey="date"
-            tick={{ fill: palette.textMuted, fontSize: 12 }}
-            tickLine={false}
-            axisLine={{ stroke: 'rgba(148,163,184,.18)' }}
-          />
-          <YAxis
-            tick={{ fill: palette.textMuted, fontSize: 12 }}
-            tickLine={false}
-            axisLine={false}
-            domain={[0, 'dataMax + 4']}
-            allowDecimals
-          />
-          <Tooltip cursor={{ fill: 'rgba(125,211,252,.06)' }} content={<PropHistoryTooltip />} />
-          {lineValue !== undefined ? (
-            <ReferenceLine
-              y={lineValue}
-              stroke={palette.warning}
-              strokeDasharray="5 5"
-              strokeWidth={2.2}
-            />
-          ) : null}
-          <Bar dataKey="value" radius={[8, 8, 3, 3]} maxBarSize={42}>
-            {data.map((row) => (
-              <Cell
-                key={`${row.date}-${row.event}`}
-                fill={row.result === 'Cleared' ? 'rgba(34,197,94,.82)' : row.result === 'Missed' ? 'rgba(244,63,94,.78)' : 'rgba(148,163,184,.62)'}
-              />
-            ))}
-          </Bar>
-        </BarChart>
-      </ResponsiveContainer>
-    </Box>
   );
 }
 

@@ -2456,6 +2456,276 @@ namespace SportsBetting.Api.Migrations
                     b.ToTable("raw_ingestion_payloads", (string)null);
                 });
 
+            modelBuilder.Entity("SportsBetting.Api.Models.RecommendationSnapshot", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<string>("Bookmaker")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("bookmaker");
+
+                    b.Property<Guid?>("CanonicalPlayerId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("canonical_player_id");
+
+                    b.Property<DateTimeOffset>("CapturedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("captured_at_utc");
+
+                    b.Property<string>("EntryCompatibilityGroup")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("entry_compatibility_group");
+
+                    b.Property<string>("EntryProvider")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("entry_provider");
+
+                    b.Property<decimal?>("EstimatedEv")
+                        .HasPrecision(12, 6)
+                        .HasColumnType("numeric(12,6)")
+                        .HasColumnName("estimated_ev");
+
+                    b.Property<string>("EventId")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("event_id");
+
+                    b.Property<DateTimeOffset?>("EventStartTimeUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("event_start_time_utc");
+
+                    b.Property<DateOnly>("ExpectedResultDate")
+                        .HasColumnType("date")
+                        .HasColumnName("expected_result_date");
+
+                    b.Property<DateTimeOffset>("FirstSeenAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("first_seen_at_utc");
+
+                    b.Property<string>("GradeStatus")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("character varying(50)")
+                        .HasColumnName("grade_status");
+
+                    b.Property<DateTimeOffset?>("GradedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("graded_at_utc");
+
+                    b.Property<string>("GradingFailureReason")
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)")
+                        .HasColumnName("grading_failure_reason");
+
+                    b.Property<int?>("HistoricalSampleSize")
+                        .HasColumnType("integer")
+                        .HasColumnName("historical_sample_size");
+
+                    b.Property<decimal?>("HitChance")
+                        .HasPrecision(8, 6)
+                        .HasColumnType("numeric(8,6)")
+                        .HasColumnName("hit_chance");
+
+                    b.Property<string>("IdempotencyKey")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("character varying(128)")
+                        .HasColumnName("idempotency_key");
+
+                    b.Property<decimal?>("ImpliedProbability")
+                        .HasPrecision(8, 6)
+                        .HasColumnType("numeric(8,6)")
+                        .HasColumnName("implied_probability");
+
+                    b.Property<bool>("IsActionableForUser")
+                        .HasColumnType("boolean")
+                        .HasColumnName("is_actionable_for_user");
+
+                    b.Property<bool>("IsCandidate")
+                        .HasColumnType("boolean")
+                        .HasColumnName("is_candidate");
+
+                    b.Property<bool>("IsTopPick")
+                        .HasColumnType("boolean")
+                        .HasColumnName("is_top_pick");
+
+                    b.Property<bool>("IsWatchlist")
+                        .HasColumnType("boolean")
+                        .HasColumnName("is_watchlist");
+
+                    b.Property<DateTimeOffset>("LastSeenAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("last_seen_at_utc");
+
+                    b.Property<string>("LifecycleStatus")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("character varying(50)")
+                        .HasColumnName("lifecycle_status");
+
+                    b.Property<decimal>("Line")
+                        .HasPrecision(12, 4)
+                        .HasColumnType("numeric(12,4)")
+                        .HasColumnName("line");
+
+                    b.Property<string>("NormalizedPlayerName")
+                        .IsRequired()
+                        .HasMaxLength(300)
+                        .HasColumnType("character varying(300)")
+                        .HasColumnName("normalized_player_name");
+
+                    b.Property<string>("NormalizedPropType")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("normalized_prop_type");
+
+                    b.Property<string>("PlayerName")
+                        .IsRequired()
+                        .HasMaxLength(300)
+                        .HasColumnType("character varying(300)")
+                        .HasColumnName("player_name");
+
+                    b.Property<Guid?>("PredictionRunId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("prediction_run_id");
+
+                    b.Property<decimal?>("ProbabilityEdge")
+                        .HasPrecision(8, 6)
+                        .HasColumnType("numeric(8,6)")
+                        .HasColumnName("probability_edge");
+
+                    b.Property<string>("PropType")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("prop_type");
+
+                    b.Property<Guid?>("PropTypeId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("prop_type_id");
+
+                    b.Property<string>("Provider")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("provider");
+
+                    b.Property<string>("ProviderCategory")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("character varying(50)")
+                        .HasColumnName("provider_category");
+
+                    b.Property<decimal>("RankingScore")
+                        .HasPrecision(18, 6)
+                        .HasColumnType("numeric(18,6)")
+                        .HasColumnName("ranking_score");
+
+                    b.Property<Guid?>("RefreshRunId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("refresh_run_id");
+
+                    b.Property<string>("ResultDateSource")
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)")
+                        .HasColumnName("result_date_source");
+
+                    b.Property<decimal?>("ResultValue")
+                        .HasPrecision(12, 4)
+                        .HasColumnType("numeric(12,4)")
+                        .HasColumnName("result_value");
+
+                    b.Property<string>("SampleWarning")
+                        .HasMaxLength(1000)
+                        .HasColumnType("character varying(1000)")
+                        .HasColumnName("sample_warning");
+
+                    b.Property<int>("SeenCount")
+                        .HasColumnType("integer")
+                        .HasColumnName("seen_count");
+
+                    b.Property<string>("Side")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)")
+                        .HasColumnName("side");
+
+                    b.Property<DateOnly>("SlateDate")
+                        .HasColumnType("date")
+                        .HasColumnName("slate_date");
+
+                    b.Property<string>("Sport")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("character varying(50)")
+                        .HasColumnName("sport");
+
+                    b.Property<string>("StrategyClassification")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("character varying(50)")
+                        .HasColumnName("strategy_classification");
+
+                    b.Property<string>("StrategyTier")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)")
+                        .HasColumnName("strategy_tier");
+
+                    b.Property<string>("TrustLevel")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("character varying(50)")
+                        .HasColumnName("trust_level");
+
+                    b.Property<string>("Warning")
+                        .HasMaxLength(1000)
+                        .HasColumnType("character varying(1000)")
+                        .HasColumnName("warning");
+
+                    b.HasKey("Id")
+                        .HasName("pk_recommendation_snapshots");
+
+                    b.HasIndex("CanonicalPlayerId")
+                        .HasDatabaseName("ix_recommendation_snapshots_canonical_player_id");
+
+                    b.HasIndex("GradeStatus")
+                        .HasDatabaseName("ix_recommendation_snapshots_grade_status");
+
+                    b.HasIndex("IdempotencyKey")
+                        .IsUnique()
+                        .HasDatabaseName("ix_recommendation_snapshots_idempotency_key");
+
+                    b.HasIndex("PredictionRunId")
+                        .HasDatabaseName("ix_recommendation_snapshots_prediction_run_id");
+
+                    b.HasIndex("PropTypeId")
+                        .HasDatabaseName("ix_recommendation_snapshots_prop_type_id");
+
+                    b.HasIndex("RefreshRunId")
+                        .HasDatabaseName("ix_recommendation_snapshots_refresh_run_id");
+
+                    b.HasIndex("ProviderCategory", "IsCandidate")
+                        .HasDatabaseName("ix_recommendation_snapshots_provider_candidate");
+
+                    b.HasIndex("Sport", "ExpectedResultDate")
+                        .HasDatabaseName("ix_recommendation_snapshots_sport_expected_result_date");
+
+                    b.HasIndex("ExpectedResultDate", "CanonicalPlayerId", "PropTypeId")
+                        .HasDatabaseName("ix_recommendation_snapshots_grade_lookup");
+
+                    b.ToTable("recommendation_snapshots", (string)null);
+                });
+
             modelBuilder.Entity("SportsBetting.Api.Models.Sport", b =>
                 {
                     b.Property<Guid>("Id")
@@ -3282,6 +3552,41 @@ namespace SportsBetting.Api.Migrations
                     b.Navigation("IngestionRun");
 
                     b.Navigation("Platform");
+                });
+
+            modelBuilder.Entity("SportsBetting.Api.Models.RecommendationSnapshot", b =>
+                {
+                    b.HasOne("SportsBetting.Api.Models.Player", "CanonicalPlayer")
+                        .WithMany()
+                        .HasForeignKey("CanonicalPlayerId")
+                        .OnDelete(DeleteBehavior.SetNull)
+                        .HasConstraintName("fk_recommendation_snapshots_players_canonical_player_id");
+
+                    b.HasOne("SportsBetting.Api.Models.PredictionRun", "PredictionRun")
+                        .WithMany()
+                        .HasForeignKey("PredictionRunId")
+                        .OnDelete(DeleteBehavior.SetNull)
+                        .HasConstraintName("fk_recommendation_snapshots_prediction_runs_prediction_run_id");
+
+                    b.HasOne("SportsBetting.Api.Models.PropType", "PropTypeRecord")
+                        .WithMany()
+                        .HasForeignKey("PropTypeId")
+                        .OnDelete(DeleteBehavior.SetNull)
+                        .HasConstraintName("fk_recommendation_snapshots_prop_types_prop_type_id");
+
+                    b.HasOne("SportsBetting.Api.Models.TheOddsRefreshRun", "RefreshRun")
+                        .WithMany()
+                        .HasForeignKey("RefreshRunId")
+                        .OnDelete(DeleteBehavior.SetNull)
+                        .HasConstraintName("fk_recommendation_snapshots_the_odds_refresh_runs_refresh_run_");
+
+                    b.Navigation("CanonicalPlayer");
+
+                    b.Navigation("PredictionRun");
+
+                    b.Navigation("PropTypeRecord");
+
+                    b.Navigation("RefreshRun");
                 });
 
             modelBuilder.Entity("SportsBetting.Api.Models.Team", b =>
