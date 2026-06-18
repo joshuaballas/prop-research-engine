@@ -11,8 +11,8 @@ import { ProviderLabel } from '../../components/providers/ProviderLabel';
 import { PageHeader } from '../../components/ui/PageHeader';
 import { StatusPill } from '../../components/ui/StatusPill';
 import { compactActionButtonSx, lockedActionButtonSx, removeActionButtonSx, secondaryGhostButtonSx } from '../../components/ui/buttonStyles';
-import { mockTopPicks } from '../../data/mockTopPicks';
 import { useEntryBuilder } from '../../hooks/useEntryBuilder';
+import { useTopPicksData } from '../../hooks/useMarketData';
 import { useResponsiveView } from '../../hooks/useResponsiveView';
 import type { MarketOpportunity } from '../../types/markets';
 import { formatPercent } from '../../utils/formatters';
@@ -20,16 +20,24 @@ import { formatPercent } from '../../utils/formatters';
 export function TopPicksPage() {
   const builder = useEntryBuilder();
   const { isMobile } = useResponsiveView();
-  const featured = mockTopPicks.slice(0, 3);
+  const topPicksQuery = useTopPicksData(30, 'top-pick');
+  const topPicks = topPicksQuery.markets;
+  const featured = topPicks.slice(0, 3);
 
   return (
     <Stack spacing={{ xs: 2, md: 3 }}>
       <PageHeader title="Top Picks" description="Curated candidates ranked by model edge, EV, provider compatibility, and freshness." />
       <TopPickControls isMobile={isMobile} />
 
-      {isMobile ? (
+      {topPicksQuery.loading ? (
+        <ApiStateCard message="Loading latest top picks..." />
+      ) : topPicksQuery.error ? (
+        <ApiStateCard tone="error" message="Top picks could not be loaded from the market API." />
+      ) : topPicks.length === 0 ? (
+        <ApiStateCard message="No top picks are available from the latest market snapshot." />
+      ) : isMobile ? (
         <Stack spacing={1.35}>
-          {mockTopPicks.map((market) => (
+          {topPicks.map((market) => (
             <TopPickCard
               key={market.id}
               market={market}
@@ -65,11 +73,26 @@ export function TopPicksPage() {
             <Typography variant="h5" fontWeight={950}>
               All Ranked Picks
             </Typography>
-            <RankedPicksTable markets={mockTopPicks} builder={builder} />
+            <RankedPicksTable markets={topPicks} builder={builder} />
           </Stack>
         </>
       )}
     </Stack>
+  );
+}
+
+function ApiStateCard({ message, tone = 'default' }: { message: string; tone?: 'default' | 'error' }) {
+  return (
+    <Box
+      sx={{
+        border: `1px solid ${tone === 'error' ? 'rgba(244,63,94,.32)' : 'rgba(148,163,184,.16)'}`,
+        borderRadius: 4,
+        bgcolor: 'rgba(15,23,42,.68)',
+        p: 2
+      }}
+    >
+      <Typography color={tone === 'error' ? 'error.main' : 'text.secondary'}>{message}</Typography>
+    </Box>
   );
 }
 

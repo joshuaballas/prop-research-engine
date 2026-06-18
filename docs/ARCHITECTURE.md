@@ -113,7 +113,7 @@ The current integration is still manual/debug-first:
 
 The worker skeleton is disabled by default and dry-run-first. It should not poll The Odds API automatically until explicitly enabled and hardened.
 
-Long-term, The Odds API calls should run through a scheduled backend worker/admin process on a controlled cadence, roughly every 1-5 minutes depending on credit budget, slate timing, and freshness needs. Frontend users should never trigger provider refreshes.
+Long-term, The Odds API calls should run through a scheduled backend worker/admin process on a controlled cadence based on lifecycle evidence, credit budget, slate timing, and freshness needs. Development defaults keep scheduled refresh disabled unless explicitly enabled, with a 15-minute minimum cadence. Frontend users should never trigger provider refreshes.
 
 ### MLB Stats API
 
@@ -196,7 +196,7 @@ The production architecture should use scheduled backend refreshes plus read-onl
 
 Target flow:
 
-1. A scheduled backend worker or admin process refreshes The Odds API data on a controlled cadence, roughly every 1-5 minutes depending on credit budget and slate state.
+1. A scheduled backend worker or admin process refreshes The Odds API data on a controlled cadence based on credit budget, slate state, and observed line lifecycle behavior. Development defaults use DFS-only MLB and a 15-minute minimum cadence when explicitly enabled.
 2. The worker uses configurable interval, bookmaker/provider preset, markets, concurrency, and credit caps.
 3. The worker fetches provider odds once per interval, persists normalized platform props and snapshots, generates scoped predictions, builds line-shopping/top-pick outputs, and records freshness metadata.
 4. All users read the same latest persisted odds, predictions, line-shopping groups, and top picks.
@@ -205,7 +205,7 @@ Target flow:
 
 The existing `refresh-current` debug/admin endpoint remains useful for manual controlled refreshes and requires `forceLive=true` for live provider calls. It is not the target frontend data path.
 
-The scheduled refresh worker foundation is disabled in committed config and guarded by `TheOddsScheduledRefresh:RequireForceLive=true`. If enabled without explicit live unblocking, it logs a warning and marks the cycle blocked. The debug/admin `refresh-current` endpoint and scheduled worker share `ITheOddsMlbRefreshService`, so future scheduled execution should reuse the same ingestion, prediction, line-shopping, classification, and diagnostics path rather than duplicating logic.
+The scheduled refresh worker foundation stays disabled in base config, defaults to `BookmakerPreset=dfsOnly`, clamps cadence to at least 15 minutes, and is guarded by `TheOddsScheduledRefresh:RequireForceLive=true`. Development/local config may enable the MLB DFS-only worker with explicit scheduled live execution at the 15-minute cadence. If enabled without explicit live unblocking, it logs a warning and marks the cycle blocked. The debug/admin `refresh-current` endpoint and scheduled worker share `ITheOddsMlbRefreshService`, so scheduled execution reuses the same ingestion, prediction, line-shopping, classification, and diagnostics path rather than duplicating logic.
 
 The Underdog source coverage audit is cadence-sensitive. Direct Underdog currently has more persisted coverage partly because it runs continuously, while The Odds API Underdog DFS rows may only be refreshed manually. Do not interpret a one-off audit as proof that The Odds API coverage is worse unless both sources are refreshed on comparable intervals and markets.
 

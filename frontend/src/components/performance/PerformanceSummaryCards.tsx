@@ -1,5 +1,5 @@
 import { Grid, Stack, Typography } from '@mui/material';
-import { mockPerformance } from '../../data/mockPerformance';
+import type { PerformanceGroup } from '../../types/performance';
 import { formatPercent } from '../../utils/formatters';
 import { AppCard } from '../ui/AppCard';
 import { palette } from '../../theme/palette';
@@ -63,12 +63,12 @@ function SummaryCard({ metric }: { metric: SummaryMetric }) {
   );
 }
 
-export function PerformanceSummaryCards() {
-  const overall = mockPerformance[0];
-  const bestStrategy = mockPerformance
+export function PerformanceSummaryCards({ rows }: { rows: PerformanceGroup[] }) {
+  const overall = rows.find((row) => row.groupType === 'Overall') ?? rows[0];
+  const bestStrategy = rows
     .filter((row) => row.groupType === 'Strategy')
     .sort((a, b) => b.roi - a.roi)[0];
-  const limitedHistoryCount = mockPerformance.filter((row) => row.warning || row.gradedPicks < 30).length;
+  const limitedHistoryCount = rows.filter((row) => row.warning || row.gradedPicks < 30).length;
   const metrics: SummaryMetric[] = [
     {
       label: 'Simulated ROI',

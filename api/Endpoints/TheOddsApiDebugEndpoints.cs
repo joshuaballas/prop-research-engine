@@ -955,24 +955,43 @@ public static partial class TheOddsApiDebugEndpoints
             IOptions<TheOddsRefreshPlannerOptions> plannerOptions,
             ITheOddsRefreshPlannerService planner,
             ITheOddsScheduledRefreshState state,
+            ApplicationDbContext dbContext,
             CancellationToken cancellationToken) =>
         {
             var scheduledOptions = options.Value;
             var plannerConfig = plannerOptions.Value;
             var snapshot = state.GetSnapshot();
             var currentPlan = await planner.BuildPlanAsync(cancellationToken);
-            var interval = plannerConfig.GetPlannerInterval();
+            var scheduledInterval = scheduledOptions.GetInterval();
+            var plannerInterval = plannerConfig.GetPlannerInterval();
+            var latestSuccessfulRefresh = await dbContext.TheOddsRefreshRuns
+                .AsNoTracking()
+                .Where(row => row.Succeeded)
+                .OrderByDescending(row => row.CompletedAtUtc)
+                .ThenByDescending(row => row.StartedAtUtc)
+                .FirstOrDefaultAsync(cancellationToken);
+            var latestSuccessfulRefreshCompletedAtUtc =
+                latestSuccessfulRefresh?.CompletedAtUtc ?? latestSuccessfulRefresh?.StartedAtUtc;
             var nextRunEstimateUtc = scheduledOptions.Enabled
-                ? snapshot.LastRunCompletedAtUtc?.Add(interval)
-                    ?? snapshot.LastRunStartedAtUtc?.Add(interval)
-                    ?? DateTimeOffset.UtcNow.Add(interval)
+                ? latestSuccessfulRefreshCompletedAtUtc?.Add(scheduledInterval)
+                    ?? snapshot.LastRunCompletedAtUtc?.Add(scheduledInterval)
+                    ?? snapshot.LastRunStartedAtUtc?.Add(scheduledInterval)
+                    ?? DateTimeOffset.UtcNow.Add(scheduledInterval)
                 : (DateTimeOffset?)null;
+            var status = scheduledOptions.Enabled && snapshot.Status == "disabled"
+                ? "waiting"
+                : snapshot.Status;
 
             return Results.Ok(new
             {
                 enabled = scheduledOptions.Enabled,
                 intervalMinutes = scheduledOptions.IntervalMinutes,
+                effectiveIntervalMinutes = (int)scheduledInterval.TotalMinutes,
                 bookmakerPreset = scheduledOptions.BookmakerPreset,
+                sport = "MLB",
+                providerCategories = scheduledOptions.BookmakerPreset.Equals("dfsOnly", StringComparison.OrdinalIgnoreCase)
+                    ? new[] { "DFS" }
+                    : new[] { "DFS", "Sportsbook" },
                 includeCandidates = scheduledOptions.IncludeCandidates,
                 includeLineShopping = scheduledOptions.IncludeLineShopping,
                 includeFullDiagnostics = scheduledOptions.IncludeFullDiagnostics,
@@ -980,11 +999,14 @@ public static partial class TheOddsApiDebugEndpoints
                 requireForceLive = scheduledOptions.RequireForceLive,
                 allowScheduledLiveRefresh = scheduledOptions.AllowScheduledLiveRefresh,
                 plannerIntervalSeconds = plannerConfig.PlannerIntervalSeconds,
+                effectivePlannerIntervalSeconds = (int)plannerInterval.TotalSeconds,
                 snapshot.LastRunStartedAtUtc,
                 snapshot.LastRunCompletedAtUtc,
                 snapshot.LastRunSucceeded,
                 snapshot.LastRunBlocked,
                 snapshot.LastRunError,
+                latestSuccessfulRefresh = ToTheOddsRefreshRunSummary(latestSuccessfulRefresh),
+                latestSuccessfulRefreshCompletedAtUtc,
                 snapshot.LastPlanGeneratedAtUtc,
                 snapshot.LastPlanShouldRefresh,
                 snapshot.LastPlanSkipReason,
@@ -1007,8 +1029,9 @@ public static partial class TheOddsApiDebugEndpoints
                 },
                 nextRunEstimateUtc,
                 callsExternalApis = false,
+                willCallExternalApis = scheduledOptions.Enabled && scheduledOptions.AllowScheduledLiveRefresh,
                 readOnly = true,
-                status = snapshot.Status,
+                status,
                 safety = new
                 {
                     disabledByDefault = true,

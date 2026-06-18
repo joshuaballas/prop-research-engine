@@ -158,6 +158,34 @@ Stable line-shopping comparison output captured after a successful live The Odds
 
 The public `/api/markets/top-picks` and `/api/markets/line-shopping` routes prefer the latest successful snapshots when available. If no snapshot exists yet, they fall back to the dynamic persisted-row read path and return `snapshotBacked=false`.
 
+### `provider_line_lifecycles`
+
+Current lifecycle state for provider/book lines observed in successful The Odds refresh snapshots. A lifecycle identity intentionally does not include line value or price, so a move from `1.5` to `2.0` updates the same lifecycle row and writes a movement event.
+
+The lookup identity is based on stable provider-line context:
+
+- sport,
+- provider key and category,
+- event id when available,
+- normalized player name until canonical/provider player ids are persisted in snapshots,
+- market/prop type,
+- side/direction.
+
+Important status values:
+
+- `Active`: seen in the latest successful relevant refresh.
+- `Stale`: not confirmed recently, but not proven unavailable.
+- `Pulled`: missing from successful provider refreshes enough times to treat as removed.
+- `Locked`: event start has passed.
+- `Expired`: event/slate is old enough to stop treating it as current.
+- `ProviderUnavailable`: reserved for cases where provider availability prevents verification; provider failure must not be treated as line pull.
+
+### `provider_line_lifecycle_events`
+
+Append-only lifecycle event history for line availability and movement. Events include `FirstSeen`, `LineChanged`, `PriceChanged`, `LineAndPriceChanged`, `MissingFromRefresh`, `ProviderPulled`, `EventLocked`, `MarkedStale`, `MarkedExpired`, `ProviderUnavailable`, and `Reactivated`.
+
+The event table is intentionally debug/admin oriented. Public market endpoints should expose only compact lifecycle fields when needed, not the event firehose.
+
 ## Results
 
 ### `prop_results`

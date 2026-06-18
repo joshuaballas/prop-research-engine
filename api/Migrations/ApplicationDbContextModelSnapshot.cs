@@ -19,7 +19,8 @@ namespace SportsBetting.Api.Migrations
 #pragma warning disable 612, 618
             modelBuilder
                 .HasAnnotation("ProductVersion", "10.0.9")
-                .HasAnnotation("Relational:MaxIdentifierLength", 63);
+                .HasAnnotation("Relational:MaxIdentifierLength", 63)
+                .HasAnnotation("SportsBetting:JsonColumnType", "jsonb");
 
             NpgsqlModelBuilderExtensions.HasPostgresExtension(modelBuilder, "uuid-ossp");
             NpgsqlModelBuilderExtensions.UseIdentityByDefaultColumns(modelBuilder);
@@ -2149,6 +2150,258 @@ namespace SportsBetting.Api.Migrations
                     b.ToTable("prop_types", (string)null);
                 });
 
+            modelBuilder.Entity("SportsBetting.Api.Models.ProviderLineLifecycle", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<Guid?>("CanonicalPlayerId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("canonical_player_id");
+
+                    b.Property<int>("ChangedCount")
+                        .HasColumnType("integer")
+                        .HasColumnName("changed_count");
+
+                    b.Property<DateTimeOffset>("CreatedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at_utc");
+
+                    b.Property<decimal?>("CurrentLine")
+                        .HasPrecision(12, 4)
+                        .HasColumnType("numeric(12,4)")
+                        .HasColumnName("current_line");
+
+                    b.Property<decimal?>("CurrentPrice")
+                        .HasPrecision(12, 6)
+                        .HasColumnType("numeric(12,6)")
+                        .HasColumnName("current_price");
+
+                    b.Property<string>("CurrentStatus")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("character varying(50)")
+                        .HasColumnName("current_status");
+
+                    b.Property<string>("EventId")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("event_id");
+
+                    b.Property<DateTimeOffset?>("EventStartTimeUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("event_start_time_utc");
+
+                    b.Property<DateTimeOffset?>("ExpiredAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("expired_at_utc");
+
+                    b.Property<DateTimeOffset>("FirstSeenUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("first_seen_utc");
+
+                    b.Property<DateTimeOffset?>("LastChangedUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("last_changed_utc");
+
+                    b.Property<Guid?>("LastRefreshRunId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("last_refresh_run_id");
+
+                    b.Property<DateTimeOffset>("LastSeenUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("last_seen_utc");
+
+                    b.Property<Guid?>("LastSnapshotId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("last_snapshot_id");
+
+                    b.Property<DateTimeOffset?>("LockedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("locked_at_utc");
+
+                    b.Property<string>("MarketKey")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("market_key");
+
+                    b.Property<int>("MissingCount")
+                        .HasColumnType("integer")
+                        .HasColumnName("missing_count");
+
+                    b.Property<string>("NormalizedPlayerName")
+                        .IsRequired()
+                        .HasMaxLength(300)
+                        .HasColumnType("character varying(300)")
+                        .HasColumnName("normalized_player_name");
+
+                    b.Property<string>("PropType")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("prop_type");
+
+                    b.Property<string>("ProviderCategory")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("character varying(50)")
+                        .HasColumnName("provider_category");
+
+                    b.Property<string>("ProviderDisplayName")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("provider_display_name");
+
+                    b.Property<string>("ProviderKey")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("provider_key");
+
+                    b.Property<string>("ProviderPlayerId")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("provider_player_id");
+
+                    b.Property<DateTimeOffset?>("PulledAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("pulled_at_utc");
+
+                    b.Property<int>("SeenCount")
+                        .HasColumnType("integer")
+                        .HasColumnName("seen_count");
+
+                    b.Property<string>("Side")
+                        .IsRequired()
+                        .HasMaxLength(30)
+                        .HasColumnType("character varying(30)")
+                        .HasColumnName("side");
+
+                    b.Property<DateOnly?>("SlateDate")
+                        .HasColumnType("date")
+                        .HasColumnName("slate_date");
+
+                    b.Property<string>("Sport")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("character varying(50)")
+                        .HasColumnName("sport");
+
+                    b.Property<DateTimeOffset>("UpdatedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at_utc");
+
+                    b.HasKey("Id")
+                        .HasName("pk_provider_line_lifecycles");
+
+                    b.HasIndex("CurrentStatus")
+                        .HasDatabaseName("ix_provider_line_lifecycles_status");
+
+                    b.HasIndex("EventStartTimeUtc")
+                        .HasDatabaseName("ix_provider_line_lifecycles_event_start_time_utc");
+
+                    b.HasIndex("FirstSeenUtc")
+                        .HasDatabaseName("ix_provider_line_lifecycles_first_seen_utc");
+
+                    b.HasIndex("LastChangedUtc")
+                        .HasDatabaseName("ix_provider_line_lifecycles_last_changed_utc");
+
+                    b.HasIndex("LastRefreshRunId")
+                        .HasDatabaseName("ix_provider_line_lifecycles_last_refresh_run_id");
+
+                    b.HasIndex("LastSeenUtc")
+                        .HasDatabaseName("ix_provider_line_lifecycles_last_seen_utc");
+
+                    b.HasIndex("Sport", "ProviderKey", "CurrentStatus")
+                        .HasDatabaseName("ix_provider_line_lifecycles_provider_status");
+
+                    b.HasIndex("Sport", "ProviderKey", "ProviderCategory", "EventId", "NormalizedPlayerName", "MarketKey", "Side")
+                        .HasDatabaseName("ix_provider_line_lifecycles_lookup");
+
+                    b.ToTable("provider_line_lifecycles", (string)null);
+                });
+
+            modelBuilder.Entity("SportsBetting.Api.Models.ProviderLineLifecycleEvent", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<string>("EventType")
+                        .IsRequired()
+                        .HasMaxLength(60)
+                        .HasColumnType("character varying(60)")
+                        .HasColumnName("event_type");
+
+                    b.Property<JsonDocument>("MetadataJson")
+                        .HasColumnType("jsonb")
+                        .HasColumnName("metadata_json");
+
+                    b.Property<decimal?>("NewLine")
+                        .HasPrecision(12, 4)
+                        .HasColumnType("numeric(12,4)")
+                        .HasColumnName("new_line");
+
+                    b.Property<decimal?>("NewPrice")
+                        .HasPrecision(12, 6)
+                        .HasColumnType("numeric(12,6)")
+                        .HasColumnName("new_price");
+
+                    b.Property<string>("NewStatus")
+                        .HasMaxLength(50)
+                        .HasColumnType("character varying(50)")
+                        .HasColumnName("new_status");
+
+                    b.Property<DateTimeOffset>("OccurredAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("occurred_at_utc");
+
+                    b.Property<decimal?>("PreviousLine")
+                        .HasPrecision(12, 4)
+                        .HasColumnType("numeric(12,4)")
+                        .HasColumnName("previous_line");
+
+                    b.Property<decimal?>("PreviousPrice")
+                        .HasPrecision(12, 6)
+                        .HasColumnType("numeric(12,6)")
+                        .HasColumnName("previous_price");
+
+                    b.Property<string>("PreviousStatus")
+                        .HasMaxLength(50)
+                        .HasColumnType("character varying(50)")
+                        .HasColumnName("previous_status");
+
+                    b.Property<Guid>("ProviderLineLifecycleId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("provider_line_lifecycle_id");
+
+                    b.Property<Guid?>("RefreshRunId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("refresh_run_id");
+
+                    b.HasKey("Id")
+                        .HasName("pk_provider_line_lifecycle_events");
+
+                    b.HasIndex("EventType")
+                        .HasDatabaseName("ix_provider_line_lifecycle_events_event_type");
+
+                    b.HasIndex("OccurredAtUtc")
+                        .HasDatabaseName("ix_provider_line_lifecycle_events_occurred_at_utc");
+
+                    b.HasIndex("ProviderLineLifecycleId")
+                        .HasDatabaseName("ix_provider_line_lifecycle_events_lifecycle_id");
+
+                    b.HasIndex("RefreshRunId")
+                        .HasDatabaseName("ix_provider_line_lifecycle_events_refresh_run_id");
+
+                    b.ToTable("provider_line_lifecycle_events", (string)null);
+                });
+
             modelBuilder.Entity("SportsBetting.Api.Models.RawIngestionPayload", b =>
                 {
                     b.Property<Guid>("Id")
@@ -2979,6 +3232,37 @@ namespace SportsBetting.Api.Migrations
                     b.Navigation("Sport");
                 });
 
+            modelBuilder.Entity("SportsBetting.Api.Models.ProviderLineLifecycle", b =>
+                {
+                    b.HasOne("SportsBetting.Api.Models.TheOddsRefreshRun", "LastRefreshRun")
+                        .WithMany()
+                        .HasForeignKey("LastRefreshRunId")
+                        .OnDelete(DeleteBehavior.SetNull)
+                        .HasConstraintName("fk_provider_line_lifecycles_the_odds_refresh_runs_last_refresh");
+
+                    b.Navigation("LastRefreshRun");
+                });
+
+            modelBuilder.Entity("SportsBetting.Api.Models.ProviderLineLifecycleEvent", b =>
+                {
+                    b.HasOne("SportsBetting.Api.Models.ProviderLineLifecycle", "ProviderLineLifecycle")
+                        .WithMany("Events")
+                        .HasForeignKey("ProviderLineLifecycleId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
+                        .HasConstraintName("fk_provider_line_lifecycle_events_provider_line_lifecycles_pro");
+
+                    b.HasOne("SportsBetting.Api.Models.TheOddsRefreshRun", "RefreshRun")
+                        .WithMany()
+                        .HasForeignKey("RefreshRunId")
+                        .OnDelete(DeleteBehavior.SetNull)
+                        .HasConstraintName("fk_provider_line_lifecycle_events_the_odds_refresh_runs_refres");
+
+                    b.Navigation("ProviderLineLifecycle");
+
+                    b.Navigation("RefreshRun");
+                });
+
             modelBuilder.Entity("SportsBetting.Api.Models.RawIngestionPayload", b =>
                 {
                     b.HasOne("SportsBetting.Api.Models.IngestionRun", "IngestionRun")
@@ -3084,6 +3368,11 @@ namespace SportsBetting.Api.Migrations
                     b.Navigation("PropResults");
 
                     b.Navigation("Props");
+                });
+
+            modelBuilder.Entity("SportsBetting.Api.Models.ProviderLineLifecycle", b =>
+                {
+                    b.Navigation("Events");
                 });
 
             modelBuilder.Entity("SportsBetting.Api.Models.Sport", b =>

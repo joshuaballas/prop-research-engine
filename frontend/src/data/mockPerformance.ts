@@ -1,15 +1,6 @@
-export interface PerformanceGroup {
-  groupType: string;
-  groupKey: string;
-  gradedPicks: number;
-  wins: number;
-  losses: number;
-  pushes: number;
-  hitRate: number;
-  roi: number;
-  averageEv: number;
-  warning?: string;
-}
+import type { PerformanceGroup } from '../types/performance';
+
+export type { PerformanceGroup };
 
 export const mockPerformance: PerformanceGroup[] = [
   { groupType: 'Overall', groupKey: 'DFS candidates', gradedPicks: 200, wins: 108, losses: 88, pushes: 4, hitRate: 0.551, roi: 0.087, averageEv: 0.096 },

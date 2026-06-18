@@ -23,6 +23,16 @@ builder.Logging.ClearProviders();
 builder.Logging.AddConsole();
 
 builder.Services.AddOpenApi();
+builder.Services.AddCors(options =>
+{
+    options.AddDefaultPolicy(policy =>
+    {
+        policy
+            .SetIsOriginAllowed(IsAllowedFrontendDevOrigin)
+            .AllowAnyHeader()
+            .AllowAnyMethod();
+    });
+});
 builder.Services.Configure<DebugAdminOptions>(builder.Configuration.GetSection(DebugAdminOptions.SectionName));
 builder.Services.Configure<UnderdogIngestionOptions>(builder.Configuration.GetSection(UnderdogIngestionOptions.SectionName));
 builder.Services.Configure<UnderdogOptions>(builder.Configuration.GetSection(UnderdogOptions.SectionName));
@@ -31,6 +41,7 @@ builder.Services.Configure<TheOddsApiOptions>(builder.Configuration.GetSection(T
 builder.Services.Configure<TheOddsIngestionWorkerOptions>(builder.Configuration.GetSection(TheOddsIngestionWorkerOptions.SectionName));
 builder.Services.Configure<TheOddsScheduledRefreshOptions>(builder.Configuration.GetSection(TheOddsScheduledRefreshOptions.SectionName));
 builder.Services.Configure<TheOddsRefreshPlannerOptions>(builder.Configuration.GetSection(TheOddsRefreshPlannerOptions.SectionName));
+builder.Services.Configure<ProviderLineLifecycleOptions>(builder.Configuration.GetSection(ProviderLineLifecycleOptions.SectionName));
 builder.Services.Configure<MlbResultImportWorkerOptions>(builder.Configuration.GetSection(MlbResultImportWorkerOptions.SectionName));
 builder.Services.Configure<PredictionGenerationOptions>(builder.Configuration.GetSection(PredictionGenerationOptions.SectionName));
 builder.Services.AddHttpClient<IUnderdogAdapter, UnderdogAdapter>(client =>
@@ -66,6 +77,7 @@ builder.Services.AddScoped<IPredictionProbabilityService, PredictionProbabilityS
 builder.Services.AddScoped<IPlayerExternalRefRepository, PlayerExternalRefRepository>();
 builder.Services.AddScoped<IPlayerResolutionService, PlayerResolutionService>();
 builder.Services.AddScoped<IApplicationErrorLogger, ApplicationErrorLogger>();
+builder.Services.AddScoped<IProviderLineLifecycleService, ProviderLineLifecycleService>();
 builder.Services.AddScoped<ITheOddsMlbRefreshService, TheOddsApiDebugEndpoints.TheOddsMlbRefreshService>();
 builder.Services.AddSingleton<IPlayerResolutionStats, PlayerResolutionStats>();
 builder.Services.AddSingleton<IPlayerMergeExecutionState, PlayerMergeExecutionState>();
@@ -104,6 +116,7 @@ if (app.Environment.IsDevelopment())
     app.MapOpenApi();
 }
 
+app.UseCors();
 app.UseHttpsRedirection();
 if (!app.Environment.IsEnvironment("Testing"))
 {
@@ -143,6 +156,7 @@ app.MapApplicationErrorDebugEndpoints();
 app.MapSystemHealthDebugEndpoints();
 app.MapDfsDebugEndpoints();
 app.MapTheOddsApiDebugEndpoints();
+app.MapProviderLineLifecycleDebugEndpoints();
 app.MapPublicMlbDfsEndpoints();
 
 app.Run();
@@ -150,6 +164,20 @@ app.Run();
 static bool IsPlaceholderConnectionString(string value)
 {
     return string.Equals(value.Trim(), "POSTGRES_CONNECTION_STRING", StringComparison.OrdinalIgnoreCase);
+}
+
+static bool IsAllowedFrontendDevOrigin(string origin)
+{
+    if (!Uri.TryCreate(origin, UriKind.Absolute, out var uri))
+    {
+        return false;
+    }
+
+    var isLocalHost = string.Equals(uri.Host, "localhost", StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(uri.Host, "127.0.0.1", StringComparison.OrdinalIgnoreCase);
+    var isVitePort = uri.Port is >= 5173 and <= 5179;
+
+    return isLocalHost && isVitePort && (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps);
 }
 
 static async Task ApplyDatabaseMigrationsAsync(WebApplication app)

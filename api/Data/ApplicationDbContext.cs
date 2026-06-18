@@ -34,6 +34,8 @@ public sealed class ApplicationDbContext(DbContextOptions<ApplicationDbContext> 
     public DbSet<TheOddsRefreshPlannerDecision> TheOddsRefreshPlannerDecisions => Set<TheOddsRefreshPlannerDecision>();
     public DbSet<MarketTopPickSnapshot> MarketTopPickSnapshots => Set<MarketTopPickSnapshot>();
     public DbSet<MarketLineShoppingSnapshot> MarketLineShoppingSnapshots => Set<MarketLineShoppingSnapshot>();
+    public DbSet<ProviderLineLifecycle> ProviderLineLifecycles => Set<ProviderLineLifecycle>();
+    public DbSet<ProviderLineLifecycleEvent> ProviderLineLifecycleEvents => Set<ProviderLineLifecycleEvent>();
     public DbSet<IngestionRun> IngestionRuns => Set<IngestionRun>();
     public DbSet<RawIngestionPayload> RawIngestionPayloads => Set<RawIngestionPayload>();
     public DbSet<CorrelationPair> CorrelationPairs => Set<CorrelationPair>();
@@ -56,6 +58,7 @@ public sealed class ApplicationDbContext(DbContextOptions<ApplicationDbContext> 
         ConfigurePropTables(modelBuilder);
         ConfigureResultTables(modelBuilder);
         ConfigurePredictionTables(modelBuilder);
+        ConfigureProviderLineLifecycleTables(modelBuilder);
         ConfigureIngestionTables(modelBuilder);
         ConfigureCorrelationTables(modelBuilder);
         ConfigureOptimizationTables(modelBuilder);
@@ -601,6 +604,76 @@ public sealed class ApplicationDbContext(DbContextOptions<ApplicationDbContext> 
             entity.HasIndex("GeneratedAtUtc").HasDatabaseName($"{indexPrefix}_generated_at_utc");
             entity.HasIndex("ProviderCategory", "IsCandidate").HasDatabaseName($"{indexPrefix}_provider_category_candidate");
             entity.HasIndex("BestEstimatedEv").HasDatabaseName($"{indexPrefix}_best_estimated_ev");
+        });
+    }
+
+    private static void ConfigureProviderLineLifecycleTables(ModelBuilder modelBuilder)
+    {
+        var jsonColumnType = GetJsonColumnType(modelBuilder);
+
+        modelBuilder.Entity<ProviderLineLifecycle>(entity =>
+        {
+            entity.ToTable("provider_line_lifecycles");
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.Sport).HasMaxLength(50).IsRequired();
+            entity.Property(x => x.ProviderKey).HasMaxLength(200).IsRequired();
+            entity.Property(x => x.ProviderDisplayName).HasMaxLength(200).IsRequired();
+            entity.Property(x => x.ProviderCategory).HasMaxLength(50).IsRequired();
+            entity.Property(x => x.EventId).HasMaxLength(200);
+            entity.Property(x => x.ProviderPlayerId).HasMaxLength(200);
+            entity.Property(x => x.NormalizedPlayerName).HasMaxLength(300).IsRequired();
+            entity.Property(x => x.MarketKey).HasMaxLength(200).IsRequired();
+            entity.Property(x => x.PropType).HasMaxLength(200).IsRequired();
+            entity.Property(x => x.Side).HasMaxLength(30).IsRequired();
+            entity.Property(x => x.CurrentLine).HasPrecision(12, 4);
+            entity.Property(x => x.CurrentPrice).HasPrecision(12, 6);
+            entity.Property(x => x.CurrentStatus).HasMaxLength(50).IsRequired();
+            entity.HasOne(x => x.LastRefreshRun)
+                .WithMany()
+                .HasForeignKey(x => x.LastRefreshRunId)
+                .OnDelete(DeleteBehavior.SetNull);
+            entity.HasIndex(x => new
+            {
+                x.Sport,
+                x.ProviderKey,
+                x.ProviderCategory,
+                x.EventId,
+                x.NormalizedPlayerName,
+                x.MarketKey,
+                x.Side
+            }).HasDatabaseName("ix_provider_line_lifecycles_lookup");
+            entity.HasIndex(x => x.CurrentStatus).HasDatabaseName("ix_provider_line_lifecycles_status");
+            entity.HasIndex(x => new { x.Sport, x.ProviderKey, x.CurrentStatus }).HasDatabaseName("ix_provider_line_lifecycles_provider_status");
+            entity.HasIndex(x => x.EventStartTimeUtc).HasDatabaseName("ix_provider_line_lifecycles_event_start_time_utc");
+            entity.HasIndex(x => x.FirstSeenUtc).HasDatabaseName("ix_provider_line_lifecycles_first_seen_utc");
+            entity.HasIndex(x => x.LastSeenUtc).HasDatabaseName("ix_provider_line_lifecycles_last_seen_utc");
+            entity.HasIndex(x => x.LastChangedUtc).HasDatabaseName("ix_provider_line_lifecycles_last_changed_utc");
+        });
+
+        modelBuilder.Entity<ProviderLineLifecycleEvent>(entity =>
+        {
+            entity.ToTable("provider_line_lifecycle_events");
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.EventType).HasMaxLength(60).IsRequired();
+            entity.Property(x => x.PreviousLine).HasPrecision(12, 4);
+            entity.Property(x => x.NewLine).HasPrecision(12, 4);
+            entity.Property(x => x.PreviousPrice).HasPrecision(12, 6);
+            entity.Property(x => x.NewPrice).HasPrecision(12, 6);
+            entity.Property(x => x.PreviousStatus).HasMaxLength(50);
+            entity.Property(x => x.NewStatus).HasMaxLength(50);
+            ConfigureJsonDocumentProperty(entity.Property(x => x.MetadataJson), jsonColumnType);
+            entity.HasOne(x => x.ProviderLineLifecycle)
+                .WithMany(x => x.Events)
+                .HasForeignKey(x => x.ProviderLineLifecycleId)
+                .OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne(x => x.RefreshRun)
+                .WithMany()
+                .HasForeignKey(x => x.RefreshRunId)
+                .OnDelete(DeleteBehavior.SetNull);
+            entity.HasIndex(x => x.ProviderLineLifecycleId).HasDatabaseName("ix_provider_line_lifecycle_events_lifecycle_id");
+            entity.HasIndex(x => x.RefreshRunId).HasDatabaseName("ix_provider_line_lifecycle_events_refresh_run_id");
+            entity.HasIndex(x => x.OccurredAtUtc).HasDatabaseName("ix_provider_line_lifecycle_events_occurred_at_utc");
+            entity.HasIndex(x => x.EventType).HasDatabaseName("ix_provider_line_lifecycle_events_event_type");
         });
     }
 

@@ -24,6 +24,7 @@ Working today:
 - The Odds API MLB manual event ingest works through debug endpoints and the `/research` dashboard.
 - The Odds API MLB current refresh can optionally include DFS/pick'em books through region `us_dfs`.
 - The Odds API line-shopping uses persisted database rows only.
+- Provider line lifecycle tracking records first seen, last seen, movement, stale, pulled, locked, and expired status after successful The Odds refresh snapshots.
 - MLB predictions, probability estimates, market ranking, line-shopping, and backtests exist.
 - Persistent application error logging exists.
 - Debug/admin routes are protected outside Development unless `DebugAdmin` is explicitly enabled with an API key.
@@ -80,8 +81,9 @@ Key config sections:
 - `MlbResultImportWorker`: controls MLB result import worker.
 - `TheOddsApi`: API key, base URL, sport key, regions, odds format, markets, and `MaxConcurrentRequests` for bounded parallel event-odds requests during explicit current-slate refreshes.
 - `TheOddsIngestionWorker`: disabled, dry-run-first worker skeleton. Its `Bookmakers` value is the conservative sportsbook context list used by manual/current The Odds MLB refresh workflows. `ExpandedBookmakers` is an opt-in expanded US sportsbook preset used only by `bookmakerPreset=expanded` or `bookmakerPreset=all`. `DfsRegion`, `DfsBookmakers`, and `IncludeDfsBookmakers` control optional DFS/pick'em rows through The Odds API `us_dfs`.
-- `TheOddsScheduledRefresh`: disabled-by-default scheduled refresh worker foundation. Defaults to `Enabled=false`, `BookmakerPreset=dfsOnly`, `RequireForceLive=true`, and `AllowScheduledLiveRefresh=false`; the status endpoint is read-only and does not call external APIs. When enabled in local/ops config, the worker still consults the read-only refresh planner before any live refresh attempt.
+- `TheOddsScheduledRefresh`: scheduled refresh worker foundation. Base config stays production-safe with `Enabled=false`, `IntervalMinutes=15`, `BookmakerPreset=dfsOnly`, `RequireForceLive=true`, and `AllowScheduledLiveRefresh=false`; Development/local config can enable MLB DFS-only auto-sync with `AllowScheduledLiveRefresh=true` at the same 15-minute minimum cadence. The status endpoint is read-only and does not call external APIs. When enabled, the worker still consults the read-only refresh planner before any live refresh attempt.
 - `TheOddsRefreshPlanner`: planning/budget configuration for `/api/markets/refresh-plan`. It estimates cadence and credit budget from persisted metadata only and does not enable scheduled live refreshes. Manual reads are read-only by default; scheduled worker planning cycles persist audit rows in `the_odds_refresh_planner_decisions`.
+- `ProviderLineLifecycle`: line lifecycle thresholds. Defaults keep active lines fresh for 15 minutes, mark pulled after 2 successful missing refreshes, and expire old event lines after 12 hours.
 - `PredictionGeneration`: recommendation thresholds and enabled prop types.
 
 ## Major Workflows
@@ -103,7 +105,7 @@ See [WORKFLOWS.md](WORKFLOWS.md) for command-level details.
 
 For a real product, the data strategy is provider-feed-first, not scraper-first. The Odds API or another paid/allowed provider feed should be the production source of truth. Do not plan to build custom scrapers for PrizePicks, Pick6, Betr, Sleeper, ParlayPlay, or other DFS apps.
 
-The Odds API refreshes should run from a scheduled backend worker or admin process on a controlled cadence, roughly every 1-5 minutes depending on credit budget, slate timing, and freshness needs. The worker should refresh provider data once per interval, persist normalized rows, generate predictions, build line-shopping/top-pick outputs, and update freshness metadata.
+The Odds API refreshes should run from a scheduled backend worker or admin process on a controlled cadence based on observed lifecycle behavior, credit budget, slate timing, and freshness needs. Current dev guidance is scheduler off by default, then manual refresh or 15-30 minute polling until lifecycle summary/cadence insight endpoints show which providers or prop types need faster refresh. The worker should refresh provider data once per interval, persist normalized rows, generate predictions, build line-shopping/top-pick outputs, update freshness metadata, and update provider line lifecycle state.
 
 Frontend users should only call read-only endpoints that return the latest persisted odds, predictions, line-shopping groups, top picks, and freshness state. All users should see the same latest persisted data. The UI should show last refreshed time, stale-data warnings, and game-started/expired lifecycle labels.
 
@@ -145,6 +147,8 @@ Not present:
 - The Odds API calls spend credits. The dashboard must not call The Odds API on page load.
 - Use dry-run before committing The Odds API ingestion.
 - Live `refresh-current` calls require `forceLive=true`; calls without it are blocked before provider requests to avoid accidental credit spend.
+- Provider/API failure does not mean provider-pulled line. Lifecycle rows become `Pulled` only when a line is missing from successful provider refreshes according to threshold.
+- Use `/api/debug/provider-lines/lifecycle-summary` and `/api/debug/provider-lines/refresh-cadence-insights` before lowering refresh interval or upgrading provider plan.
 - Expanded and All bookmaker presets are opt-in because they can spend more credits and increase refresh time.
 - DFS rows from The Odds API use indicative odds and may vary based on user selections. Treat sportsbook rows as market context for a DFS-only user.
 - DFS entries are provider-scoped. Do not mix PrizePicks, Underdog, DraftKings Pick6, Betr Picks, or sportsbook-context legs in one future entry builder. Entry rules marked `NeedsVerification` must be confirmed before production use.

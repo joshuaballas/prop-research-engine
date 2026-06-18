@@ -2,15 +2,16 @@ import { Box, Button, Grid, Stack, Typography } from '@mui/material';
 import { EntryCandidateCard } from '../../components/entry-builder/EntryCandidateCard';
 import { DataStateBanner } from '../../components/ui/DataStateBanner';
 import { PageHeader } from '../../components/ui/PageHeader';
-import { mockTopPicks } from '../../data/mockTopPicks';
 import { useEntryBuilder } from '../../hooks/useEntryBuilder';
+import { useEntryCandidateData } from '../../hooks/useMarketData';
 import type { MarketOpportunity } from '../../types/markets';
 
 export function EntryBuilderPage() {
   const builder = useEntryBuilder();
+  const candidatesQuery = useEntryCandidateData(40);
   const lockedProvider = builder.lockedProviderName;
   const lockedGroup = builder.lockedProviderKey;
-  const candidates = mockTopPicks.filter((market) => market.providerCategory === 'DFS' && market.canAddToEntry);
+  const candidates = candidatesQuery.markets;
   const visibleCandidates = lockedGroup && !builder.showAllCandidates ? candidates.filter((market) => market.entryCompatibilityGroup === lockedGroup) : candidates;
 
   const handleAddLeg = (market: MarketOpportunity) => {
@@ -96,7 +97,15 @@ export function EntryBuilderPage() {
       </Stack>
 
       <Grid container spacing={1.5} alignItems="stretch">
-        {visibleCandidates.map((market) => (
+        {candidatesQuery.loading ? (
+          <Grid size={12}>
+            <StateCard message="Loading entry candidates..." />
+          </Grid>
+        ) : candidatesQuery.error ? (
+          <Grid size={12}>
+            <StateCard tone="error" message="Entry candidates could not be loaded from the market API." />
+          </Grid>
+        ) : visibleCandidates.length ? visibleCandidates.map((market) => (
           <Grid key={market.id} size={{ xs: 12, md: 6, lg: 4 }} sx={{ display: 'flex', alignSelf: 'stretch' }}>
             <EntryCandidateCard
               market={market}
@@ -105,9 +114,28 @@ export function EntryBuilderPage() {
               onAdd={handleAddLeg}
             />
           </Grid>
-        ))}
+        )) : (
+          <Grid size={12}>
+            <StateCard message="No compatible entry candidates are available." />
+          </Grid>
+        )}
       </Grid>
 
     </Stack>
+  );
+}
+
+function StateCard({ message, tone = 'default' }: { message: string; tone?: 'default' | 'error' }) {
+  return (
+    <Box
+      sx={{
+        border: `1px solid ${tone === 'error' ? 'rgba(244,63,94,.32)' : 'rgba(148,163,184,.16)'}`,
+        borderRadius: 3,
+        bgcolor: 'rgba(15,23,42,.58)',
+        p: 2
+      }}
+    >
+      <Typography color={tone === 'error' ? 'error.main' : 'text.secondary'}>{message}</Typography>
+    </Box>
   );
 }

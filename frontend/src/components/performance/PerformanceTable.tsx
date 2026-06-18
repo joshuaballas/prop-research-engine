@@ -1,5 +1,5 @@
 import { Box, Stack, Table, TableBody, TableCell, TableHead, TableRow, Typography } from '@mui/material';
-import type { PerformanceGroup } from '../../data/mockPerformance';
+import type { PerformanceGroup } from '../../types/performance';
 import { formatPercent } from '../../utils/formatters';
 import { MetadataText } from '../ui/MetadataText';
 import { palette } from '../../theme/palette';

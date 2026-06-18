@@ -1,6 +1,6 @@
 import ExpandMoreRoundedIcon from '@mui/icons-material/ExpandMoreRounded';
 import { Accordion, AccordionDetails, AccordionSummary, Box, Stack, Typography } from '@mui/material';
-import type { PerformanceGroup } from '../../data/mockPerformance';
+import type { PerformanceGroup } from '../../types/performance';
 import { palette } from '../../theme/palette';
 import { formatPercent } from '../../utils/formatters';
 

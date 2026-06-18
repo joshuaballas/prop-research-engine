@@ -62,7 +62,7 @@ Use this when you want the dashboard to produce active strategy-aware candidates
 
 This is a debug/admin workflow. A production frontend should not call this endpoint. Production users should read latest persisted odds, predictions, line-shopping groups, top picks, and freshness metadata from read-only endpoints populated by a scheduled backend refresh process.
 
-The target production cadence for The Odds API refreshes is roughly every 1-5 minutes, configurable by credit budget, slate timing, and freshness needs. Public/frontend users must not trigger provider refreshes.
+The current development recommendation is to keep the scheduler off by default and use manual refreshes or conservative 15-30 minute polling until lifecycle evidence justifies a faster cadence. Public/frontend users must not trigger provider refreshes.
 
 Production-style frontend reads should use the non-debug persisted-data endpoints. Prefer `/api/markets/*`; `/api/mlb/*` remains as an MLB compatibility wrapper.
 
@@ -81,11 +81,25 @@ After a successful live The Odds refresh, the app stores stable Top Picks and li
 
 Freshness separates recency from usability: `isFresh=true` means a successful refresh happened within the threshold, while `hasUsableMarketData=false` means that refresh did not produce usable market snapshots/data. The freshness response includes snapshot counts, active/stale group counts, provider ingestion success/failure counts, provider rejected-key detection, and a `usabilityWarning`.
 
+Provider line lifecycle tracking runs only after successful snapshot persistence. It tracks first seen, last seen, movement, missing refreshes, pulled status, stale status, event lock, and expiration for provider lines. A provider/API failure is not the same as a pulled line: failed refreshes and rejected keys should not mark every previously seen line as pulled. `Pulled` means the line went missing from successful provider refreshes; `Stale` means it has not been confirmed recently; `Locked` means event start has passed.
+
+Use lifecycle diagnostics before tightening refresh cadence or upgrading The Odds API plan:
+
+```powershell
+Invoke-RestMethod -Uri "http://localhost:5299/api/debug/provider-lines/lifecycle-summary?sport=MLB" |
+  ConvertTo-Json -Depth 20
+
+Invoke-RestMethod -Uri "http://localhost:5299/api/debug/provider-lines/refresh-cadence-insights?sport=MLB" |
+  ConvertTo-Json -Depth 20
+```
+
+Cadence insight is observational. If only a small percent of lines change or get pulled within 10-15 minutes, keep 15-30 minute polling outside near-lock windows. If a provider/prop type changes quickly, lower cadence for that slice instead of globally.
+
 Provider status is exposed separately at `/api/markets/provider-status`. It reads persisted refresh metadata only and surfaces The Odds API key/credit/provider availability, including rejected-key detection, low/exhausted credit warnings, latest refresh usability, and a recommended action. Use it in frontend health banners before implying current market data is actionable.
 
 Refresh planning is exposed at `/api/markets/refresh-plan`. It is also read-only and uses persisted provider status, snapshots, refresh metadata, and `TheOddsRefreshPlanner` budget/cadence config to explain whether a scheduled refresh would run now or skip. It estimates calls and credit-budget impact, but it never calls The Odds API and never enables the scheduled worker.
 
-The scheduled The Odds refresh worker is planner-gated. Even if `TheOddsScheduledRefresh:Enabled=true` is set in local/ops config, each tick first reads the same planner decision. The worker skips without provider calls when the planner says `shouldRefresh=false`, when `budgetAllowed=false`, when provider status is unavailable/rejected-key, or when `AllowScheduledLiveRefresh=false`. Committed config keeps `AllowScheduledLiveRefresh=false`.
+The scheduled The Odds refresh worker is planner-gated. Base `appsettings.json` keeps the worker disabled, uses `IntervalMinutes=15`, `BookmakerPreset=dfsOnly`, and keeps `AllowScheduledLiveRefresh=false` so production-like defaults do not burn credits unexpectedly. Local Development config enables the existing MLB DFS-only worker with `AllowScheduledLiveRefresh=true` at the same 15-minute minimum cadence. Each scheduled tick first reads the same planner decision, and the worker skips without provider calls when the planner says `shouldRefresh=false`, when `budgetAllowed=false`, when provider status is unavailable/rejected-key, or when scheduled live refresh is not explicitly allowed.
 
 Planner decisions can be persisted for audit. The scheduled worker writes a planner decision row each time it runs a planning cycle. Manual reads remain read-only unless `/api/markets/refresh-plan?persistDecision=true` is explicitly used. Read history with `/api/markets/refresh-plan/history?take=20`.
 
@@ -149,6 +163,16 @@ $refresh.predictionRunId
 $refresh.strategyClassificationSummary
 $refresh.topActiveCandidates | Select-Object -First 10
 $refresh | ConvertTo-Json -Depth 20 | Set-Content ".\tmp-analysis\current-mlb-recommendations-refresh.json"
+```
+
+Inspect lifecycle rows after a successful live refresh:
+
+```powershell
+Invoke-RestMethod -Uri "http://localhost:5299/api/debug/provider-lines/lifecycles?sport=MLB&take=25" |
+  ConvertTo-Json -Depth 20
+
+Invoke-RestMethod -Uri "http://localhost:5299/api/debug/provider-lines/lifecycle-events?sport=MLB&take=25" |
+  ConvertTo-Json -Depth 20
 ```
 
 Check persisted refresh freshness without provider calls:

@@ -38,6 +38,7 @@ public static partial class TheOddsApiDebugEndpoints
         ITheOddsApiMlbPlayerPropsAdapter adapter,
         IPredictionGenerationService generationService,
         IPredictionProbabilityService probabilityService,
+        IProviderLineLifecycleService providerLineLifecycleService,
         IServiceScopeFactory scopeFactory,
         ApplicationDbContext dbContext,
         IApplicationErrorLogger errorLogger) : ITheOddsMlbRefreshService
@@ -588,6 +589,7 @@ public static partial class TheOddsApiDebugEndpoints
                     dbContext,
                     cancellationToken);
                 await dbContext.SaveChangesAsync(cancellationToken);
+                await providerLineLifecycleService.TrackRefreshAsync(refreshRun.Id, cancellationToken);
 
                 return Results.Ok(new
                 {

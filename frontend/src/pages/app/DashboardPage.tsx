@@ -19,10 +19,8 @@ import { PageHeader } from '../../components/ui/PageHeader';
 import { SectionHeader } from '../../components/ui/SectionHeader';
 import { StatusPill } from '../../components/ui/StatusPill';
 import { compactActionButtonSx, lockedActionButtonSx, removeActionButtonSx, secondaryGhostButtonSx } from '../../components/ui/buttonStyles';
-import { mockMarkets } from '../../data/mockMarkets';
-import { mockPerformance } from '../../data/mockPerformance';
-import { mockTopPicks } from '../../data/mockTopPicks';
 import { useEntryBuilder } from '../../hooks/useEntryBuilder';
+import { useLineShoppingData, useMarketFreshnessData, usePerformanceData, useTopPicksData } from '../../hooks/useMarketData';
 import { useSelectedSports } from '../../hooks/useSelectedSports';
 import type { MarketOpportunity } from '../../types/markets';
 import { formatPercent } from '../../utils/formatters';
@@ -30,45 +28,51 @@ import { formatPercent } from '../../utils/formatters';
 export function DashboardPage() {
   const sports = useSelectedSports();
   const builder = useEntryBuilder();
-  const filtered = mockTopPicks.filter((market) => sports.includesSport(market.sport));
-  const filteredMarkets = mockMarkets.filter((market) => sports.includesSport(market.sport));
+  const freshnessQuery = useMarketFreshnessData();
+  const topPicksQuery = useTopPicksData(10, 'dashboard-top-pick');
+  const lineShoppingQuery = useLineShoppingData(12, true, 'dashboard-line-shopping');
+  const performanceQuery = usePerformanceData();
+  const topPicks = topPicksQuery.markets;
+  const lineShoppingMarkets = lineShoppingQuery.markets;
+  const performanceRows = performanceQuery.rows;
+  const filtered = topPicks.filter((market) => sports.includesSport(market.sport));
+  const filteredMarkets = lineShoppingMarkets.filter((market) => sports.includesSport(market.sport));
   const activeDfs = filteredMarkets.filter((market) => market.providerCategory === 'DFS' && market.freshness === 'Fresh');
   const entryProvider = builder.lockedProviderName ?? 'No provider selected';
   const entryLegs = builder.legs;
   const compatibleSports = Array.from(new Set(entryLegs.map((market) => market.sport)));
-  const overall = mockPerformance[0];
-  const bestStrategy = mockPerformance.find((item) => item.groupType === 'Strategy');
-  const limitedHistoryCount = mockPerformance.filter((item) => item.warning).length;
+  const overall = performanceRows.find((item) => item.groupType === 'Overall') ?? performanceRows[0];
+  const bestStrategy = performanceRows.find((item) => item.groupType === 'Strategy');
+  const limitedHistoryCount = performanceRows.filter((item) => item.warning).length;
+  const returnedTopPicks = topPicks.length;
+  const bestEvMarket = filtered.reduce<MarketOpportunity | undefined>(
+    (best, market) => (!best || market.estimatedEv > best.estimatedEv ? market : best),
+    undefined
+  );
+  const freshness = freshnessQuery.data;
+  const dataStatus = freshness?.hasUsableMarketData ? 'Fresh' : freshness?.isStale ? 'Stale' : 'No data';
 
   return (
     <Stack spacing={{ xs: 2.5, md: 3 }}>
       <PageHeader
         title="Dashboard"
         description="Current DFS opportunities, provider-compatible entry state, reference lines, and recent performance."
-        action={
-          <Stack spacing={0.3} alignItems={{ xs: 'flex-start', md: 'flex-end' }}>
-            <MetadataText tone="fresh">Updated 4m ago</MetadataText>
-            <Typography variant="caption" color="text.secondary">
-              Next scheduled market check in 1m
-            </Typography>
-          </Stack>
-        }
       />
 
       <SportToggleRail selectedSports={sports.selectedSports} onToggle={sports.toggleSport} />
 
       <DataStateBanner
-        title="Market data is usable"
-        message="DFS rows are current for selected sports. Sportsbook rows are reference lines only and are not added to entries."
-        status="Fresh"
+        title={freshnessQuery.error ? 'Market data is unavailable' : freshness?.hasUsableMarketData ? 'Market data is usable' : 'No usable market data yet'}
+        message={freshnessQuery.error ? 'The read-only market API could not be reached.' : freshness?.usabilityWarning ?? 'DFS rows are current for selected sports. Sportsbook rows are reference lines only and are not added to entries.'}
+        status={dataStatus}
       />
 
       <Grid container spacing={2}>
         <Grid size={{ xs: 12, sm: 6, lg: 2.4 }}>
-          <MetricCard label="Top Picks" value={`${filtered.filter((market) => market.strategyClassification === 'Candidate').length}`} helper="Selected sports" />
+          <MetricCard label="Top Picks" value={`${returnedTopPicks}`} helper="Latest returned rows" />
         </Grid>
         <Grid size={{ xs: 12, sm: 6, lg: 2.4 }}>
-          <MetricCard label="Best EV" value={formatPercent(filtered[0]?.estimatedEv ?? 0, { signed: true })} helper={filtered[0]?.player ?? 'No active row'} />
+          <MetricCard label="Best EV" value={formatPercent(bestEvMarket?.estimatedEv ?? 0, { signed: true })} helper={bestEvMarket?.player ?? 'No active row'} />
         </Grid>
         <Grid size={{ xs: 12, sm: 6, lg: 2.4 }}>
           <MetricCard label="DFS Providers" value={`${new Set(activeDfs.map((market) => market.provider)).size}`} helper="Entry-supported sources" />
@@ -77,7 +81,7 @@ export function DashboardPage() {
           <MetricCard label="Entry Builder" value={`${entryLegs.length} legs`} helper={entryProvider} />
         </Grid>
         <Grid size={{ xs: 12, sm: 6, lg: 2.4 }}>
-          <MetricCard label="Graded picks" value={`${overall.gradedPicks}`} helper="Recent performance" />
+          <MetricCard label="Graded picks" value={`${overall?.gradedPicks ?? 0}`} helper="Recent performance" />
         </Grid>
       </Grid>
 
@@ -91,11 +95,23 @@ export function DashboardPage() {
         }
       />
       <Grid container spacing={2}>
-        {filtered.slice(0, 3).map((market) => (
+        {topPicksQuery.loading ? (
+          <Grid size={12}>
+            <ApiStateCard message="Loading top opportunities..." />
+          </Grid>
+        ) : topPicksQuery.error ? (
+          <Grid size={12}>
+            <ApiStateCard tone="error" message="Top opportunities could not be loaded." />
+          </Grid>
+        ) : filtered.length ? filtered.slice(0, 3).map((market) => (
           <Grid key={market.id} size={{ xs: 12, lg: 4 }}>
             <DashboardOpportunityCard market={market} builder={builder} />
           </Grid>
-        ))}
+        )) : (
+          <Grid size={12}>
+            <ApiStateCard message="No top opportunities are available for the selected sports." />
+          </Grid>
+        )}
       </Grid>
 
       <Grid container spacing={2}>
@@ -103,9 +119,15 @@ export function DashboardPage() {
           <SectionHeader title="Line-shopping preview" description="Best DFS provider beside sportsbook reference lines." />
           <Box mt={2}>
             <Stack spacing={1.2}>
-              {filteredMarkets.slice(0, 5).map((market) => (
+              {lineShoppingQuery.loading ? (
+                <ApiStateCard message="Loading line-shopping preview..." />
+              ) : lineShoppingQuery.error ? (
+                <ApiStateCard tone="error" message="Line-shopping preview could not be loaded." />
+              ) : filteredMarkets.length ? filteredMarkets.slice(0, 5).map((market) => (
                 <LineShoppingPreviewCard key={market.id} market={market} />
-              ))}
+              )) : (
+                <ApiStateCard message="No line-shopping rows are available for the selected sports." />
+              )}
             </Stack>
           </Box>
         </Grid>
@@ -129,7 +151,7 @@ export function DashboardPage() {
       />
       <Grid container spacing={2}>
         <Grid size={{ xs: 12, md: 4 }}>
-          <PerformancePanel icon={<InsightsOutlinedIcon />} title="Candidate performance" value={formatPercent(overall.roi, { signed: true })} detail={`${overall.wins}-${overall.losses}-${overall.pushes} across ${overall.gradedPicks} graded picks`} />
+          <PerformancePanel icon={<InsightsOutlinedIcon />} title="Candidate performance" value={formatPercent(overall?.roi ?? 0, { signed: true })} detail={overall ? `${overall.wins}-${overall.losses}-${overall.pushes} across ${overall.gradedPicks} graded picks` : 'No graded picks yet'} />
         </Grid>
         <Grid size={{ xs: 12, md: 4 }}>
           <PerformancePanel icon={<AutoGraphOutlinedIcon />} title="Best strategy" value={bestStrategy ? formatPercent(bestStrategy.roi, { signed: true }) : '-'} detail={bestStrategy ? `${bestStrategy.groupKey} · ${bestStrategy.gradedPicks} graded picks` : 'No graded strategy yet'} />
@@ -212,6 +234,14 @@ function DashboardOpportunityCard({ market, builder }: { market: MarketOpportuni
           </Button>
         </Stack>
       </Stack>
+    </AppCard>
+  );
+}
+
+function ApiStateCard({ message, tone = 'default' }: { message: string; tone?: 'default' | 'error' }) {
+  return (
+    <AppCard sx={{ borderColor: tone === 'error' ? 'rgba(244,63,94,.32)' : undefined }}>
+      <Typography color={tone === 'error' ? 'error.main' : 'text.secondary'}>{message}</Typography>
     </AppCard>
   );
 }

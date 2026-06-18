@@ -3,7 +3,7 @@ import { useState } from 'react';
 import { LineShoppingCard, LineShoppingTable } from '../../components/markets/LineShoppingTable';
 import { MarketFilters } from '../../components/markets/MarketFilters';
 import { PageHeader } from '../../components/ui/PageHeader';
-import { mockMarkets } from '../../data/mockMarkets';
+import { useLineShoppingData } from '../../hooks/useMarketData';
 import { useResponsiveView } from '../../hooks/useResponsiveView';
 import { formatPercent } from '../../utils/formatters';
 
@@ -11,13 +11,14 @@ export function LineShoppingPage() {
   const { isMobile } = useResponsiveView();
   const [candidateOnly, setCandidateOnly] = useState(true);
   const [dfsActionableOnly, setDfsActionableOnly] = useState(true);
-  const lineShoppingMarkets = mockMarkets.filter((market) => market.providerCategory === 'DFS');
+  const lineShoppingQuery = useLineShoppingData(50, false, 'line-shopping');
+  const lineShoppingMarkets = lineShoppingQuery.markets.filter((market) => market.providerCategory === 'DFS');
   const visibleMarkets = lineShoppingMarkets.filter((market) => {
     if (candidateOnly && market.strategyClassification !== 'Candidate') return false;
     if (dfsActionableOnly && !market.canAddToEntry) return false;
     return true;
   });
-  const bestEv = Math.max(...lineShoppingMarkets.map((market) => market.estimatedEv));
+  const bestEv = lineShoppingMarkets.length ? Math.max(...lineShoppingMarkets.map((market) => market.estimatedEv)) : 0;
   const dfsProviderCount = new Set(lineShoppingMarkets.map((market) => market.provider)).size;
   const activeComparisons = lineShoppingMarkets.filter((market) => market.freshness === 'Fresh').length;
   const referenceCoverage = lineShoppingMarkets.filter(
@@ -66,14 +67,33 @@ export function LineShoppingPage() {
       <Typography variant="body2" color="text.secondary" sx={{ mt: -1.25 }}>
         Reference lines are sportsbook prices used for comparison. They are not added to DFS entries.
       </Typography>
-      {isMobile ? (
+      {lineShoppingQuery.loading ? (
+        <ApiStateCard message="Loading latest line-shopping rows..." />
+      ) : lineShoppingQuery.error ? (
+        <ApiStateCard tone="error" message="Line-shopping rows could not be loaded from the market API." />
+      ) : isMobile ? (
         <Stack spacing={1.5}>
-          {visibleMarkets.map((market) => (
+          {visibleMarkets.length ? visibleMarkets.map((market) => (
             <LineShoppingCard key={market.id} market={market} />
-          ))}
+          )) : <ApiStateCard message="No DFS line-shopping rows match the current filters." />}
         </Stack>
-      ) : <LineShoppingTable markets={visibleMarkets} />}
+      ) : visibleMarkets.length ? <LineShoppingTable markets={visibleMarkets} /> : <ApiStateCard message="No DFS line-shopping rows match the current filters." />}
     </Stack>
+  );
+}
+
+function ApiStateCard({ message, tone = 'default' }: { message: string; tone?: 'default' | 'error' }) {
+  return (
+    <Box
+      sx={{
+        border: `1px solid ${tone === 'error' ? 'rgba(244,63,94,.32)' : 'rgba(148,163,184,.16)'}`,
+        borderRadius: 4,
+        bgcolor: 'rgba(15,23,42,.68)',
+        p: 2
+      }}
+    >
+      <Typography color={tone === 'error' ? 'error.main' : 'text.secondary'}>{message}</Typography>
+    </Box>
   );
 }
 

@@ -158,7 +158,7 @@ Invoke-RestMethod "http://localhost:5299/api/markets/performance-summary?sport=M
 | GET | `/api/debug/the-odds/mlb/ingestion-plan` | Planner/dashboard helper using persisted DB state only. Supports `date`, `bookmakers`, `markets`, `maxEvents`. | No | No | No |
 | GET | `/api/debug/the-odds/mlb/worker-status` | Disabled worker skeleton status and last dry-run fields. | No | No | No |
 | POST | `/api/debug/the-odds/mlb/worker-dry-run` | Runs worker planning manually without enabling worker, API calls, or writes. | No | No | No |
-| GET | `/api/debug/the-odds/mlb/scheduled-refresh/status` | Read-only status for the disabled-by-default scheduled The Odds MLB refresh worker foundation. Reports config, planner interval, last planner decision, skip/block reason, last run state, next estimate, and safety flags. The worker is planner-gated and cannot run live scheduled refreshes unless local/ops config explicitly enables scheduled live execution. | No | No | No |
+| GET | `/api/debug/the-odds/mlb/scheduled-refresh/status` | Read-only status for the scheduled The Odds MLB refresh worker. Reports config, planner interval, latest successful refresh timestamp, last planner decision, skip/block reason, last run state, next estimate, and safety flags. Base config keeps scheduled live execution off; Development/local config can explicitly enable the MLB DFS-only worker at the 15-minute minimum cadence. | No | No | No |
 | GET | `/api/debug/the-odds/mlb/bookmaker-coverage` | Compact persisted-row coverage report by bookmaker and prop type for the latest relevant run/slate. Shows configured sportsbook books, configured DFS books, observed sportsbook/DFS books, provider-category breakdown, best-book distribution, average books per comparison group, missing configured event coverage, and candidate/watchlist/avoid contribution by best book. | No | No | No |
 | GET | `/api/debug/the-odds/mlb/bookmaker-coverage-audit` | Audits persisted bookmaker coverage. Supports `eventId`, `runId`. | No | No | No |
 | GET | `/api/debug/the-odds/mlb/bookmaker-prediction-dropout` | Explains why a bookmaker's persisted props did not produce predictions. Supports `bookmaker`, `eventId`, `runId`, `ignoreRunContext`. | No | No | No |
@@ -171,6 +171,10 @@ Invoke-RestMethod "http://localhost:5299/api/markets/performance-summary?sport=M
 | POST | `/api/debug/the-odds/mlb/player-alias-link` | Creates an alias bridge from source player to existing MLB-mapped canonical player. Dry-run by default. | Yes unless dry-run | No | No |
 | POST | `/api/debug/the-odds/mlb/player-alias-link/auto-safe` | Auto-links only safe alias candidates. Dry-run by default. | Yes unless dry-run | No | No |
 | GET | `/api/debug/the-odds/mlb/historical-feature-gap-audit` | Explains missing historical features for The Odds props. | No | No | No |
+| GET | `/api/debug/provider-lines/lifecycles` | Lists tracked provider line lifecycle rows. Supports `sport`, `providerKey`, `providerCategory`, `status`, `propType`, `player`, `slateDate`, `eventId`, and `take`. | No | No | No |
+| GET | `/api/debug/provider-lines/lifecycle-summary` | Aggregates lifecycle status, lifetime, movement, pull, provider, prop-type, and sport counts. Supports `sport`, `providerKey`, `providerCategory`, `propType`, `fromDate`, and `toDate`. | No | No | No |
+| GET | `/api/debug/provider-lines/lifecycle-events` | Reads lifecycle event history. Supports `lifecycleId`, `sport`, `providerKey`, `eventType`, `fromUtc`, `toUtc`, and `take`. | No | No | No |
+| GET | `/api/debug/provider-lines/refresh-cadence-insights` | Uses lifecycle movement/pull timing to suggest a refresh cadence for the requested sport/provider/prop filters. Supports `sport`, `providerKey`, `propType`, `fromDate`, and `toDate`. | No | No | No |
 
 Examples:
 
@@ -194,6 +198,18 @@ $refresh = Invoke-RestMethod `
 Invoke-RestMethod -Uri "http://localhost:5299/api/debug/the-odds/mlb/line-shopping"
 
 Invoke-RestMethod -Uri "http://localhost:5299/api/debug/the-odds/mlb/bookmaker-coverage"
+
+Invoke-RestMethod -Uri "http://localhost:5299/api/debug/provider-lines/lifecycle-summary?sport=MLB" |
+  ConvertTo-Json -Depth 20
+
+Invoke-RestMethod -Uri "http://localhost:5299/api/debug/provider-lines/lifecycles?sport=MLB&take=25" |
+  ConvertTo-Json -Depth 20
+
+Invoke-RestMethod -Uri "http://localhost:5299/api/debug/provider-lines/lifecycle-events?sport=MLB&take=25" |
+  ConvertTo-Json -Depth 20
+
+Invoke-RestMethod -Uri "http://localhost:5299/api/debug/provider-lines/refresh-cadence-insights?sport=MLB" |
+  ConvertTo-Json -Depth 20
 ```
 
 ## MLB Results

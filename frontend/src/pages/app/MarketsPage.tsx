@@ -6,7 +6,7 @@ import { MarketTable } from '../../components/markets/MarketTable';
 import { SportToggleRail } from '../../components/navigation/SportToggleRail';
 import { PageHeader } from '../../components/ui/PageHeader';
 import { SectionHeader } from '../../components/ui/SectionHeader';
-import { mockMarkets } from '../../data/mockMarkets';
+import { useMarketScannerData } from '../../hooks/useMarketData';
 import { useSelectedSports } from '../../hooks/useSelectedSports';
 import { useResponsiveView } from '../../hooks/useResponsiveView';
 import { formatPercent } from '../../utils/formatters';
@@ -16,7 +16,8 @@ export function MarketsPage() {
   const { isMobile } = useResponsiveView();
   const [candidateOnly, setCandidateOnly] = useState(false);
   const [dfsActionableOnly, setDfsActionableOnly] = useState(true);
-  const scannerMarkets = mockMarkets.filter((market) => sports.includesSport(market.sport));
+  const marketsQuery = useMarketScannerData(75, 'market');
+  const scannerMarkets = marketsQuery.markets.filter((market) => sports.includesSport(market.sport));
   const dfsMarkets = scannerMarkets.filter((market) => market.providerCategory === 'DFS');
   const markets = scannerMarkets.filter((market) => {
     if (dfsActionableOnly && market.providerCategory !== 'DFS') return false;
@@ -67,10 +68,29 @@ export function MarketsPage() {
       />
 
       <SectionHeader title="Market scanner" description="Inventory view for available rows. Use Details for research rows, low-quality rows, and reference-only lines." />
-      {isMobile ? (
+      {marketsQuery.loading ? (
+        <ApiStateCard message="Loading market scanner rows..." />
+      ) : marketsQuery.error ? (
+        <ApiStateCard tone="error" message="Market scanner rows could not be loaded from the market API." />
+      ) : isMobile ? (
         <Grid container spacing={2}>{markets.map((market) => <Grid key={market.id} size={12}><MarketCard market={market} /></Grid>)}</Grid>
-      ) : <MarketTable markets={markets} />}
+      ) : markets.length ? <MarketTable markets={markets} /> : <ApiStateCard message="No market rows match the current filters." />}
     </Stack>
+  );
+}
+
+function ApiStateCard({ message, tone = 'default' }: { message: string; tone?: 'default' | 'error' }) {
+  return (
+    <Box
+      sx={{
+        border: `1px solid ${tone === 'error' ? 'rgba(244,63,94,.32)' : 'rgba(148,163,184,.16)'}`,
+        borderRadius: 4,
+        bgcolor: 'rgba(15,23,42,.68)',
+        p: 2
+      }}
+    >
+      <Typography color={tone === 'error' ? 'error.main' : 'text.secondary'}>{message}</Typography>
+    </Box>
   );
 }
 

@@ -507,6 +507,88 @@ public sealed class MarketLineShoppingSnapshot
     public PredictionRun? PredictionRun { get; set; }
 }
 
+public sealed class ProviderLineLifecycle
+{
+    public Guid Id { get; set; }
+    public string Sport { get; set; } = "MLB";
+    public string ProviderKey { get; set; } = string.Empty;
+    public string ProviderDisplayName { get; set; } = string.Empty;
+    public string ProviderCategory { get; set; } = string.Empty;
+    public string? EventId { get; set; }
+    public DateTimeOffset? EventStartTimeUtc { get; set; }
+    public DateOnly? SlateDate { get; set; }
+    public Guid? CanonicalPlayerId { get; set; }
+    public string? ProviderPlayerId { get; set; }
+    public string NormalizedPlayerName { get; set; } = string.Empty;
+    public string MarketKey { get; set; } = string.Empty;
+    public string PropType { get; set; } = string.Empty;
+    public string Side { get; set; } = string.Empty;
+    public decimal? CurrentLine { get; set; }
+    public decimal? CurrentPrice { get; set; }
+    public string CurrentStatus { get; set; } = ProviderLineLifecycleStatuses.Active;
+    public DateTimeOffset FirstSeenUtc { get; set; }
+    public DateTimeOffset LastSeenUtc { get; set; }
+    public DateTimeOffset? LastChangedUtc { get; set; }
+    public Guid? LastRefreshRunId { get; set; }
+    public Guid? LastSnapshotId { get; set; }
+    public int SeenCount { get; set; }
+    public int ChangedCount { get; set; }
+    public int MissingCount { get; set; }
+    public DateTimeOffset? PulledAtUtc { get; set; }
+    public DateTimeOffset? LockedAtUtc { get; set; }
+    public DateTimeOffset? ExpiredAtUtc { get; set; }
+    public DateTimeOffset CreatedAtUtc { get; set; } = DateTimeOffset.UtcNow;
+    public DateTimeOffset UpdatedAtUtc { get; set; } = DateTimeOffset.UtcNow;
+
+    public TheOddsRefreshRun? LastRefreshRun { get; set; }
+    public ICollection<ProviderLineLifecycleEvent> Events { get; set; } = [];
+}
+
+public sealed class ProviderLineLifecycleEvent
+{
+    public Guid Id { get; set; }
+    public Guid ProviderLineLifecycleId { get; set; }
+    public Guid? RefreshRunId { get; set; }
+    public DateTimeOffset OccurredAtUtc { get; set; } = DateTimeOffset.UtcNow;
+    public string EventType { get; set; } = string.Empty;
+    public decimal? PreviousLine { get; set; }
+    public decimal? NewLine { get; set; }
+    public decimal? PreviousPrice { get; set; }
+    public decimal? NewPrice { get; set; }
+    public string? PreviousStatus { get; set; }
+    public string? NewStatus { get; set; }
+    public JsonDocument? MetadataJson { get; set; }
+
+    public ProviderLineLifecycle? ProviderLineLifecycle { get; set; }
+    public TheOddsRefreshRun? RefreshRun { get; set; }
+}
+
+public static class ProviderLineLifecycleStatuses
+{
+    public const string Active = "Active";
+    public const string Stale = "Stale";
+    public const string Pulled = "Pulled";
+    public const string Locked = "Locked";
+    public const string Expired = "Expired";
+    public const string ProviderUnavailable = "ProviderUnavailable";
+}
+
+public static class ProviderLineLifecycleEventTypes
+{
+    public const string FirstSeen = "FirstSeen";
+    public const string SeenUnchanged = "SeenUnchanged";
+    public const string LineChanged = "LineChanged";
+    public const string PriceChanged = "PriceChanged";
+    public const string LineAndPriceChanged = "LineAndPriceChanged";
+    public const string MissingFromRefresh = "MissingFromRefresh";
+    public const string ProviderPulled = "ProviderPulled";
+    public const string EventLocked = "EventLocked";
+    public const string MarkedStale = "MarkedStale";
+    public const string MarkedExpired = "MarkedExpired";
+    public const string ProviderUnavailable = "ProviderUnavailable";
+    public const string Reactivated = "Reactivated";
+}
+
 public sealed class IngestionRun
 {
     public Guid Id { get; set; }

@@ -4,7 +4,7 @@ import { PerformanceSummaryCards } from '../../components/performance/Performanc
 import { PerformanceTable } from '../../components/performance/PerformanceTable';
 import { AppCard } from '../../components/ui/AppCard';
 import { PageHeader } from '../../components/ui/PageHeader';
-import { mockPerformance } from '../../data/mockPerformance';
+import { usePerformanceData } from '../../hooks/useMarketData';
 import { useResponsiveView } from '../../hooks/useResponsiveView';
 import { palette } from '../../theme/palette';
 import { useMemo, useState } from 'react';
@@ -21,10 +21,12 @@ const breakdownTabs = [
 export function PerformancePage() {
   const { isMobile } = useResponsiveView();
   const [selectedTab, setSelectedTab] = useState(breakdownTabs[0].label);
+  const performanceQuery = usePerformanceData();
+  const performanceRows = performanceQuery.rows;
   const activeTab = breakdownTabs.find((tab) => tab.label === selectedTab) ?? breakdownTabs[0];
   const visibleRows = useMemo(
-    () => mockPerformance.filter((row) => activeTab.types.includes(row.groupType)),
-    [activeTab.types]
+    () => performanceRows.filter((row) => activeTab.types.includes(row.groupType)),
+    [activeTab.types, performanceRows]
   );
 
   return (
@@ -50,7 +52,15 @@ export function PerformancePage() {
         </Stack>
       </AppCard>
 
-      <PerformanceSummaryCards />
+      {performanceQuery.loading ? (
+        <ApiStateCard message="Loading performance summary..." />
+      ) : performanceQuery.error ? (
+        <ApiStateCard tone="error" message="Performance summary could not be loaded from the market API." />
+      ) : performanceRows.length ? (
+        <PerformanceSummaryCards rows={performanceRows} />
+      ) : (
+        <ApiStateCard message="No graded performance summary is available yet." />
+      )}
 
       <Stack spacing={1.5}>
         <Stack spacing={0.4}>
@@ -107,7 +117,9 @@ export function PerformancePage() {
           })}
         </Box>
 
-        {isMobile ? (
+        {performanceQuery.loading || performanceQuery.error || !performanceRows.length ? (
+          <ApiStateCard message={performanceQuery.loading ? 'Loading breakdowns...' : 'No performance breakdown rows are available.'} />
+        ) : isMobile ? (
           <PerformanceMobileAccordion rows={visibleRows} category={selectedTab} />
         ) : (
           <PerformanceTable rows={visibleRows} category={selectedTab} />
@@ -141,5 +153,13 @@ export function PerformancePage() {
         </AppCard>
       </Box>
     </Stack>
+  );
+}
+
+function ApiStateCard({ message, tone = 'default' }: { message: string; tone?: 'default' | 'error' }) {
+  return (
+    <AppCard sx={{ borderColor: tone === 'error' ? 'rgba(244,63,94,.32)' : undefined }}>
+      <Typography color={tone === 'error' ? 'error.main' : 'text.secondary'}>{message}</Typography>
+    </AppCard>
   );
 }

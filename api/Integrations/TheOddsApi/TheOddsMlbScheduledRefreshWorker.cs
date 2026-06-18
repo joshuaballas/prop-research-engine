@@ -19,10 +19,12 @@ public sealed class TheOddsMlbScheduledRefreshWorker(
             return;
         }
 
-        var interval = plannerOptions.Value.GetPlannerInterval();
+        var interval = options.Value.GetInterval();
+        var plannerInterval = plannerOptions.Value.GetPlannerInterval();
         logger.LogWarning(
-            "The Odds API MLB scheduled refresh worker is enabled. Planner interval: {Interval}. BookmakerPreset: {BookmakerPreset}. RequireForceLive: {RequireForceLive}. AllowScheduledLiveRefresh: {AllowScheduledLiveRefresh}.",
+            "The Odds API MLB scheduled refresh worker is enabled. Scheduled cadence: {Interval}. Planner check interval config: {PlannerInterval}. BookmakerPreset: {BookmakerPreset}. RequireForceLive: {RequireForceLive}. AllowScheduledLiveRefresh: {AllowScheduledLiveRefresh}.",
             interval,
+            plannerInterval,
             options.Value.BookmakerPreset,
             options.Value.RequireForceLive,
             options.Value.AllowScheduledLiveRefresh);
