@@ -4,6 +4,7 @@ public interface ITheOddsScheduledRefreshState
 {
     TheOddsScheduledRefreshStateSnapshot GetSnapshot();
     void MarkDisabled();
+    void MarkWaiting(DateTimeOffset observedAt, DateTimeOffset nextWakeAt);
     void MarkStarted(DateTimeOffset startedAt);
     void MarkBlocked(DateTimeOffset completedAt, string reason);
     void MarkSkipped(DateTimeOffset completedAt, string reason);
@@ -18,9 +19,13 @@ public sealed class TheOddsScheduledRefreshState : ITheOddsScheduledRefreshState
     private DateTimeOffset? lastRunStartedAtUtc;
     private DateTimeOffset? lastRunCompletedAtUtc;
     private bool? lastRunSucceeded;
+    private bool lastRunSkipped;
     private bool lastRunBlocked;
     private string? lastRunError;
     private string status = "disabled";
+    private bool workerRunning;
+    private DateTimeOffset? lastWakeAtUtc;
+    private DateTimeOffset? nextWakeEstimateUtc;
     private DateTimeOffset? lastPlanGeneratedAtUtc;
     private bool? lastPlanShouldRefresh;
     private string? lastPlanSkipReason;
@@ -38,9 +43,13 @@ public sealed class TheOddsScheduledRefreshState : ITheOddsScheduledRefreshState
                 lastRunStartedAtUtc,
                 lastRunCompletedAtUtc,
                 lastRunSucceeded,
+                lastRunSkipped,
                 lastRunBlocked,
                 lastRunError,
                 status,
+                workerRunning,
+                lastWakeAtUtc,
+                nextWakeEstimateUtc,
                 lastPlanGeneratedAtUtc,
                 lastPlanShouldRefresh,
                 lastPlanSkipReason,
@@ -57,6 +66,22 @@ public sealed class TheOddsScheduledRefreshState : ITheOddsScheduledRefreshState
         lock (syncRoot)
         {
             status = "disabled";
+            workerRunning = false;
+            nextWakeEstimateUtc = null;
+            lastRunSkipped = false;
+            lastRunBlocked = false;
+            lastRunError = null;
+        }
+    }
+
+    public void MarkWaiting(DateTimeOffset observedAt, DateTimeOffset nextWakeAt)
+    {
+        lock (syncRoot)
+        {
+            status = "waiting";
+            workerRunning = true;
+            lastWakeAtUtc = observedAt;
+            nextWakeEstimateUtc = nextWakeAt;
             lastRunBlocked = false;
             lastRunError = null;
         }
@@ -67,9 +92,13 @@ public sealed class TheOddsScheduledRefreshState : ITheOddsScheduledRefreshState
         lock (syncRoot)
         {
             status = "running";
+            workerRunning = true;
+            lastWakeAtUtc = startedAt;
+            nextWakeEstimateUtc = null;
             lastRunStartedAtUtc = startedAt;
             lastRunCompletedAtUtc = null;
             lastRunSucceeded = null;
+            lastRunSkipped = false;
             lastRunBlocked = false;
             lastRunError = null;
         }
@@ -82,6 +111,7 @@ public sealed class TheOddsScheduledRefreshState : ITheOddsScheduledRefreshState
             status = "blocked";
             lastRunCompletedAtUtc = completedAt;
             lastRunSucceeded = false;
+            lastRunSkipped = false;
             lastRunBlocked = true;
             lastRunError = reason;
         }
@@ -94,6 +124,7 @@ public sealed class TheOddsScheduledRefreshState : ITheOddsScheduledRefreshState
             status = "skipped";
             lastRunCompletedAtUtc = completedAt;
             lastRunSucceeded = false;
+            lastRunSkipped = true;
             lastRunBlocked = false;
             lastRunError = null;
             lastSkippedAtUtc = completedAt;
@@ -121,6 +152,7 @@ public sealed class TheOddsScheduledRefreshState : ITheOddsScheduledRefreshState
             status = "completed";
             lastRunCompletedAtUtc = completedAt;
             lastRunSucceeded = true;
+            lastRunSkipped = false;
             lastRunBlocked = false;
             lastRunError = null;
         }
@@ -133,6 +165,7 @@ public sealed class TheOddsScheduledRefreshState : ITheOddsScheduledRefreshState
             status = "failed";
             lastRunCompletedAtUtc = completedAt;
             lastRunSucceeded = false;
+            lastRunSkipped = false;
             lastRunBlocked = false;
             lastRunError = error;
         }
@@ -143,9 +176,13 @@ public sealed record TheOddsScheduledRefreshStateSnapshot(
     DateTimeOffset? LastRunStartedAtUtc,
     DateTimeOffset? LastRunCompletedAtUtc,
     bool? LastRunSucceeded,
+    bool LastRunSkipped,
     bool LastRunBlocked,
     string? LastRunError,
     string Status,
+    bool WorkerRunning,
+    DateTimeOffset? LastWakeAtUtc,
+    DateTimeOffset? NextWakeEstimateUtc,
     DateTimeOffset? LastPlanGeneratedAtUtc,
     bool? LastPlanShouldRefresh,
     string? LastPlanSkipReason,

@@ -17,12 +17,14 @@ public interface ITheOddsRefreshPlannerService
 
 public sealed class TheOddsRefreshPlannerService(
     ApplicationDbContext dbContext,
-    IOptions<TheOddsRefreshPlannerOptions> options) : ITheOddsRefreshPlannerService
+    IOptions<TheOddsRefreshPlannerOptions> options,
+    IOptions<TheOddsScheduledRefreshOptions> scheduledRefreshOptions) : ITheOddsRefreshPlannerService
 {
     public async Task<TheOddsRefreshPlanResult> BuildPlanAsync(CancellationToken cancellationToken)
     {
         var generatedAtUtc = DateTimeOffset.UtcNow;
         var plannerOptions = options.Value;
+        var scheduledOptions = scheduledRefreshOptions.Value;
         var latestRun = await dbContext.TheOddsRefreshRuns
             .AsNoTracking()
             .Where(row => row.Provider == "The Odds API" && row.Sport == "MLB")
@@ -47,7 +49,20 @@ public sealed class TheOddsRefreshPlannerService(
             estimatedSlateEvents = eventStartTimes.Length;
         }
 
-        var estimatedApiCalls = estimatedSlateEvents == 0 ? 0 : 1 + estimatedSlateEvents;
+        var hasPersistedEventEstimate = estimatedSlateEvents > 0;
+        var allowEventDiscoveryFallback = scheduledOptions.Enabled &&
+            scheduledOptions.AllowScheduledLiveRefresh &&
+            scheduledOptions.AllowEventDiscoveryWhenNoPersistedEvents;
+        var estimateSource = hasPersistedEventEstimate
+            ? "PersistedEvents"
+            : allowEventDiscoveryFallback
+                ? "EventDiscoveryFallback"
+                : "NoPersistedEvents";
+        var estimatedApiCalls = hasPersistedEventEstimate
+            ? 1 + estimatedSlateEvents
+            : allowEventDiscoveryFallback
+                ? scheduledOptions.GetFallbackEstimatedApiCalls()
+                : 0;
         var providerDiagnostics = ExtractProviderDiagnostics(latestRun?.DiagnosticsJson);
         var activeSnapshotCount = latestRun is null ? 0 : await dbContext.MarketLineShoppingSnapshots
             .AsNoTracking()
@@ -68,7 +83,7 @@ public sealed class TheOddsRefreshPlannerService(
         var minutesUntilNextEventStart = nextEventStart == default
             ? (decimal?)null
             : Math.Round((decimal)(nextEventStart - generatedAtUtc).TotalMinutes, 2);
-        var cadence = ResolveCadence(plannerOptions, minutesUntilNextEventStart);
+        var cadence = ResolveCadence(plannerOptions, scheduledOptions, minutesUntilNextEventStart, estimateSource);
         var lastSuccessfulAt = latestSuccessfulRun?.CompletedAtUtc ?? latestSuccessfulRun?.StartedAtUtc;
         var nextEligibleRefreshUtc = lastSuccessfulAt?.AddMinutes(cadence.RefreshEveryMinutes) ?? generatedAtUtc;
         var cadenceAllowsRefresh = !lastSuccessfulAt.HasValue || generatedAtUtc >= nextEligibleRefreshUtc;
@@ -82,7 +97,8 @@ public sealed class TheOddsRefreshPlannerService(
             budget.BudgetAllowed,
             cadenceAllowsRefresh,
             stopAfterStartTriggered,
-            estimatedSlateEvents);
+            estimatedSlateEvents,
+            allowEventDiscoveryFallback);
 
         return new TheOddsRefreshPlanResult(
             generatedAtUtc,
@@ -95,6 +111,7 @@ public sealed class TheOddsRefreshPlannerService(
             BookmakerPreset: plannerOptions.DefaultBookmakerPreset,
             EstimatedSlateEvents: estimatedSlateEvents,
             EstimatedApiCalls: estimatedApiCalls,
+            EstimateSource: estimateSource,
             CadenceRule: cadence,
             MinutesUntilNextEventStart: minutesUntilNextEventStart,
             LastSuccessfulRefreshAtUtc: lastSuccessfulAt,
@@ -106,7 +123,7 @@ public sealed class TheOddsRefreshPlannerService(
             HasUsableMarketData: latestHadUsableMarketData,
             ShouldRefresh: skipReason is null,
             SkipReason: skipReason,
-            RecommendedAction: BuildRecommendedAction(skipReason, providerDiagnostics));
+            RecommendedAction: BuildRecommendedAction(skipReason, estimateSource, providerDiagnostics));
     }
 
     private async Task<TheOddsRefreshBudgetSummary> BuildBudgetAsync(
@@ -168,6 +185,7 @@ public sealed class TheOddsRefreshPlannerService(
         CancellationToken cancellationToken)
     {
         var plannerOptions = options.Value;
+        var scheduledOptions = scheduledRefreshOptions.Value;
         var decision = new TheOddsRefreshPlannerDecision
         {
             Id = Guid.NewGuid(),
@@ -204,6 +222,7 @@ public sealed class TheOddsRefreshPlannerService(
                 plan.RequestsRemaining,
                 plan.EstimatedSlateEvents,
                 plan.EstimatedApiCalls,
+                plan.EstimateSource,
                 plan.CadenceRule,
                 plan.Budget,
                 plan.HasUsableMarketData,
@@ -222,7 +241,9 @@ public sealed class TheOddsRefreshPlannerService(
                     plannerOptions.HardStopAtDailyPercent,
                     plannerOptions.HardStopAtMonthlyPercent,
                     plannerOptions.ProviderRemainingHardStopCredits,
-                    plannerOptions.StopAfterEventStart
+                    plannerOptions.StopAfterEventStart,
+                    scheduledOptions.AllowEventDiscoveryWhenNoPersistedEvents,
+                    scheduledOptions.FallbackEstimatedApiCalls
                 }
             })
         };
@@ -266,37 +287,53 @@ public sealed class TheOddsRefreshPlannerService(
         bool budgetAllowed,
         bool cadenceAllowsRefresh,
         bool stopAfterStartTriggered,
-        int estimatedSlateEvents)
+        int estimatedSlateEvents,
+        bool allowEventDiscoveryFallback)
     {
         if (!plannerOptions.Enabled) return "PlannerDisabled";
         if (!providerAvailable) return "ProviderUnavailable";
         if (!budgetAllowed) return "CreditBudgetExceeded";
         if (stopAfterStartTriggered) return "StopAfterEventStart";
-        if (estimatedSlateEvents <= 0) return "NoPersistedSlateEvents";
+        if (estimatedSlateEvents <= 0 && !allowEventDiscoveryFallback) return "NoPersistedSlateEvents";
         if (!cadenceAllowsRefresh) return "CadenceNotDue";
         return null;
     }
 
-    private static string BuildRecommendedAction(string? skipReason, ProviderDiagnostics diagnostics)
+    private static string BuildRecommendedAction(string? skipReason, string estimateSource, ProviderDiagnostics diagnostics)
     {
         return skipReason switch
         {
+            null when estimateSource == "EventDiscoveryFallback" => "Refresh is eligible. No persisted events are available, so scheduled refresh will discover events from The Odds before fetching lines.",
             null => "Refresh is eligible by persisted planner state. Scheduled live execution still requires explicit scheduled live config.",
             "ProviderUnavailable" when diagnostics.ProviderRejectedKeyDetected => "Check TheOddsApi:ApiKey and account credit status before live refreshes.",
             "ProviderUnavailable" => "Provider is unavailable or degraded beyond planner limits; skip scheduled refresh.",
             "CreditBudgetExceeded" => "Skip refresh because estimated calls would exceed the configured credit budget or provider remaining credits.",
             "CadenceNotDue" => "Skip refresh until the configured cadence window is due.",
-            "StopAfterEventStart" => "Skip refresh because configured planning stops after the slate has started.",
+            "StopAfterEventStart" => "Skip refresh because TheOddsRefreshPlanner:StopAfterEventStart is enabled for this target.",
             "NoPersistedSlateEvents" => "No persisted slate events are available for estimation.",
             "PlannerDisabled" => "Planner is disabled in config.",
             _ => "Skip refresh based on current planner state."
         };
     }
 
-    private static PlannerCadenceRule ResolveCadence(TheOddsRefreshPlannerOptions options, decimal? minutesUntilNextEventStart)
+    private static PlannerCadenceRule ResolveCadence(
+        TheOddsRefreshPlannerOptions options,
+        TheOddsScheduledRefreshOptions scheduledOptions,
+        decimal? minutesUntilNextEventStart,
+        string estimateSource)
     {
         if (!minutesUntilNextEventStart.HasValue)
         {
+            if (estimateSource == "EventDiscoveryFallback")
+            {
+                return new PlannerCadenceRule(
+                    "EventDiscoveryFallback",
+                    null,
+                    null,
+                    (int)scheduledOptions.GetInterval().TotalMinutes,
+                    "No persisted upcoming event start was found; use scheduled cadence and discover events live.");
+            }
+
             return new PlannerCadenceRule("NoKnownUpcomingEvent", null, null, options.FarOutRefreshMinutes, "No persisted upcoming event start was found.");
         }
 
@@ -478,7 +515,7 @@ public sealed class TheOddsRefreshPlannerOptions
     public int NearLockMaxMinutes { get; set; } = 30;
     public int NearLockRefreshMinutes { get; set; } = 5;
     public int FarOutMaxMinutes { get; set; } = 1440;
-    public bool StopAfterEventStart { get; set; } = true;
+    public bool StopAfterEventStart { get; set; } = false;
 
     public TimeSpan GetPlannerInterval() => TimeSpan.FromSeconds(Math.Max(10, PlannerIntervalSeconds));
 }
@@ -494,6 +531,7 @@ public sealed record TheOddsRefreshPlanResult(
     string BookmakerPreset,
     int EstimatedSlateEvents,
     int EstimatedApiCalls,
+    string EstimateSource,
     PlannerCadenceRule CadenceRule,
     decimal? MinutesUntilNextEventStart,
     DateTimeOffset? LastSuccessfulRefreshAtUtc,

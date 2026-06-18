@@ -5,6 +5,7 @@ import { Box, Button, Stack, Table, TableBody, TableCell, TableHead, TableRow, T
 import { useEntryBuilder } from '../../hooks/useEntryBuilder';
 import type { MarketOpportunity } from '../../types/markets';
 import { formatPercent } from '../../utils/formatters';
+import { MetricLabelWithHelp } from '../metrics/MetricLabelWithHelp';
 import { StatusPill } from '../ui/StatusPill';
 import { ProjectionModifierBadge } from './ProjectionModifierBadge';
 import { ProviderLabel } from '../providers/ProviderLabel';
@@ -21,11 +22,12 @@ export function MarketTable({ markets }: { markets: MarketOpportunity[] }) {
             <TableCell>Sport</TableCell>
             <TableCell>Provider</TableCell>
             <TableCell>Line</TableCell>
-            <TableCell align="right">EV</TableCell>
-            <TableCell align="right">Edge</TableCell>
-            <TableCell>Confidence</TableCell>
+            <TableCell align="right"><MetricLabelWithHelp metric="ev" align="right" variant="table" /></TableCell>
+            <TableCell align="right"><MetricLabelWithHelp metric="edge" align="right" variant="table" /></TableCell>
+            <TableCell align="right"><MetricLabelWithHelp metric="hitChance" align="right" variant="table" /></TableCell>
+            <TableCell><MetricLabelWithHelp metric="trust" variant="table" /></TableCell>
             <TableCell>Tags</TableCell>
-            <TableCell>Warning</TableCell>
+            <TableCell><MetricLabelWithHelp metric="warning" variant="table" /></TableCell>
             <TableCell>Action</TableCell>
           </TableRow>
         </TableHead>
@@ -73,6 +75,9 @@ export function MarketTable({ markets }: { markets: MarketOpportunity[] }) {
                 </TableCell>
                 <TableCell align="right">
                   <Typography fontWeight={900}>{formatPercent(market.probabilityEdge, { signed: true })}</Typography>
+                </TableCell>
+                <TableCell align="right">
+                  <Typography fontWeight={900}>{formatPercent(market.modelProbability)}</Typography>
                 </TableCell>
                 <TableCell><ConfidenceLabel level={market.trustLevel} /></TableCell>
                 <TableCell>

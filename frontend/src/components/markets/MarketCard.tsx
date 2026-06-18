@@ -5,6 +5,7 @@ import { Button, Stack, Typography } from '@mui/material';
 import { useEntryBuilder } from '../../hooks/useEntryBuilder';
 import type { MarketOpportunity } from '../../types/markets';
 import { formatPercent } from '../../utils/formatters';
+import { MetricLabelWithHelp } from '../metrics/MetricLabelWithHelp';
 import { ProviderLabel } from '../providers/ProviderLabel';
 import { AppCard } from '../ui/AppCard';
 import { StatusPill } from '../ui/StatusPill';
@@ -58,8 +59,8 @@ export function MarketCard({ market }: { market: MarketOpportunity }) {
         </Stack>
 
         <Stack direction="row" justifyContent="space-between" sx={{ borderTop: '1px solid rgba(148,163,184,.14)', pt: 1 }}>
-          <Metric label="Edge" value={formatPercent(market.probabilityEdge, { signed: true })} />
-          <Metric label="Model" value={formatPercent(market.modelProbability)} />
+          <Metric label="Edge" value={formatPercent(market.probabilityEdge, { signed: true })} metric="edge" />
+          <Metric label="Hit chance" value={formatPercent(market.modelProbability)} metric="hitChance" />
           <Metric label="Sample" value={String(market.historicalSampleSize)} />
           <Metric label="Line" value={String(market.line)} />
         </Stack>
@@ -134,12 +135,14 @@ function isScannerAddable(market: MarketOpportunity) {
   );
 }
 
-function Metric({ label, value }: { label: string; value: string }) {
+function Metric({ label, value, metric }: { label: string; value: string; metric?: 'ev' | 'edge' | 'hitChance' | 'trust' | 'warning' }) {
   return (
     <Stack spacing={0.15}>
-      <Typography variant="caption" color="text.secondary" fontWeight={850}>
-        {label}
-      </Typography>
+      {metric ? <MetricLabelWithHelp metric={metric} /> : (
+        <Typography variant="caption" color="text.secondary" fontWeight={850}>
+          {label}
+        </Typography>
+      )}
       <Typography fontWeight={950}>{value}</Typography>
     </Stack>
   );

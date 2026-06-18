@@ -6,6 +6,7 @@ import { Box, Button, Divider, Stack, Typography } from '@mui/material';
 import { useToast } from '../../hooks/useToast';
 import { formatAmericanOdds, formatDecimal, formatPercent, formatRiskToWin } from '../../utils/formatters';
 import type { MarketOpportunity } from '../../types/markets';
+import { MetricLabelWithHelp } from '../metrics/MetricLabelWithHelp';
 import { AppCard } from '../ui/AppCard';
 import { StatusPill } from '../ui/StatusPill';
 import { ProjectionModifierBadge } from './ProjectionModifierBadge';
@@ -59,9 +60,7 @@ export function TopPickCard({ market, onAdd, hideActions = false, variant = 'def
             <Stack direction="row" justifyContent="space-between" alignItems="center" gap={1.2} flexWrap="wrap">
               <ProviderLabel provider={market.provider} category={market.providerCategory} compact />
               <Stack direction="row" spacing={0.7} alignItems="center">
-                <Typography variant="caption" color="text.secondary" fontWeight={850}>
-                  Confidence
-                </Typography>
+                <MetricLabelWithHelp metric="trust" />
                 <StatusPill label={confidence} />
               </Stack>
             </Stack>
@@ -71,10 +70,10 @@ export function TopPickCard({ market, onAdd, hideActions = false, variant = 'def
             <Stack direction="row" flexWrap="wrap" gap={1.75} rowGap={1.25}>
               <Metric label="Odds" value={`${formatAmericanOdds(market.bestAmericanPrice)} / ${formatDecimal(market.bestDecimalPrice)}`} />
               <Metric label="Risk" value={formatRiskToWin(market.bestAmericanPrice)} />
-              <Metric label="Model" value={formatPercent(market.modelProbability)} />
+              <Metric label="Hit chance" value={formatPercent(market.modelProbability)} metric="hitChance" />
               <Metric label="Break-even" value={formatPercent(market.impliedProbability)} />
-              <Metric label="Edge" value={formatPercent(market.probabilityEdge, { signed: true })} />
-              <Metric label="EV" value={formatPercent(market.estimatedEv, { signed: true })} />
+              <Metric label="Edge" value={formatPercent(market.probabilityEdge, { signed: true })} metric="edge" />
+              <Metric label="EV" value={formatPercent(market.estimatedEv, { signed: true })} metric="ev" />
               <Metric label="Sample" value={`${market.historicalSampleSize}`} />
             </Stack>
 
@@ -138,24 +137,22 @@ export function TopPickCard({ market, onAdd, hideActions = false, variant = 'def
               <Typography color={market.estimatedEv > 0 ? 'success.main' : 'error.main'} fontWeight={950}>
                 {formatPercent(market.estimatedEv, { signed: true })}
               </Typography>
-              <Typography variant="caption" color="text.secondary" fontWeight={800}>
-                EV
-              </Typography>
+              <MetricLabelWithHelp metric="ev" align="right" />
             </Stack>
           </Stack>
 
           <Stack direction="row" justifyContent="space-between" alignItems="center" gap={1} flexWrap="wrap">
             <ProviderLabel provider={market.provider} category={market.providerCategory} compact />
             <Typography variant="caption" color={confidenceTone[confidence]} fontWeight={900}>
-              {confidence} confidence
+              {confidence} trust
             </Typography>
           </Stack>
 
           <Divider />
 
           <Stack direction="row" flexWrap="wrap" gap={1.4} rowGap={0.75}>
-            <Metric label="Edge" value={formatPercent(market.probabilityEdge, { signed: true })} compact />
-            <Metric label="Model" value={formatPercent(market.modelProbability)} compact />
+            <Metric label="Edge" value={formatPercent(market.probabilityEdge, { signed: true })} compact metric="edge" />
+            <Metric label="Hit chance" value={formatPercent(market.modelProbability)} compact metric="hitChance" />
             <Metric label="Sample" value={`${market.historicalSampleSize}`} compact />
           </Stack>
 
@@ -224,10 +221,10 @@ export function TopPickCard({ market, onAdd, hideActions = false, variant = 'def
         <Stack direction="row" flexWrap="wrap" gap={2}>
           <Metric label="Odds" value={`${formatAmericanOdds(market.bestAmericanPrice)} / ${formatDecimal(market.bestDecimalPrice)}`} />
           <Metric label="Risk" value={formatRiskToWin(market.bestAmericanPrice)} />
-          <Metric label="Model" value={formatPercent(market.modelProbability)} />
+          <Metric label="Hit chance" value={formatPercent(market.modelProbability)} metric="hitChance" />
           <Metric label="Break-even" value={formatPercent(market.impliedProbability)} />
-          <Metric label="Edge" value={formatPercent(market.probabilityEdge, { signed: true })} />
-          <Metric label="EV" value={formatPercent(market.estimatedEv, { signed: true })} />
+          <Metric label="Edge" value={formatPercent(market.probabilityEdge, { signed: true })} metric="edge" />
+          <Metric label="EV" value={formatPercent(market.estimatedEv, { signed: true })} metric="ev" />
           <Metric label="Sample" value={`${market.historicalSampleSize}`} />
         </Stack>
 
@@ -261,12 +258,16 @@ export function TopPickCard({ market, onAdd, hideActions = false, variant = 'def
   );
 }
 
-function Metric({ label, value, compact = false }: { label: string; value: string; compact?: boolean }) {
+function Metric({ label, value, compact = false, metric }: { label: string; value: string; compact?: boolean; metric?: 'ev' | 'edge' | 'hitChance' | 'trust' | 'warning' }) {
   return (
     <Stack minWidth={compact ? 68 : 92} spacing={0.2}>
-      <Typography variant="caption" color="text.secondary" fontWeight={800}>
-        {label}
-      </Typography>
+      {metric ? (
+        <MetricLabelWithHelp metric={metric} />
+      ) : (
+        <Typography variant="caption" color="text.secondary" fontWeight={800}>
+          {label}
+        </Typography>
+      )}
       <Typography variant="body2" fontWeight={900}>
         {value}
       </Typography>
@@ -324,7 +325,7 @@ export function getTopPickConfidence(market: MarketOpportunity): 'Strong' | 'Med
 }
 
 export function formatTopPickWarning(market: MarketOpportunity) {
-  return market.warnings.map(cleanWarning).join(' - ') || 'None';
+  return market.warnings.map(cleanWarning).join(' - ') || '-';
 }
 
 const confidenceTone = {

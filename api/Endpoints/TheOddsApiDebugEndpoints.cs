@@ -964,6 +964,12 @@ public static partial class TheOddsApiDebugEndpoints
             var currentPlan = await planner.BuildPlanAsync(cancellationToken);
             var scheduledInterval = scheduledOptions.GetInterval();
             var plannerInterval = plannerConfig.GetPlannerInterval();
+            var latestRefreshRun = await dbContext.TheOddsRefreshRuns
+                .AsNoTracking()
+                .Where(row => row.Provider == "The Odds API" && row.Sport == "MLB")
+                .OrderByDescending(row => row.StartedAtUtc)
+                .ThenByDescending(row => row.CompletedAtUtc)
+                .FirstOrDefaultAsync(cancellationToken);
             var latestSuccessfulRefresh = await dbContext.TheOddsRefreshRuns
                 .AsNoTracking()
                 .Where(row => row.Succeeded)
@@ -972,15 +978,22 @@ public static partial class TheOddsApiDebugEndpoints
                 .FirstOrDefaultAsync(cancellationToken);
             var latestSuccessfulRefreshCompletedAtUtc =
                 latestSuccessfulRefresh?.CompletedAtUtc ?? latestSuccessfulRefresh?.StartedAtUtc;
-            var nextRunEstimateUtc = scheduledOptions.Enabled
-                ? latestSuccessfulRefreshCompletedAtUtc?.Add(scheduledInterval)
-                    ?? snapshot.LastRunCompletedAtUtc?.Add(scheduledInterval)
-                    ?? snapshot.LastRunStartedAtUtc?.Add(scheduledInterval)
-                    ?? DateTimeOffset.UtcNow.Add(scheduledInterval)
+            var executionBlockedReason = ResolveScheduledRefreshExecutionBlockedReason(scheduledOptions, plannerConfig);
+            var willCallExternalApis = executionBlockedReason is null;
+            var postRefreshReadBuffer = scheduledOptions.GetPostRefreshReadBuffer();
+            var nextRefreshDueUtc = scheduledOptions.Enabled && latestSuccessfulRefreshCompletedAtUtc.HasValue
+                ? latestSuccessfulRefreshCompletedAtUtc.Value.Add(scheduledInterval)
                 : (DateTimeOffset?)null;
+            var nextDataAvailableEstimateUtc = nextRefreshDueUtc?.Add(postRefreshReadBuffer);
+            var nextRunEstimateUtc = nextDataAvailableEstimateUtc;
             var status = scheduledOptions.Enabled && snapshot.Status == "disabled"
                 ? "waiting"
                 : snapshot.Status;
+            var currentPlanRecommendedAction = currentPlan.ShouldRefresh &&
+                willCallExternalApis &&
+                !string.Equals(currentPlan.EstimateSource, "EventDiscoveryFallback", StringComparison.OrdinalIgnoreCase)
+                ? "Refresh is eligible for scheduled live execution."
+                : currentPlan.RecommendedAction;
 
             return Results.Ok(new
             {
@@ -998,15 +1011,26 @@ public static partial class TheOddsApiDebugEndpoints
                 freshnessMinutes = scheduledOptions.FreshnessMinutes,
                 requireForceLive = scheduledOptions.RequireForceLive,
                 allowScheduledLiveRefresh = scheduledOptions.AllowScheduledLiveRefresh,
+                postRefreshReadBufferSeconds = (int)postRefreshReadBuffer.TotalSeconds,
                 plannerIntervalSeconds = plannerConfig.PlannerIntervalSeconds,
                 effectivePlannerIntervalSeconds = (int)plannerInterval.TotalSeconds,
+                workerRegistered = true,
+                workerRunning = snapshot.WorkerRunning,
+                snapshot.LastWakeAtUtc,
+                snapshot.NextWakeEstimateUtc,
                 snapshot.LastRunStartedAtUtc,
                 snapshot.LastRunCompletedAtUtc,
                 snapshot.LastRunSucceeded,
+                snapshot.LastRunSkipped,
                 snapshot.LastRunBlocked,
                 snapshot.LastRunError,
+                latestRefreshRunId = latestRefreshRun?.Id,
+                latestRun = ToTheOddsRefreshRunSummary(latestRefreshRun),
                 latestSuccessfulRefresh = ToTheOddsRefreshRunSummary(latestSuccessfulRefresh),
                 latestSuccessfulRefreshCompletedAtUtc,
+                latestSuccessfulRefreshId = latestSuccessfulRefresh?.Id,
+                latestSuccessfulRefreshRunId = latestSuccessfulRefresh?.Id,
+                actualApiCalls = latestRefreshRun?.ActualApiCalls ?? 0,
                 snapshot.LastPlanGeneratedAtUtc,
                 snapshot.LastPlanShouldRefresh,
                 snapshot.LastPlanSkipReason,
@@ -1021,15 +1045,44 @@ public static partial class TheOddsApiDebugEndpoints
                     currentPlan.ShouldRefresh,
                     currentPlan.SkipReason,
                     currentPlan.EstimatedApiCalls,
+                    currentPlan.EstimateSource,
                     budgetAllowed = currentPlan.Budget.BudgetAllowed,
                     currentPlan.ProviderAvailable,
                     currentPlan.ProviderStatus,
                     currentPlan.ProviderRejectedKeyDetected,
-                    currentPlan.RecommendedAction
+                    recommendedAction = currentPlanRecommendedAction
                 },
+                nextRefreshDueUtc,
+                nextDataAvailableEstimateUtc,
+                refreshedTargets = latestSuccessfulRefresh is null
+                    ? Array.Empty<object>()
+                    : new object[]
+                    {
+                        new
+                        {
+                            sport = latestSuccessfulRefresh.Sport,
+                            latestSuccessfulRefresh.BookmakerPreset,
+                            providerCategories = ParseCommaSeparatedSet(latestSuccessfulRefresh.ProviderCategoriesIncluded),
+                            latestSuccessfulRefresh.ActualApiCalls,
+                            completedAtUtc = latestSuccessfulRefresh.CompletedAtUtc ?? latestSuccessfulRefresh.StartedAtUtc
+                        }
+                    },
+                skippedTargets = currentPlan.ShouldRefresh
+                    ? Array.Empty<object>()
+                    : new object[]
+                    {
+                        new
+                        {
+                            sport = "MLB",
+                            bookmakerPreset = scheduledOptions.BookmakerPreset,
+                            skipReason = currentPlan.SkipReason,
+                            currentPlan.RecommendedAction
+                        }
+                    },
                 nextRunEstimateUtc,
                 callsExternalApis = false,
-                willCallExternalApis = scheduledOptions.Enabled && scheduledOptions.AllowScheduledLiveRefresh,
+                willCallExternalApis,
+                executionBlockedReason,
                 readOnly = true,
                 status,
                 safety = new
@@ -1039,8 +1092,9 @@ public static partial class TheOddsApiDebugEndpoints
                     statusEndpointCallsExternalApis = false,
                     requiresExplicitLocalEnablement = true,
                     liveExecutionRequiresAllowScheduledLiveRefresh = true,
-                    liveExecutionBlockedWhenRequireForceLive = true,
+                    scheduledRequestsUseForceLive = true,
                     plannerGatedExecution = true,
+                    stopAfterEventStart = plannerConfig.StopAfterEventStart,
                     refreshLogicSource = "Shared refresh-current service; automatic live execution remains disabled by default and guarded by planner, budget, provider status, and scheduled refresh config."
                 }
             });
@@ -3143,6 +3197,28 @@ public static partial class TheOddsApiDebugEndpoints
             run.ErrorMessage,
             diagnostics = run.DiagnosticsJson
         };
+    }
+
+    private static string? ResolveScheduledRefreshExecutionBlockedReason(
+        TheOddsScheduledRefreshOptions scheduledOptions,
+        TheOddsRefreshPlannerOptions plannerOptions)
+    {
+        if (!scheduledOptions.Enabled)
+        {
+            return "TheOddsScheduledRefresh:Enabled is false.";
+        }
+
+        if (!plannerOptions.Enabled)
+        {
+            return "TheOddsRefreshPlanner:Enabled is false.";
+        }
+
+        if (!scheduledOptions.AllowScheduledLiveRefresh)
+        {
+            return "TheOddsScheduledRefresh:AllowScheduledLiveRefresh is false.";
+        }
+
+        return null;
     }
 
     private static object BuildTheOddsProviderFailureResponse(TheOddsApiProviderException exception)

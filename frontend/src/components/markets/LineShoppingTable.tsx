@@ -7,6 +7,7 @@ import { Accordion, AccordionDetails, AccordionSummary, Box, Button, Divider, St
 import { useEntryBuilder } from '../../hooks/useEntryBuilder';
 import type { MarketOpportunity } from '../../types/markets';
 import { formatPercent } from '../../utils/formatters';
+import { MetricLabelWithHelp } from '../metrics/MetricLabelWithHelp';
 import { ProviderLabel } from '../providers/ProviderLabel';
 import { StatusPill } from '../ui/StatusPill';
 import { compactActionButtonSx, lockedActionButtonSx, removeActionButtonSx, secondaryGhostButtonSx } from '../ui/buttonStyles';
@@ -24,9 +25,9 @@ export function LineShoppingTable({ markets, showActions = true }: { markets: Ma
             <TableCell>Best DFS / Source</TableCell>
             <TableCell>DFS Line</TableCell>
             <TableCell>Reference Lines</TableCell>
-            <TableCell align="right">EV</TableCell>
-            <TableCell>Confidence</TableCell>
-            <TableCell>Warning</TableCell>
+            <TableCell align="right"><MetricLabelWithHelp metric="ev" align="right" variant="table" /></TableCell>
+            <TableCell><MetricLabelWithHelp metric="trust" variant="table" /></TableCell>
+            <TableCell><MetricLabelWithHelp metric="warning" variant="table" /></TableCell>
             {showActions ? <TableCell align="center">Action</TableCell> : null}
           </TableRow>
         </TableHead>
@@ -92,7 +93,7 @@ function LineShoppingRow({ market, showActions }: { market: MarketOpportunity; s
               </TableCell>
               <TableCell sx={{ minWidth: 185, maxWidth: 230 }}>
                 <Typography variant="body2" color={market.warnings.length ? 'warning.main' : 'text.secondary'} sx={{ lineHeight: 1.4 }}>
-                  {market.warnings.map(cleanWarning).join(', ') || 'None'}
+                  {market.warnings.map(cleanWarning).join(', ') || '-'}
                 </Typography>
               </TableCell>
               {showActions ? <LineShoppingActionCell market={market} /> : null}
@@ -180,7 +181,7 @@ export function LineShoppingCard({ market }: { market: MarketOpportunity }) {
         <Stack spacing={1.1}>
           <Divider />
           <DetailLine label="Best DFS line" value={`${market.provider} - ${market.side} ${market.line}`} />
-          <DetailLine label="Confidence" value={confidence} tone={confidenceTone[confidence]} />
+          <DetailLine label="Trust" value={confidence} tone={confidenceTone[confidence]} metric="trust" />
           <DetailLine label="Reference lines" value={market.sportsbookContext ?? 'No reference line'} />
           <ProviderLineGroup title="DFS lines" lines={dfsLines} marketId={market.id} />
           <ProviderLineGroup title="Reference lines" lines={referenceLines} marketId={market.id} emptyText="No reference-line details available." />
@@ -239,12 +240,14 @@ function ProviderLineGroup({
   );
 }
 
-function DetailLine({ label, value, tone = 'text.primary' }: { label: string; value: string; tone?: string }) {
+function DetailLine({ label, value, tone = 'text.primary', metric }: { label: string; value: string; tone?: string; metric?: 'ev' | 'edge' | 'hitChance' | 'trust' | 'warning' }) {
   return (
     <Stack spacing={0.15}>
-      <Typography variant="caption" color="text.secondary" fontWeight={850}>
-        {label}
-      </Typography>
+      {metric ? <MetricLabelWithHelp metric={metric} /> : (
+        <Typography variant="caption" color="text.secondary" fontWeight={850}>
+          {label}
+        </Typography>
+      )}
       <Typography fontWeight={900} color={tone}>{value}</Typography>
     </Stack>
   );

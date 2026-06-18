@@ -33,9 +33,14 @@ public sealed class TheOddsMlbScheduledRefreshWorker(
 
         try
         {
+            logger.LogInformation("The Odds API MLB scheduled refresh worker running startup planning cycle.");
+            await RunGuardedCycleAsync(stoppingToken);
+            state.MarkWaiting(DateTimeOffset.UtcNow, DateTimeOffset.UtcNow.Add(interval));
+
             while (await timer.WaitForNextTickAsync(stoppingToken))
             {
                 await RunGuardedCycleAsync(stoppingToken);
+                state.MarkWaiting(DateTimeOffset.UtcNow, DateTimeOffset.UtcNow.Add(interval));
             }
         }
         catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)

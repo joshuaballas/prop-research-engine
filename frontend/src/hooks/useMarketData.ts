@@ -14,20 +14,25 @@ import {
   demoTopPicks
 } from '../data/demo/marketFixtures';
 import type { MarketOpportunity } from '../types/markets';
+import { useMarketDataRefreshVersion } from './useMarketDataRefresh';
 
 export function useMarketFreshnessData(deps: readonly unknown[] = []) {
-  return useApiQuery((signal) => (isDemoDataMode ? Promise.resolve(demoMarketFreshness) : getMarketFreshness(signal)), deps);
+  const refreshVersion = useMarketDataRefreshVersion();
+  return useApiQuery((signal) => (isDemoDataMode ? Promise.resolve(demoMarketFreshness) : getMarketFreshness(signal)), [...deps, refreshVersion]);
 }
 
 export function useProviderStatusData(deps: readonly unknown[] = []) {
-  return useApiQuery((signal) => (isDemoDataMode ? Promise.resolve(demoProviderStatus) : getProviderStatus(signal)), deps);
+  const refreshVersion = useMarketDataRefreshVersion();
+  return useApiQuery((signal) => (isDemoDataMode ? Promise.resolve(demoProviderStatus) : getProviderStatus(signal)), [...deps, refreshVersion]);
 }
 
 export function useScheduledRefreshStatusData(deps: readonly unknown[] = []) {
-  return useApiQuery((signal) => (isDemoDataMode ? Promise.resolve(demoScheduledRefreshStatus) : getScheduledRefreshStatus(signal)), deps);
+  const refreshVersion = useMarketDataRefreshVersion();
+  return useApiQuery((signal) => (isDemoDataMode ? Promise.resolve(demoScheduledRefreshStatus) : getScheduledRefreshStatus(signal)), [...deps, refreshVersion]);
 }
 
 export function useTopPicksData(take = 30, sourcePrefix = 'top-pick') {
+  const refreshVersion = useMarketDataRefreshVersion();
   const query = useApiQuery(
     async (signal) => {
       if (isDemoDataMode) {
@@ -37,7 +42,7 @@ export function useTopPicksData(take = 30, sourcePrefix = 'top-pick') {
       const response = await getTopPicks(signal, take);
       return mapMarketGroupsToOpportunities(response.topPicks, sourcePrefix);
     },
-    [take, sourcePrefix]
+    [take, sourcePrefix, refreshVersion]
   );
   const markets = query.data ?? [];
 
@@ -45,6 +50,7 @@ export function useTopPicksData(take = 30, sourcePrefix = 'top-pick') {
 }
 
 export function useLineShoppingData(take = 50, topOnly = false, sourcePrefix = 'line-shopping') {
+  const refreshVersion = useMarketDataRefreshVersion();
   const query = useApiQuery(
     async (signal) => {
       if (isDemoDataMode) {
@@ -54,7 +60,7 @@ export function useLineShoppingData(take = 50, topOnly = false, sourcePrefix = '
       const response = await getLineShopping(signal, take, topOnly);
       return mapMarketGroupsToOpportunities(response.comparisonGroups, sourcePrefix);
     },
-    [take, topOnly, sourcePrefix]
+    [take, topOnly, sourcePrefix, refreshVersion]
   );
   const markets = query.data ?? [];
 
@@ -62,6 +68,7 @@ export function useLineShoppingData(take = 50, topOnly = false, sourcePrefix = '
 }
 
 export function useMarketScannerData(take = 75, sourcePrefix = 'market') {
+  const refreshVersion = useMarketDataRefreshVersion();
   const query = useApiQuery(
     async (signal) => {
       if (isDemoDataMode) {
@@ -71,7 +78,7 @@ export function useMarketScannerData(take = 75, sourcePrefix = 'market') {
       const response = await getLineShopping(signal, take, false);
       return mapMarketGroupsToOpportunities(response.comparisonGroups, sourcePrefix);
     },
-    [take, sourcePrefix]
+    [take, sourcePrefix, refreshVersion]
   );
   const markets = query.data ?? [];
 
@@ -79,6 +86,7 @@ export function useMarketScannerData(take = 75, sourcePrefix = 'market') {
 }
 
 export function useEntryCandidateData(take = 40) {
+  const refreshVersion = useMarketDataRefreshVersion();
   const query = useApiQuery(
     async (signal) => {
       if (isDemoDataMode) {
@@ -88,7 +96,7 @@ export function useEntryCandidateData(take = 40) {
       const response = await getTopPicks(signal, take);
       return mapMarketGroupsToOpportunities(response.topPicks, 'entry-candidate').filter((market) => market.providerCategory === 'DFS' && market.canAddToEntry);
     },
-    [take]
+    [take, refreshVersion]
   );
   const markets = query.data ?? [];
 
@@ -96,6 +104,7 @@ export function useEntryCandidateData(take = 40) {
 }
 
 export function usePerformanceData() {
+  const refreshVersion = useMarketDataRefreshVersion();
   const query = useApiQuery(
     async (signal) => {
       if (isDemoDataMode) {
@@ -105,7 +114,7 @@ export function usePerformanceData() {
       const response = await getPerformanceSummary(signal);
       return mapPerformanceSummaryToGroups(response);
     },
-    []
+    [refreshVersion]
   );
   const rows = useMemo(
     () => query.data ?? [],

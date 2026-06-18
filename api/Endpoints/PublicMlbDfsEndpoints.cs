@@ -453,6 +453,7 @@ public static class PublicMlbDfsEndpoints
                     supportedSports = SupportedMarketSports,
                     plan.EstimatedSlateEvents,
                     plan.EstimatedApiCalls,
+                    plan.EstimateSource,
                     cadenceRule = plan.CadenceRule,
                     plan.MinutesUntilNextEventStart,
                     plan.LastSuccessfulRefreshAtUtc,

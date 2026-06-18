@@ -7,6 +7,7 @@ import { Box, Button, Collapse, Grid, MenuItem, Stack, Table, TableBody, TableCe
 import { useState } from 'react';
 import { ProjectionModifierBadge } from '../../components/markets/ProjectionModifierBadge';
 import { formatTopPickWarning, getTopPickConfidence, TopPickCard } from '../../components/markets/TopPickCard';
+import { MetricLabelWithHelp } from '../../components/metrics/MetricLabelWithHelp';
 import { ProviderLabel } from '../../components/providers/ProviderLabel';
 import { PageHeader } from '../../components/ui/PageHeader';
 import { StatusPill } from '../../components/ui/StatusPill';
@@ -123,7 +124,7 @@ function TopPickControls({ isMobile }: { isMobile: boolean }) {
             </Button>
           </Stack>
           <TextField label="Sort by" size="small" select defaultValue="EV" fullWidth>
-            {['EV', 'Edge', 'Confidence', 'Sample'].map((item) => (
+            {['EV', 'Edge', 'Trust', 'Sample'].map((item) => (
               <MenuItem key={item} value={item}>
                 {item}
               </MenuItem>
@@ -152,7 +153,7 @@ function TopPickControls({ isMobile }: { isMobile: boolean }) {
                   </MenuItem>
                 ))}
               </TextField>
-              <TextField label="Confidence" size="small" select defaultValue="All" fullWidth>
+              <TextField label="Trust" size="small" select defaultValue="All" fullWidth>
                 {['All', 'Strong', 'Medium', 'Weak'].map((item) => (
                   <MenuItem key={item} value={item}>
                     {item}
@@ -196,7 +197,7 @@ function TopPickControls({ isMobile }: { isMobile: boolean }) {
             </MenuItem>
           ))}
         </TextField>
-        <TextField label="Confidence" size="small" select defaultValue="All" sx={{ width: 132 }}>
+        <TextField label="Trust" size="small" select defaultValue="All" sx={{ width: 132 }}>
           {['All', 'Strong', 'Medium', 'Weak'].map((item) => (
             <MenuItem key={item} value={item}>
               {item}
@@ -204,7 +205,7 @@ function TopPickControls({ isMobile }: { isMobile: boolean }) {
           ))}
         </TextField>
         <TextField label="Sort by" size="small" select defaultValue="EV" sx={{ width: 126 }}>
-          {['EV', 'Edge', 'Confidence', 'Sample'].map((item) => (
+          {['EV', 'Edge', 'Trust', 'Sample'].map((item) => (
             <MenuItem key={item} value={item}>
               {item}
             </MenuItem>
@@ -238,11 +239,11 @@ function RankedPicksTable({ markets, builder }: { markets: MarketOpportunity[]; 
             <TableCell>Rank</TableCell>
             <TableCell>Market</TableCell>
             <TableCell>Provider</TableCell>
-            <TableCell align="right">EV</TableCell>
-            <TableCell align="right">Edge</TableCell>
-            <TableCell>Confidence</TableCell>
-            <TableCell>Tags</TableCell>
-            <TableCell>Warning</TableCell>
+            <TableCell align="right"><MetricLabelWithHelp metric="ev" align="right" variant="table" /></TableCell>
+            <TableCell align="right"><MetricLabelWithHelp metric="edge" align="right" variant="table" /></TableCell>
+            <TableCell align="right"><MetricLabelWithHelp metric="hitChance" align="right" variant="table" /></TableCell>
+            <TableCell><MetricLabelWithHelp metric="trust" variant="table" /></TableCell>
+            <TableCell><MetricLabelWithHelp metric="warning" variant="table" /></TableCell>
             <TableCell align="center">Action</TableCell>
           </TableRow>
         </TableHead>
@@ -264,6 +265,10 @@ function RankedPicksTable({ markets, builder }: { markets: MarketOpportunity[]; 
                     <Typography variant="body2" color="text.secondary">
                       {market.side} {market.propType} {market.line} - {market.sport}
                     </Typography>
+                    <Stack direction="row" gap={0.6} flexWrap="wrap">
+                      <StatusPill label={market.strategyClassification} />
+                      <ProjectionModifierBadge modifier={market.projectionModifier} />
+                    </Stack>
                   </Stack>
                 </TableCell>
                 <TableCell sx={{ minWidth: 160 }}>
@@ -275,14 +280,9 @@ function RankedPicksTable({ markets, builder }: { markets: MarketOpportunity[]; 
                   </Typography>
                 </TableCell>
                 <TableCell align="right">{formatPercent(market.probabilityEdge, { signed: true })}</TableCell>
+                <TableCell align="right">{formatPercent(market.modelProbability)}</TableCell>
                 <TableCell>
                   <StatusPill label={confidence} />
-                </TableCell>
-                <TableCell sx={{ minWidth: 165 }}>
-                  <Stack direction="row" gap={0.6} flexWrap="wrap">
-                    <StatusPill label={market.strategyClassification} />
-                    <ProjectionModifierBadge modifier={market.projectionModifier} />
-                  </Stack>
                 </TableCell>
                 <TableCell sx={{ minWidth: 180, maxWidth: 240 }}>
                   <Typography variant="body2" color={market.warnings.length ? 'warning.main' : 'text.secondary'} sx={{ lineHeight: 1.4 }}>

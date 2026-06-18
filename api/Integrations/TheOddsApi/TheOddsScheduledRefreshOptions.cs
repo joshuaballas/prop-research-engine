@@ -13,6 +13,11 @@ public sealed class TheOddsScheduledRefreshOptions
     public int FreshnessMinutes { get; set; } = 30;
     public bool RequireForceLive { get; set; } = true;
     public bool AllowScheduledLiveRefresh { get; set; } = false;
+    public bool AllowEventDiscoveryWhenNoPersistedEvents { get; set; } = true;
+    public int FallbackEstimatedApiCalls { get; set; } = 8;
+    public int PostRefreshReadBufferSeconds { get; set; } = 30;
 
     public TimeSpan GetInterval() => TimeSpan.FromMinutes(Math.Max(15, IntervalMinutes));
+    public int GetFallbackEstimatedApiCalls() => Math.Max(1, FallbackEstimatedApiCalls);
+    public TimeSpan GetPostRefreshReadBuffer() => TimeSpan.FromSeconds(Math.Max(0, PostRefreshReadBufferSeconds));
 }

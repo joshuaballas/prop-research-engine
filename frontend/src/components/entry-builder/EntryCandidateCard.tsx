@@ -5,6 +5,7 @@ import RemoveCircleOutlineRoundedIcon from '@mui/icons-material/RemoveCircleOutl
 import { Box, Button, Stack, Typography } from '@mui/material';
 import type { MarketOpportunity } from '../../types/markets';
 import { palette } from '../../theme/palette';
+import { MetricLabelWithHelp } from '../metrics/MetricLabelWithHelp';
 import { AppCard } from '../ui/AppCard';
 import { ProjectionModifierBadge } from '../markets/ProjectionModifierBadge';
 import { ProviderLabel } from '../providers/ProviderLabel';
@@ -59,9 +60,7 @@ export function EntryCandidateCard({ market, lockedProvider, selected = false, o
             </Typography>
           </Box>
           <Stack alignItems="flex-end" spacing={0.25} sx={{ flexShrink: 0 }}>
-            <Typography variant="caption" color="text.secondary" fontWeight={900}>
-              EV
-            </Typography>
+            <MetricLabelWithHelp metric="ev" align="right" />
             <Typography color={market.estimatedEv > 0 ? 'success.main' : 'error.main'} fontWeight={950}>
               {formatSignedPercent(market.estimatedEv)}
             </Typography>
@@ -79,7 +78,7 @@ export function EntryCandidateCard({ market, lockedProvider, selected = false, o
             fontWeight={900}
             color={market.trustLevel === 'Strong' ? 'success.main' : market.trustLevel === 'Medium' ? 'warning.main' : 'error.main'}
           >
-            {market.trustLevel} confidence
+            {market.trustLevel} trust
           </Typography>
         </Stack>
 
@@ -92,8 +91,8 @@ export function EntryCandidateCard({ market, lockedProvider, selected = false, o
             pt: 1.15
           }}
         >
-          <Metric label="Edge" value={formatSignedPercent(market.probabilityEdge)} />
-          <Metric label="Model" value={formatPercent(market.modelProbability)} />
+          <Metric label="Edge" value={formatSignedPercent(market.probabilityEdge)} metric="edge" />
+          <Metric label="Hit chance" value={formatPercent(market.modelProbability)} metric="hitChance" />
           <Metric label="Sample" value={String(market.historicalSampleSize)} />
           <Metric label="Line" value={String(market.line)} />
         </Box>
@@ -160,12 +159,14 @@ export function EntryCandidateCard({ market, lockedProvider, selected = false, o
   );
 }
 
-function Metric({ label, value }: { label: string; value: string }) {
+function Metric({ label, value, metric }: { label: string; value: string; metric?: 'ev' | 'edge' | 'hitChance' | 'trust' | 'warning' }) {
   return (
     <Box sx={{ minWidth: 0 }}>
-      <Typography variant="caption" color="text.secondary" fontWeight={900}>
-        {label}
-      </Typography>
+      {metric ? <MetricLabelWithHelp metric={metric} /> : (
+        <Typography variant="caption" color="text.secondary" fontWeight={900}>
+          {label}
+        </Typography>
+      )}
       <Typography variant="body2" fontWeight={950} noWrap>
         {value}
       </Typography>

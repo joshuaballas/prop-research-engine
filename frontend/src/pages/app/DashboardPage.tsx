@@ -9,6 +9,7 @@ import { Box, Button, Divider, Grid, Stack, Typography } from '@mui/material';
 import type { ReactNode } from 'react';
 import { Link as RouterLink } from 'react-router-dom';
 import { ProjectionModifierBadge } from '../../components/markets/ProjectionModifierBadge';
+import { MetricLabelWithHelp } from '../../components/metrics/MetricLabelWithHelp';
 import { SportToggleRail } from '../../components/navigation/SportToggleRail';
 import { ProviderLabel } from '../../components/providers/ProviderLabel';
 import { AppCard } from '../../components/ui/AppCard';
@@ -198,10 +199,10 @@ function DashboardOpportunityCard({ market, builder }: { market: MarketOpportuni
 
         <Grid container spacing={1.2}>
           <Grid size={{ xs: 4 }}>
-            <CompactMetric label="Edge" value={formatPercent(market.probabilityEdge, { signed: true })} />
+            <CompactMetric label="Edge" value={formatPercent(market.probabilityEdge, { signed: true })} metric="edge" />
           </Grid>
           <Grid size={{ xs: 4 }}>
-            <CompactMetric label="Model" value={formatPercent(market.modelProbability)} />
+            <CompactMetric label="Hit chance" value={formatPercent(market.modelProbability)} metric="hitChance" />
           </Grid>
           <Grid size={{ xs: 4 }}>
             <CompactMetric label="Sample" value={`${market.historicalSampleSize}`} />
@@ -355,12 +356,14 @@ function EntryBuilderPreview({ provider, legs, sports }: { provider: string; leg
   );
 }
 
-function CompactMetric({ label, value }: { label: string; value: string }) {
+function CompactMetric({ label, value, metric }: { label: string; value: string; metric?: 'ev' | 'edge' | 'hitChance' | 'trust' | 'warning' }) {
   return (
     <Stack spacing={0.2} minWidth={0}>
-      <Typography variant="caption" color="text.secondary" fontWeight={800}>
-        {label}
-      </Typography>
+      {metric ? <MetricLabelWithHelp metric={metric} /> : (
+        <Typography variant="caption" color="text.secondary" fontWeight={800}>
+          {label}
+        </Typography>
+      )}
       <Typography variant="body2" fontWeight={900} noWrap>
         {value}
       </Typography>

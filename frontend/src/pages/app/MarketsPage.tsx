@@ -60,7 +60,7 @@ export function MarketsPage() {
         useToggleButtons
         scannerFields
         compactMobile
-        classificationLabel="Confidence"
+        classificationLabel="Trust"
         candidateOnly={candidateOnly}
         dfsActionableOnly={dfsActionableOnly}
         onCandidateOnlyChange={setCandidateOnly}

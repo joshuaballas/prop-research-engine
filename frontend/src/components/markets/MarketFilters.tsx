@@ -53,7 +53,7 @@ export function MarketFilters({
         ))}
       </TextField>
       <TextField label={classificationLabel} size="small" select defaultValue="All" sx={{ minWidth: { xs: '100%', md: 126 }, width: { md: 126 } }}>
-        {(classificationLabel === 'Confidence' ? ['All', 'Strong', 'Medium', 'Weak'] : ['All', 'Candidate', 'Watchlist', 'Research', 'Avoid']).map((item) => (
+        {(classificationLabel === 'Trust' ? ['All', 'Strong', 'Medium', 'Weak'] : ['All', 'Candidate', 'Watchlist', 'Research', 'Avoid']).map((item) => (
           <MenuItem key={item} value={item}>
             {item}
           </MenuItem>
