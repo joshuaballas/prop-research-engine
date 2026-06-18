@@ -11,20 +11,9 @@ export function AuthLayout() {
     <Box
       minHeight="100vh"
       sx={{
-        background:
-          `radial-gradient(circle at 20% 10%, rgba(34,211,238,.16), transparent 32%), radial-gradient(circle at 86% 18%, rgba(129,140,248,.12), transparent 34%), ${palette.bg}`,
+        backgroundColor: palette.bg,
         position: 'relative',
-        overflow: 'hidden',
-        '&:before': {
-          content: '""',
-          position: 'absolute',
-          inset: 0,
-          background:
-            'linear-gradient(rgba(125,211,252,.035) 1px, transparent 1px), linear-gradient(90deg, rgba(125,211,252,.03) 1px, transparent 1px)',
-          backgroundSize: '36px 36px',
-          opacity: 0.5,
-          pointerEvents: 'none'
-        }
+        overflow: 'hidden'
       }}
     >
       <Container maxWidth="lg" sx={{ py: { xs: 4, md: 9 } }}>
@@ -39,8 +28,7 @@ export function AuthLayout() {
               <AppCard
                 sx={{
                   display: { xs: 'none', md: 'block' },
-                  background: 'rgba(8,13,26,.72)',
-                  backdropFilter: 'blur(16px)'
+                  backgroundColor: 'rgba(8,13,26,.72)'
                 }}
               >
                 <Stack spacing={1.35}>
@@ -78,7 +66,7 @@ export function AuthLayout() {
                   { icon: <VerifiedUserOutlinedIcon color="primary" />, title: 'Provider-safe entries', body: 'Avoid combining legs across incompatible DFS platforms.' }
                 ].map((item) => (
                   <Grid key={item.title} size={{ xs: 12, sm: 4, md: 12 }}>
-                    <AppCard sx={{ background: 'rgba(15,23,42,.72)', backdropFilter: 'blur(12px)' }}>
+                    <AppCard sx={{ backgroundColor: 'rgba(15,23,42,.72)' }}>
                       <Stack direction="row" spacing={1.5}>
                         {item.icon}
                         <Box>

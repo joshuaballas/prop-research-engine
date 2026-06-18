@@ -17,19 +17,8 @@ export function AppLayout() {
         position: 'relative',
         isolation: 'isolate',
         bgcolor: palette.bg,
-        background: {
-          xs: palette.bg,
-          md: `radial-gradient(circle at 18% 0%, rgba(34,211,238,.12), transparent 30%), radial-gradient(circle at 88% 8%, rgba(129,140,248,.1), transparent 32%), ${palette.bg}`
-        },
-        '&::before': {
-          content: '""',
-          display: { xs: 'block', md: 'none' },
-          position: 'fixed',
-          inset: 0,
-          zIndex: -1,
-          pointerEvents: 'none',
-          background: `radial-gradient(circle at 18vw 0, rgba(34,211,238,.12), transparent 30vh), radial-gradient(circle at 88vw 8vh, rgba(129,140,248,.1), transparent 32vh), ${palette.bg}`
-        }
+        background: palette.bg,
+        // Keep the app shell background solid so component state changes cannot shift page-level color.
       }}
     >
       <AppSidebar />

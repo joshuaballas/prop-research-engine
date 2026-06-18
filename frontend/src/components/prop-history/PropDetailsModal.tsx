@@ -38,7 +38,6 @@ export function PropDetailsModal({ market, open, onClose }: PropDetailsModalProp
           borderRadius: 2.5,
           border: '1px solid rgba(148,163,184,.18)',
           bgcolor: 'rgba(8,13,25,.98)',
-          backgroundImage: 'linear-gradient(180deg, rgba(17,24,39,.98), rgba(8,13,25,.98))',
           boxShadow: '0 28px 80px rgba(0,0,0,.48)'
         }
       }}

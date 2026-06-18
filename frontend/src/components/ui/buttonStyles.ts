@@ -15,7 +15,7 @@ export const primaryActionButtonSx = {
     color: palette.text,
     borderColor: 'rgba(165, 243, 252, 0.64)',
     background: 'rgba(13, 91, 116, 0.96)',
-    boxShadow: 'inset 0 1px 0 rgba(255,255,255,.14), 0 10px 24px rgba(8, 145, 178, 0.16)'
+    boxShadow: 'inset 0 1px 0 rgba(255,255,255,.14)'
   },
   '&:active:not(.Mui-disabled)': {
     transform: 'translateY(1px)',
@@ -85,7 +85,7 @@ export const compactActionButtonSx = {
     color: palette.text,
     background: 'rgba(13, 91, 116, 0.9)',
     borderColor: 'rgba(165, 243, 252, 0.62)',
-    boxShadow: 'inset 0 1px 0 rgba(255,255,255,.1), 0 5px 14px rgba(8, 145, 178, 0.1)'
+    boxShadow: 'inset 0 1px 0 rgba(255,255,255,.1)'
   },
   '&:active:not(.Mui-disabled)': {
     transform: 'translateY(1px)',
@@ -122,7 +122,7 @@ export const compactActionButtonSx = {
 
 export const removeActionButtonSx = {
   color: '#FFE4E6',
-  background: 'linear-gradient(180deg, rgba(127, 29, 29, 0.36), rgba(76, 5, 25, 0.34))',
+  background: 'rgba(127, 29, 29, 0.34)',
   border: '1px solid rgba(244,63,94,.44)',
   boxShadow: 'inset 0 1px 0 rgba(255,255,255,.08)',
   textShadow: 'none',
@@ -131,9 +131,9 @@ export const removeActionButtonSx = {
   },
   '&:hover': {
     color: '#FFE4E6',
-    background: 'linear-gradient(180deg, rgba(159, 18, 57, 0.42), rgba(88, 28, 45, 0.38))',
+    background: 'rgba(159, 18, 57, 0.4)',
     borderColor: 'rgba(251,113,133,.6)',
-    boxShadow: 'inset 0 1px 0 rgba(255,255,255,.1), 0 10px 24px rgba(244,63,94,.12)'
+    boxShadow: 'inset 0 1px 0 rgba(255,255,255,.1)'
   },
   '&:active:not(.Mui-disabled)': {
     transform: 'translateY(1px)',

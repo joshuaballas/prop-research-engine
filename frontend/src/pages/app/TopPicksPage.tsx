@@ -4,7 +4,7 @@ import LockRoundedIcon from '@mui/icons-material/LockRounded';
 import RemoveCircleOutlineRoundedIcon from '@mui/icons-material/RemoveCircleOutlineRounded';
 import TuneRoundedIcon from '@mui/icons-material/TuneRounded';
 import { Box, Button, Collapse, Grid, MenuItem, Stack, Table, TableBody, TableCell, TableHead, TableRow, TextField, Typography } from '@mui/material';
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { ProjectionModifierBadge } from '../../components/markets/ProjectionModifierBadge';
 import { formatTopPickWarning, getTopPickConfidence, TopPickCard } from '../../components/markets/TopPickCard';
 import { MetricLabelWithHelp } from '../../components/metrics/MetricLabelWithHelp';
@@ -19,6 +19,7 @@ import { useTopPicksData } from '../../hooks/useMarketData';
 import { useResponsiveView } from '../../hooks/useResponsiveView';
 import type { MarketOpportunity } from '../../types/markets';
 import { formatPercent } from '../../utils/formatters';
+import { buildAvailableSportOptions, getAvailableSportCodes } from '../../utils/sportOptions';
 import { hasRenderableWarning } from '../../utils/warnings';
 
 export function TopPicksPage() {
@@ -26,12 +27,17 @@ export function TopPicksPage() {
   const { isMobile } = useResponsiveView();
   const topPicksQuery = useTopPicksData(30, 'top-pick');
   const topPicks = topPicksQuery.markets;
+  const availableSportCodes = useMemo(() => getAvailableSportCodes(topPicks), [topPicks]);
+  const sportFilterLabels = useMemo(() => {
+    const labels = buildAvailableSportOptions(availableSportCodes).map((sport) => sport.label);
+    return labels.length ? labels : ['All'];
+  }, [availableSportCodes]);
   const featured = topPicks.slice(0, 3);
 
   return (
     <Stack spacing={{ xs: 2, md: 3 }}>
       <PageHeader title="Top Picks" description="Curated candidates ranked by model edge, EV, provider compatibility, and freshness." />
-      <TopPickControls isMobile={isMobile} />
+      <TopPickControls isMobile={isMobile} sportOptions={sportFilterLabels} />
 
       {topPicksQuery.loading ? (
         <ApiStateCard message="Loading latest top picks..." />
@@ -100,7 +106,7 @@ function ApiStateCard({ message, tone = 'default' }: { message: string; tone?: '
   );
 }
 
-function TopPickControls({ isMobile }: { isMobile: boolean }) {
+function TopPickControls({ isMobile, sportOptions }: { isMobile: boolean; sportOptions: string[] }) {
   const [filtersOpen, setFiltersOpen] = useState(false);
 
   if (isMobile) {
@@ -136,7 +142,7 @@ function TopPickControls({ isMobile }: { isMobile: boolean }) {
           <Collapse in={filtersOpen} timeout="auto" unmountOnExit>
             <Stack spacing={1} sx={{ pt: 0.25 }}>
               <TextField label="Sport" size="small" select defaultValue="All" fullWidth>
-                {['All', 'MLB', 'NBA', 'TENNIS', 'GOLF'].map((item) => (
+                {sportOptions.map((item) => (
                   <MenuItem key={item} value={item}>
                     {item}
                   </MenuItem>
@@ -180,7 +186,7 @@ function TopPickControls({ isMobile }: { isMobile: boolean }) {
       <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
         <TextField label="Search player" size="small" fullWidth sx={{ maxWidth: 360, minWidth: 300 }} />
         <TextField label="Sport" size="small" select defaultValue="All" sx={{ width: 122 }}>
-          {['All', 'MLB', 'NBA', 'TENNIS', 'GOLF'].map((item) => (
+          {sportOptions.map((item) => (
             <MenuItem key={item} value={item}>
               {item}
             </MenuItem>

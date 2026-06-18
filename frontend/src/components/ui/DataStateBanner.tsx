@@ -17,10 +17,7 @@ export function DataStateBanner({ title, message, status }: DataStateBannerProps
         border: `1px solid ${status === 'Unavailable' ? 'rgba(244,63,94,.35)' : palette.borderStrong}`,
         borderRadius: 4,
         p: 2,
-        background:
-          status === 'Unavailable'
-            ? 'linear-gradient(135deg, rgba(244,63,94,.12), rgba(15,23,42,.84))'
-            : 'linear-gradient(135deg, rgba(34,211,238,.11), rgba(15,23,42,.84))'
+        backgroundColor: status === 'Unavailable' ? 'rgba(76, 5, 25, 0.34)' : palette.surfaceGlow
       }}
     >
       <Stack direction={{ xs: 'column', sm: 'row' }} alignItems={{ sm: 'center' }} justifyContent="space-between" gap={1}>

@@ -38,7 +38,7 @@ export const components: Components<Omit<Theme, 'components'>> = {
         '&:hover': {
           backgroundColor: 'rgba(13, 91, 116, 0.96)',
           borderColor: 'rgba(165, 243, 252, 0.64)',
-          boxShadow: 'inset 0 1px 0 rgba(255,255,255,.14), 0 10px 24px rgba(8, 145, 178, 0.16)'
+          boxShadow: 'inset 0 1px 0 rgba(255,255,255,.14)'
         },
         '&:active:not(.Mui-disabled)': {
           boxShadow: 'inset 0 2px 8px rgba(3,7,18,.34), 0 5px 16px rgba(8, 145, 178, 0.14)'
@@ -73,7 +73,6 @@ export const components: Components<Omit<Theme, 'components'>> = {
     styleOverrides: {
       root: {
         borderRadius: 20,
-        backgroundImage: 'none',
         border: `1px solid ${palette.border}`,
         backgroundColor: palette.surface,
         boxShadow: '0 16px 40px rgba(0,0,0,.24)'

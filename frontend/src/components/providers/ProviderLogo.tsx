@@ -114,11 +114,8 @@ export function ProviderLogo({ provider, category = 'DFS', mark, size = 38, sx }
         flexShrink: 0,
         overflow: 'hidden',
         border: category === 'Sportsbook' ? '1px solid rgba(148,163,184,.22)' : '1px solid rgba(34,211,238,.28)',
-        bgcolor: category === 'Sportsbook' ? 'rgba(148,163,184,.1)' : 'rgba(34,211,238,.12)',
-        color: category === 'Sportsbook' ? 'rgba(226,232,240,.78)' : '#031018',
-        background: category === 'Sportsbook'
-          ? 'linear-gradient(135deg, rgba(148,163,184,.16), rgba(15,23,42,.3))'
-          : 'linear-gradient(135deg, #22D3EE, #A78BFA)',
+        bgcolor: category === 'Sportsbook' ? 'rgba(148,163,184,.1)' : 'rgba(34,211,238,.16)',
+        color: category === 'Sportsbook' ? 'rgba(226,232,240,.78)' : '#F8FAFC',
         fontSize: fallback.length > 3 ? size * 0.24 : size * 0.31,
         fontWeight: 950,
         letterSpacing: 0,

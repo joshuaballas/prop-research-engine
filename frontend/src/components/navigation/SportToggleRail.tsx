@@ -1,17 +1,16 @@
 import { Box, Button, Stack, Typography } from '@mui/material';
-import { mockSports } from '../../data/mockSports';
-import type { SportCode } from '../../types/sports';
+import type { SportCode, SportOption } from '../../types/sports';
 import { palette } from '../../theme/palette';
 
 interface SportToggleRailProps {
   selectedSports: SportCode[];
   onToggle: (sport: SportCode) => void;
   compact?: boolean;
-  sports?: typeof mockSports;
+  sports?: SportOption[];
   hideStatuses?: boolean;
 }
 
-export function SportToggleRail({ selectedSports, onToggle, compact = false, sports = mockSports, hideStatuses = false }: SportToggleRailProps) {
+export function SportToggleRail({ selectedSports, onToggle, compact = false, sports = [], hideStatuses = true }: SportToggleRailProps) {
   return (
     <Box sx={{ overflowX: 'auto', pb: 0.5 }}>
       <Stack direction="row" spacing={1} minWidth="max-content">
@@ -31,7 +30,7 @@ export function SportToggleRail({ selectedSports, onToggle, compact = false, spo
                 borderColor: active ? 'rgba(34,211,238,.58)' : palette.border,
                 bgcolor: active ? 'rgba(34,211,238,.12)' : 'rgba(15,23,42,.55)',
                 color: active ? 'primary.main' : 'text.secondary',
-                boxShadow: active ? '0 0 0 1px rgba(34,211,238,.08), 0 12px 34px rgba(34,211,238,.08)' : 'none',
+                boxShadow: 'none',
                 '&:hover': {
                   borderColor: active ? 'rgba(34,211,238,.72)' : 'rgba(148,163,184,.32)',
                   bgcolor: active ? 'rgba(34,211,238,.15)' : 'rgba(15,23,42,.78)'

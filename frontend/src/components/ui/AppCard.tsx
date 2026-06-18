@@ -12,7 +12,7 @@ export function AppCard({ children, sx, contentSx, ...props }: AppCardProps) {
       sx={{
         borderRadius: 4,
         border: `1px solid ${palette.border}`,
-        background: `linear-gradient(180deg, rgba(17, 28, 49, 0.96), rgba(10, 16, 32, 0.96))`,
+        backgroundColor: palette.surface,
         ...sx
       }}
     >

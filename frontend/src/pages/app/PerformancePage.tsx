@@ -37,8 +37,7 @@ export function PerformancePage() {
       <AppCard
         sx={{
           borderColor: 'rgba(245, 158, 11, 0.34)',
-          background:
-            'linear-gradient(135deg, rgba(245, 158, 11, 0.1), rgba(15, 23, 42, 0.96) 34%, rgba(10, 16, 32, 0.98))'
+          backgroundColor: 'rgba(60, 42, 18, 0.72)'
         }}
         contentSx={{ py: { xs: 2, md: 2.25 } }}
       >

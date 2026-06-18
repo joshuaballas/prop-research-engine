@@ -1,5 +1,5 @@
 import { Box, Grid, Stack, Typography } from '@mui/material';
-import { useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { MarketCard } from '../../components/markets/MarketCard';
 import { MarketFilters } from '../../components/markets/MarketFilters';
 import { MarketTable } from '../../components/markets/MarketTable';
@@ -9,7 +9,9 @@ import { SectionHeader } from '../../components/ui/SectionHeader';
 import { useMarketScannerData } from '../../hooks/useMarketData';
 import { useSelectedSports } from '../../hooks/useSelectedSports';
 import { useResponsiveView } from '../../hooks/useResponsiveView';
+import type { SportCode } from '../../types/sports';
 import { formatPercent } from '../../utils/formatters';
+import { buildAvailableSportOptions, getAvailableSportCodes } from '../../utils/sportOptions';
 
 export function MarketsPage() {
   const sports = useSelectedSports();
@@ -17,6 +19,8 @@ export function MarketsPage() {
   const [candidateOnly, setCandidateOnly] = useState(false);
   const [dfsActionableOnly, setDfsActionableOnly] = useState(true);
   const marketsQuery = useMarketScannerData(75, 'market');
+  const availableSportCodes = useMemo(() => getAvailableSportCodes(marketsQuery.markets), [marketsQuery.markets]);
+  const marketSportOptions = useMemo(() => buildAvailableSportOptions(availableSportCodes), [availableSportCodes]);
   const scannerMarkets = marketsQuery.markets.filter((market) => sports.includesSport(market.sport));
   const dfsMarkets = scannerMarkets.filter((market) => market.providerCategory === 'DFS');
   const markets = scannerMarkets.filter((market) => {
@@ -27,10 +31,19 @@ export function MarketsPage() {
   const bestEv = dfsMarkets.length ? Math.max(...dfsMarkets.map((market) => market.estimatedEv)) : 0;
   const dfsProviderCount = new Set(dfsMarkets.map((market) => market.provider)).size;
   const lowSampleRows = scannerMarkets.filter((market) => market.historicalSampleSize < 35).length;
+
+  useEffect(() => {
+    const selectedSpecificSports = sports.selectedSports.filter((sport): sport is Exclude<SportCode, 'ALL'> => sport !== 'ALL');
+    if (!selectedSpecificSports.length) return;
+    if (selectedSpecificSports.some((sport) => !availableSportCodes.has(sport))) {
+      sports.toggleSport('ALL');
+    }
+  }, [availableSportCodes, sports.selectedSports, sports.toggleSport]);
+
   return (
     <Stack spacing={3} sx={{ px: { xs: 0.75, sm: 0 } }}>
       <PageHeader title="Markets" description="Scan available DFS rows, provider lines, model edge, and entry compatibility." />
-      <SportToggleRail selectedSports={sports.selectedSports} onToggle={sports.toggleSport} />
+      <SportToggleRail selectedSports={sports.selectedSports} onToggle={sports.toggleSport} sports={marketSportOptions} />
 
       {isMobile ? (
         <MobileSummaryStrip

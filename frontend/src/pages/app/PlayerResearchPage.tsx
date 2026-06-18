@@ -132,7 +132,7 @@ function EmptyResearchState({ onSelect }: { onSelect: (player: PlayerResearchPro
     <AppCard
       sx={{
         borderColor: 'rgba(125,211,252,.22)',
-        background: 'linear-gradient(135deg, rgba(14, 35, 55, 0.88), rgba(10, 16, 32, 0.96))'
+        backgroundColor: palette.surfaceGlow
       }}
       contentSx={{ p: { xs: 2, md: 2.6 } }}
     >

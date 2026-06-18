@@ -22,13 +22,13 @@ import { PageHeader } from '../../components/ui/PageHeader';
 import { SectionHeader } from '../../components/ui/SectionHeader';
 import { StatusPill } from '../../components/ui/StatusPill';
 import { compactActionButtonSx, lockedActionButtonSx, removeActionButtonSx, secondaryGhostButtonSx } from '../../components/ui/buttonStyles';
-import { mockSports } from '../../data/mockSports';
 import { useEntryBuilder } from '../../hooks/useEntryBuilder';
 import { useLineShoppingData, useMarketFreshnessData, usePerformanceData, useTopPicksData } from '../../hooks/useMarketData';
 import { useSelectedSports } from '../../hooks/useSelectedSports';
 import type { MarketOpportunity } from '../../types/markets';
 import type { SportCode } from '../../types/sports';
 import { formatPercent } from '../../utils/formatters';
+import { buildAvailableSportOptions, getAvailableSportCodes } from '../../utils/sportOptions';
 import { hasRenderableWarning, renderWarningText } from '../../utils/warnings';
 
 export function DashboardPage() {
@@ -43,7 +43,7 @@ export function DashboardPage() {
   const performanceRows = performanceQuery.rows;
   const performanceAvailability = performanceQuery.summary?.dataAvailability;
   const availableSportCodes = useMemo(() => getAvailableSportCodes([...topPicks, ...lineShoppingMarkets]), [lineShoppingMarkets, topPicks]);
-  const dashboardSports = useMemo(() => getDashboardSportOptions(availableSportCodes), [availableSportCodes]);
+  const dashboardSports = useMemo(() => buildAvailableSportOptions(availableSportCodes), [availableSportCodes]);
   const filtered = topPicks.filter((market) => sports.includesSport(market.sport));
   const filteredMarkets = lineShoppingMarkets.filter((market) => sports.includesSport(market.sport));
   const activeDfs = filteredMarkets.filter((market) => market.providerCategory === 'DFS' && market.freshness === 'Fresh');
@@ -85,7 +85,6 @@ export function DashboardPage() {
         selectedSports={sports.selectedSports}
         onToggle={sports.toggleSport}
         compact
-        hideStatuses
         sports={dashboardSports}
       />
 
@@ -334,21 +333,6 @@ function LineShoppingPreview({ markets }: { markets: MarketOpportunity[] }) {
   );
 }
 
-function getAvailableSportCodes(markets: MarketOpportunity[]) {
-  return new Set(markets.map((market) => market.sport));
-}
-
-function getDashboardSportOptions(availableSportCodes: Set<Exclude<SportCode, 'ALL'>>) {
-  if (!availableSportCodes.size) {
-    return mockSports.filter((sport) => sport.code === 'ALL');
-  }
-
-  return mockSports.filter((sport) => {
-    if (sport.code === 'ALL') return true;
-    return availableSportCodes.has(sport.code);
-  });
-}
-
 function LineShoppingPreviewCard({ market, showReference }: { market: MarketOpportunity; showReference: boolean }) {
   const warning = renderWarningText(market.warnings);
 
@@ -565,9 +549,7 @@ function PerformancePanel({ icon, title, value, detail, tone = 'default' }: { ic
       sx={{
         height: '100%',
         borderColor: tone === 'warning' ? 'rgba(245,158,11,.34)' : undefined,
-        background: tone === 'warning'
-          ? 'linear-gradient(180deg, rgba(17,28,49,.96), rgba(10,16,32,.96))'
-          : undefined
+        backgroundColor: tone === 'warning' ? 'rgba(17,28,49,.96)' : undefined
       }}
     >
       <Stack spacing={1.2}>

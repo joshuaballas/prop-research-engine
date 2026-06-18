@@ -21,9 +21,7 @@ function BillingPlanOption({ plan, isCurrent }: { plan: PricingPlan; isCurrent: 
       sx={{
         height: '100%',
         borderColor: isCurrent ? palette.borderStrong : palette.border,
-        background: isCurrent
-          ? 'linear-gradient(180deg, rgba(17, 34, 58, 0.98), rgba(8, 16, 32, 0.98))'
-          : 'linear-gradient(180deg, rgba(17, 28, 49, 0.94), rgba(10, 16, 32, 0.96))'
+        backgroundColor: isCurrent ? 'rgba(17, 34, 58, 0.98)' : palette.surface
       }}
       contentSx={{ height: '100%', display: 'flex', flexDirection: 'column', gap: 2 }}
     >

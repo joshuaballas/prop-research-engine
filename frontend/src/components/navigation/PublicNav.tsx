@@ -4,11 +4,11 @@ import { Link as RouterLink } from 'react-router-dom';
 
 export function PublicNav() {
   return (
-    <AppBar position="sticky" elevation={0} color="transparent" sx={{ backdropFilter: 'blur(18px)', borderBottom: '1px solid rgba(148,163,184,.12)' }}>
+    <AppBar position="sticky" elevation={0} color="transparent" sx={{ bgcolor: '#070B14', borderBottom: '1px solid rgba(148,163,184,.12)' }}>
       <Container maxWidth="xl">
         <Toolbar disableGutters sx={{ gap: 2, minHeight: 72 }}>
           <Stack component={RouterLink} to="/" direction="row" spacing={1.1} alignItems="center" sx={{ color: 'text.primary', textDecoration: 'none' }}>
-            <Box sx={{ width: 34, height: 34, borderRadius: 2, display: 'grid', placeItems: 'center', background: 'linear-gradient(135deg, #22D3EE, #818CF8)', color: '#031019' }}>
+            <Box sx={{ width: 34, height: 34, borderRadius: 2, display: 'grid', placeItems: 'center', bgcolor: 'rgba(34,211,238,.14)', color: 'primary.main', border: '1px solid rgba(34,211,238,.28)' }}>
               <AutoGraphOutlinedIcon fontSize="small" />
             </Box>
             <Box>

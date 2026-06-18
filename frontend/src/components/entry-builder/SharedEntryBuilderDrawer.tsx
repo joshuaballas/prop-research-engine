@@ -28,7 +28,7 @@ export function SharedEntryBuilderDrawer() {
             borderTopRightRadius: { xs: 4, md: 0 },
             borderLeft: { md: '1px solid rgba(125,211,252,.22)' },
             borderTop: { xs: '1px solid rgba(125,211,252,.22)', md: 'none' },
-            background: 'linear-gradient(180deg, rgba(17,28,49,.98), rgba(7,11,20,.98))'
+            backgroundColor: 'rgba(17,28,49,.98)'
           }
         }}
       >
@@ -56,7 +56,7 @@ export function SharedEntryBuilderDrawer() {
             justifyContent: 'space-between',
             px: 2,
             py: 1.1,
-            boxShadow: '0 18px 45px rgba(34,211,238,.22)'
+            boxShadow: '0 14px 32px rgba(0,0,0,.3)'
           }}
         >
           <Box component="span">

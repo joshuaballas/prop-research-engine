@@ -166,7 +166,6 @@ export function HomePage() {
             mx: 'auto',
             borderColor: 'rgba(125,211,252,.24)',
             background: '#08111F !important',
-            backgroundImage: 'none !important',
             '&:before': {
               display: 'none'
             },
@@ -221,26 +220,7 @@ function ScannerBackground() {
         inset: 0,
         overflow: 'hidden',
         pointerEvents: 'none',
-        background:
-          'radial-gradient(circle at 18% 8%, rgba(34,211,238,.18), transparent 30%), radial-gradient(circle at 76% 14%, rgba(129,140,248,.18), transparent 32%), radial-gradient(circle at 50% 58%, rgba(14,165,233,.08), transparent 36%)',
-        '&:before': {
-          content: '""',
-          position: 'absolute',
-          inset: 0,
-          background:
-            'linear-gradient(rgba(148,163,184,.055) 1px, transparent 1px), linear-gradient(90deg, rgba(148,163,184,.045) 1px, transparent 1px)',
-          backgroundSize: '54px 54px',
-          maskImage: 'linear-gradient(to bottom, black, transparent 76%)',
-          opacity: 0.55
-        },
-        '&:after': {
-          content: '""',
-          position: 'absolute',
-          inset: 0,
-          background:
-            'repeating-linear-gradient(100deg, transparent 0 24px, rgba(34,211,238,.045) 25px, transparent 27px)',
-          opacity: 0.32
-        }
+        backgroundColor: '#070B14'
       }}
     >
       <Stack
@@ -254,7 +234,6 @@ function ScannerBackground() {
           left: '50%',
           width: { xs: '120%', md: 980 },
           transform: 'translateX(-48%) rotate(-4deg)',
-          filter: 'blur(.15px)',
           opacity: 0.28
         }}
       >
@@ -287,8 +266,7 @@ function HeroProductPreview({ children }: { children: ReactNode }) {
           p: 2,
           pt: 2.25,
           border: '1px solid rgba(125,211,252,.22)',
-          background:
-            'linear-gradient(145deg, rgba(15,23,42,.88), rgba(5,10,22,.98)), radial-gradient(circle at 18% 12%, rgba(34,211,238,.14), transparent 42%)',
+          backgroundColor: 'rgba(15,23,42,.88)',
           boxShadow: '0 18px 58px rgba(0,0,0,.44)',
           overflow: 'hidden'
         }}
@@ -313,22 +291,11 @@ function HeroProductPreview({ children }: { children: ReactNode }) {
           borderRadius: 4,
           p: { sm: 2, md: 2.2 },
           border: '1px solid rgba(125,211,252,.22)',
-          background:
-            'linear-gradient(145deg, rgba(15,23,42,.84), rgba(5,10,22,.96)), radial-gradient(circle at 12% 18%, rgba(34,211,238,.14), transparent 36%)',
+          backgroundColor: 'rgba(15,23,42,.84)',
           boxShadow: '0 24px 90px rgba(0,0,0,.48)',
           overflow: 'hidden'
         }}
       >
-        <Box
-          sx={{
-            position: 'absolute',
-            inset: 0,
-            background:
-              'linear-gradient(rgba(125,211,252,.06) 1px, transparent 1px), linear-gradient(90deg, rgba(125,211,252,.04) 1px, transparent 1px)',
-            backgroundSize: '32px 32px',
-            opacity: 0.5
-          }}
-        />
         <Stack spacing={1.5} sx={{ position: 'relative', zIndex: 1 }}>
           <Stack direction="row" justifyContent="space-between" alignItems="center" gap={1}>
             <MetadataText tone="fresh">Markets updated 3m ago</MetadataText>
@@ -382,7 +349,7 @@ function HeroProductPreview({ children }: { children: ReactNode }) {
 
 function SportRailPreview() {
   return (
-    <AppCard sx={{ p: 0, background: 'rgba(8,13,26,.9)', backdropFilter: 'blur(14px)' }}>
+    <AppCard sx={{ p: 0, background: 'rgba(8,13,26,.9)' }}>
       <Stack spacing={0.85}>
         <Typography variant="caption" color="text.secondary" fontWeight={900}>
           SPORTS
@@ -412,7 +379,7 @@ function SportRailPreview() {
 
 function EntrySummaryPreview({ compact = false }: { compact?: boolean }) {
   return (
-    <AppCard sx={{ background: 'rgba(8,13,26,.9)', backdropFilter: 'blur(14px)' }}>
+    <AppCard sx={{ background: 'rgba(8,13,26,.9)' }}>
       <Stack spacing={compact ? 1 : 1.35}>
         <Stack direction="row" justifyContent="space-between" alignItems="center">
           <Typography variant="caption" color="text.secondary" fontWeight={900}>
@@ -439,7 +406,7 @@ function EntrySummaryPreview({ compact = false }: { compact?: boolean }) {
 function LineStripPreview() {
   const strip = mockMarkets.slice(0, 3);
   return (
-    <AppCard sx={{ background: 'rgba(8,13,26,.88)', backdropFilter: 'blur(14px)' }}>
+    <AppCard sx={{ background: 'rgba(8,13,26,.88)' }}>
       <Stack spacing={1.25}>
         <Stack direction="row" justifyContent="space-between" alignItems="center" gap={1}>
           <Typography variant="caption" color="text.secondary" fontWeight={900}>
@@ -506,14 +473,14 @@ function WorkflowTimeline() {
           bottom: { xs: 28, md: 'auto' },
           height: { xs: 'auto', md: 2 },
           width: { xs: 2, md: 'auto' },
-          background: 'linear-gradient(90deg, rgba(34,211,238,.65), rgba(129,140,248,.4), rgba(148,163,184,.1))'
+          backgroundColor: 'rgba(34,211,238,.38)'
         }
       }}
     >
       <Grid container spacing={2.5}>
         {steps.map((step, index) => (
           <Grid key={step.title} size={{ xs: 12, md: 4 }}>
-            <AppCard sx={{ height: '100%', background: 'rgba(15,23,42,.88)', backdropFilter: 'blur(10px)' }}>
+            <AppCard sx={{ height: '100%', background: 'rgba(15,23,42,.88)' }}>
               <Stack spacing={2}>
                 <Stack direction="row" alignItems="center" spacing={1.4}>
                   <Box
@@ -552,8 +519,7 @@ function CoverageBoard() {
     <AppCard
       sx={{
         overflow: 'hidden',
-        background:
-          'linear-gradient(135deg, rgba(34,211,238,.08), transparent 35%), linear-gradient(225deg, rgba(129,140,248,.08), transparent 42%), rgba(15,23,42,.92)'
+        backgroundColor: 'rgba(15,23,42,.92)'
       }}
     >
       <Grid container spacing={0}>
@@ -803,7 +769,7 @@ function FreshnessTrustPanel() {
                 <Box key={status.label} sx={{ p: 1.2, borderRadius: 2, bgcolor: 'rgba(8,13,26,.5)', border: `1px solid ${palette.border}` }}>
                   <Stack direction="row" justifyContent="space-between" alignItems="center" gap={1}>
                     <Stack direction="row" spacing={1} alignItems="center">
-                      <Box sx={{ width: 9, height: 9, borderRadius: 999, bgcolor: status.tone, boxShadow: `0 0 18px ${status.tone}` }} />
+                      <Box sx={{ width: 9, height: 9, borderRadius: 999, bgcolor: status.tone }} />
                       <Typography fontWeight={950}>{status.label}</Typography>
                     </Stack>
                     <Typography variant="caption" color="text.secondary">
@@ -870,7 +836,7 @@ function MiniBar({ label, value }: { label: string; value: number }) {
           bgcolor: 'rgba(148,163,184,.12)',
           '& .MuiLinearProgress-bar': {
             borderRadius: 99,
-            background: 'linear-gradient(90deg, #22D3EE, #818CF8)'
+            backgroundColor: '#22D3EE'
           }
         }}
       />

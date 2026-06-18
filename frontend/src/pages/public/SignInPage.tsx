@@ -22,8 +22,7 @@ export function SignInPage() {
       sx={{
         maxWidth: 500,
         ml: { md: 'auto' },
-        background:
-          'linear-gradient(180deg, rgba(17,28,49,.98), rgba(8,13,26,.98))',
+        backgroundColor: 'rgba(17,28,49,.98)',
         borderColor: 'rgba(125,211,252,.22)',
         boxShadow: '0 24px 80px rgba(0,0,0,.35)'
       }}

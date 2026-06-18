@@ -23,21 +23,8 @@ export function PlanCard({ plan }: { plan: PricingPlan }) {
         overflow: 'hidden',
         borderRadius: 4,
         border: `1px solid ${isFeatured ? 'rgba(34,211,238,.62)' : 'rgba(148,163,184,.18)'}`,
-        background: isFeatured
-          ? 'linear-gradient(180deg, rgba(17, 34, 58, 0.98), rgba(8, 16, 32, 0.98))'
-          : `linear-gradient(180deg, rgba(17, 28, 49, 0.96), rgba(10, 16, 32, 0.96))`,
-        boxShadow: isFeatured ? '0 24px 80px rgba(34,211,238,.12)' : undefined,
-        '&:before': isFeatured
-          ? {
-              content: '""',
-              position: 'absolute',
-              inset: 0,
-              background:
-                'radial-gradient(circle at 50% 0%, rgba(34,211,238,.16), transparent 36%), linear-gradient(90deg, rgba(34,211,238,.18), rgba(129,140,248,.12))',
-              opacity: 0.8,
-              pointerEvents: 'none'
-            }
-          : undefined
+        backgroundColor: isFeatured ? 'rgba(17, 34, 58, 0.98)' : 'rgba(17, 28, 49, 0.96)',
+        boxShadow: isFeatured ? '0 18px 46px rgba(0,0,0,.28)' : undefined
       }}
     >
       <CardContent

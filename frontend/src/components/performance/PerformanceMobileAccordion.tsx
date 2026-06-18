@@ -38,7 +38,7 @@ export function PerformanceMobileAccordion({ rows, category }: { rows: Performan
             sx={{
               border: `1px solid ${palette.border}`,
               borderRadius: 3,
-              background: 'linear-gradient(180deg, rgba(17, 28, 49, 0.95), rgba(8, 13, 26, 0.98))',
+              backgroundColor: palette.surface,
               overflow: 'hidden',
               '&:before': { display: 'none' }
             }}

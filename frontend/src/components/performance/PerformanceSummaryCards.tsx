@@ -19,7 +19,7 @@ function SummaryCard({ metric }: { metric: SummaryMetric }) {
     <AppCard
       sx={{
         height: '100%',
-        background: 'linear-gradient(180deg, rgba(17, 28, 49, 0.9), rgba(9, 14, 28, 0.96))'
+        backgroundColor: palette.surface
       }}
       contentSx={{
         height: '100%',

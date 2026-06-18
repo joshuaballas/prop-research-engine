@@ -32,29 +32,11 @@ export function AppSidebar() {
         flexShrink: 0,
         display: { xs: 'none', lg: 'block' },
         borderRight: '1px solid rgba(148,163,184,.12)',
-        background:
-          'linear-gradient(90deg, #070B14 0%, #08101D 58%, #09111F 100%)',
+        backgroundColor: '#070B14',
         minHeight: '100vh',
         position: 'sticky',
         top: 0,
-        overflow: 'hidden',
-        '&:before': {
-          content: '""',
-          position: 'absolute',
-          inset: 0,
-          background: 'linear-gradient(180deg, rgba(125,211,252,.028), transparent 22%, transparent 76%, rgba(15,23,42,.18))',
-          pointerEvents: 'none'
-        },
-        '&:after': {
-          content: '""',
-          position: 'absolute',
-          left: 0,
-          right: 0,
-          bottom: 0,
-          height: '36%',
-          background: 'linear-gradient(180deg, transparent, rgba(3,7,18,.4))',
-          pointerEvents: 'none'
-        }
+        overflow: 'hidden'
       }}
     >
       <Stack spacing={2.4} px={2} py={2.1} sx={{ position: 'relative', zIndex: 1 }}>
@@ -122,8 +104,7 @@ export function AppSidebar() {
                     bottom: 10,
                     width: 2,
                     borderRadius: 999,
-                    backgroundColor: active ? 'rgba(34,211,238,.86)' : 'transparent',
-                    boxShadow: active ? '0 0 10px rgba(34,211,238,.24)' : 'none'
+                    backgroundColor: active ? 'rgba(34,211,238,.86)' : 'transparent'
                   },
                   '& .MuiSvgIcon-root': {
                     fontSize: 20,
