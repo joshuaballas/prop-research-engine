@@ -2,6 +2,7 @@ import LockOutlinedIcon from '@mui/icons-material/LockOutlined';
 import { Box, Button, Link, Stack, TextField, Typography } from '@mui/material';
 import { Link as RouterLink } from 'react-router-dom';
 import { AppCard } from '../../components/ui/AppCard';
+import { palette } from '../../theme/palette';
 
 const authFieldSx = {
   '& .MuiOutlinedInput-root': {
@@ -22,7 +23,7 @@ export function SignInPage() {
       sx={{
         maxWidth: 500,
         ml: { md: 'auto' },
-        backgroundColor: 'rgba(17,28,49,.98)',
+        backgroundColor: palette.cardSurface,
         borderColor: 'rgba(125,211,252,.22)',
         boxShadow: '0 24px 80px rgba(0,0,0,.35)'
       }}

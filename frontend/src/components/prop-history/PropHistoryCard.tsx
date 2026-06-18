@@ -243,7 +243,7 @@ function StatSummary({
           rowGap: 0.85,
           border: '1px solid rgba(148,163,184,.16)',
           borderRadius: 3,
-          bgcolor: 'rgba(15, 23, 42, 0.44)',
+          bgcolor: palette.cardSurface,
           boxShadow: 'inset 0 1px 0 rgba(255,255,255,.025)',
           '& > div': {
             minWidth: 0
@@ -271,7 +271,7 @@ function StatSummary({
           p: 1.05,
           borderRadius: 3,
           border: hasWarning ? '1px solid rgba(245,158,11,.28)' : '1px solid rgba(148,163,184,.12)',
-          bgcolor: hasWarning ? 'rgba(54, 38, 13, 0.18)' : 'rgba(15, 23, 42, 0.24)'
+          bgcolor: hasWarning ? 'rgba(54, 38, 13, 0.18)' : palette.cardSurface
         }}
       >
         <Typography variant="body2" color={hasWarning ? 'warning.main' : 'text.secondary'} fontWeight={hasWarning ? 820 : 650}>

@@ -266,7 +266,7 @@ function HeroProductPreview({ children }: { children: ReactNode }) {
           p: 2,
           pt: 2.25,
           border: '1px solid rgba(125,211,252,.22)',
-          backgroundColor: 'rgba(15,23,42,.88)',
+          backgroundColor: palette.cardSurface,
           boxShadow: '0 18px 58px rgba(0,0,0,.44)',
           overflow: 'hidden'
         }}
@@ -291,7 +291,7 @@ function HeroProductPreview({ children }: { children: ReactNode }) {
           borderRadius: 4,
           p: { sm: 2, md: 2.2 },
           border: '1px solid rgba(125,211,252,.22)',
-          backgroundColor: 'rgba(15,23,42,.84)',
+          backgroundColor: palette.cardSurface,
           boxShadow: '0 24px 90px rgba(0,0,0,.48)',
           overflow: 'hidden'
         }}
@@ -349,7 +349,7 @@ function HeroProductPreview({ children }: { children: ReactNode }) {
 
 function SportRailPreview() {
   return (
-    <AppCard sx={{ p: 0, background: 'rgba(8,13,26,.9)' }}>
+    <AppCard sx={{ p: 0, background: palette.cardSurface }}>
       <Stack spacing={0.85}>
         <Typography variant="caption" color="text.secondary" fontWeight={900}>
           SPORTS
@@ -379,7 +379,7 @@ function SportRailPreview() {
 
 function EntrySummaryPreview({ compact = false }: { compact?: boolean }) {
   return (
-    <AppCard sx={{ background: 'rgba(8,13,26,.9)' }}>
+    <AppCard sx={{ background: palette.cardSurface }}>
       <Stack spacing={compact ? 1 : 1.35}>
         <Stack direction="row" justifyContent="space-between" alignItems="center">
           <Typography variant="caption" color="text.secondary" fontWeight={900}>
@@ -406,7 +406,7 @@ function EntrySummaryPreview({ compact = false }: { compact?: boolean }) {
 function LineStripPreview() {
   const strip = mockMarkets.slice(0, 3);
   return (
-    <AppCard sx={{ background: 'rgba(8,13,26,.88)' }}>
+    <AppCard sx={{ background: palette.cardSurface }}>
       <Stack spacing={1.25}>
         <Stack direction="row" justifyContent="space-between" alignItems="center" gap={1}>
           <Typography variant="caption" color="text.secondary" fontWeight={900}>
@@ -463,24 +463,13 @@ function WorkflowTimeline() {
   return (
     <Box
       sx={{
-        position: 'relative',
-        '&:before': {
-          content: '""',
-          position: 'absolute',
-          left: { xs: 22, md: '10%' },
-          right: { xs: 'auto', md: '10%' },
-          top: { xs: 28, md: 42 },
-          bottom: { xs: 28, md: 'auto' },
-          height: { xs: 'auto', md: 2 },
-          width: { xs: 2, md: 'auto' },
-          backgroundColor: 'rgba(34,211,238,.38)'
-        }
+        position: 'relative'
       }}
     >
       <Grid container spacing={2.5}>
         {steps.map((step, index) => (
           <Grid key={step.title} size={{ xs: 12, md: 4 }}>
-            <AppCard sx={{ height: '100%', background: 'rgba(15,23,42,.88)' }}>
+            <AppCard sx={{ height: '100%', background: palette.cardSurface }}>
               <Stack spacing={2}>
                 <Stack direction="row" alignItems="center" spacing={1.4}>
                   <Box
@@ -519,7 +508,7 @@ function CoverageBoard() {
     <AppCard
       sx={{
         overflow: 'hidden',
-        backgroundColor: 'rgba(15,23,42,.92)'
+        backgroundColor: palette.cardSurface
       }}
     >
       <Grid container spacing={0}>

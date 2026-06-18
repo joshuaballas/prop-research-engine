@@ -145,7 +145,7 @@ export function AccountPage() {
                             py: 1.1,
                             borderRadius: 2.25,
                             border: `1px solid ${selected ? palette.borderStrong : palette.border}`,
-                            backgroundColor: selected ? 'rgba(34, 211, 238, 0.09)' : 'rgba(15, 23, 42, 0.46)'
+                            backgroundColor: selected ? 'rgba(34, 211, 238, 0.09)' : palette.cardSurface
                           }}
                         >
                           <Typography fontWeight={900}>{option}</Typography>

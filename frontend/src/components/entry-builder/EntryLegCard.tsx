@@ -15,7 +15,7 @@ export function EntryLegCard({ leg, onRemove }: { leg: EntryLeg; onRemove?: (id:
         border: `1px solid ${palette.border}`,
         borderRadius: 3,
         p: 1.35,
-        background: 'rgba(15,23,42,.48)'
+        background: palette.cardSurface
       }}
     >
       <Stack direction="row" justifyContent="space-between" gap={1.25} alignItems="flex-start">

@@ -2,6 +2,7 @@ export const palette = {
   bg: '#070B14',
   bgSoft: '#0A1020',
   surface: '#0F172A',
+  cardSurface: 'rgba(15, 23, 42, 0.72)',
   surfaceRaised: '#111C31',
   surfaceGlow: '#10243B',
   border: 'rgba(148, 163, 184, 0.18)',

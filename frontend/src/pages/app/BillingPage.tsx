@@ -21,7 +21,7 @@ function BillingPlanOption({ plan, isCurrent }: { plan: PricingPlan; isCurrent: 
       sx={{
         height: '100%',
         borderColor: isCurrent ? palette.borderStrong : palette.border,
-        backgroundColor: isCurrent ? 'rgba(17, 34, 58, 0.98)' : palette.surface
+        backgroundColor: palette.cardSurface
       }}
       contentSx={{ height: '100%', display: 'flex', flexDirection: 'column', gap: 2 }}
     >

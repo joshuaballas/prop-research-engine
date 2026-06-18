@@ -4,6 +4,7 @@ import { DataStateBanner } from '../../components/ui/DataStateBanner';
 import { PageHeader } from '../../components/ui/PageHeader';
 import { useEntryBuilder } from '../../hooks/useEntryBuilder';
 import { useEntryCandidateData } from '../../hooks/useMarketData';
+import { palette } from '../../theme/palette';
 import type { MarketOpportunity } from '../../types/markets';
 
 export function EntryBuilderPage() {
@@ -48,7 +49,7 @@ export function EntryBuilderPage() {
               border: '1px dashed rgba(148,163,184,.24)',
               borderRadius: 3,
               p: 1.75,
-              background: 'rgba(15,23,42,.32)'
+              background: palette.cardSurface
             }}
           >
             <Typography fontWeight={950}>Add a DFS leg to start an entry.</Typography>
@@ -131,7 +132,7 @@ function StateCard({ message, tone = 'default' }: { message: string; tone?: 'def
       sx={{
         border: `1px solid ${tone === 'error' ? 'rgba(244,63,94,.32)' : 'rgba(148,163,184,.16)'}`,
         borderRadius: 3,
-        bgcolor: 'rgba(15,23,42,.58)',
+        bgcolor: palette.cardSurface,
         p: 2
       }}
     >

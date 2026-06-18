@@ -5,6 +5,7 @@ import { MarketFilters } from '../../components/markets/MarketFilters';
 import { PageHeader } from '../../components/ui/PageHeader';
 import { useLineShoppingData } from '../../hooks/useMarketData';
 import { useResponsiveView } from '../../hooks/useResponsiveView';
+import { palette } from '../../theme/palette';
 import { formatPercent } from '../../utils/formatters';
 
 export function LineShoppingPage() {
@@ -88,7 +89,7 @@ function ApiStateCard({ message, tone = 'default' }: { message: string; tone?: '
       sx={{
         border: `1px solid ${tone === 'error' ? 'rgba(244,63,94,.32)' : 'rgba(148,163,184,.16)'}`,
         borderRadius: 4,
-        bgcolor: 'rgba(15,23,42,.68)',
+        bgcolor: palette.cardSurface,
         p: 2
       }}
     >
@@ -120,7 +121,7 @@ function MobileSummaryStrip({
       sx={{
         border: '1px solid rgba(148,163,184,.16)',
         borderRadius: 4,
-        bgcolor: 'rgba(15,23,42,.62)',
+        bgcolor: palette.cardSurface,
         px: 1.2,
         py: 1
       }}
@@ -150,7 +151,7 @@ function SummaryMetric({ label, value, helper, tone = 'default' }: { label: stri
         height: '100%',
         border: '1px solid rgba(148,163,184,.16)',
         borderRadius: 4,
-        bgcolor: 'rgba(15,23,42,.72)',
+        bgcolor: palette.cardSurface,
         p: 1.7
       }}
     >

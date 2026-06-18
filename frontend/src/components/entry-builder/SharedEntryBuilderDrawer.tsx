@@ -1,6 +1,7 @@
 import { Box, Button, Drawer, useMediaQuery, useTheme } from '@mui/material';
 import { mockEntryRules } from '../../data/mockEntryRules';
 import { useEntryBuilder } from '../../hooks/useEntryBuilder';
+import { palette } from '../../theme/palette';
 import { EntryBuilderTray } from './EntryBuilderTray';
 
 export function SharedEntryBuilderDrawer() {
@@ -28,7 +29,7 @@ export function SharedEntryBuilderDrawer() {
             borderTopRightRadius: { xs: 4, md: 0 },
             borderLeft: { md: '1px solid rgba(125,211,252,.22)' },
             borderTop: { xs: '1px solid rgba(125,211,252,.22)', md: 'none' },
-            backgroundColor: 'rgba(17,28,49,.98)'
+            backgroundColor: palette.cardSurface
           }
         }}
       >

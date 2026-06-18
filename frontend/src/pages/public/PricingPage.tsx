@@ -6,6 +6,7 @@ import { PlanCard } from '../../components/billing/PlanCard';
 import { AppCard } from '../../components/ui/AppCard';
 import { MetadataText } from '../../components/ui/MetadataText';
 import { mockPricingPlans } from '../../data/mockPricingPlans';
+import { palette } from '../../theme/palette';
 
 export function PricingPage() {
   const trustNotes = [
@@ -57,7 +58,7 @@ export function PricingPage() {
         <Grid container spacing={2.5}>
           {trustNotes.map((note) => (
             <Grid key={note.title} size={{ xs: 12, md: 4 }}>
-              <AppCard sx={{ height: '100%', background: 'rgba(15,23,42,.76)' }}>
+              <AppCard sx={{ height: '100%', background: palette.cardSurface }}>
                 <Stack direction="row" spacing={1.5} alignItems="flex-start">
                   <Box
                     sx={{

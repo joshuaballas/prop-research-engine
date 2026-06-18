@@ -25,6 +25,7 @@ import { compactActionButtonSx, lockedActionButtonSx, removeActionButtonSx, seco
 import { useEntryBuilder } from '../../hooks/useEntryBuilder';
 import { useLineShoppingData, useMarketFreshnessData, usePerformanceData, useTopPicksData } from '../../hooks/useMarketData';
 import { useSelectedSports } from '../../hooks/useSelectedSports';
+import { palette } from '../../theme/palette';
 import type { MarketOpportunity } from '../../types/markets';
 import type { SportCode } from '../../types/sports';
 import { formatPercent } from '../../utils/formatters';
@@ -337,7 +338,7 @@ function LineShoppingPreviewCard({ market, showReference }: { market: MarketOppo
   const warning = renderWarningText(market.warnings);
 
   return (
-    <AppCard sx={{ background: 'rgba(15,23,42,.72)' }} contentSx={{ p: 1.7, '&:last-child': { pb: 1.7 } }}>
+    <AppCard sx={{ background: palette.cardSurface }} contentSx={{ p: 1.7, '&:last-child': { pb: 1.7 } }}>
       <Stack spacing={0.85}>
         <Stack direction="row" justifyContent="space-between" alignItems="flex-start" gap={2}>
           <Box minWidth={0}>
@@ -549,7 +550,7 @@ function PerformancePanel({ icon, title, value, detail, tone = 'default' }: { ic
       sx={{
         height: '100%',
         borderColor: tone === 'warning' ? 'rgba(245,158,11,.34)' : undefined,
-        backgroundColor: tone === 'warning' ? 'rgba(17,28,49,.96)' : undefined
+        backgroundColor: tone === 'warning' ? palette.cardSurface : undefined
       }}
     >
       <Stack spacing={1.2}>

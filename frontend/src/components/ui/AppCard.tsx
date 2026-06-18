@@ -8,11 +8,12 @@ interface AppCardProps extends CardProps {
 export function AppCard({ children, sx, contentSx, ...props }: AppCardProps) {
   return (
     <Card
+      elevation={0}
       {...props}
       sx={{
         borderRadius: 4,
         border: `1px solid ${palette.border}`,
-        backgroundColor: palette.surface,
+        backgroundColor: palette.cardSurface,
         ...sx
       }}
     >

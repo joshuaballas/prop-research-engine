@@ -19,7 +19,7 @@ function SummaryCard({ metric }: { metric: SummaryMetric }) {
     <AppCard
       sx={{
         height: '100%',
-        backgroundColor: palette.surface
+        backgroundColor: palette.cardSurface
       }}
       contentSx={{
         height: '100%',

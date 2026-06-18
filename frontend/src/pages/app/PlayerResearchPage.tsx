@@ -104,7 +104,7 @@ function PlayerSearch({
         '& .MuiOutlinedInput-root': {
           minHeight: 58,
           borderRadius: 3,
-          bgcolor: 'rgba(15,23,42,.68)',
+          bgcolor: palette.cardSurface,
           border: `1px solid ${palette.border}`
         }
       }}
@@ -132,7 +132,7 @@ function EmptyResearchState({ onSelect }: { onSelect: (player: PlayerResearchPro
     <AppCard
       sx={{
         borderColor: 'rgba(125,211,252,.22)',
-        backgroundColor: palette.surfaceGlow
+        backgroundColor: palette.cardSurface
       }}
       contentSx={{ p: { xs: 2, md: 2.6 } }}
     >
@@ -164,7 +164,7 @@ function EmptyResearchState({ onSelect }: { onSelect: (player: PlayerResearchPro
                 p: 1.45,
                 borderRadius: 3,
                 border: '1px solid rgba(148,163,184,.14)',
-                bgcolor: 'rgba(2,6,23,.2)'
+                bgcolor: palette.cardSurface
               }}
             >
               <Typography fontWeight={900}>{card.title}</Typography>
@@ -215,7 +215,7 @@ function PlayerProfile({ player }: { player: PlayerResearchProfile }) {
               p: 1.7,
               borderRadius: 3,
               border: `1px solid ${palette.border}`,
-              bgcolor: 'rgba(2,6,23,.28)'
+              bgcolor: palette.cardSurface
             }}
           >
             <Typography variant="caption" color="text.secondary" fontWeight={800}>
@@ -379,12 +379,12 @@ function CurrentLineCard({ line, active, onSelect }: { line: MarketOpportunity; 
         minHeight: { md: 69 },
         borderRadius: 3,
         border: active ? '1px solid rgba(34,211,238,.5)' : '1px solid rgba(148,163,184,.16)',
-        bgcolor: active ? 'rgba(11,74,94,.26)' : 'rgba(2,6,23,.22)',
+        bgcolor: active ? 'rgba(11,74,94,.26)' : palette.cardSurface,
         cursor: 'pointer',
         transition: 'border-color .16s ease, background-color .16s ease',
         '&:hover': {
           borderColor: active ? 'rgba(34,211,238,.58)' : 'rgba(148,163,184,.26)',
-          bgcolor: active ? 'rgba(11,74,94,.32)' : 'rgba(15,23,42,.36)'
+          bgcolor: active ? 'rgba(11,74,94,.32)' : palette.cardSurface
         },
         '&:focus-visible': {
           outline: '2px solid rgba(34,211,238,.42)',
@@ -513,7 +513,7 @@ function StatSummary({
           rowGap: 0.85,
           border: '1px solid rgba(148,163,184,.16)',
           borderRadius: 3,
-          bgcolor: 'rgba(15, 23, 42, 0.44)',
+          bgcolor: palette.cardSurface,
           boxShadow: 'inset 0 1px 0 rgba(255,255,255,.025)',
           '& > div': {
             minWidth: 0
@@ -541,7 +541,7 @@ function StatSummary({
           p: 1.05,
           borderRadius: 3,
           border: hasWarning ? '1px solid rgba(245,158,11,.28)' : '1px solid rgba(148,163,184,.12)',
-          bgcolor: hasWarning ? 'rgba(54, 38, 13, 0.18)' : 'rgba(15, 23, 42, 0.24)'
+          bgcolor: hasWarning ? 'rgba(54, 38, 13, 0.18)' : palette.cardSurface
         }}
       >
         <Typography variant="body2" color={hasWarning ? 'warning.main' : 'text.secondary'} fontWeight={hasWarning ? 820 : 650}>

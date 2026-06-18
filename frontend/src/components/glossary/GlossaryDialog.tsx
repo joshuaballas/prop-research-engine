@@ -63,7 +63,7 @@ export function GlossaryDialog({ open, onClose }: GlossaryDialogProps) {
                 p: 1.5,
                 borderRadius: 2,
                 border: '1px solid rgba(148,163,184,.14)',
-                bgcolor: 'rgba(15,23,42,.58)'
+                bgcolor: palette.cardSurface
               }}
             >
               <Typography fontWeight={900}>{term.label}</Typography>

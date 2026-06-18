@@ -6,6 +6,7 @@ import RemoveCircleOutlineRoundedIcon from '@mui/icons-material/RemoveCircleOutl
 import { Accordion, AccordionDetails, AccordionSummary, Box, Button, Divider, Stack, Table, TableBody, TableCell, TableHead, TableRow, Typography } from '@mui/material';
 import { useState } from 'react';
 import { useEntryBuilder } from '../../hooks/useEntryBuilder';
+import { palette } from '../../theme/palette';
 import type { MarketOpportunity } from '../../types/markets';
 import { formatPercent } from '../../utils/formatters';
 import { hasRenderableWarning, renderWarningText } from '../../utils/warnings';
@@ -154,7 +155,7 @@ export function LineShoppingCard({ market }: { market: MarketOpportunity }) {
       sx={{
         border: '1px solid rgba(148,163,184,.16)',
         borderRadius: '16px !important',
-        bgcolor: 'rgba(15,23,42,.82)',
+        bgcolor: palette.cardSurface,
         overflow: 'hidden',
         '&:before': { display: 'none' }
       }}

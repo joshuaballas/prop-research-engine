@@ -38,7 +38,7 @@ export function PerformanceMobileAccordion({ rows, category }: { rows: Performan
             sx={{
               border: `1px solid ${palette.border}`,
               borderRadius: 3,
-              backgroundColor: palette.surface,
+              backgroundColor: palette.cardSurface,
               overflow: 'hidden',
               '&:before': { display: 'none' }
             }}

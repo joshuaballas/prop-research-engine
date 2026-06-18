@@ -2,6 +2,7 @@ import CheckCircleRoundedIcon from '@mui/icons-material/CheckCircleRounded';
 import { Button, Card, CardContent, Chip, Divider, Stack, Typography } from '@mui/material';
 import { Link as RouterLink } from 'react-router-dom';
 import type { PricingPlan } from '../../types/billing';
+import { palette } from '../../theme/palette';
 import { formatCurrency } from '../../utils/formatters';
 import { StatusPill } from '../ui/StatusPill';
 
@@ -14,6 +15,7 @@ export function PlanCard({ plan }: { plan: PricingPlan }) {
 
   return (
     <Card
+      elevation={0}
       sx={{
         height: '100%',
         width: '100%',
@@ -23,8 +25,9 @@ export function PlanCard({ plan }: { plan: PricingPlan }) {
         overflow: 'hidden',
         borderRadius: 4,
         border: `1px solid ${isFeatured ? 'rgba(34,211,238,.62)' : 'rgba(148,163,184,.18)'}`,
-        backgroundColor: isFeatured ? 'rgba(17, 34, 58, 0.98)' : 'rgba(17, 28, 49, 0.96)',
-        boxShadow: isFeatured ? '0 18px 46px rgba(0,0,0,.28)' : undefined
+        backgroundColor: palette.cardSurface,
+        backgroundImage: 'none',
+        boxShadow: 'none'
       }}
     >
       <CardContent

@@ -5,6 +5,7 @@ import { getPropHistory } from '../../api/markets';
 import type { PropHistoryResponseDto } from '../../api/types';
 import { isDemoDataMode } from '../../config/dataMode';
 import { mockPlayerResearchPlayers } from '../../data/mockPlayerResearch';
+import { palette } from '../../theme/palette';
 import { formatPercent } from '../../utils/formatters';
 import { getMarketCautions } from '../../utils/marketCautions';
 import { MetricLabelWithHelp } from '../metrics/MetricLabelWithHelp';
@@ -178,7 +179,7 @@ function MetricStrip({ market }: { market: MarketOpportunity }) {
         py: { xs: 1.25, md: 1.45 },
         borderRadius: 2.5,
         border: '1px solid rgba(148,163,184,.14)',
-        bgcolor: 'rgba(15,23,42,.45)'
+        bgcolor: palette.cardSurface
       }}
     >
       <DetailMetric metric="hitChance" value={formatPercent(market.modelProbability)} />

@@ -100,12 +100,16 @@ export const components: Components<Omit<Theme, 'components'>> = {
     }
   },
   MuiCard: {
+    defaultProps: {
+      elevation: 0
+    },
     styleOverrides: {
       root: {
         borderRadius: 20,
         border: `1px solid ${palette.border}`,
-        backgroundColor: palette.surface,
-        boxShadow: '0 16px 40px rgba(0,0,0,.24)'
+        backgroundColor: palette.cardSurface,
+        backgroundImage: 'none',
+        boxShadow: 'none'
       }
     }
   },

@@ -1,5 +1,6 @@
 import CloseRoundedIcon from '@mui/icons-material/CloseRounded';
 import { Box, Button, IconButton, Stack, TextField, Typography } from '@mui/material';
+import { palette } from '../../theme/palette';
 import type { EntryLeg, EntryRule } from '../../types/entryBuilder';
 import { EntryBuilderSummary } from './EntryBuilderSummary';
 import { EntryLegCard } from './EntryLegCard';
@@ -63,7 +64,7 @@ export function EntryBuilderTray({
                 border: '1px dashed rgba(148,163,184,.28)',
                 borderRadius: 3,
                 p: 1.75,
-                background: 'rgba(15,23,42,.42)'
+                background: palette.cardSurface
               }}
             >
               <Typography fontWeight={950}>No legs selected</Typography>

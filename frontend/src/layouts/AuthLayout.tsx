@@ -66,7 +66,7 @@ export function AuthLayout() {
                   { icon: <VerifiedUserOutlinedIcon color="primary" />, title: 'Provider-safe entries', body: 'Avoid combining legs across incompatible DFS platforms.' }
                 ].map((item) => (
                   <Grid key={item.title} size={{ xs: 12, sm: 4, md: 12 }}>
-                    <AppCard sx={{ backgroundColor: 'rgba(15,23,42,.72)' }}>
+                    <AppCard sx={{ backgroundColor: palette.cardSurface }}>
                       <Stack direction="row" spacing={1.5}>
                         {item.icon}
                         <Box>
