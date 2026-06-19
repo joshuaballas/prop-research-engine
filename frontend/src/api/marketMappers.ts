@@ -16,7 +16,7 @@ export function mapPerformanceSummaryToGroups(summary: MarketPerformanceSummaryD
     ...(summary.groups.byProvider ?? []).map((row) => mapPerformanceGroup(row, 'Provider')),
     ...(summary.groups.byProviderCategory ?? []).map((row) => mapPerformanceGroup(row, 'Provider')),
     ...(summary.groups.byPropType ?? []).map((row) => mapPerformanceGroup(row, 'Prop Type')),
-    ...(summary.groups.byStrategyClassification ?? []).map((row) => mapPerformanceGroup(row, 'Confidence')),
+    ...(summary.groups.byStrategyClassification ?? []).map((row) => mapPerformanceGroup(row, 'Trust')),
     ...(summary.groups.byStrategyTier ?? []).map((row) => mapPerformanceGroup(row, 'Strategy')),
     ...(summary.groups.byProviderAndPropType ?? []).map((row) => mapPerformanceGroup(row, 'Provider + Sport'))
   ];
@@ -108,6 +108,9 @@ function mapMarketGroupToOpportunity(group: MarketGroupDto, index: number, sourc
 
 function mapPerformanceGroup(row: PerformanceGroupDto, fallbackType: string): PerformanceGroup {
   const gradedPicks = row.gradedPicks ?? 0;
+  const unmatched = row.unmatched ?? 0;
+  const pending = row.pending ?? 0;
+  const hasGradeableSample = row.hasGradeableSample ?? gradedPicks > 0;
   const warning = row.sampleSizeWarning || gradedPicks < 30 ? 'Limited history' : undefined;
   return {
     groupType: normalizePerformanceGroupType(row.groupType, fallbackType),
@@ -116,9 +119,9 @@ function mapPerformanceGroup(row: PerformanceGroupDto, fallbackType: string): Pe
     wins: row.wins ?? 0,
     losses: row.losses ?? 0,
     pushes: row.pushes ?? 0,
-    noResults: row.noResults ?? 0,
-    unmatched: row.unmatched ?? 0,
-    pending: row.pending ?? 0,
+    unmatched,
+    pending,
+    hasGradeableSample,
     hitRate: row.hitRate ?? 0,
     roi: row.simulatedRoi ?? 0,
     averageEv: row.averageEstimatedEv ?? 0,
@@ -173,7 +176,7 @@ function normalizePerformanceGroupType(groupType: string, fallback: string) {
     provider: 'Provider',
     providerCategory: 'Provider',
     propType: 'Prop Type',
-    strategyClassification: 'Confidence',
+    strategyClassification: 'Trust',
     strategyTier: 'Strategy',
     providerAndPropType: 'Provider + Sport'
   };

@@ -355,6 +355,9 @@ export interface MarketPerformanceSummaryDto {
     importedResultsForCompletedDate?: number;
     propResultsForCompletedDate?: number;
     noResultPicks?: number;
+    hasGradeableSample?: boolean;
+    gradeableGroupCount?: number;
+    noResultOnlyGroupCount?: number;
     unmatchedPicks?: number;
     hasLedgerRowsForCompletedDate?: boolean;
     hasFilteredRowsForCompletedDate?: boolean;
@@ -389,6 +392,8 @@ export interface PerformanceGroupDto {
   noResults?: number;
   unmatched?: number;
   pending?: number;
+  hasGradeableSample?: boolean;
+  isNoResultOnly?: boolean;
   hitRate?: number;
   averageEstimatedEv?: number | null;
   simulatedRoi?: number;

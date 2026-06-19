@@ -14,16 +14,16 @@ const breakdownTabs = [
   { label: 'Providers', types: ['Provider'] },
   { label: 'Sports', types: ['Sport'] },
   { label: 'Prop Types', types: ['Prop Type'] },
-  { label: 'Confidence', types: ['Confidence'] },
+  { label: 'Trust', types: ['Trust'] },
   { label: 'Strategy', types: ['Strategy'] }
 ];
 
 export function PerformancePage() {
   const { isMobile } = useResponsiveView();
   const [selectedTab, setSelectedTab] = useState(breakdownTabs[0].label);
-  const performanceQuery = usePerformanceData();
+  const performanceQuery = usePerformanceData('latestCompleted');
   const performanceRows = performanceQuery.rows;
-  const pendingCurrentSlatePicks = performanceQuery.summary?.dataAvailability?.currentSlatePendingPicks ?? 0;
+  const hasGradedSample = (performanceQuery.summary?.dataAvailability?.gradedPicks ?? performanceRows.find((row) => row.groupType === 'Overall')?.gradedPicks ?? 0) > 0;
   const activeTab = breakdownTabs.find((tab) => tab.label === selectedTab) ?? breakdownTabs[0];
   const visibleRows = useMemo(
     () => performanceRows.filter((row) => activeTab.types.includes(row.groupType)),
@@ -46,8 +46,7 @@ export function PerformancePage() {
             Performance is sample-size dependent
           </Typography>
           <Typography color="text.secondary">
-            Treat early results as research, not proof. Historical groups with limited graded picks need more context before
-            they should influence an entry workflow.
+            Treat early results as research, not proof. This page only reports picks with determined outcomes.
           </Typography>
         </Stack>
       </AppCard>
@@ -56,16 +55,10 @@ export function PerformancePage() {
         <ApiStateCard message="Loading performance summary..." />
       ) : performanceQuery.error ? (
         <ApiStateCard tone="error" message="Performance summary could not be loaded from the market API." />
-      ) : performanceRows.length ? (
+      ) : performanceRows.length && hasGradedSample ? (
         <PerformanceSummaryCards rows={performanceRows} />
       ) : (
-        <ApiStateCard
-          message={
-            pendingCurrentSlatePicks > 0
-              ? `No graded recommendations yet. Today: ${pendingCurrentSlatePicks} candidates pending results.`
-              : 'No graded performance summary is available yet.'
-          }
-        />
+        <CleanBaselineCard />
       )}
 
       <Stack spacing={1.5}>
@@ -74,7 +67,7 @@ export function PerformancePage() {
             Performance breakdowns
           </Typography>
           <Typography color="text.secondary">
-            Compare historical candidate results by one category at a time.
+            Compare gradeable candidate outcomes by one category at a time.
           </Typography>
         </Stack>
 
@@ -123,8 +116,10 @@ export function PerformancePage() {
           })}
         </Box>
 
-        {performanceQuery.loading || performanceQuery.error || !performanceRows.length ? (
-          <ApiStateCard message={performanceQuery.loading ? 'Loading breakdowns...' : 'No performance breakdown rows are available.'} />
+        {performanceQuery.loading || performanceQuery.error || !performanceRows.length || !hasGradedSample ? (
+          <ApiStateCard message={performanceQuery.loading ? 'Loading breakdowns...' : 'No graded performance groups yet.'} />
+        ) : !visibleRows.length ? (
+          <ApiStateCard message="No graded performance groups are available for this category yet." />
         ) : isMobile ? (
           <PerformanceMobileAccordion rows={visibleRows} category={selectedTab} />
         ) : (
@@ -153,12 +148,27 @@ export function PerformancePage() {
             What to watch
           </Typography>
           <Typography color="text.secondary">
-            Provider, prop type, and confidence splits become more useful once each group has enough graded picks to smooth
+            Provider, prop type, and trust splits become more useful once each group has enough graded picks to smooth
             out one-slate noise.
           </Typography>
         </AppCard>
       </Box>
     </Stack>
+  );
+}
+
+function CleanBaselineCard() {
+  return (
+    <AppCard>
+      <Stack spacing={0.65}>
+        <Typography variant="h6" fontWeight={950}>
+          No graded picks yet.
+        </Typography>
+        <Typography color="text.secondary">
+          New recommendations are being tracked. Results will appear after completed slates are imported and matched.
+        </Typography>
+      </Stack>
+    </AppCard>
   );
 }
 

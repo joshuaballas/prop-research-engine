@@ -21,12 +21,11 @@ export function PerformanceTable({ rows, category }: { rows: PerformanceGroup[];
           <TableRow>
             <TableCell>Group</TableCell>
             <TableCell align="right">Graded</TableCell>
-            <TableCell align="right">No Result</TableCell>
             <TableCell align="right">W-L-P</TableCell>
             <TableCell align="right">Hit Rate</TableCell>
             <TableCell align="right">Simulated ROI</TableCell>
             <TableCell align="right">Avg EV</TableCell>
-            <TableCell>Sample Status / Warning</TableCell>
+            <TableCell>Sample Status / Caution</TableCell>
           </TableRow>
         </TableHead>
         <TableBody>
@@ -49,7 +48,6 @@ export function PerformanceTable({ rows, category }: { rows: PerformanceGroup[];
                     </Stack>
                   </TableCell>
                   <TableCell align="right">{row.gradedPicks}</TableCell>
-                  <TableCell align="right">{row.noResults ?? 0}</TableCell>
                   <TableCell align="right">
                     {row.wins}-{row.losses}-{row.pushes}
                   </TableCell>
@@ -58,18 +56,22 @@ export function PerformanceTable({ rows, category }: { rows: PerformanceGroup[];
                     align="right"
                     sx={{ color: row.roi >= 0 ? palette.success : palette.danger, fontWeight: 900 }}
                   >
-                    {formatPercent(row.roi, { signed: true })}
+                    {row.gradedPicks > 0 ? formatPercent(row.roi, { signed: true }) : '-'}
                   </TableCell>
                   <TableCell align="right">{formatPercent(row.averageEv, { signed: true })}</TableCell>
                   <TableCell>
-                    {warningTone ? <MetadataText tone={warningTone}>{warning}</MetadataText> : warning}
+                    {warningTone ? (
+                      <MetadataText tone={warningTone}>{warning}</MetadataText>
+                    ) : (
+                      warning
+                    )}
                   </TableCell>
                 </TableRow>
               );
             })
           ) : (
             <TableRow>
-              <TableCell colSpan={8}>
+              <TableCell colSpan={7}>
                 <Typography color="text.secondary">No {category.toLowerCase()} performance rows yet.</Typography>
               </TableCell>
             </TableRow>

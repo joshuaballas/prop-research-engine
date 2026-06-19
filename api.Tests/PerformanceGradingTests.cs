@@ -76,11 +76,9 @@ public sealed class PerformanceGradingTests
 
         await EnsureSuccessWithBodyAsync(response);
         var json = await response.Content.ReadFromJsonAsync<JsonElement>();
-        var overall = json.GetProperty("groups").GetProperty("overall")[0];
         Assert.Equal(0, json.GetProperty("dataAvailability").GetProperty("gradedPicks").GetInt32());
-        Assert.Equal(1, overall.GetProperty("pending").GetInt32());
-        Assert.Equal(JsonValueKind.Null, overall.GetProperty("hitRate").ValueKind);
-        Assert.Equal(JsonValueKind.Null, overall.GetProperty("simulatedRoi").ValueKind);
+        Assert.Equal(1, json.GetProperty("dataAvailability").GetProperty("pendingRowsForCompletedDate").GetInt32());
+        Assert.Empty(json.GetProperty("groups").GetProperty("overall").EnumerateArray());
     }
 
     [Fact]
@@ -103,11 +101,15 @@ public sealed class PerformanceGradingTests
 
         await EnsureSuccessWithBodyAsync(response);
         var json = await response.Content.ReadFromJsonAsync<JsonElement>();
-        var overall = json.GetProperty("groups").GetProperty("overall")[0];
         Assert.Equal(0, json.GetProperty("dataAvailability").GetProperty("gradedPicks").GetInt32());
-        Assert.Equal(1, overall.GetProperty("noResults").GetInt32());
-        Assert.Equal(JsonValueKind.Null, overall.GetProperty("hitRate").ValueKind);
-        Assert.Equal(JsonValueKind.Null, overall.GetProperty("simulatedRoi").ValueKind);
+        Assert.Equal(1, json.GetProperty("dataAvailability").GetProperty("noResultRowsForCompletedDate").GetInt32());
+        Assert.Empty(json.GetProperty("groups").GetProperty("overall").EnumerateArray());
+
+        var diagnosticResponse = await client.GetAsync("/api/markets/performance-summary?candidateOnly=true&gradingMode=latestCompleted&includeNoResultDiagnostics=true");
+        await EnsureSuccessWithBodyAsync(diagnosticResponse);
+        var diagnosticJson = await diagnosticResponse.Content.ReadFromJsonAsync<JsonElement>();
+        var diagnosticOverall = diagnosticJson.GetProperty("groups").GetProperty("overall")[0];
+        Assert.Equal(1, diagnosticOverall.GetProperty("noResults").GetInt32());
     }
 
     [Fact]
@@ -129,11 +131,9 @@ public sealed class PerformanceGradingTests
 
         await EnsureSuccessWithBodyAsync(response);
         var json = await response.Content.ReadFromJsonAsync<JsonElement>();
-        var overall = json.GetProperty("groups").GetProperty("overall")[0];
         Assert.Equal(0, json.GetProperty("dataAvailability").GetProperty("gradedPicks").GetInt32());
-        Assert.Equal(1, overall.GetProperty("unmatched").GetInt32());
-        Assert.Equal(JsonValueKind.Null, overall.GetProperty("hitRate").ValueKind);
-        Assert.Equal(JsonValueKind.Null, overall.GetProperty("simulatedRoi").ValueKind);
+        Assert.Equal(1, json.GetProperty("dataAvailability").GetProperty("unmatchedRowsForCompletedDate").GetInt32());
+        Assert.Empty(json.GetProperty("groups").GetProperty("overall").EnumerateArray());
     }
 
     [Fact]

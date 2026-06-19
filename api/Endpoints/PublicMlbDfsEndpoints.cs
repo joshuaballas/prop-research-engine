@@ -302,6 +302,7 @@ public static class PublicMlbDfsEndpoints
             bool? includeResearch,
             bool? includeStale,
             bool? includeExcluded,
+            bool? includeNoResultDiagnostics,
             bool? includeDiagnostics,
             int? diagnosticSampleSize,
             IPlayerIdentityAliasService playerIdentityAliasService,
@@ -333,6 +334,7 @@ public static class PublicMlbDfsEndpoints
                 includeResearch ?? false,
                 includeStale ?? false,
                 includeExcluded ?? false,
+                includeNoResultDiagnostics ?? false,
                 includeDiagnostics ?? false,
                 diagnosticSampleSize,
                 playerIdentityAliasService,
@@ -808,6 +810,7 @@ public static class PublicMlbDfsEndpoints
         bool includeResearch,
         bool includeStale,
         bool includeExcluded,
+        bool includeNoResultDiagnostics,
         bool includeDiagnostics,
         int? diagnosticSampleSize,
         IPlayerIdentityAliasService playerIdentityAliasService,
@@ -842,6 +845,7 @@ public static class PublicMlbDfsEndpoints
             includeResearch,
             includeStale,
             includeExcluded,
+            includeNoResultDiagnostics,
             includeDiagnostics,
             diagnosticSampleSize,
             dbContext,
@@ -1229,6 +1233,7 @@ public static class PublicMlbDfsEndpoints
         bool includeResearch,
         bool includeStale,
         bool includeExcluded,
+        bool includeNoResultDiagnostics,
         bool includeDiagnostics,
         int? diagnosticSampleSize,
         ApplicationDbContext dbContext,
@@ -1439,6 +1444,10 @@ public static class PublicMlbDfsEndpoints
                 ? "Small graded sample. Treat ROI and hit-rate as directional only."
                 : null;
 
+        var groupRows = includeNoResultDiagnostics
+            ? gradedRows
+            : gradedRows.Where(row => IsGradedOutcome(row.Outcome)).ToArray();
+
         return new
         {
             generatedAtUtc,
@@ -1464,6 +1473,7 @@ public static class PublicMlbDfsEndpoints
                 includeResearch,
                 includeStale,
                 includeExcluded,
+                includeNoResultDiagnostics,
                 fromDate,
                 toDate,
                 minSampleSize,
@@ -1547,6 +1557,9 @@ public static class PublicMlbDfsEndpoints
                 totalPicksAfterFilters = ledgerTotalAfterFilters,
                 gradedPicks = totalGraded,
                 noResultPicks = noResultRows,
+                hasGradeableSample = totalGraded > 0,
+                gradeableGroupCount = CountGradeableGroups(groupRows),
+                noResultOnlyGroupCount = includeNoResultDiagnostics ? CountNoResultOnlyGroups(gradedRows) : 0,
                 hasEnoughData = totalGraded >= 30,
                 warning,
                 latestCompletedDate,
@@ -1634,14 +1647,14 @@ public static class PublicMlbDfsEndpoints
             },
             groups = new
             {
-                overall = BuildLedgerPerformanceGroups(gradedRows, "overall", row => "All"),
-                byProviderCategory = BuildLedgerPerformanceGroups(gradedRows, "providerCategory", row => row.Snapshot.ProviderCategory),
-                byProvider = BuildLedgerPerformanceGroups(gradedRows, "provider", row => row.Snapshot.EntryProvider),
-                byBookmaker = BuildLedgerPerformanceGroups(gradedRows, "bookmaker", row => row.Snapshot.Bookmaker),
-                byPropType = BuildLedgerPerformanceGroups(gradedRows, "propType", row => row.Snapshot.PropType),
-                byStrategyClassification = BuildLedgerPerformanceGroups(gradedRows, "strategyClassification", row => row.Snapshot.StrategyClassification),
-                byStrategyTier = BuildLedgerPerformanceGroups(gradedRows, "strategyTier", row => row.Snapshot.StrategyTier),
-                byProviderAndPropType = BuildLedgerPerformanceGroups(gradedRows, "providerAndPropType", row => $"{row.Snapshot.EntryProvider} | {row.Snapshot.PropType}")
+                overall = BuildLedgerPerformanceGroups(groupRows, "overall", row => "All"),
+                byProviderCategory = BuildLedgerPerformanceGroups(groupRows, "providerCategory", row => row.Snapshot.ProviderCategory),
+                byProvider = BuildLedgerPerformanceGroups(groupRows, "provider", row => row.Snapshot.EntryProvider),
+                byBookmaker = BuildLedgerPerformanceGroups(groupRows, "bookmaker", row => row.Snapshot.Bookmaker),
+                byPropType = BuildLedgerPerformanceGroups(groupRows, "propType", row => row.Snapshot.PropType),
+                byStrategyClassification = BuildLedgerPerformanceGroups(groupRows, "strategyClassification", row => row.Snapshot.StrategyClassification),
+                byStrategyTier = BuildLedgerPerformanceGroups(groupRows, "strategyTier", row => row.Snapshot.StrategyTier),
+                byProviderAndPropType = BuildLedgerPerformanceGroups(groupRows, "providerAndPropType", row => $"{row.Snapshot.EntryProvider} | {row.Snapshot.PropType}")
             }
         };
     }
@@ -2964,6 +2977,41 @@ public static class PublicMlbDfsEndpoints
             .ToArray();
     }
 
+    private static int CountGradeableGroups(IReadOnlyCollection<LedgerPerformanceRow> rows)
+    {
+        return CountLedgerPerformanceGroups(rows, group => group.Any(row => IsGradedOutcome(row.Outcome)));
+    }
+
+    private static int CountNoResultOnlyGroups(IReadOnlyCollection<LedgerPerformanceRow> rows)
+    {
+        return CountLedgerPerformanceGroups(rows, group =>
+        {
+            var groupRows = group.ToArray();
+            return groupRows.All(row => !IsGradedOutcome(row.Outcome))
+                && groupRows.Any(row => IsNoResultFailure(row.MatchFailureReason))
+                && groupRows.All(row => IsNoResultFailure(row.MatchFailureReason));
+        });
+    }
+
+    private static int CountLedgerPerformanceGroups(
+        IReadOnlyCollection<LedgerPerformanceRow> rows,
+        Func<IGrouping<string, LedgerPerformanceRow>, bool> predicate)
+    {
+        return new[]
+            {
+                rows.GroupBy(row => "All"),
+                rows.GroupBy(row => string.IsNullOrWhiteSpace(row.Snapshot.ProviderCategory) ? "Unknown" : row.Snapshot.ProviderCategory),
+                rows.GroupBy(row => string.IsNullOrWhiteSpace(row.Snapshot.EntryProvider) ? "Unknown" : row.Snapshot.EntryProvider),
+                rows.GroupBy(row => string.IsNullOrWhiteSpace(row.Snapshot.Bookmaker) ? "Unknown" : row.Snapshot.Bookmaker),
+                rows.GroupBy(row => string.IsNullOrWhiteSpace(row.Snapshot.PropType) ? "Unknown" : row.Snapshot.PropType),
+                rows.GroupBy(row => string.IsNullOrWhiteSpace(row.Snapshot.StrategyClassification) ? "Unknown" : row.Snapshot.StrategyClassification),
+                rows.GroupBy(row => string.IsNullOrWhiteSpace(row.Snapshot.StrategyTier) ? "Unknown" : row.Snapshot.StrategyTier),
+                rows.GroupBy(row => $"{row.Snapshot.EntryProvider} | {row.Snapshot.PropType}")
+            }
+            .SelectMany(group => group)
+            .Count(predicate);
+    }
+
     private static dynamic BuildLedgerPerformanceGroup(
         string groupType,
         string groupKey,
@@ -2997,6 +3045,8 @@ public static class PublicMlbDfsEndpoints
             strategyTier = FirstDistinctOrNull(rows.Select(row => row.Snapshot.StrategyTier)),
             totalPicks = rows.Count,
             gradedPicks = graded.Length,
+            hasGradeableSample = graded.Length > 0,
+            isNoResultOnly = graded.Length == 0 && noResults > 0 && unmatched == 0 && pending == 0,
             wins,
             losses,
             pushes,
@@ -3044,6 +3094,8 @@ public static class PublicMlbDfsEndpoints
             strategyTier = FirstDistinctOrNull(rows.Select(row => row.Snapshot.StrategyTier)),
             totalPicks = rows.Count,
             gradedPicks = graded.Length,
+            hasGradeableSample = graded.Length > 0,
+            isNoResultOnly = false,
             wins,
             losses,
             pushes,

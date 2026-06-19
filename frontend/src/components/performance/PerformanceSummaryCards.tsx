@@ -65,17 +65,18 @@ function SummaryCard({ metric }: { metric: SummaryMetric }) {
 
 export function PerformanceSummaryCards({ rows }: { rows: PerformanceGroup[] }) {
   const overall = rows.find((row) => row.groupType === 'Overall') ?? rows[0];
+  const hasGradedSample = (overall?.gradedPicks ?? 0) > 0;
   const bestStrategy = rows
-    .filter((row) => row.groupType === 'Strategy')
+    .filter((row) => row.groupType === 'Strategy' && row.gradedPicks > 0)
     .sort((a, b) => b.roi - a.roi)[0];
   const limitedHistoryCount = rows.filter((row) => row.warning || row.gradedPicks < 30).length;
   const hasDecisions = overall.wins + overall.losses > 0;
   const metrics: SummaryMetric[] = [
     {
       label: 'Simulated ROI',
-      value: formatPercent(overall.roi, { signed: true }),
-      helper: 'Historical candidate results',
-      tone: 'good'
+      value: hasGradedSample ? formatPercent(overall.roi, { signed: true }) : '-',
+      helper: hasGradedSample ? 'Historical candidate results' : 'No graded sample',
+      tone: hasGradedSample ? 'good' : 'default'
     },
     {
       label: 'Hit Rate',
@@ -88,16 +89,16 @@ export function PerformanceSummaryCards({ rows }: { rows: PerformanceGroup[] }) 
       helper: 'Across graded history'
     },
     {
-      label: 'Average EV',
+      label: 'Avg EV at recommendation time',
       value: formatPercent(overall.averageEv, { signed: true }),
-      helper: 'At recommendation time',
+      helper: 'Captured recommendation signal',
       tone: 'good'
     },
     {
       label: 'Best Strategy',
       value: bestStrategy?.groupKey === 'ConservativeCandidate'
         ? 'Conservative'
-        : bestStrategy?.groupKey.replace(/([a-z])([A-Z])/g, '$1 $2') ?? 'N/A',
+        : bestStrategy?.groupKey.replace(/([a-z])([A-Z])/g, '$1 $2') ?? '-',
       helper: bestStrategy ? `${formatPercent(bestStrategy.roi, { signed: true })} simulated ROI` : 'No graded strategy yet'
     },
     {
