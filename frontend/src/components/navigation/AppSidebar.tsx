@@ -59,7 +59,7 @@ export function AppSidebar() {
               color: 'primary.main',
               bgcolor: 'rgba(34,211,238,.1)',
               border: '1px solid rgba(34,211,238,.24)',
-              boxShadow: 'inset 0 1px 0 rgba(255,255,255,.06)'
+              boxShadow: 'none'
             }}
           >
             <FactCheckOutlinedIcon fontSize="small" />
@@ -127,8 +127,9 @@ export function AppSidebar() {
                     }
                   },
                   '&.Mui-focusVisible': {
-                    outline: 'none',
-                    boxShadow: '0 0 0 2px rgba(34,211,238,.22)'
+                    outline: '2px solid rgba(34,211,238,.5)',
+                    outlineOffset: 2,
+                    boxShadow: 'none'
                   }
                 }}
               >

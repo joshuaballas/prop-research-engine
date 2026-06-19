@@ -13,7 +13,7 @@ import { StatusPill } from '../ui/StatusPill';
 import { ProjectionModifierBadge } from './ProjectionModifierBadge';
 import { ProviderLabel } from '../providers/ProviderLabel';
 import { removeActionButtonSx } from '../ui/buttonStyles';
-import { appTableRowSx } from '../ui/appTableStyles';
+import { appTableRowSx, stickyActionCellSx, stickyActionHeaderCellSx } from '../ui/appTableStyles';
 import { AppDataTable } from '../ui/AppDataTable';
 import { AppRowActions, desktopRowActionButtonSx, desktopRowDetailsButtonSx } from '../ui/AppRowActions';
 import { AppTableEvValue, AppTableMetricValue, AppTablePrimaryText, AppTableSecondaryText } from '../ui/AppTableTypography';
@@ -58,7 +58,7 @@ export function MarketTable({ markets }: { markets: MarketOpportunity[] }) {
             <TableCell align="right"><MetricLabelWithHelp metric="hitChance" align="right" variant="table" /></TableCell>
             <TableCell><MetricLabelWithHelp metric="trust" variant="table" /></TableCell>
             {showTagsColumn ? <TableCell><TagsLabelWithHelp /></TableCell> : null}
-            <TableCell sx={{ pl: 1.5, pr: 2 }}>Action</TableCell>
+            <TableCell align="center" sx={{ ...stickyActionHeaderCellSx, pl: 1.5, pr: 2 }}>Action</TableCell>
           </TableRow>
         </TableHead>
         <TableBody>
@@ -127,8 +127,8 @@ export function MarketTable({ markets }: { markets: MarketOpportunity[] }) {
                     </Stack>
                   </TableCell>
                 ) : null}
-                <TableCell sx={{ width: 130, pl: 1.5, pr: 2, py: 1.05 }}>
-                  <AppRowActions>
+                <TableCell data-sticky-action="true" align="center" sx={{ ...stickyActionCellSx, width: 130, pl: 1.5, pr: 2, py: 1.05 }}>
+                  <AppRowActions sx={{ mx: 'auto' }}>
                     {canAddFromScanner || selected ? (
                       <Button
                         size="small"

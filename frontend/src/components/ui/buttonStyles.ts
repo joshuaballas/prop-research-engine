@@ -5,9 +5,9 @@ export const primaryActionButtonSx = {
   border: '1px solid rgba(125, 211, 252, 0.5)',
   background: 'rgba(11, 74, 94, 0.92)',
   textShadow: 'none',
-  boxShadow: 'inset 0 1px 0 rgba(255,255,255,.12), 0 8px 20px rgba(8, 145, 178, 0.12)',
+  boxShadow: 'none',
   transition:
-    'background-color .16s ease, border-color .16s ease, box-shadow .16s ease, color .16s ease, transform .08s ease',
+    'background-color .16s ease, border-color .16s ease, color .16s ease, transform .08s ease',
   '& .MuiButton-startIcon, & .MuiButton-endIcon': {
     color: 'inherit'
   },
@@ -15,15 +15,16 @@ export const primaryActionButtonSx = {
     color: palette.text,
     borderColor: 'rgba(165, 243, 252, 0.64)',
     background: 'rgba(13, 91, 116, 0.96)',
-    boxShadow: 'inset 0 1px 0 rgba(255,255,255,.14)'
+    boxShadow: 'none'
   },
   '&:active:not(.Mui-disabled)': {
     transform: 'translateY(1px)',
-    boxShadow: 'inset 0 2px 8px rgba(3,7,18,.34), 0 5px 16px rgba(8, 145, 178, 0.14)'
+    boxShadow: 'none'
   },
   '&:focus-visible': {
-    outline: 'none',
-    boxShadow: `0 0 0 3px rgba(34, 211, 238, 0.22), 0 0 0 1px ${palette.primary}`
+    outline: `2px solid ${palette.primary}`,
+    outlineOffset: 2,
+    boxShadow: 'none'
   },
   '&.Mui-disabled': {
     color: 'rgba(203,213,225,.44)',
@@ -56,7 +57,7 @@ export const secondaryGhostButtonSx = {
   color: palette.textMuted,
   background: 'rgba(15, 23, 42, 0.48)',
   border: '1px solid rgba(148,163,184,.2)',
-  boxShadow: 'inset 0 1px 0 rgba(255,255,255,.03)',
+  boxShadow: 'none',
   '& .MuiButton-startIcon, & .MuiButton-endIcon': {
     color: 'inherit'
   },
@@ -66,8 +67,9 @@ export const secondaryGhostButtonSx = {
     background: 'rgba(34, 211, 238, 0.07)'
   },
   '&:focus-visible': {
-    outline: 'none',
-    boxShadow: `0 0 0 3px rgba(34, 211, 238, 0.18), 0 0 0 1px ${palette.borderStrong}`
+    outline: `2px solid ${palette.borderStrong}`,
+    outlineOffset: 2,
+    boxShadow: 'none'
   }
 };
 
@@ -76,7 +78,7 @@ export const compactActionButtonSx = {
   color: palette.text,
   background: 'rgba(11, 74, 94, 0.82)',
   border: '1px solid rgba(125, 211, 252, 0.48)',
-  boxShadow: 'inset 0 1px 0 rgba(255,255,255,.08)',
+  boxShadow: 'none',
   textShadow: 'none',
   '& .MuiButton-startIcon, & .MuiButton-endIcon': {
     color: 'inherit'
@@ -85,11 +87,11 @@ export const compactActionButtonSx = {
     color: palette.text,
     background: 'rgba(13, 91, 116, 0.9)',
     borderColor: 'rgba(165, 243, 252, 0.62)',
-    boxShadow: 'inset 0 1px 0 rgba(255,255,255,.1)'
+    boxShadow: 'none'
   },
   '&:active:not(.Mui-disabled)': {
     transform: 'translateY(1px)',
-    boxShadow: 'inset 0 2px 8px rgba(3,7,18,.28)'
+    boxShadow: 'none'
   },
   '&:active:not(.Mui-disabled)::after': {
     content: '""',
@@ -109,8 +111,9 @@ export const compactActionButtonSx = {
     }
   },
   '&:focus-visible': {
-    outline: 'none',
-    boxShadow: `0 0 0 3px rgba(34, 211, 238, 0.2), 0 0 0 1px ${palette.primary}`
+    outline: `2px solid ${palette.primary}`,
+    outlineOffset: 2,
+    boxShadow: 'none'
   },
   '&.Mui-disabled': {
     color: 'rgba(203,213,225,.44)',
@@ -124,7 +127,7 @@ export const removeActionButtonSx = {
   color: '#FFE4E6',
   background: 'rgba(127, 29, 29, 0.34)',
   border: '1px solid rgba(244,63,94,.44)',
-  boxShadow: 'inset 0 1px 0 rgba(255,255,255,.08)',
+  boxShadow: 'none',
   textShadow: 'none',
   '& .MuiButton-startIcon, & .MuiButton-endIcon': {
     color: 'inherit'
@@ -133,15 +136,16 @@ export const removeActionButtonSx = {
     color: '#FFE4E6',
     background: 'rgba(159, 18, 57, 0.4)',
     borderColor: 'rgba(251,113,133,.6)',
-    boxShadow: 'inset 0 1px 0 rgba(255,255,255,.1)'
+    boxShadow: 'none'
   },
   '&:active:not(.Mui-disabled)': {
     transform: 'translateY(1px)',
-    boxShadow: 'inset 0 2px 8px rgba(3,7,18,.28)'
+    boxShadow: 'none'
   },
   '&:focus-visible': {
-    outline: 'none',
-    boxShadow: '0 0 0 3px rgba(244, 63, 94, 0.22), 0 0 0 1px rgba(251, 113, 133, 0.72)'
+    outline: '2px solid rgba(251, 113, 133, 0.72)',
+    outlineOffset: 2,
+    boxShadow: 'none'
   }
 };
 
@@ -149,15 +153,16 @@ export const destructiveOutlineButtonSx = {
   color: '#FDA4AF',
   background: 'rgba(127, 29, 29, 0.12)',
   border: '1px solid rgba(244,63,94,.38)',
-  boxShadow: 'inset 0 1px 0 rgba(255,255,255,.04)',
+  boxShadow: 'none',
   '&:hover': {
     color: '#FFE4E6',
     background: 'rgba(127, 29, 29, 0.18)',
     borderColor: 'rgba(251,113,133,.56)'
   },
   '&:focus-visible': {
-    outline: 'none',
-    boxShadow: '0 0 0 3px rgba(244, 63, 94, 0.2), 0 0 0 1px rgba(251, 113, 133, 0.68)'
+    outline: '2px solid rgba(251, 113, 133, 0.68)',
+    outlineOffset: 2,
+    boxShadow: 'none'
   }
 };
 

@@ -11,7 +11,9 @@ export function EntryBuilderTray({
   legs,
   rules,
   amount,
+  selectedEntryType,
   onAmountChange,
+  onEntryTypeChange,
   onRemove,
   onClear,
   onClose
@@ -19,21 +21,22 @@ export function EntryBuilderTray({
   legs: EntryLeg[];
   rules: EntryRule[];
   amount: number;
+  selectedEntryType: string;
   onAmountChange: (value: number) => void;
+  onEntryTypeChange: (entryType: string) => void;
   onRemove: (id: string) => void;
   onClear: () => void;
   onClose?: () => void;
 }) {
-  const [selectedEntryType, setSelectedEntryType] = useState('');
   const [reviewOpen, setReviewOpen] = useState(false);
   const review = buildEntryReview(legs, rules, amount, selectedEntryType);
 
   useEffect(() => {
     const nextEntryType = resolveEntryType(review.entryTypes, selectedEntryType);
     if (nextEntryType !== selectedEntryType) {
-      setSelectedEntryType(nextEntryType);
+      onEntryTypeChange(nextEntryType);
     }
-  }, [review.entryTypes, selectedEntryType]);
+  }, [onEntryTypeChange, review.entryTypes, selectedEntryType]);
 
   useEffect(() => {
     if (!legs.length) {
@@ -70,7 +73,7 @@ export function EntryBuilderTray({
           rules={rules}
           amount={amount}
           selectedEntryType={review.selectedEntryType}
-          onEntryTypeChange={setSelectedEntryType}
+          onEntryTypeChange={onEntryTypeChange}
         />
 
         <TextField

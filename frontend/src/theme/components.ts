@@ -47,13 +47,14 @@ export const components: Components<Omit<Theme, 'components'>> = {
         paddingInline: 18,
         minHeight: 38,
         transition:
-          'background-color .16s ease, border-color .16s ease, box-shadow .16s ease, color .16s ease, transform .08s ease',
+          'background-color .16s ease, border-color .16s ease, color .16s ease, transform .08s ease',
         '& .MuiButton-startIcon, & .MuiButton-endIcon': {
           color: 'inherit'
         },
         '&:focus-visible': {
-          outline: 'none',
-          boxShadow: `0 0 0 3px rgba(34, 211, 238, 0.22), 0 0 0 1px ${palette.primary}`
+          outline: `2px solid ${palette.primary}`,
+          outlineOffset: 2,
+          boxShadow: 'none'
         },
         '&:active:not(.Mui-disabled)': {
           transform: 'translateY(1px)'
@@ -64,14 +65,14 @@ export const components: Components<Omit<Theme, 'components'>> = {
         color: palette.text,
         border: '1px solid rgba(125, 211, 252, 0.5)',
         textShadow: 'none',
-        boxShadow: 'inset 0 1px 0 rgba(255,255,255,.12), 0 8px 20px rgba(8, 145, 178, 0.12)',
+        boxShadow: 'none',
         '&:hover': {
           backgroundColor: 'rgba(13, 91, 116, 0.96)',
           borderColor: 'rgba(165, 243, 252, 0.64)',
-          boxShadow: 'inset 0 1px 0 rgba(255,255,255,.14)'
+          boxShadow: 'none'
         },
         '&:active:not(.Mui-disabled)': {
-          boxShadow: 'inset 0 2px 8px rgba(3,7,18,.34), 0 5px 16px rgba(8, 145, 178, 0.14)'
+          boxShadow: 'none'
         },
         '&.Mui-disabled': {
           color: 'rgba(203,213,225,.44)',
@@ -85,7 +86,7 @@ export const components: Components<Omit<Theme, 'components'>> = {
         borderColor: palette.border,
         color: palette.textMuted,
         backgroundColor: 'rgba(15, 23, 42, 0.5)',
-        boxShadow: 'inset 0 1px 0 rgba(255,255,255,.03)',
+        boxShadow: 'none',
         '&:hover': {
           borderColor: palette.borderStrong,
           color: palette.text,

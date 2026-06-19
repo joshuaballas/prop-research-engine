@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useMemo, useReducer, type PropsWithChildren } from 'react';
+import { createContext, useCallback, useContext, useEffect, useMemo, useReducer, type PropsWithChildren } from 'react';
 import { mockEntryRules } from '../data/mockEntryRules';
 import type { EntryLeg } from '../types/entryBuilder';
 import type { MarketOpportunity } from '../types/markets';
@@ -8,6 +8,7 @@ import { useToast } from './useToast';
 interface EntryBuilderState {
   selectedLegs: EntryLeg[];
   entryAmount: number;
+  selectedEntryType: string;
   isDrawerOpen: boolean;
   showAllCandidates: boolean;
 }
@@ -17,6 +18,7 @@ type EntryBuilderAction =
   | { type: 'removeLeg'; legId: string }
   | { type: 'clearEntry' }
   | { type: 'setEntryAmount'; amount: number }
+  | { type: 'setSelectedEntryType'; entryType: string }
   | { type: 'openEntryBuilder' }
   | { type: 'closeEntryBuilder' }
   | { type: 'setShowAllCandidates'; value: boolean }
@@ -27,6 +29,7 @@ interface EntryBuilderContextValue {
   selectedLegs: EntryLeg[];
   amount: number;
   entryAmount: number;
+  selectedEntryType: string;
   lockedProviderKey?: string;
   lockedProviderName?: string;
   isDrawerOpen: boolean;
@@ -38,6 +41,7 @@ interface EntryBuilderContextValue {
   clearEntry: () => void;
   setAmount: (amount: number) => void;
   setEntryAmount: (amount: number) => void;
+  setSelectedEntryType: (entryType: string) => void;
   openEntryBuilder: () => void;
   closeEntryBuilder: () => void;
   setShowAllCandidates: (value: boolean) => void;
@@ -49,14 +53,18 @@ interface EntryBuilderContextValue {
 const initialState: EntryBuilderState = {
   selectedLegs: [],
   entryAmount: 25,
+  selectedEntryType: '',
   isDrawerOpen: false,
   showAllCandidates: false
 };
 
+const ENTRY_BUILDER_STORAGE_KEY = 'sportsbetting.entryBuilder.v1';
+const ENTRY_BUILDER_STORAGE_VERSION = 1;
+
 const EntryBuilderContext = createContext<EntryBuilderContextValue | null>(null);
 
 export function EntryBuilderProvider({ children }: PropsWithChildren) {
-  const [state, dispatch] = useReducer(entryBuilderReducer, initialState);
+  const [state, dispatch] = useReducer(entryBuilderReducer, undefined, loadPersistedEntryBuilderState);
   const { showToast } = useToast();
   const lockedProviderName = state.selectedLegs[0]?.entryProvider;
   const lockedProviderKey = state.selectedLegs[0]?.entryCompatibilityGroup;
@@ -105,6 +113,7 @@ export function EntryBuilderProvider({ children }: PropsWithChildren) {
       selectedLegs: state.selectedLegs,
       amount: state.entryAmount,
       entryAmount: state.entryAmount,
+      selectedEntryType: state.selectedEntryType,
       lockedProviderKey,
       lockedProviderName,
       isDrawerOpen: state.isDrawerOpen,
@@ -116,6 +125,7 @@ export function EntryBuilderProvider({ children }: PropsWithChildren) {
       clearEntry,
       setAmount: (amount: number) => dispatch({ type: 'setEntryAmount', amount }),
       setEntryAmount: (amount: number) => dispatch({ type: 'setEntryAmount', amount }),
+      setSelectedEntryType: (entryType: string) => dispatch({ type: 'setSelectedEntryType', entryType }),
       openEntryBuilder: () => dispatch({ type: 'openEntryBuilder' }),
       closeEntryBuilder: () => dispatch({ type: 'closeEntryBuilder' }),
       setShowAllCandidates: (nextValue: boolean) => dispatch({ type: 'setShowAllCandidates', value: nextValue }),
@@ -123,8 +133,12 @@ export function EntryBuilderProvider({ children }: PropsWithChildren) {
       isSelected: (legId: string) => state.selectedLegs.some((leg) => leg.id === legId),
       isCompatible: (market: MarketOpportunity) => !lockedProviderKey || market.entryCompatibilityGroup === lockedProviderKey
     }),
-    [addLeg, clearEntry, lockedProviderKey, lockedProviderName, removeLeg, state.entryAmount, state.isDrawerOpen, state.selectedLegs, state.showAllCandidates, toggleLeg]
+    [addLeg, clearEntry, lockedProviderKey, lockedProviderName, removeLeg, state.entryAmount, state.isDrawerOpen, state.selectedEntryType, state.selectedLegs, state.showAllCandidates, toggleLeg]
   );
+
+  useEffect(() => {
+    persistEntryBuilderState(state);
+  }, [state]);
 
   return <EntryBuilderContext.Provider value={value}>{children}</EntryBuilderContext.Provider>;
 }
@@ -160,11 +174,14 @@ function entryBuilderReducer(state: EntryBuilderState, action: EntryBuilderActio
       return {
         ...state,
         selectedLegs: [],
+        selectedEntryType: '',
         isDrawerOpen: false,
         showAllCandidates: false
       };
     case 'setEntryAmount':
       return { ...state, entryAmount: action.amount };
+    case 'setSelectedEntryType':
+      return { ...state, selectedEntryType: action.entryType };
     case 'openEntryBuilder':
       return { ...state, isDrawerOpen: true };
     case 'closeEntryBuilder':
@@ -180,4 +197,59 @@ function entryBuilderReducer(state: EntryBuilderState, action: EntryBuilderActio
 
 export function mapMarketToEntryLeg(market: MarketOpportunity): EntryLeg {
   return market;
+}
+
+function loadPersistedEntryBuilderState(): EntryBuilderState {
+  if (typeof window === 'undefined') return initialState;
+
+  try {
+    const raw = window.localStorage.getItem(ENTRY_BUILDER_STORAGE_KEY);
+    if (!raw) return initialState;
+
+    const parsed = JSON.parse(raw) as Partial<EntryBuilderState> & { version?: number };
+    if (parsed.version !== ENTRY_BUILDER_STORAGE_VERSION || !Array.isArray(parsed.selectedLegs)) {
+      return initialState;
+    }
+
+    return {
+      selectedLegs: parsed.selectedLegs.filter(isPersistableEntryLeg),
+      entryAmount: typeof parsed.entryAmount === 'number' && Number.isFinite(parsed.entryAmount) && parsed.entryAmount > 0 ? parsed.entryAmount : initialState.entryAmount,
+      selectedEntryType: typeof parsed.selectedEntryType === 'string' ? parsed.selectedEntryType : initialState.selectedEntryType,
+      isDrawerOpen: typeof parsed.isDrawerOpen === 'boolean' ? parsed.isDrawerOpen : initialState.isDrawerOpen,
+      showAllCandidates: typeof parsed.showAllCandidates === 'boolean' ? parsed.showAllCandidates : initialState.showAllCandidates
+    };
+  } catch {
+    return initialState;
+  }
+}
+
+function persistEntryBuilderState(state: EntryBuilderState) {
+  if (typeof window === 'undefined') return;
+
+  try {
+    if (!state.selectedLegs.length) {
+      window.localStorage.removeItem(ENTRY_BUILDER_STORAGE_KEY);
+      return;
+    }
+
+    window.localStorage.setItem(
+      ENTRY_BUILDER_STORAGE_KEY,
+      JSON.stringify({
+        version: ENTRY_BUILDER_STORAGE_VERSION,
+        selectedLegs: state.selectedLegs,
+        entryAmount: state.entryAmount,
+        selectedEntryType: state.selectedEntryType,
+        isDrawerOpen: state.isDrawerOpen,
+        showAllCandidates: state.showAllCandidates
+      })
+    );
+  } catch {
+    // Storage can fail in private modes or when quota is unavailable; keep the in-memory slip working.
+  }
+}
+
+function isPersistableEntryLeg(value: unknown): value is EntryLeg {
+  if (!value || typeof value !== 'object') return false;
+  const leg = value as Partial<EntryLeg>;
+  return typeof leg.id === 'string' && typeof leg.entryCompatibilityGroup === 'string' && typeof leg.entryProvider === 'string';
 }

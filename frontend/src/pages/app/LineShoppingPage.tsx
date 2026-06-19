@@ -1,8 +1,9 @@
 import { Box, Grid, Stack, Typography } from '@mui/material';
-import { useMemo, useState } from 'react';
-import { LineShoppingCard, LineShoppingComparisonList } from '../../components/markets/LineShoppingTable';
+import { useEffect, useMemo, useState } from 'react';
+import { groupLineShoppingMarkets, LineShoppingCard, LineShoppingComparisonList, type LineShoppingGroup } from '../../components/markets/LineShoppingTable';
 import { MarketFilters, type MarketFilterOption, type MarketFilterValues } from '../../components/markets/MarketFilters';
 import { PageHeader } from '../../components/ui/PageHeader';
+import { AppTablePagination } from '../../components/ui/AppTablePagination';
 import { useEntryBuilder } from '../../hooks/useEntryBuilder';
 import { useLineShoppingData } from '../../hooks/useMarketData';
 import { useResponsiveView } from '../../hooks/useResponsiveView';
@@ -27,6 +28,7 @@ export function LineShoppingPage() {
   const builder = useEntryBuilder();
   const [filters, setFilters] = useState<MarketFilterValues>(defaultLineShoppingFilters);
   const [candidateOnly, setCandidateOnly] = useState(true);
+  const [page, setPage] = useState(1);
   const lineShoppingQuery = useLineShoppingData(50, false, 'line-shopping');
   const lineShoppingMarkets = lineShoppingQuery.markets.filter((market) => market.providerCategory === 'DFS');
   const providerCategoryOptions = useMemo(
@@ -42,6 +44,13 @@ export function LineShoppingPage() {
     () => lineShoppingMarkets.filter((market) => lineShoppingMarketMatchesFilters(market, filters, candidateOnly, builder)),
     [builder, candidateOnly, filters, lineShoppingMarkets]
   );
+  const groups = useMemo(() => groupLineShoppingMarkets(visibleMarkets), [visibleMarkets]);
+  const pageSize = isMobile ? 8 : 20;
+  const pageCount = Math.max(1, Math.ceil(groups.length / pageSize));
+  const visibleGroups = useMemo(() => {
+    const start = (page - 1) * pageSize;
+    return groups.slice(start, start + pageSize);
+  }, [groups, page, pageSize]);
   const bestEv = visibleMarkets.length ? Math.max(...visibleMarkets.map((market) => market.estimatedEv)) : 0;
   const dfsProviderCount = new Set(visibleMarkets.map((market) => market.provider)).size;
   const activeComparisons = visibleMarkets.filter((market) => market.freshness === 'Fresh').length;
@@ -50,6 +59,14 @@ export function LineShoppingPage() {
     setFilters(defaultLineShoppingFilters);
     setCandidateOnly(true);
   };
+
+  useEffect(() => {
+    setPage(1);
+  }, [candidateOnly, filters, pageSize]);
+
+  useEffect(() => {
+    setPage((current) => Math.min(current, pageCount));
+  }, [pageCount]);
 
   return (
     <Stack spacing={3} sx={{ px: { xs: 0.75, sm: 0 } }}>
@@ -103,14 +120,34 @@ export function LineShoppingPage() {
       ) : lineShoppingQuery.error ? (
         <ApiStateCard tone="error" message="Line-shopping rows could not be loaded from the market API." />
       ) : isMobile ? (
-        <Stack sx={{ gap: 1.5 }}>
-          {visibleMarkets.length ? visibleMarkets.map((market) => (
-            <LineShoppingCard key={market.id} market={market} />
-          )) : <ApiStateCard message="No line-shopping opportunities match these filters." />}
-        </Stack>
-      ) : visibleMarkets.length ? <LineShoppingComparisonList markets={visibleMarkets} /> : <ApiStateCard message="No line-shopping opportunities match these filters." />}
+        groups.length ? (
+          <>
+            <Stack sx={{ gap: 1.5 }}>
+              {visibleGroups.map((group) => (
+                <LineShoppingCard key={group.key} market={marketFromLineShoppingGroup(group)} />
+              ))}
+            </Stack>
+            <AppTablePagination count={groups.length} page={page} pageSize={pageSize} itemLabel="opportunities" onChange={setPage} />
+          </>
+        ) : <ApiStateCard message="No line-shopping opportunities match these filters." />
+      ) : groups.length ? (
+        <>
+          <LineShoppingComparisonList groups={visibleGroups} />
+          <AppTablePagination count={groups.length} page={page} pageSize={pageSize} itemLabel="opportunities" onChange={setPage} />
+        </>
+      ) : <ApiStateCard message="No line-shopping opportunities match these filters." />}
     </Stack>
   );
+}
+
+function marketFromLineShoppingGroup(group: LineShoppingGroup): MarketOpportunity {
+  return {
+    ...group.bestMarket,
+    providerLines: [
+      ...group.providerLines,
+      ...group.referenceLines
+    ]
+  };
 }
 
 function buildOptions(values: string[], labelForValue?: (value: string) => string): MarketFilterOption[] {

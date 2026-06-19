@@ -3,17 +3,18 @@ import LockRoundedIcon from '@mui/icons-material/LockRounded';
 import RemoveCircleOutlineRoundedIcon from '@mui/icons-material/RemoveCircleOutlineRounded';
 import TuneRoundedIcon from '@mui/icons-material/TuneRounded';
 import { Box, Button, Collapse, Grid, MenuItem, Stack, TableBody, TableCell, TableHead, TableRow, TextField, Typography } from '@mui/material';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { getTopPickConfidence, TopPickCard } from '../../components/markets/TopPickCard';
 import { MetricLabelWithHelp } from '../../components/metrics/MetricLabelWithHelp';
 import { TrustValue } from '../../components/metrics/TrustValue';
 import { PropDetailsModal } from '../../components/prop-history/PropDetailsModal';
 import { ProviderLabel } from '../../components/providers/ProviderLabel';
 import { PageHeader } from '../../components/ui/PageHeader';
-import { appTableRowSx } from '../../components/ui/appTableStyles';
+import { appTableRowSx, stickyActionCellSx, stickyActionHeaderCellSx } from '../../components/ui/appTableStyles';
 import { lockedActionButtonSx, removeActionButtonSx } from '../../components/ui/buttonStyles';
 import { AppDataTable } from '../../components/ui/AppDataTable';
 import { AppRowActions, desktopRowActionButtonSx, desktopRowDetailsButtonSx } from '../../components/ui/AppRowActions';
+import { AppTablePagination } from '../../components/ui/AppTablePagination';
 import { AppTableEvValue, AppTableMetricValue, AppTablePrimaryText, AppTableSecondaryText } from '../../components/ui/AppTableTypography';
 import { OpportunityPickText } from '../../components/ui/OpportunityCard';
 import { useEntryBuilder } from '../../hooks/useEntryBuilder';
@@ -48,6 +49,7 @@ export function TopPicksPage() {
   const builder = useEntryBuilder();
   const { isMobile } = useResponsiveView();
   const [filters, setFilters] = useState<TopPickFilterValues>(defaultTopPickFilters);
+  const [page, setPage] = useState(1);
   const topPicksQuery = useTopPicksData(30, 'top-pick');
   const topPicks = topPicksQuery.markets;
   const availableSportCodes = useMemo(() => getAvailableSportCodes(topPicks), [topPicks]);
@@ -62,7 +64,21 @@ export function TopPicksPage() {
   );
   const showOpportunityFilter = opportunityOptions.length > 2;
   const visibleTopPicks = useMemo(() => sortTopPicks(filterTopPicks(topPicks, filters), filters.sort), [filters, topPicks]);
-  const featured = visibleTopPicks.slice(0, 3);
+  const pageSize = isMobile ? 8 : 20;
+  const pageCount = Math.max(1, Math.ceil(visibleTopPicks.length / pageSize));
+  const pagedTopPicks = useMemo(() => {
+    const start = (page - 1) * pageSize;
+    return visibleTopPicks.slice(start, start + pageSize);
+  }, [page, pageSize, visibleTopPicks]);
+  const featured = pagedTopPicks.slice(0, 3);
+
+  useEffect(() => {
+    setPage(1);
+  }, [filters, pageSize]);
+
+  useEffect(() => {
+    setPage((current) => Math.min(current, pageCount));
+  }, [pageCount]);
 
   return (
     <Stack spacing={{ xs: 2, md: 3 }}>
@@ -86,18 +102,21 @@ export function TopPicksPage() {
       ) : visibleTopPicks.length === 0 ? (
         <ApiStateCard message="No top picks match these filters." />
       ) : isMobile ? (
-        <Stack spacing={1.35}>
-          {visibleTopPicks.map((market) => (
-            <TopPickCard
-              key={market.id}
-              market={market}
-              variant="compact"
-              selected={builder.isSelected(market.id)}
-              incompatible={!builder.isSelected(market.id) && !builder.isCompatible(market)}
-              onAdd={builder.toggleLeg}
-            />
-          ))}
-        </Stack>
+        <>
+          <Stack spacing={1.35}>
+            {pagedTopPicks.map((market) => (
+              <TopPickCard
+                key={market.id}
+                market={market}
+                variant="compact"
+                selected={builder.isSelected(market.id)}
+                incompatible={!builder.isSelected(market.id) && !builder.isCompatible(market)}
+                onAdd={builder.toggleLeg}
+              />
+            ))}
+          </Stack>
+          <AppTablePagination count={visibleTopPicks.length} page={page} pageSize={pageSize} itemLabel="picks" onChange={setPage} />
+        </>
       ) : (
         <>
           <Stack spacing={1.4}>
@@ -123,7 +142,8 @@ export function TopPicksPage() {
             <Typography variant="h5" fontWeight={950}>
               All Ranked Picks
             </Typography>
-            <RankedPicksTable markets={visibleTopPicks} builder={builder} />
+            <RankedPicksTable markets={pagedTopPicks} rankOffset={(page - 1) * pageSize} builder={builder} />
+            <AppTablePagination count={visibleTopPicks.length} page={page} pageSize={pageSize} itemLabel="picks" onChange={setPage} />
           </Stack>
         </>
       )}
@@ -366,7 +386,7 @@ function TopPickControls({
   );
 }
 
-function RankedPicksTable({ markets, builder }: { markets: MarketOpportunity[]; builder: ReturnType<typeof useEntryBuilder> }) {
+function RankedPicksTable({ markets, rankOffset, builder }: { markets: MarketOpportunity[]; rankOffset: number; builder: ReturnType<typeof useEntryBuilder> }) {
   const [detailsMarket, setDetailsMarket] = useState<MarketOpportunity | null>(null);
 
   return (
@@ -381,7 +401,7 @@ function RankedPicksTable({ markets, builder }: { markets: MarketOpportunity[]; 
               <TableCell align="right"><MetricLabelWithHelp metric="edge" align="right" variant="table" /></TableCell>
               <TableCell align="right"><MetricLabelWithHelp metric="hitChance" align="right" variant="table" /></TableCell>
               <TableCell><MetricLabelWithHelp metric="trust" variant="table" /></TableCell>
-              <TableCell align="center">Action</TableCell>
+              <TableCell align="center" sx={stickyActionHeaderCellSx}>Action</TableCell>
             </TableRow>
           </TableHead>
           <TableBody>
@@ -392,7 +412,7 @@ function RankedPicksTable({ markets, builder }: { markets: MarketOpportunity[]; 
               return (
               <TableRow key={market.id} hover sx={appTableRowSx}>
                 <TableCell>
-                  <AppTablePrimaryText>#{index + 1}</AppTablePrimaryText>
+                  <AppTablePrimaryText>#{rankOffset + index + 1}</AppTablePrimaryText>
                 </TableCell>
                 <TableCell sx={{ minWidth: 230 }}>
                   <Stack spacing={0.3}>
@@ -429,7 +449,7 @@ function RankedPicksTable({ markets, builder }: { markets: MarketOpportunity[]; 
                 <TableCell>
                   <TrustValue level={confidence} />
                 </TableCell>
-                <TableCell align="center" sx={{ minWidth: 130 }}>
+                <TableCell data-sticky-action="true" align="center" sx={{ ...stickyActionCellSx, minWidth: 130 }}>
                   <AppRowActions sx={{ mx: 'auto' }}>
                     <Button
                       startIcon={selected ? <RemoveCircleOutlineRoundedIcon /> : incompatible ? <LockRoundedIcon /> : <AddCircleOutlineRoundedIcon />}

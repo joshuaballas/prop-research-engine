@@ -13,7 +13,7 @@ import { MetricLabelWithHelp } from '../metrics/MetricLabelWithHelp';
 import { TrustValue } from '../metrics/TrustValue';
 import { PropDetailsModal } from '../prop-history/PropDetailsModal';
 import { ProviderLabel } from '../providers/ProviderLabel';
-import { appTableRowSx } from '../ui/appTableStyles';
+import { appTableRowSx, stickyActionCellSx, stickyActionHeaderCellSx } from '../ui/appTableStyles';
 import { lockedActionButtonSx, removeActionButtonSx } from '../ui/buttonStyles';
 import { AppDataTable } from '../ui/AppDataTable';
 import {
@@ -28,7 +28,7 @@ import { AppTableEvValue, AppTableMetricValue, AppTablePrimaryText, AppTableSeco
 import { OpportunityMetricGrid, OpportunityMetricItem, OpportunityPickText } from '../ui/OpportunityCard';
 import { ProjectionModifierBadge } from './ProjectionModifierBadge';
 
-interface LineShoppingGroup {
+export interface LineShoppingGroup {
   key: string;
   bestMarket: MarketOpportunity;
   markets: MarketOpportunity[];
@@ -66,7 +66,7 @@ export function LineShoppingTable({ markets, showActions = true }: { markets: Ma
             <TableCell align="right"><MetricLabelWithHelp metric="ev" align="right" variant="table" /></TableCell>
             <TableCell align="right"><MetricLabelWithHelp metric="hitChance" align="right" variant="table" /></TableCell>
             <TableCell><MetricLabelWithHelp metric="trust" variant="table" /></TableCell>
-            {showActions ? <TableCell align="center">Action</TableCell> : null}
+            {showActions ? <TableCell align="center" sx={stickyActionHeaderCellSx}>Action</TableCell> : null}
           </TableRow>
         </TableHead>
         <TableBody>
@@ -156,7 +156,7 @@ function LineShoppingActionCell({ market, onDetails }: { market: MarketOpportuni
   const canAdd = market.canAddToEntry && market.estimatedEv > 0 && !incompatible;
 
   return (
-    <TableCell align="center" sx={{ minWidth: 130 }}>
+    <TableCell data-sticky-action="true" align="center" sx={{ ...stickyActionCellSx, minWidth: 130 }}>
       <AppRowActions sx={{ mx: 'auto' }}>
         <Button
           startIcon={selected ? <RemoveCircleOutlineRoundedIcon /> : incompatible ? <LockRoundedIcon /> : <AddCircleOutlineRoundedIcon />}
@@ -335,10 +335,9 @@ function LineShoppingCardActions({ market, onDetails }: { market: MarketOpportun
   );
 }
 
-export function LineShoppingComparisonList({ markets }: { markets: MarketOpportunity[] }) {
+export function LineShoppingComparisonList({ groups }: { groups: LineShoppingGroup[] }) {
   const [expandedKeys, setExpandedKeys] = useState<Record<string, boolean>>({});
   const [detailsMarket, setDetailsMarket] = useState<MarketOpportunity | null>(null);
-  const groups = groupLineShoppingMarkets(markets.filter((market) => market.providerCategory === 'DFS'));
   return (
     <>
       <AppDataTable minWidth={960}>
@@ -351,8 +350,8 @@ export function LineShoppingComparisonList({ markets }: { markets: MarketOpportu
             <TableCell align="right"><MetricLabelWithHelp metric="ev" align="right" variant="table" /></TableCell>
             <TableCell align="right"><MetricLabelWithHelp metric="hitChance" align="right" variant="table" /></TableCell>
             <TableCell><MetricLabelWithHelp metric="trust" variant="table" /></TableCell>
-            <TableCell align="center">Action</TableCell>
             <TableCell align="center" aria-label="Expand details" />
+            <TableCell align="center" sx={stickyActionHeaderCellSx}>Action</TableCell>
           </TableRow>
         </TableHead>
         <TableBody>
@@ -431,9 +430,6 @@ function LineShoppingComparisonRow({
         <TableCell sx={{ minWidth: 125 }}>
           <TrustValue level={confidence} />
         </TableCell>
-        <TableCell align="center" sx={{ minWidth: 130 }}>
-          <LineShoppingCardActions market={market} onDetails={onDetails} />
-        </TableCell>
         <TableCell align="center" sx={{ width: 48 }}>
           {canExpand ? (
             <IconButton
@@ -451,6 +447,9 @@ function LineShoppingComparisonRow({
               <ExpandMoreRoundedIcon fontSize="small" />
             </IconButton>
           ) : null}
+        </TableCell>
+        <TableCell data-sticky-action="true" align="center" sx={{ ...stickyActionCellSx, minWidth: 130 }}>
+          <LineShoppingCardActions market={market} onDetails={onDetails} />
         </TableCell>
       </TableRow>
       {canExpand ? (
@@ -685,7 +684,7 @@ function mobileEntryButtonSxFor(selected: boolean, incompatible: boolean) {
   return mobileEntryButtonSx;
 }
 
-function groupLineShoppingMarkets(markets: MarketOpportunity[]): LineShoppingGroup[] {
+export function groupLineShoppingMarkets(markets: MarketOpportunity[]): LineShoppingGroup[] {
   const groups = new Map<string, MarketOpportunity[]>();
 
   markets.forEach((market) => {

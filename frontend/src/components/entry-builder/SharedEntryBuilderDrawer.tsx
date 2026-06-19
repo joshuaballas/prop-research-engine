@@ -55,7 +55,9 @@ export function SharedEntryBuilderDrawer() {
           legs={builder.legs}
           rules={rules}
           amount={builder.amount}
+          selectedEntryType={builder.selectedEntryType}
           onAmountChange={builder.setAmount}
+          onEntryTypeChange={builder.setSelectedEntryType}
           onRemove={builder.removeLeg}
           onClear={builder.clearEntry}
           onClose={builder.closeEntryBuilder}
@@ -75,7 +77,7 @@ export function SharedEntryBuilderDrawer() {
             justifyContent: 'space-between',
             px: 2,
             py: 1.1,
-            boxShadow: '0 14px 32px rgba(0,0,0,.3)'
+            boxShadow: 'none'
           }}
         >
           <Box component="span">

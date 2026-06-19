@@ -1,7 +1,6 @@
-import { Box, Button, Divider, Stack, Typography } from '@mui/material';
+import { Box, Button, Stack, Typography } from '@mui/material';
 import type { EntryLeg, EntryRule } from '../../types/entryBuilder';
 import { palette } from '../../theme/palette';
-import { estimatePayout } from '../../utils/payoutEstimator';
 import { buildEntryReview } from '../../utils/entryReview';
 import { MetadataText } from '../ui/MetadataText';
 import { ProviderLabel } from '../providers/ProviderLabel';
@@ -21,7 +20,6 @@ export function EntryBuilderSummary({
 }) {
   const review = buildEntryReview(legs, rules, amount, selectedEntryType);
   const rule = review.rule;
-  const estimate = estimatePayout(legs, amount, rules, review.selectedEntryType);
   const averageEv = legs.length ? legs.reduce((sum, leg) => sum + leg.estimatedEv, 0) / legs.length : 0;
   const sports = Array.from(new Set(legs.map((leg) => leg.sport)));
   const possibleLegCounts = review.allowedFinalLegCounts.length ? review.allowedFinalLegCounts.join(', ') : rule?.allowedLegCounts.join(', ') || 'Unavailable';
@@ -45,8 +43,8 @@ export function EntryBuilderSummary({
         }}
       >
         <Metric label="Avg EV" value={legs.length ? formatSignedPercent(averageEv) : '-'} tone={averageEv > 0 ? 'fresh' : 'default'} />
-        <Metric label="Est. multiplier" value={legs.length ? formatMultiplier(estimate.multiplier) : '-'} />
-        <Metric label="Est. payout" value={legs.length ? formatPayout(estimate.estimatedPayout) : '-'} />
+        <Metric label="Est. multiplier" value={legs.length ? formatMultiplier(review.multiplier) : '-'} />
+        <Metric label="Est. payout" value={legs.length ? formatPayout(review.estimatedPayout) : '-'} />
       </Box>
 
       <Stack spacing={0.8}>
@@ -80,15 +78,6 @@ export function EntryBuilderSummary({
         <Typography variant="body2" color="text.secondary">
           {review.payoutUnavailableReason}
         </Typography>
-      ) : null}
-
-      {estimate.warning ? (
-        <>
-          <Divider />
-          <Typography variant="body2" color="warning.main" fontWeight={800}>
-            Final payout may vary. Confirm all lines and terms in the DFS app.
-          </Typography>
-        </>
       ) : null}
     </Stack>
   );
