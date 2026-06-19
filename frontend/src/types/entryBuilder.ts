@@ -14,6 +14,12 @@ export interface EntryRule {
   supportsModifiers: boolean | 'Unknown';
   sameGameAllowed: boolean | 'Unknown';
   sourceConfidence: 'Known' | 'Assumed' | 'NeedsVerification';
+  payoutModelType?: 'FixedMultiplierTable' | 'FixedMultiplierTableWithPartialHitRows' | 'VariableMultiplier' | 'PrizePoolOrContestBased' | 'UnknownOrUnavailable' | string;
+  hasPartialHitPayouts?: boolean;
+  partialHitPayoutsModeled?: boolean;
+  payoutRulesNotes?: string;
+  sourceUrl?: string;
+  lastVerifiedAtUtc?: string | null;
   notes: string;
   multiplierTable?: EntryMultiplierRule[];
 }

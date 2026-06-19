@@ -35,6 +35,18 @@ interface EntryRuleDto {
   Notes?: string[];
   sourceConfidence?: string;
   SourceConfidence?: string;
+  payoutModelType?: string;
+  PayoutModelType?: string;
+  hasPartialHitPayouts?: boolean;
+  HasPartialHitPayouts?: boolean;
+  partialHitPayoutsModeled?: boolean;
+  PartialHitPayoutsModeled?: boolean;
+  payoutRulesNotes?: string;
+  PayoutRulesNotes?: string;
+  sourceUrl?: string;
+  SourceUrl?: string;
+  lastVerifiedAtUtc?: string | null;
+  LastVerifiedAtUtc?: string | null;
   payoutMultipliers?: EntryMultiplierRuleDto[];
   PayoutMultipliers?: EntryMultiplierRuleDto[];
   multiplierTable?: EntryMultiplierRuleDto[];
@@ -77,6 +89,12 @@ function normalizeEntryRulesResponse(response: EntryRulesResponseDto): EntryRule
     supportsModifiers: normalizeBooleanUnknown(rule.supportsDemonsGoblinsOrAltLines ?? rule.SupportsDemonsGoblinsOrAltLines),
     sameGameAllowed: normalizeBooleanUnknown(rule.sameGameAllowed ?? rule.SameGameAllowed),
     sourceConfidence: normalizeSourceConfidence(rule.sourceConfidence ?? rule.SourceConfidence),
+    payoutModelType: rule.payoutModelType ?? rule.PayoutModelType,
+    hasPartialHitPayouts: rule.hasPartialHitPayouts ?? rule.HasPartialHitPayouts,
+    partialHitPayoutsModeled: rule.partialHitPayoutsModeled ?? rule.PartialHitPayoutsModeled,
+    payoutRulesNotes: rule.payoutRulesNotes ?? rule.PayoutRulesNotes,
+    sourceUrl: rule.sourceUrl ?? rule.SourceUrl,
+    lastVerifiedAtUtc: rule.lastVerifiedAtUtc ?? rule.LastVerifiedAtUtc ?? null,
     notes: (rule.notes ?? rule.Notes ?? []).join(' '),
     multiplierTable: normalizeMultiplierRules(rule.payoutMultipliers ?? rule.PayoutMultipliers ?? rule.multiplierTable ?? rule.MultiplierTable ?? [])
   }));

@@ -26,6 +26,12 @@ public static class DfsEntryRulesCatalog
                     "Standard Player Pick payout rates can vary by lineup submission, promotions, pick combinations, special projections, and other pre-established factors disclosed by PrizePicks before submission."
                 },
                 sourceConfidence: "NeedsVerification",
+                payoutModelType: "FixedMultiplierTableWithPartialHitRows",
+                hasPartialHitPayouts: true,
+                partialHitPayoutsModeled: false,
+                payoutRulesNotes: "Standard Player Pick all-correct top-payout rows are configured for Power and Flex. Flex partial-hit rows, protected plays, promos, special projections, and lineup-specific variations are not modeled.",
+                sourceUrl: "https://help.prizepicks.com/hc/en-us/articles/34718473789979-Payouts",
+                lastVerifiedAtUtc: new DateTimeOffset(2026, 6, 19, 0, 0, 0, TimeSpan.Zero),
                 payoutMultipliers: BuildPrizePicksStandardPlayerPickMultipliers()),
             BuildEntryRule(
                 "Underdog",
@@ -46,6 +52,12 @@ public static class DfsEntryRulesCatalog
                     "Direct Underdog ingestion and The Odds API us_dfs Underdog rows are separate data paths."
                 },
                 sourceConfidence: "NeedsVerification",
+                payoutModelType: "UnknownOrUnavailable",
+                hasPartialHitPayouts: false,
+                partialHitPayoutsModeled: false,
+                payoutRulesNotes: "No official fixed Underdog Pick'em payout multiplier table was verified in this pass. Keep exact payout unavailable until official provider rules expose provider, entry type, leg count, projection modifier, and partial-hit payout terms.",
+                sourceUrl: "https://app.underdogfantasy.com/rules",
+                lastVerifiedAtUtc: null,
                 payoutMultipliers: Array.Empty<DfsEntryPayoutMultiplierRow>()),
             BuildEntryRule(
                 "DraftKings Pick6",
@@ -62,22 +74,39 @@ public static class DfsEntryRulesCatalog
                 sameGameAllowed: "Unknown",
                 notes: new[] { "DraftKings Pick6 entries should use DraftKings Pick6 legs only." },
                 sourceConfidence: "NeedsVerification",
+                payoutModelType: "UnknownOrUnavailable",
+                hasPartialHitPayouts: false,
+                partialHitPayoutsModeled: false,
+                payoutRulesNotes: "The accessible official Pick6 page confirms a Pick6 product flow and minimum two picks, but no official fixed payout multiplier table was verified. Keep exact payout unavailable until official payout rules are modeled.",
+                sourceUrl: "https://pick6.draftkings.com/",
+                lastVerifiedAtUtc: null,
                 payoutMultipliers: Array.Empty<DfsEntryPayoutMultiplierRow>()),
             BuildEntryRule(
                 "Betr Picks",
                 "DFS",
                 actionableForUser: true,
                 "BetrPicks",
-                minLegs: null,
-                maxLegs: null,
-                allowedLegCounts: Array.Empty<int>(),
-                entryTypes: new[] { "Picks" },
+                minLegs: 2,
+                maxLegs: 10,
+                allowedLegCounts: new[] { 2, 3, 4, 5, 6, 7, 8, 9, 10 },
+                entryTypes: new[] { "Perfect Play", "Flex Play" },
                 supportsFlex: null,
                 supportsPower: null,
                 supportsDemonsGoblinsOrAltLines: "Unknown",
                 sameGameAllowed: "Unknown",
-                notes: new[] { "Betr Picks entries should use Betr Picks legs only." },
+                notes: new[]
+                {
+                    "Betr Picks entries should use Betr Picks legs only.",
+                    "Betr Picks House Rules describe 2-10 player lineups and Perfect Play/Flex Play formats.",
+                    "The prize is posted before entry, and Edge Combos or other non-standard conditions can change the multiplier."
+                },
                 sourceConfidence: "NeedsVerification",
+                payoutModelType: "VariableMultiplier",
+                hasPartialHitPayouts: true,
+                partialHitPayoutsModeled: false,
+                payoutRulesNotes: "Betr Picks House Rules say the entry fee and total prize are posted before entry and note non-standard payouts such as Edge Combos. No official fixed payout multiplier table was verified, so exact payout remains unavailable.",
+                sourceUrl: "https://help.betr.app/en/articles/9461972-betr-picks-house-rules",
+                lastVerifiedAtUtc: null,
                 payoutMultipliers: Array.Empty<DfsEntryPayoutMultiplierRow>()),
         };
         var entryBuildableProviders = rules
@@ -92,6 +121,9 @@ public static class DfsEntryRulesCatalog
                 row.AllowedLegCounts,
                 row.EntryTypes,
                 row.SourceConfidence,
+                row.PayoutModelType,
+                row.HasPartialHitPayouts,
+                row.PartialHitPayoutsModeled,
                 hasConfiguredPayoutMultipliers = row.PayoutMultipliers.Count > 0
             })
             .ToArray();
@@ -142,6 +174,12 @@ public static class DfsEntryRulesCatalog
         string sameGameAllowed,
         IReadOnlyList<string> notes,
         string sourceConfidence,
+        string payoutModelType,
+        bool hasPartialHitPayouts,
+        bool partialHitPayoutsModeled,
+        string payoutRulesNotes,
+        string sourceUrl,
+        DateTimeOffset? lastVerifiedAtUtc,
         IReadOnlyList<DfsEntryPayoutMultiplierRow> payoutMultipliers)
     {
         return new DfsEntryRuleRow(
@@ -159,6 +197,12 @@ public static class DfsEntryRulesCatalog
             sameGameAllowed,
             notes,
             sourceConfidence,
+            payoutModelType,
+            hasPartialHitPayouts,
+            partialHitPayoutsModeled,
+            payoutRulesNotes,
+            sourceUrl,
+            lastVerifiedAtUtc,
             payoutMultipliers);
     }
 
@@ -203,6 +247,12 @@ public static class DfsEntryRulesCatalog
         string SameGameAllowed,
         IReadOnlyList<string> Notes,
         string SourceConfidence,
+        string PayoutModelType,
+        bool HasPartialHitPayouts,
+        bool PartialHitPayoutsModeled,
+        string PayoutRulesNotes,
+        string SourceUrl,
+        DateTimeOffset? LastVerifiedAtUtc,
         IReadOnlyList<DfsEntryPayoutMultiplierRow> PayoutMultipliers);
 
     private sealed record DfsEntryPayoutMultiplierRow(

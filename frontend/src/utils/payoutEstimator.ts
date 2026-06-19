@@ -39,9 +39,13 @@ export function estimatePayout(legs: EntryLeg[], entryAmount: number, rules: Ent
   }
   const unavailableReason =
     multiplier === null
-      ? entryType
-        ? 'Multiplier data is not configured for this entry type and leg count.'
-        : 'Multiplier data is not configured for this provider and leg count.'
+      ? isVariablePayoutModel(rule?.payoutModelType)
+        ? 'Exact payout is variable for this provider. Confirm final payout in the provider app.'
+        : isUnavailablePayoutModel(rule?.payoutModelType)
+        ? 'Exact payout rules are not configured for this provider. Confirm final payout in the provider app.'
+        : entryType
+          ? 'Multiplier data is not configured for this entry type and leg count.'
+          : 'Multiplier data is not configured for this provider and leg count.'
       : undefined;
 
   return {
@@ -91,6 +95,14 @@ function isPrizePicksRule(rule: EntryRule | undefined) {
   if (!rule) return false;
   const provider = `${rule.provider} ${rule.compatibilityGroup}`.toLowerCase();
   return provider.includes('prizepicks') || provider.includes('prize picks');
+}
+
+function isUnavailablePayoutModel(payoutModelType: string | undefined) {
+  return payoutModelType === 'UnknownOrUnavailable' || payoutModelType === 'PrizePoolOrContestBased';
+}
+
+function isVariablePayoutModel(payoutModelType: string | undefined) {
+  return payoutModelType === 'VariableMultiplier';
 }
 
 function isMultiplierApplicableToProjectionType(appliesToProjectionType: string | undefined, projectionEligibility: ProjectionPayoutEligibility) {

@@ -295,6 +295,29 @@ public sealed class RefreshSafetyTests
         AssertMultiplier(prizePicksMultipliers, "Flex", 4, 6m);
         AssertMultiplier(prizePicksMultipliers, "Flex", 5, 10m);
         AssertMultiplier(prizePicksMultipliers, "Flex", 6, 25m);
+        Assert.Equal("FixedMultiplierTableWithPartialHitRows", prizePicks.GetProperty("payoutModelType").GetString());
+        Assert.True(prizePicks.GetProperty("hasPartialHitPayouts").GetBoolean());
+        Assert.False(prizePicks.GetProperty("partialHitPayoutsModeled").GetBoolean());
+
+        foreach (var provider in new[] { "Underdog", "DraftKings Pick6" })
+        {
+            var rule = rules.Single(row => row.GetProperty("provider").GetString() == provider);
+            Assert.Equal("UnknownOrUnavailable", rule.GetProperty("payoutModelType").GetString());
+            Assert.False(rule.GetProperty("hasPartialHitPayouts").GetBoolean());
+            Assert.False(rule.GetProperty("partialHitPayoutsModeled").GetBoolean());
+            Assert.Empty(rule.GetProperty("payoutMultipliers").EnumerateArray());
+            Assert.False(string.IsNullOrWhiteSpace(rule.GetProperty("payoutRulesNotes").GetString()));
+            Assert.False(string.IsNullOrWhiteSpace(rule.GetProperty("sourceUrl").GetString()));
+        }
+
+        var betrPicks = rules.Single(row => row.GetProperty("provider").GetString() == "Betr Picks");
+        Assert.Equal("VariableMultiplier", betrPicks.GetProperty("payoutModelType").GetString());
+        Assert.True(betrPicks.GetProperty("hasPartialHitPayouts").GetBoolean());
+        Assert.False(betrPicks.GetProperty("partialHitPayoutsModeled").GetBoolean());
+        Assert.Empty(betrPicks.GetProperty("payoutMultipliers").EnumerateArray());
+        Assert.Equal(new[] { 2, 3, 4, 5, 6, 7, 8, 9, 10 }, betrPicks.GetProperty("allowedLegCounts").EnumerateArray().Select(row => row.GetInt32()).ToArray());
+        Assert.Contains(betrPicks.GetProperty("entryTypes").EnumerateArray(), row => row.GetString() == "Perfect Play");
+        Assert.Contains(betrPicks.GetProperty("entryTypes").EnumerateArray(), row => row.GetString() == "Flex Play");
     }
 
     [Fact]

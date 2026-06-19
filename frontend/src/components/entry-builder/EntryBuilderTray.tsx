@@ -182,7 +182,7 @@ function EntryReviewPanel({ review, amount }: { review: ReturnType<typeof buildE
 
       <Typography variant="body2" color="text.secondary">
         {review.multiplier === null
-          ? 'Payout unavailable. Confirm final payout in the DFS app.'
+          ? review.payoutUnavailableReason ?? 'Payout unavailable. Confirm final payout in the DFS app.'
           : 'Final payout may vary. Confirm all lines and terms in the DFS app.'}
       </Typography>
     </Stack>
