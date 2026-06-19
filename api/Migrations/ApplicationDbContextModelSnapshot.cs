@@ -2553,6 +2553,10 @@ namespace SportsBetting.Api.Migrations
                         .HasColumnType("boolean")
                         .HasColumnName("is_candidate");
 
+                    b.Property<bool>("IsExcludedFromPerformance")
+                        .HasColumnType("boolean")
+                        .HasColumnName("is_excluded_from_performance");
+
                     b.Property<bool>("IsTopPick")
                         .HasColumnType("boolean")
                         .HasColumnName("is_top_pick");
@@ -2602,6 +2606,20 @@ namespace SportsBetting.Api.Migrations
                         .HasPrecision(8, 6)
                         .HasColumnType("numeric(8,6)")
                         .HasColumnName("probability_edge");
+
+                    b.Property<DateTimeOffset?>("PerformanceExcludedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("performance_excluded_at_utc");
+
+                    b.Property<string>("PerformanceExcludedBy")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("performance_excluded_by");
+
+                    b.Property<string>("PerformanceExclusionReason")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("performance_exclusion_reason");
 
                     b.Property<string>("PropType")
                         .IsRequired()
@@ -2710,6 +2728,9 @@ namespace SportsBetting.Api.Migrations
 
                     b.HasIndex("PropTypeId")
                         .HasDatabaseName("ix_recommendation_snapshots_prop_type_id");
+
+                    b.HasIndex("IsExcludedFromPerformance")
+                        .HasDatabaseName("ix_recommendation_snapshots_performance_excluded");
 
                     b.HasIndex("RefreshRunId")
                         .HasDatabaseName("ix_recommendation_snapshots_refresh_run_id");

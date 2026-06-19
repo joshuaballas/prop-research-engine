@@ -12,6 +12,33 @@ namespace SportsBetting.Api.Endpoints;
 public static class PublicMlbDfsEndpoints
 {
     private static readonly string[] SupportedMarketSports = ["MLB"];
+    private static readonly string[] SupportedMlbPerformancePropTypeKeys =
+    [
+        "HITS",
+        "RUNS",
+        "RBIS",
+        "HOME_RUNS",
+        "TOTAL_BASES",
+        "STOLEN_BASES",
+        "WALKS",
+        "HITS_RUNS_RBIS",
+        "PITCHER_STRIKEOUTS",
+        "PITCHER_WALKS",
+        "PITCHER_HITS_ALLOWED",
+        "PITCHER_EARNED_RUNS",
+        "HOMERUNS",
+        "TOTALBASES",
+        "STOLENBASES",
+        "BATTERWALKS",
+        "HITSRUNSRBIS",
+        "PITCHERSTRIKEOUTS",
+        "WALKSALLOWED",
+        "PITCHERWALKS",
+        "PITCHERHITSALLOWED",
+        "HITSALLOWED",
+        "PITCHEREARNEDRUNS",
+        "EARNEDRUNSALLOWED"
+    ];
     private const string MlbOnlyMarketReadLimitation = "Only MLB persisted market read models are currently implemented. Additional sports should be added behind these /api/markets routes instead of duplicating route families.";
 
     public static IEndpointRouteBuilder MapPublicMlbDfsEndpoints(this IEndpointRouteBuilder endpoints)
@@ -270,6 +297,11 @@ public static class PublicMlbDfsEndpoints
             DateOnly? toDate,
             int? minSampleSize,
             string? gradingMode,
+            bool? topPickOnly,
+            bool? includeWatchlist,
+            bool? includeResearch,
+            bool? includeStale,
+            bool? includeExcluded,
             bool? includeDiagnostics,
             int? diagnosticSampleSize,
             IPlayerIdentityAliasService playerIdentityAliasService,
@@ -291,11 +323,16 @@ public static class PublicMlbDfsEndpoints
                 propType,
                 strategyClassification,
                 strategyTier,
-                candidateOnly ?? true,
+                ResolveEffectiveCandidateOnly(candidateOnly, includeWatchlist, includeResearch),
                 fromDate,
                 toDate,
                 minSampleSize,
                 gradingMode,
+                topPickOnly ?? false,
+                includeWatchlist ?? false,
+                includeResearch ?? false,
+                includeStale ?? false,
+                includeExcluded ?? false,
                 includeDiagnostics ?? false,
                 diagnosticSampleSize,
                 playerIdentityAliasService,
@@ -747,6 +784,11 @@ public static class PublicMlbDfsEndpoints
         return new MarketSportResolution(requestedSport, "MLB", UnsupportedResponse: null);
     }
 
+    private static bool ResolveEffectiveCandidateOnly(bool? candidateOnly, bool? includeWatchlist, bool? includeResearch)
+    {
+        return candidateOnly ?? !(includeWatchlist == true || includeResearch == true);
+    }
+
     private static async Task<object> BuildMarketPerformanceSummaryResponseAsync(
         string? requestedSport,
         string effectiveSport,
@@ -761,6 +803,11 @@ public static class PublicMlbDfsEndpoints
         DateOnly? toDate,
         int? minSampleSize,
         string? gradingMode,
+        bool topPickOnly,
+        bool includeWatchlist,
+        bool includeResearch,
+        bool includeStale,
+        bool includeExcluded,
         bool includeDiagnostics,
         int? diagnosticSampleSize,
         IPlayerIdentityAliasService playerIdentityAliasService,
@@ -790,6 +837,11 @@ public static class PublicMlbDfsEndpoints
             minSampleSize,
             normalizedGradingMode,
             latestRefresh,
+            topPickOnly,
+            includeWatchlist,
+            includeResearch,
+            includeStale,
+            includeExcluded,
             includeDiagnostics,
             diagnosticSampleSize,
             dbContext,
@@ -833,9 +885,29 @@ public static class PublicMlbDfsEndpoints
             snapshotQuery = snapshotQuery.Where(row => row.StrategyTier == strategyTier);
         }
 
-        if (candidateOnly)
+        if (topPickOnly)
+        {
+            snapshotQuery = snapshotQuery.Where(row => row.IsCandidate && row.StrategyClassification == "TopPick");
+        }
+        else if (candidateOnly)
         {
             snapshotQuery = snapshotQuery.Where(row => row.IsCandidate);
+        }
+        else if (!includeResearch)
+        {
+            snapshotQuery = snapshotQuery.Where(row => row.IsCandidate || (includeWatchlist && row.IsWatchlist));
+        }
+
+        if (!includeWatchlist)
+        {
+            snapshotQuery = snapshotQuery.Where(row => !row.IsWatchlist);
+        }
+
+        if (!includeStale)
+        {
+            snapshotQuery = snapshotQuery.Where(row =>
+                row.EntryActionableForUser &&
+                row.LifecycleStatus == "Active");
         }
 
         if (fromDate.HasValue)
@@ -1024,6 +1096,10 @@ public static class PublicMlbDfsEndpoints
                 strategyClassification,
                 strategyTier,
                 candidateOnly,
+                topPickOnly,
+                includeWatchlist,
+                includeResearch,
+                includeStale,
                 fromDate,
                 toDate,
                 minSampleSize,
@@ -1148,6 +1224,11 @@ public static class PublicMlbDfsEndpoints
         int? minSampleSize,
         string normalizedGradingMode,
         TheOddsApiDebugEndpoints.MlbRefreshFreshnessResponse latestRefresh,
+        bool topPickOnly,
+        bool includeWatchlist,
+        bool includeResearch,
+        bool includeStale,
+        bool includeExcluded,
         bool includeDiagnostics,
         int? diagnosticSampleSize,
         ApplicationDbContext dbContext,
@@ -1200,10 +1281,20 @@ public static class PublicMlbDfsEndpoints
             ledgerQuery = ledgerQuery.Where(row => row.StrategyTier == strategyTier);
         }
 
-        if (candidateOnly)
+        var ledgerPreExclusionQuery = ledgerQuery;
+        if (!includeExcluded)
         {
-            ledgerQuery = ledgerQuery.Where(row => row.IsCandidate);
+            ledgerQuery = ledgerQuery.Where(row => !row.IsExcludedFromPerformance);
         }
+
+        var ledgerPreEligibilityQuery = ledgerQuery;
+        ledgerQuery = ApplyRecommendationPerformanceEligibility(
+            ledgerPreEligibilityQuery,
+            candidateOnly,
+            topPickOnly,
+            includeWatchlist,
+            includeResearch,
+            includeStale);
 
         if (fromDate.HasValue)
         {
@@ -1249,38 +1340,58 @@ public static class PublicMlbDfsEndpoints
         var baseSelectedQuery = selectedDate.HasValue
             ? ledgerQuery.Where(row => row.ExpectedResultDate == selectedDate.Value)
             : ledgerQuery;
-        var selectedRows = await baseSelectedQuery
+        var selectedPreEligibilityRows = selectedDate.HasValue
+            ? await ledgerPreEligibilityQuery
+                .Where(row => row.ExpectedResultDate == selectedDate.Value)
+                .Select(row => new
+                {
+                    row.IsCandidate,
+                    row.IsTopPick,
+                    row.IsWatchlist,
+                    row.IsActionableForUser,
+                    row.LifecycleStatus,
+                    row.Warning,
+                    row.CanonicalPlayerId,
+                    row.PropTypeId,
+                    row.NormalizedPropType,
+                    row.EventId,
+                    row.EventStartTimeUtc,
+                    row.ExpectedResultDate
+                })
+                .ToArrayAsync(cancellationToken)
+            : [];
+        var selectedRowsBeforeGradeability = await baseSelectedQuery
             .OrderByDescending(row => row.RankingScore)
             .ThenByDescending(row => row.EstimatedEv)
             .Take(5000)
             .ToArrayAsync(cancellationToken);
+        var selectedRows = selectedRowsBeforeGradeability
+            .Where(HasPerformanceGradeability)
+            .ToArray();
         var resultDates = selectedRows.Select(row => row.ExpectedResultDate).Distinct().ToArray();
         var playerIds = selectedRows
             .Where(row => row.CanonicalPlayerId.HasValue)
             .Select(row => row.CanonicalPlayerId!.Value)
             .Distinct()
             .ToArray();
-        var propTypeIds = selectedRows
-            .Where(row => row.PropTypeId.HasValue)
-            .Select(row => row.PropTypeId!.Value)
-            .Distinct()
-            .ToArray();
-        var resultRows = resultDates.Length == 0 || playerIds.Length == 0 || propTypeIds.Length == 0
+        var resultRows = resultDates.Length == 0 || playerIds.Length == 0
             ? []
             : await dbContext.PropResults
                 .AsNoTracking()
                 .Where(row => resultDates.Contains(row.EventDate)
-                    && playerIds.Contains(row.PlayerId)
-                    && propTypeIds.Contains(row.PropTypeId))
+                    && playerIds.Contains(row.PlayerId))
                 .Select(row => new LedgerActualResultLookupRow(
+                    row.Id,
                     row.EventDate,
                     row.PlayerId,
                     row.PropTypeId,
+                    row.PropType != null ? row.PropType.Name : string.Empty,
                     row.ActualResultValue))
                 .ToArrayAsync(cancellationToken);
-        var diagnosticResultDates = includeDiagnostics
-            ? resultDates.SelectMany(date => new[] { date.AddDays(-1), date, date.AddDays(1) }).Distinct().ToArray()
-            : resultDates;
+        var diagnosticResultDates = resultDates
+            .SelectMany(date => new[] { date.AddDays(-1), date, date.AddDays(1) })
+            .Distinct()
+            .ToArray();
         var diagnosticResultRows = diagnosticResultDates.Length == 0
             ? []
             : await dbContext.PropResults
@@ -1296,11 +1407,8 @@ public static class PublicMlbDfsEndpoints
                     row.PropType != null ? row.PropType.Name : string.Empty,
                     row.ActualResultValue))
                 .ToArrayAsync(cancellationToken);
-        var resultLookup = resultRows
-            .GroupBy(row => new LedgerResultLookupKey(row.EventDate, row.PlayerId, row.PropTypeId))
-            .ToDictionary(group => group.Key, group => group.First().ActualResultValue);
         var gradedRows = selectedRows
-            .Select(row => GradeLedgerPerformanceRow(row, resultLookup, diagnosticResultRows))
+            .Select(row => GradeLedgerPerformanceRow(row, resultRows, diagnosticResultRows))
             .ToArray();
         var totalGraded = gradedRows.Count(row => IsGradedOutcome(row.Outcome));
         var wonRows = gradedRows.Count(row => row.Outcome == "Win");
@@ -1341,7 +1449,7 @@ public static class PublicMlbDfsEndpoints
             effectiveSport,
             gradingMode = normalizedGradingMode,
             performanceSource = "recommendationLedger",
-            limitation = "Performance summary uses recommendation_snapshots as the gradeable ledger and matches rows to prop_results by expected result date, canonical player id, prop type id, side, and line.",
+            limitation = "Performance summary uses recommendation_snapshots as the captured-pick ledger and matches rows to prop_results by expected result date, canonical player id, and normalized prop/stat type. Provider, side, and line are not used to find the result row; side and line are used only after a result is found.",
             filters = new
             {
                 providerCategory,
@@ -1351,6 +1459,11 @@ public static class PublicMlbDfsEndpoints
                 strategyClassification,
                 strategyTier,
                 candidateOnly,
+                topPickOnly,
+                includeWatchlist,
+                includeResearch,
+                includeStale,
+                includeExcluded,
                 fromDate,
                 toDate,
                 minSampleSize,
@@ -1363,6 +1476,72 @@ public static class PublicMlbDfsEndpoints
                 pendingLedgerRows = pendingRows,
                 noResultLedgerRows = noResultRows,
                 unmatchedLedgerRows = unmatchedRows,
+                preFilterRowsForCompletedDate = selectedPreEligibilityRows.Length,
+                excludedFromPerformanceRows = selectedDate.HasValue
+                    ? await ledgerPreExclusionQuery.CountAsync(row => row.ExpectedResultDate == selectedDate.Value && row.IsExcludedFromPerformance, cancellationToken)
+                    : await ledgerPreExclusionQuery.CountAsync(row => row.IsExcludedFromPerformance, cancellationToken),
+                includedExcludedRows = includeExcluded ? selectedRows.Count(row => row.IsExcludedFromPerformance) : 0,
+                rowsAfterPerformanceEligibility = selectedRows.Length,
+                rowsExcludedWatchlist = selectedPreEligibilityRows.Count(row => row.IsWatchlist && !includeWatchlist),
+                rowsExcludedResearch = selectedPreEligibilityRows.Count(row => !row.IsCandidate && !row.IsTopPick && !row.IsWatchlist && !includeResearch),
+                rowsExcludedStale = selectedPreEligibilityRows.Count(row =>
+                    !includeStale &&
+                    !string.IsNullOrWhiteSpace(row.Warning) &&
+                    row.Warning.Contains("stale", StringComparison.OrdinalIgnoreCase)),
+                rowsExcludedNonPlayable = selectedPreEligibilityRows.Count(row =>
+                    !includeStale &&
+                    (!row.IsActionableForUser || row.LifecycleStatus != "Active")),
+                rowsExcludedNotCandidateOrTopPick = selectedPreEligibilityRows.Count(row =>
+                    topPickOnly
+                        ? !row.IsTopPick
+                        : candidateOnly
+                            ? !row.IsCandidate
+                            : !includeResearch && !row.IsCandidate && !row.IsTopPick && !(includeWatchlist && row.IsWatchlist)),
+                rowsExcludedMissingPlayer = selectedRowsBeforeGradeability.Count(row => !row.CanonicalPlayerId.HasValue),
+                rowsExcludedMissingProp = selectedRowsBeforeGradeability.Count(row => !row.PropTypeId.HasValue || string.IsNullOrWhiteSpace(row.NormalizedPropType)),
+                rowsExcludedUnsupportedProp = selectedRowsBeforeGradeability.Count(row =>
+                    row.PropTypeId.HasValue &&
+                    !string.IsNullOrWhiteSpace(row.NormalizedPropType) &&
+                    !IsSupportedMlbPerformancePropType(row.NormalizedPropType)),
+                rowsExcludedMissingEventMapping = selectedRowsBeforeGradeability.Count(row =>
+                    string.IsNullOrWhiteSpace(row.EventId) ||
+                    !row.EventStartTimeUtc.HasValue ||
+                    row.ExpectedResultDate == default),
+                rowsExcludedEventDateMappingMismatch = selectedRowsBeforeGradeability.Count(row =>
+                    row.EventStartTimeUtc.HasValue &&
+                    row.ExpectedResultDate != default &&
+                    ResolveEasternDate(row.EventStartTimeUtc.Value) != row.ExpectedResultDate),
+                candidateRows = selectedRows.Count(row => row.IsCandidate),
+                topPickRows = selectedRows.Count(row => row.IsTopPick),
+                watchlistRows = selectedRows.Count(row => row.IsWatchlist),
+                researchRows = selectedRows.Count(row => !row.IsCandidate && !row.IsTopPick && !row.IsWatchlist),
+                preFilterCandidateRows = selectedPreEligibilityRows.Count(row => row.IsCandidate),
+                preFilterTopPickRows = selectedPreEligibilityRows.Count(row => row.IsTopPick),
+                preFilterWatchlistRows = selectedPreEligibilityRows.Count(row => row.IsWatchlist),
+                preFilterResearchRows = selectedPreEligibilityRows.Count(row => !row.IsCandidate && !row.IsTopPick && !row.IsWatchlist),
+                staleLockedExpiredRows = selectedRows.Count(row =>
+                    !row.IsActionableForUser ||
+                    row.LifecycleStatus != "Active" ||
+                    (!string.IsNullOrWhiteSpace(row.Warning) && row.Warning.Contains("stale", StringComparison.OrdinalIgnoreCase))),
+                staleOrNonPlayableRows = selectedRows.Count(row =>
+                    !row.IsActionableForUser ||
+                    row.LifecycleStatus != "Active" ||
+                    (!string.IsNullOrWhiteSpace(row.Warning) && row.Warning.Contains("stale", StringComparison.OrdinalIgnoreCase))),
+                preFilterStaleOrNonPlayableRows = selectedPreEligibilityRows.Count(row =>
+                    !row.IsActionableForUser ||
+                    row.LifecycleStatus != "Active" ||
+                    (!string.IsNullOrWhiteSpace(row.Warning) && row.Warning.Contains("stale", StringComparison.OrdinalIgnoreCase))),
+                noResultProviderInactiveRows = gradedRows.Count(row => row.MatchFailureReason == "ProviderLineForInactivePlayer"),
+                noResultEventDateMismatchRows = gradedRows.Count(row => row.MatchFailureReason == "EventDateMismatch"),
+                noResultUnknownRowsForCompletedDate = gradedRows.Count(row => row.MatchFailureReason == "Unknown"),
+                noResultMissingPlayerRowsForCompletedDate = gradedRows.Count(row => row.MatchFailureReason == "MissingLedgerPlayerId"),
+                noResultMissingPropRowsForCompletedDate = gradedRows.Count(row => row.MatchFailureReason == "MissingLedgerPropType"),
+                noResultUnsupportedPropRowsForCompletedDate = gradedRows.Count(row => row.MatchFailureReason == "UnsupportedPropType"),
+                noResultResultsNotImportedRowsForCompletedDate = gradedRows.Count(row => row.MatchFailureReason == "NoPropResultsForDate"),
+                noResultReasonCodeCounts = gradedRows
+                    .Where(row => row.Outcome is null)
+                    .GroupBy(row => row.MatchFailureReason ?? "Unknown")
+                    .ToDictionary(group => group.Key, group => group.Count()),
                 snapshotRowsLoaded = 0,
                 picksAfterFilters = selectedRows.Length,
                 totalPicksAfterFilters = ledgerTotalAfterFilters,
@@ -1386,6 +1565,9 @@ public static class PublicMlbDfsEndpoints
                 noResultRowsForCompletedDate = noResultRows,
                 unmatchedRowsForCompletedDate = unmatchedRows,
                 pendingRowsForCompletedDate = pendingRows,
+                matchedAndGradedRowsForCompletedDate = totalGraded,
+                providerInactiveRowsForCompletedDate = gradedRows.Count(row => row.MatchFailureReason == "ProviderLineForInactivePlayer"),
+                eventDateMismatchRowsForCompletedDate = gradedRows.Count(row => row.MatchFailureReason == "EventDateMismatch"),
                 wonRowsForCompletedDate = wonRows,
                 lostRowsForCompletedDate = lostRows,
                 pushedRowsForCompletedDate = pushedRows,
@@ -1464,6 +1646,321 @@ public static class PublicMlbDfsEndpoints
         };
     }
 
+    internal static async Task<PerformanceResetSelectionResult> BuildPerformanceResetSelectionAsync(
+        string? requestedSport,
+        string effectiveSport,
+        string? provider,
+        string? propType,
+        bool candidateOnly,
+        bool topPickOnly,
+        bool includeWatchlist,
+        bool includeResearch,
+        bool includeStale,
+        bool includeExcluded,
+        string gradingMode,
+        bool gradedOnly,
+        int take,
+        ApplicationDbContext dbContext,
+        CancellationToken cancellationToken)
+    {
+        var normalizedGradingMode = NormalizePerformanceGradingMode(gradingMode);
+        var latestCompletedDate = await dbContext.PropResults
+            .AsNoTracking()
+            .Select(row => (DateOnly?)row.EventDate)
+            .MaxAsync(cancellationToken);
+
+        var allLedgerQuery = dbContext.RecommendationSnapshots
+            .AsNoTracking()
+            .Where(row => row.Sport == effectiveSport);
+        var ledgerQuery = allLedgerQuery;
+
+        if (!string.IsNullOrWhiteSpace(provider))
+        {
+            ledgerQuery = ledgerQuery.Where(row => row.Provider == provider || row.EntryProvider == provider);
+        }
+
+        if (!string.IsNullOrWhiteSpace(propType))
+        {
+            var normalizedPropType = RecommendationLedgerWriter.NormalizeKey(propType);
+            ledgerQuery = ledgerQuery.Where(row => row.PropType == propType || row.NormalizedPropType == normalizedPropType);
+        }
+
+        var ledgerPreExclusionQuery = ledgerQuery;
+        if (!includeExcluded)
+        {
+            ledgerQuery = ledgerQuery.Where(row => !row.IsExcludedFromPerformance);
+        }
+
+        ledgerQuery = ApplyRecommendationPerformanceEligibility(
+            ledgerQuery,
+            candidateOnly,
+            topPickOnly,
+            includeWatchlist,
+            includeResearch,
+            includeStale);
+
+        var latestLedgerDate = await ledgerQuery
+            .Select(row => (DateOnly?)row.ExpectedResultDate)
+            .DefaultIfEmpty()
+            .MaxAsync(cancellationToken);
+        var selectedDate = normalizedGradingMode switch
+        {
+            "currentSlate" => latestLedgerDate,
+            "latestCompleted" => latestCompletedDate,
+            _ => null
+        };
+        var baseSelectedQuery = selectedDate.HasValue
+            ? ledgerQuery.Where(row => row.ExpectedResultDate == selectedDate.Value)
+            : ledgerQuery;
+        var selectedRowsBeforeGradeability = await baseSelectedQuery
+            .OrderByDescending(row => row.RankingScore)
+            .ThenByDescending(row => row.EstimatedEv)
+            .Take(5000)
+            .ToArrayAsync(cancellationToken);
+        var selectedRows = selectedRowsBeforeGradeability
+            .Where(HasPerformanceGradeability)
+            .ToArray();
+        var gradedRows = await GradeLedgerRowsAsync(selectedRows, dbContext, cancellationToken);
+        var selectableRows = gradedRows
+            .Where(row => !gradedOnly || IsGradedOutcome(row.Outcome))
+            .ToArray();
+        var selectedResetRows = selectableRows
+            .Take(take)
+            .ToArray();
+        var excludedRowsSkipped = includeExcluded
+            ? 0
+            : await CountExcludedResetCandidatesAsync(
+                ledgerPreExclusionQuery,
+                selectedDate,
+                candidateOnly,
+                topPickOnly,
+                includeWatchlist,
+                includeResearch,
+                includeStale,
+                gradedOnly,
+                dbContext,
+                cancellationToken);
+        var before = BuildResetPerformanceSummary(gradedRows);
+        var selectedIds = selectedResetRows.Select(row => row.Snapshot.Id).ToHashSet();
+        var after = BuildResetPerformanceSummary(gradedRows.Where(row => !selectedIds.Contains(row.Snapshot.Id)).ToArray());
+
+        return new PerformanceResetSelectionResult(
+            LatestCompletedDate: latestCompletedDate,
+            FiltersApplied: new
+            {
+                requestedSport,
+                effectiveSport,
+                provider,
+                propType,
+                candidateOnly,
+                topPickOnly,
+                includeWatchlist,
+                includeResearch,
+                includeStale,
+                includeExcluded,
+                gradingMode = normalizedGradingMode,
+                gradedOnly,
+                take
+            },
+            GradedRowsAvailableBeforeTake: selectableRows.Length,
+            AlreadyExcludedRowsSkipped: excludedRowsSkipped,
+            PublicPerformanceBeforeReset: before,
+            ExpectedPublicPerformanceAfterReset: after,
+            Rows: selectedResetRows.Select(row => new PerformanceResetSelectionRow(
+                RecommendationSnapshotId: row.Snapshot.Id,
+                PlayerName: row.Snapshot.PlayerName,
+                PropType: row.Snapshot.PropType,
+                Provider: row.Snapshot.Provider,
+                Side: row.Snapshot.Side,
+                Line: row.Snapshot.Line,
+                FinalGradeStatus: ToSnapshotGradeStatus(row.Outcome),
+                CapturedAtUtc: row.Snapshot.CapturedAtUtc,
+                ExpectedResultDate: row.Snapshot.ExpectedResultDate,
+                AlreadyExcluded: row.Snapshot.IsExcludedFromPerformance,
+                PerformanceExclusionReason: row.Snapshot.PerformanceExclusionReason,
+                PerformanceExcludedAtUtc: row.Snapshot.PerformanceExcludedAtUtc,
+                PerformanceExcludedBy: row.Snapshot.PerformanceExcludedBy)).ToArray());
+    }
+
+    private static async Task<LedgerPerformanceRow[]> GradeLedgerRowsAsync(
+        RecommendationSnapshot[] selectedRows,
+        ApplicationDbContext dbContext,
+        CancellationToken cancellationToken)
+    {
+        var resultDates = selectedRows.Select(row => row.ExpectedResultDate).Distinct().ToArray();
+        var playerIds = selectedRows
+            .Where(row => row.CanonicalPlayerId.HasValue)
+            .Select(row => row.CanonicalPlayerId!.Value)
+            .Distinct()
+            .ToArray();
+        var resultRows = resultDates.Length == 0 || playerIds.Length == 0
+            ? []
+            : await dbContext.PropResults
+                .AsNoTracking()
+                .Where(row => resultDates.Contains(row.EventDate)
+                    && playerIds.Contains(row.PlayerId))
+                .Select(row => new LedgerActualResultLookupRow(
+                    row.Id,
+                    row.EventDate,
+                    row.PlayerId,
+                    row.PropTypeId,
+                    row.PropType != null ? row.PropType.Name : string.Empty,
+                    row.ActualResultValue))
+                .ToArrayAsync(cancellationToken);
+        var diagnosticResultDates = resultDates
+            .SelectMany(date => new[] { date.AddDays(-1), date, date.AddDays(1) })
+            .Distinct()
+            .ToArray();
+        var diagnosticResultRows = diagnosticResultDates.Length == 0
+            ? []
+            : await dbContext.PropResults
+                .AsNoTracking()
+                .Where(row => diagnosticResultDates.Contains(row.EventDate))
+                .Select(row => new LedgerDiagnosticResultRow(
+                    row.Id,
+                    row.EventDate,
+                    row.PlayerId,
+                    row.PlayerId,
+                    row.Player != null ? row.Player.DisplayName : string.Empty,
+                    row.PropTypeId,
+                    row.PropType != null ? row.PropType.Name : string.Empty,
+                    row.ActualResultValue))
+                .ToArrayAsync(cancellationToken);
+
+        return selectedRows
+            .Select(row => GradeLedgerPerformanceRow(row, resultRows, diagnosticResultRows))
+            .ToArray();
+    }
+
+    private static async Task<int> CountExcludedResetCandidatesAsync(
+        IQueryable<RecommendationSnapshot> ledgerPreExclusionQuery,
+        DateOnly? selectedDate,
+        bool candidateOnly,
+        bool topPickOnly,
+        bool includeWatchlist,
+        bool includeResearch,
+        bool includeStale,
+        bool gradedOnly,
+        ApplicationDbContext dbContext,
+        CancellationToken cancellationToken)
+    {
+        var excludedQuery = ApplyRecommendationPerformanceEligibility(
+            ledgerPreExclusionQuery.Where(row => row.IsExcludedFromPerformance),
+            candidateOnly,
+            topPickOnly,
+            includeWatchlist,
+            includeResearch,
+            includeStale);
+        if (selectedDate.HasValue)
+        {
+            excludedQuery = excludedQuery.Where(row => row.ExpectedResultDate == selectedDate.Value);
+        }
+
+        var excludedRows = (await excludedQuery
+                .OrderByDescending(row => row.RankingScore)
+                .ThenByDescending(row => row.EstimatedEv)
+                .Take(5000)
+                .ToArrayAsync(cancellationToken))
+            .Where(HasPerformanceGradeability)
+            .ToArray();
+        if (!gradedOnly)
+        {
+            return excludedRows.Length;
+        }
+
+        var gradedExcludedRows = await GradeLedgerRowsAsync(excludedRows, dbContext, cancellationToken);
+        return gradedExcludedRows.Count(row => IsGradedOutcome(row.Outcome));
+    }
+
+    private static object BuildResetPerformanceSummary(IReadOnlyCollection<LedgerPerformanceRow> rows)
+    {
+        return new
+        {
+            gradedPicks = rows.Count(row => IsGradedOutcome(row.Outcome)),
+            wins = rows.Count(row => row.Outcome == "Win"),
+            losses = rows.Count(row => row.Outcome == "Loss"),
+            pushes = rows.Count(row => row.Outcome == "Push"),
+            noResults = rows.Count(row => IsNoResultFailure(row.MatchFailureReason))
+        };
+    }
+
+    private static string ToSnapshotGradeStatus(string? outcome)
+    {
+        return outcome switch
+        {
+            "Win" => "Won",
+            "Loss" => "Lost",
+            "Push" => "Pushed",
+            _ => string.IsNullOrWhiteSpace(outcome) ? "NoResult" : outcome
+        };
+    }
+
+    private static IQueryable<RecommendationSnapshot> ApplyRecommendationPerformanceEligibility(
+        IQueryable<RecommendationSnapshot> query,
+        bool candidateOnly,
+        bool topPickOnly,
+        bool includeWatchlist,
+        bool includeResearch,
+        bool includeStale)
+    {
+        if (topPickOnly)
+        {
+            query = query.Where(row => row.IsTopPick);
+        }
+        else if (candidateOnly)
+        {
+            query = query.Where(row => row.IsCandidate);
+        }
+        else if (!includeResearch)
+        {
+            query = query.Where(row =>
+                row.IsCandidate ||
+                row.IsTopPick ||
+                (includeWatchlist && row.IsWatchlist));
+        }
+
+        if (!includeWatchlist)
+        {
+            query = query.Where(row => !row.IsWatchlist);
+        }
+
+        if (!includeResearch)
+        {
+            query = query.Where(row => row.IsCandidate || row.IsTopPick || row.IsWatchlist);
+        }
+
+        if (!includeStale)
+        {
+            query = query.Where(row =>
+                row.IsActionableForUser &&
+                row.LifecycleStatus == "Active" &&
+                (row.Warning == null || !row.Warning.ToLower().Contains("stale")));
+        }
+
+        return query;
+    }
+
+    private static bool HasPerformanceGradeability(RecommendationSnapshot row)
+    {
+        var normalizedPropType = string.IsNullOrWhiteSpace(row.NormalizedPropType)
+            ? NormalizePerformancePropTypeKey(row.PropType)
+            : NormalizePerformancePropTypeKey(row.NormalizedPropType);
+        return row.CanonicalPlayerId.HasValue &&
+            row.PropTypeId.HasValue &&
+            IsSupportedMlbPerformancePropType(normalizedPropType) &&
+            !string.IsNullOrWhiteSpace(row.EventId) &&
+            row.EventStartTimeUtc.HasValue &&
+            row.ExpectedResultDate != default &&
+            ResolveEasternDate(row.EventStartTimeUtc.Value) == row.ExpectedResultDate;
+    }
+
+    private static bool IsSupportedMlbPerformancePropType(string? propType)
+    {
+        var normalizedPropType = NormalizePerformancePropTypeKey(propType);
+        return !string.IsNullOrWhiteSpace(normalizedPropType) &&
+            SupportedMlbPerformancePropTypeKeys.Contains(normalizedPropType);
+    }
+
     private static bool IsGradedOutcome(string? outcome)
     {
         return outcome is "Win" or "Loss" or "Push";
@@ -1471,7 +1968,15 @@ public static class PublicMlbDfsEndpoints
 
     private static bool IsNoResultFailure(string? reason)
     {
-        return reason is "ProviderLineForInactivePlayer" or "NoResultForPlayerPropOnDate" or "NoResultForPlayerOnDate";
+        return reason is "ProviderLineForInactivePlayer"
+            or "NoResultForPlayerPropOnDate"
+            or "NoResultForPlayerOnDate"
+            or "EventDateMismatch"
+            or "MissingLedgerPlayerId"
+            or "MissingLedgerPropType"
+            or "UnsupportedPropType"
+            or "PropTypeNormalizationMismatch"
+            or "Unknown";
     }
 
     private static bool IsPendingFailure(string? reason)
@@ -2265,7 +2770,7 @@ public static class PublicMlbDfsEndpoints
 
     private static LedgerPerformanceRow GradeLedgerPerformanceRow(
         RecommendationSnapshot row,
-        IReadOnlyDictionary<LedgerResultLookupKey, decimal> actualResults,
+        IReadOnlyCollection<LedgerActualResultLookupRow> actualResults,
         IReadOnlyCollection<LedgerDiagnosticResultRow> diagnosticResultRows)
     {
         decimal? actualResult = null;
@@ -2281,17 +2786,37 @@ public static class PublicMlbDfsEndpoints
         }
         else
         {
-            var key = new LedgerResultLookupKey(
-                row.ExpectedResultDate,
-                row.CanonicalPlayerId.Value,
-                row.PropTypeId.Value);
-            if (actualResults.TryGetValue(key, out var value))
+            var normalizedPropType = string.IsNullOrWhiteSpace(row.NormalizedPropType)
+                ? NormalizePerformancePropTypeKey(row.PropType)
+                : NormalizePerformancePropTypeKey(row.NormalizedPropType);
+            if (!IsSupportedMlbPerformancePropType(normalizedPropType))
             {
-                actualResult = value;
+                matchFailureReason = "UnsupportedPropType";
             }
             else
             {
-                matchFailureReason = BuildLedgerMatchFailureReason(row, diagnosticResultRows);
+                var matches = actualResults
+                .Where(result => result.EventDate == row.ExpectedResultDate
+                    && result.PlayerId == row.CanonicalPlayerId.Value
+                    && (result.PropTypeId == row.PropTypeId.Value ||
+                        string.Equals(
+                            NormalizePerformancePropTypeKey(result.PropType),
+                            normalizedPropType,
+                            StringComparison.OrdinalIgnoreCase)))
+                .ToArray();
+
+                if (matches.Length == 1)
+                {
+                    actualResult = matches[0].ActualResultValue;
+                }
+                else if (matches.Length > 1)
+                {
+                    matchFailureReason = "MultipleResultRowsForPlayerPropDate";
+                }
+                else
+                {
+                    matchFailureReason = BuildLedgerMatchFailureReason(row, diagnosticResultRows);
+                }
             }
         }
 
@@ -2327,17 +2852,12 @@ public static class PublicMlbDfsEndpoints
         var normalizedPropType = string.IsNullOrWhiteSpace(row.NormalizedPropType)
             ? NormalizePerformancePropTypeKey(row.PropType)
             : NormalizePerformancePropTypeKey(row.NormalizedPropType);
-        var sameDateRows = diagnosticResultRows
-            .Where(result => result.EventDate == row.ExpectedResultDate)
-            .ToArray();
-        if (sameDateRows.Length == 0)
-        {
-            return "NoPropResultsForDate";
-        }
-
         var nearbyDates = new[] { row.ExpectedResultDate.AddDays(-1), row.ExpectedResultDate, row.ExpectedResultDate.AddDays(1) };
         var nearbyRows = diagnosticResultRows
             .Where(result => nearbyDates.Contains(result.EventDate))
+            .ToArray();
+        var sameDateRows = nearbyRows
+            .Where(result => result.EventDate == row.ExpectedResultDate)
             .ToArray();
         var aliasEquivalentPlayerIds = nearbyRows
             .Where(result => !string.IsNullOrWhiteSpace(normalizedPlayerName)
@@ -2361,12 +2881,17 @@ public static class PublicMlbDfsEndpoints
 
         if (hasNearbyPlayerAndProp)
         {
-            return "ResultDateMismatch";
+            return "EventDateMismatch";
+        }
+
+        if (sameDateRows.Length == 0)
+        {
+            return "NoPropResultsForDate";
         }
 
         if ((hasSameDateSamePlayerId || hasSameDateSamePlayerName) && !hasSameDatePlayerAndProp)
         {
-            return "PropTypeMismatch";
+            return "NoResultForPlayerPropOnDate";
         }
 
         if (hasSameDateSamePropType && !hasSameDateSamePlayerId && hasSameDateSamePlayerName)
@@ -2456,7 +2981,7 @@ public static class PublicMlbDfsEndpoints
             !IsPendingFailure(row.MatchFailureReason));
         var decisions = wins + losses;
         var profit = graded.Sum(row => row.Profit ?? 0m);
-        var roi = graded.Length == 0 ? 0m : Math.Round(profit / graded.Length, 4);
+        var roi = graded.Length == 0 ? (decimal?)null : Math.Round(profit / graded.Length, 4);
         var first = rows.FirstOrDefault()?.Snapshot;
 
         return new
@@ -2478,7 +3003,7 @@ public static class PublicMlbDfsEndpoints
             noResults,
             unmatched,
             pending,
-            hitRate = decisions == 0 ? 0m : Math.Round(wins / (decimal)decisions, 4),
+            hitRate = decisions == 0 ? (decimal?)null : Math.Round(wins / (decimal)decisions, 4),
             averageEstimatedEv = AverageNullable(rows.Select(row => row.Snapshot.EstimatedEv)),
             averageModelProbability = AverageNullable(rows.Select(row => row.Snapshot.HitChance)),
             averageImpliedProbability = AverageNullable(rows.Select(row => row.Snapshot.ImpliedProbability)),
@@ -2503,7 +3028,7 @@ public static class PublicMlbDfsEndpoints
         var pushes = graded.Count(row => row.Outcome == "Push");
         var decisions = wins + losses;
         var profit = graded.Sum(row => row.Profit ?? 0m);
-        var roi = graded.Length == 0 ? 0m : Math.Round(profit / graded.Length, 4);
+        var roi = graded.Length == 0 ? (decimal?)null : Math.Round(profit / graded.Length, 4);
         var first = rows.FirstOrDefault()?.Snapshot;
 
         return new
@@ -2522,7 +3047,7 @@ public static class PublicMlbDfsEndpoints
             wins,
             losses,
             pushes,
-            hitRate = decisions == 0 ? 0m : Math.Round(wins / (decimal)decisions, 4),
+            hitRate = decisions == 0 ? (decimal?)null : Math.Round(wins / (decimal)decisions, 4),
             averageEstimatedEv = AverageNullable(rows.Select(row => row.Snapshot.BestEstimatedEv)),
             averageModelProbability = AverageNullable(rows.Select(row => row.Snapshot.BestProbability)),
             averageImpliedProbability = AverageNullable(rows.Select(row => row.Snapshot.BestImpliedProbability)),
@@ -3315,6 +3840,30 @@ public static class PublicMlbDfsEndpoints
         };
     }
 
+    internal sealed record PerformanceResetSelectionResult(
+        DateOnly? LatestCompletedDate,
+        object FiltersApplied,
+        int GradedRowsAvailableBeforeTake,
+        int AlreadyExcludedRowsSkipped,
+        object PublicPerformanceBeforeReset,
+        object ExpectedPublicPerformanceAfterReset,
+        PerformanceResetSelectionRow[] Rows);
+
+    internal sealed record PerformanceResetSelectionRow(
+        Guid RecommendationSnapshotId,
+        string PlayerName,
+        string PropType,
+        string Provider,
+        string Side,
+        decimal Line,
+        string FinalGradeStatus,
+        DateTimeOffset CapturedAtUtc,
+        DateOnly ExpectedResultDate,
+        bool AlreadyExcluded,
+        string? PerformanceExclusionReason,
+        DateTimeOffset? PerformanceExcludedAtUtc,
+        string? PerformanceExcludedBy);
+
     private sealed record MarketSportResolution(
         string? RequestedSport,
         string? EffectiveSport,
@@ -3378,15 +3927,12 @@ public static class PublicMlbDfsEndpoints
         string MatchLookupMode,
         string? MatchFailureReason);
 
-    private readonly record struct LedgerResultLookupKey(
-        DateOnly EventDate,
-        Guid PlayerId,
-        Guid PropTypeId);
-
     private sealed record LedgerActualResultLookupRow(
+        Guid PropResultId,
         DateOnly EventDate,
         Guid PlayerId,
         Guid PropTypeId,
+        string PropType,
         decimal ActualResultValue);
 
     private sealed record LedgerDiagnosticResultRow(

@@ -644,6 +644,8 @@ public sealed class ApplicationDbContext(DbContextOptions<ApplicationDbContext> 
             entity.Property(x => x.ResultValue).HasPrecision(12, 4);
             entity.Property(x => x.GradeStatus).HasMaxLength(50).IsRequired();
             entity.Property(x => x.GradingFailureReason).HasMaxLength(500);
+            entity.Property(x => x.PerformanceExclusionReason).HasMaxLength(200);
+            entity.Property(x => x.PerformanceExcludedBy).HasMaxLength(200);
             entity.HasOne(x => x.RefreshRun)
                 .WithMany()
                 .HasForeignKey(x => x.RefreshRunId)
@@ -667,6 +669,7 @@ public sealed class ApplicationDbContext(DbContextOptions<ApplicationDbContext> 
             entity.HasIndex(x => x.PredictionRunId).HasDatabaseName("ix_recommendation_snapshots_prediction_run_id");
             entity.HasIndex(x => new { x.ProviderCategory, x.IsCandidate }).HasDatabaseName("ix_recommendation_snapshots_provider_candidate");
             entity.HasIndex(x => x.GradeStatus).HasDatabaseName("ix_recommendation_snapshots_grade_status");
+            entity.HasIndex(x => x.IsExcludedFromPerformance).HasDatabaseName("ix_recommendation_snapshots_performance_excluded");
         });
     }
 

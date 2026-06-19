@@ -201,6 +201,10 @@ Important uniqueness:
 
 MLB prediction features read from this table by player/equivalent player, prop type/equivalent prop type, and event date.
 
+Performance grading treats `prop_results` as provider-independent stat outcomes. A captured recommendation is matched to a result by sport/result date, canonical player id, and prop type id or normalized prop/stat type. Provider, side, and line are not part of result lookup because those describe the offered market, not the final player stat. Once a single stat result is found, side and line determine Win/Loss/Push and diagnostics use `MatchedAndGraded`. If the result date is not imported, the row is `Pending`. If the player/date exists but the prop/stat is missing, the row is `NoResult`. If the same player/prop exists only on a nearby imported date, diagnostics use `EventDateMismatch`. If the date/prop exists but the player has no result by id or normalized name, diagnostics use `ProviderLineForInactivePlayer`. If more than one result row matches the same player/date/prop, the row is `Unmatched` until the duplicate result rows are resolved.
+
+`Pitcher Strikeouts` and `Total Bases` are critical MLB grading props and should normalize consistently across The Odds provider lines, predictions, recommendation snapshots, prop-history reads, and imported results.
+
 ### `mlb_result_import_states`
 
 Overall MLB result importer state: last successful date/run and source-level progress.
@@ -237,6 +241,32 @@ Recommendations are currently research outputs, not final product advice.
 ### `prediction_run_skip_counts`
 
 Aggregated skip reasons for a prediction run, such as missing historical results, unsupported prop type, no sportsbook line, or insufficient history.
+
+### `recommendation_snapshots`
+
+Durable captured-pick ledger used by Performance. Rows are created from surfaced The Odds candidate/watchlist/top-pick opportunities and retain the state needed to grade the pick later:
+
+- expected result date,
+- canonical player id when safely resolved,
+- display and normalized player name,
+- prop type id, display prop type, and normalized prop type,
+- side and line,
+- provider/bookmaker context,
+- hit chance, implied probability, edge, EV, trust, warning, and historical sample size,
+- candidate/top-pick/watchlist flags,
+- actionability and lifecycle status,
+- grade status/result fields for diagnostics,
+- performance exclusion audit fields: `is_excluded_from_performance`, `performance_exclusion_reason`, `performance_excluded_at_utc`, and `performance_excluded_by`.
+
+The idempotency key includes provider, side, and line because those identify the captured opportunity. Grading does not use provider, side, or line to find the result row. It first finds the final stat result from `prop_results`; then side and line grade that stat as Win/Loss/Push. Public Performance has two layers of filtering: common query filters such as sport/date/provider/prop, then performance eligibility. Default performance eligibility includes actionable `IsCandidate` rows, while `topPickOnly=true` uses `IsTopPick`. Watchlist-only, research-only, stale, locked, expired, non-playable, and performance-excluded rows remain in the ledger for diagnostics but are excluded from public Performance unless the corresponding debug include switch is set. Performance eligibility also requires gradeability metadata: canonical player id, supported MLB result prop type, event id, event start time, and expected result date. `NoResult`, `Unmatched`, and `Pending` are not losses and must be excluded from hit rate and ROI.
+
+Performance baseline resets must not delete predictions, snapshots, or results. They mark polluted captured-pick rows with the performance exclusion fields so public Performance can start from a clean baseline while debug endpoints still show the excluded evidence and reason. The exclusion fields are audit metadata only; they do not alter `prop_results` or erase historical provider captures.
+
+Performance diagnostics expose inclusion fields and exclusion buckets derived from `IsCandidate`, `IsTopPick`, `IsWatchlist`, `IsActionableForUser`, `LifecycleStatus`, stale warning text, canonical player identity, prop type support, event/date mapping, and performance exclusion state. Result-coverage rows report whether the row is research, stale, locked, expired, playable, excluded from performance, included in default/candidate/top-pick performance, and the exact exclusion reasons.
+
+No-result reason buckets include `NoPropResultsForDate`, `MissingCanonicalPlayerId`, `MissingLedgerPropType`, `UnsupportedPropType`, `MissingEventDateMapping`, `NoResultForPlayerPropOnDate`, `NoResultForPlayerOnDate`, `ProviderLineForInactivePlayer`, `EventDateMismatch`, `MultipleResultRowsForPlayerPropDate`, and `Unknown`. Unknown should be visible and should trend toward zero as importer coverage and capture quality improve.
+
+Expected result dates should be the actual MLB game date. Because late MLB games can start after midnight UTC while still belonging to the previous Eastern evening, diagnostics preserve `eventStartTimeUtc`, the UTC event date, and the Eastern event date to make date-boundary mismatches visible.
 
 ## Operations
 

@@ -556,6 +556,10 @@ public sealed class RecommendationSnapshot
     public string GradeStatus { get; set; } = "Pending";
     public DateTimeOffset? GradedAtUtc { get; set; }
     public string? GradingFailureReason { get; set; }
+    public bool IsExcludedFromPerformance { get; set; }
+    public string? PerformanceExclusionReason { get; set; }
+    public DateTimeOffset? PerformanceExcludedAtUtc { get; set; }
+    public string? PerformanceExcludedBy { get; set; }
 
     public TheOddsRefreshRun? RefreshRun { get; set; }
     public PredictionRun? PredictionRun { get; set; }

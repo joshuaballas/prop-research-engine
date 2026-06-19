@@ -439,8 +439,10 @@ public static partial class TheOddsApiDebugEndpoints
         var selectedProbability = string.Equals(group.BestSide, "Under", StringComparison.OrdinalIgnoreCase)
             ? group.ModelProbabilityUnder
             : group.ModelProbabilityOver;
+        var gradeability = BuildRecommendationGradeability(group, entry.EntryActionableForUser);
         var warning = strategy.StrategyWarnings.FirstOrDefault()
-            ?? (string.IsNullOrWhiteSpace(group.SampleWarning) ? null : group.SampleWarning);
+            ?? (string.IsNullOrWhiteSpace(group.SampleWarning) ? null : group.SampleWarning)
+            ?? gradeability.Warning;
 
         return new RecommendationLedgerCandidate(
             CapturedAtUtc: generatedAtUtc,
@@ -474,12 +476,83 @@ public static partial class TheOddsApiDebugEndpoints
             StrategyClassification: strategy.StrategyClassification,
             StrategyTier: strategy.StrategyTier,
             RankingScore: group.RankingScore,
-            IsCandidate: strategy.IsCandidate,
-            IsTopPick: isTopPick,
-            IsWatchlist: strategy.IsWatchlist,
+            IsCandidate: strategy.IsCandidate && gradeability.IsGradeable,
+            IsTopPick: isTopPick && gradeability.IsGradeable,
+            IsWatchlist: strategy.IsWatchlist || !gradeability.IsGradeable,
             IsActionableForUser: entry.EntryActionableForUser,
             LifecycleStatus: group.LifecycleStatus);
     }
+
+    private static RecommendationGradeability BuildRecommendationGradeability(
+        TheOddsLineShoppingGroup group,
+        bool entryActionableForUser)
+    {
+        var reasons = new List<string>();
+
+        if (group.PlayerId == Guid.Empty)
+        {
+            reasons.Add("missing canonical player id");
+        }
+
+        if (group.PropTypeId == Guid.Empty || !IsSupportedMlbPerformancePropType(group.NormalizedPropType))
+        {
+            reasons.Add("unsupported result prop");
+        }
+
+        var eventStartTimeUtc = group.EventStartTimeUtc ?? group.EventStartTime;
+        if (string.IsNullOrWhiteSpace(group.EventId) || !eventStartTimeUtc.HasValue || group.ExpectedResultDate == default)
+        {
+            reasons.Add("missing event/result-date mapping");
+        }
+        else
+        {
+            var easternDate = DateOnly.FromDateTime(ConvertUtcToMlbLocalTime(eventStartTimeUtc.Value.ToUniversalTime()).Date);
+            if (easternDate != group.ExpectedResultDate)
+            {
+                reasons.Add("event date does not match expected MLB result date");
+            }
+        }
+
+        if (!entryActionableForUser ||
+            !string.Equals(group.LifecycleStatus, "Active", StringComparison.OrdinalIgnoreCase) ||
+            group.IsStale ||
+            group.IsExpired)
+        {
+            reasons.Add("line is not currently playable");
+        }
+
+        return reasons.Count == 0
+            ? new RecommendationGradeability(true, null)
+            : new RecommendationGradeability(false, $"Research only: {string.Join("; ", reasons.Distinct(StringComparer.OrdinalIgnoreCase))}.");
+    }
+
+    private static bool IsSupportedMlbPerformancePropType(string? propType)
+    {
+        if (string.IsNullOrWhiteSpace(propType))
+        {
+            return false;
+        }
+
+        return NormalizeTheOddsPropTypeName(propType) is
+            "HITS" or
+            "RUNS" or
+            "RBIS" or
+            "HOMERUNS" or
+            "TOTALBASES" or
+            "STOLENBASES" or
+            "BATTERWALKS" or
+            "WALKS" or
+            "HITSRUNSRBIS" or
+            "PITCHERSTRIKEOUTS" or
+            "PITCHERWALKS" or
+            "WALKSALLOWED" or
+            "PITCHERHITSALLOWED" or
+            "HITSALLOWED" or
+            "PITCHEREARNEDRUNS" or
+            "EARNEDRUNSALLOWED";
+    }
+
+    private sealed record RecommendationGradeability(bool IsGradeable, string? Warning);
 
     private static string BuildRecommendationLedgerGroupIdentity(TheOddsLineShoppingGroup group)
     {
