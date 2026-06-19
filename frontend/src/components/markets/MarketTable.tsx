@@ -1,6 +1,6 @@
 import AddCircleOutlineRoundedIcon from '@mui/icons-material/AddCircleOutlineRounded';
 import RemoveCircleOutlineRoundedIcon from '@mui/icons-material/RemoveCircleOutlineRounded';
-import { Box, Button, Stack, Table, TableBody, TableCell, TableHead, TableRow, Typography } from '@mui/material';
+import { Box, Button, Stack, TableBody, TableCell, TableHead, TableRow, Typography } from '@mui/material';
 import { useState } from 'react';
 import { useEntryBuilder } from '../../hooks/useEntryBuilder';
 import type { MarketOpportunity } from '../../types/markets';
@@ -12,8 +12,10 @@ import { PropDetailsModal } from '../prop-history/PropDetailsModal';
 import { StatusPill } from '../ui/StatusPill';
 import { ProjectionModifierBadge } from './ProjectionModifierBadge';
 import { ProviderLabel } from '../providers/ProviderLabel';
-import { compactActionButtonSx, removeActionButtonSx, secondaryGhostButtonSx } from '../ui/buttonStyles';
-import { appTableRowSx, stackedRowActionsSx } from '../ui/appTableStyles';
+import { removeActionButtonSx } from '../ui/buttonStyles';
+import { appTableRowSx } from '../ui/appTableStyles';
+import { AppDataTable } from '../ui/AppDataTable';
+import { AppRowActions, desktopRowActionButtonSx, desktopRowDetailsButtonSx } from '../ui/AppRowActions';
 import { TagsLabelWithHelp } from './TagsLabelWithHelp';
 import { marketTagLabel } from '../../utils/marketTags';
 import { CautionLabels } from './CautionLabels';
@@ -23,8 +25,7 @@ export function MarketTable({ markets }: { markets: MarketOpportunity[] }) {
   const [detailsMarket, setDetailsMarket] = useState<MarketOpportunity | null>(null);
   return (
     <>
-      <Box sx={{ overflowX: 'auto', border: '1px solid rgba(148,163,184,.16)', borderRadius: 3 }}>
-        <Table size="small" stickyHeader sx={{ tableLayout: 'fixed', minWidth: 1330 }}>
+      <AppDataTable minWidth={1330} sx={{ borderRadius: 3 }} tableSx={{ tableLayout: 'fixed' }}>
         <colgroup>
           <col style={{ width: '25%' }} />
           <col style={{ width: 64 }} />
@@ -119,7 +120,7 @@ export function MarketTable({ markets }: { markets: MarketOpportunity[] }) {
                   </Box>
                 </TableCell>
                 <TableCell sx={{ width: 130, pl: 1.5, pr: 2, py: 1.05 }}>
-                  <Stack spacing={0.65} sx={stackedRowActionsSx}>
+                  <AppRowActions>
                     {canAddFromScanner || selected ? (
                       <Button
                         size="small"
@@ -139,36 +140,20 @@ export function MarketTable({ markets }: { markets: MarketOpportunity[] }) {
                     >
                       Details
                     </Button>
-                  </Stack>
+                  </AppRowActions>
                 </TableCell>
               </TableRow>
             );
           })}
         </TableBody>
-        </Table>
-      </Box>
+      </AppDataTable>
       <PropDetailsModal market={detailsMarket} open={Boolean(detailsMarket)} onClose={() => setDetailsMarket(null)} />
     </>
   );
 }
 
-const baseActionButtonSx = {
-  ...compactActionButtonSx,
-  width: 98,
-  minWidth: 98,
-  height: 32,
-  fontSize: 12,
-  whiteSpace: 'nowrap'
-};
-
-const detailsActionButtonSx = {
-  ...secondaryGhostButtonSx,
-  width: 98,
-  minWidth: 98,
-  height: 32,
-  fontSize: 12,
-  whiteSpace: 'nowrap'
-};
+const baseActionButtonSx = desktopRowActionButtonSx;
+const detailsActionButtonSx = desktopRowDetailsButtonSx;
 
 function entryButtonSx(selected: boolean) {
   if (selected) {

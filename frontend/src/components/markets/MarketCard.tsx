@@ -14,7 +14,8 @@ import { ProviderLabel } from '../providers/ProviderLabel';
 import { AppCard } from '../ui/AppCard';
 import { StatusPill } from '../ui/StatusPill';
 import { ProjectionModifierBadge } from './ProjectionModifierBadge';
-import { compactActionButtonSx, removeActionButtonSx, secondaryGhostButtonSx } from '../ui/buttonStyles';
+import { removeActionButtonSx } from '../ui/buttonStyles';
+import { AppMobileCardActions, mobileCardActionButtonSx, mobileCardDetailsButtonSx } from '../ui/AppRowActions';
 import { marketTagLabel } from '../../utils/marketTags';
 import { CautionLabels } from './CautionLabels';
 
@@ -107,7 +108,7 @@ export function MarketCard({ market }: { market: MarketOpportunity }) {
           </Box>
         ) : null}
 
-        <Stack spacing={0.8} sx={{ mt: 'auto', '& > .MuiButton-root': { width: '100%', minWidth: 0 } }}>
+        <AppMobileCardActions>
           {canAddFromScanner || selected ? (
             <Button
               size="small"
@@ -122,30 +123,15 @@ export function MarketCard({ market }: { market: MarketOpportunity }) {
           <Button size="small" variant="outlined" onClick={() => setDetailsOpen(true)} sx={secondaryActionButtonSx}>
             Details
           </Button>
-        </Stack>
+        </AppMobileCardActions>
       </Stack>
       <PropDetailsModal market={market} open={detailsOpen} onClose={() => setDetailsOpen(false)} />
     </AppCard>
   );
 }
 
-const baseActionButtonSx = {
-  ...compactActionButtonSx,
-  width: '100%',
-  minWidth: 0,
-  height: 32,
-  fontSize: 12,
-  whiteSpace: 'nowrap'
-};
-
-const secondaryActionButtonSx = {
-  ...secondaryGhostButtonSx,
-  width: '100%',
-  minWidth: 0,
-  height: 32,
-  fontSize: 12,
-  whiteSpace: 'nowrap'
-};
+const baseActionButtonSx = mobileCardActionButtonSx;
+const secondaryActionButtonSx = mobileCardDetailsButtonSx;
 
 function entryButtonSx(selected: boolean) {
   if (selected) {

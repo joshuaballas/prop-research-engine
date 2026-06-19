@@ -14,6 +14,7 @@ import { StatusPill } from '../ui/StatusPill';
 import { ProjectionModifierBadge } from './ProjectionModifierBadge';
 import { ProviderLabel } from '../providers/ProviderLabel';
 import { compactActionButtonSx, lockedActionButtonSx, removeActionButtonSx, secondaryGhostButtonSx } from '../ui/buttonStyles';
+import { AppMobileCardActions, mobileCardActionButtonSx, mobileCardDetailsButtonSx } from '../ui/AppRowActions';
 import { hasRenderableWarning, renderWarningText } from '../../utils/warnings';
 
 interface TopPickCardProps {
@@ -165,20 +166,20 @@ export function TopPickCard({ market, onAdd, hideActions = false, variant = 'def
           ) : null}
 
           {hideActions ? null : (
-            <Stack direction="row" spacing={1}>
+            <AppMobileCardActions>
               <Button
                 startIcon={selected ? <RemoveCircleOutlineRoundedIcon /> : incompatible ? <LockRoundedIcon /> : <AddCircleOutlineRoundedIcon />}
                 variant="contained"
                 disabled={!market.canAddToEntry || incompatible}
                 onClick={() => onAdd?.(market)}
-                sx={entryButtonSx(selected, incompatible)}
+                sx={mobileEntryButtonSx(selected, incompatible)}
               >
                 {selected ? 'Remove' : incompatible ? 'Locked' : 'Add leg'}
               </Button>
-              <Button startIcon={<InfoOutlinedIcon />} variant="outlined" onClick={() => setDetailsOpen(true)} sx={compareButtonSx}>
+              <Button startIcon={<InfoOutlinedIcon />} variant="outlined" onClick={() => setDetailsOpen(true)} sx={mobileCardDetailsButtonSx}>
                 Details
               </Button>
-            </Stack>
+            </AppMobileCardActions>
           )}
           <PropDetailsModal market={market} open={detailsOpen} onClose={() => setDetailsOpen(false)} />
         </Stack>
@@ -368,3 +369,21 @@ const compareButtonSx = {
   fontWeight: 850,
   whiteSpace: 'nowrap'
 };
+
+function mobileEntryButtonSx(selected: boolean, incompatible: boolean) {
+  if (selected) {
+    return {
+      ...mobileCardActionButtonSx,
+      ...removeActionButtonSx
+    };
+  }
+
+  if (incompatible) {
+    return {
+      ...mobileCardActionButtonSx,
+      ...lockedActionButtonSx
+    };
+  }
+
+  return mobileCardActionButtonSx;
+}

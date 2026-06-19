@@ -1,9 +1,10 @@
-import { Box, Stack, Table, TableBody, TableCell, TableHead, TableRow, Typography } from '@mui/material';
+import { Stack, TableBody, TableCell, TableHead, TableRow, Typography } from '@mui/material';
 import type { PerformanceGroup } from '../../types/performance';
 import { formatPercent } from '../../utils/formatters';
 import { MetadataText } from '../ui/MetadataText';
 import { palette } from '../../theme/palette';
 import { appTableRowSx } from '../ui/appTableStyles';
+import { AppDataTable } from '../ui/AppDataTable';
 
 function getSampleWarning(row: PerformanceGroup) {
   if (row.warning) {
@@ -15,8 +16,7 @@ function getSampleWarning(row: PerformanceGroup) {
 
 export function PerformanceTable({ rows, category }: { rows: PerformanceGroup[]; category: string }) {
   return (
-    <Box sx={{ overflowX: 'auto', border: `1px solid ${palette.border}`, borderRadius: 4 }}>
-      <Table size="small" stickyHeader>
+    <AppDataTable>
         <TableHead>
           <TableRow>
             <TableCell>Group</TableCell>
@@ -77,7 +77,6 @@ export function PerformanceTable({ rows, category }: { rows: PerformanceGroup[];
             </TableRow>
           )}
         </TableBody>
-      </Table>
-    </Box>
+    </AppDataTable>
   );
 }

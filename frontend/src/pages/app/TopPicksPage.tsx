@@ -3,18 +3,18 @@ import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
 import LockRoundedIcon from '@mui/icons-material/LockRounded';
 import RemoveCircleOutlineRoundedIcon from '@mui/icons-material/RemoveCircleOutlineRounded';
 import TuneRoundedIcon from '@mui/icons-material/TuneRounded';
-import { Box, Button, Collapse, Grid, MenuItem, Stack, Table, TableBody, TableCell, TableHead, TableRow, TextField, Typography } from '@mui/material';
+import { Box, Button, Collapse, Grid, MenuItem, Stack, TableBody, TableCell, TableHead, TableRow, TextField, Typography } from '@mui/material';
 import { useMemo, useState } from 'react';
-import { ProjectionModifierBadge } from '../../components/markets/ProjectionModifierBadge';
 import { formatTopPickWarning, getTopPickConfidence, TopPickCard } from '../../components/markets/TopPickCard';
 import { MetricLabelWithHelp } from '../../components/metrics/MetricLabelWithHelp';
 import { TrustValue } from '../../components/metrics/TrustValue';
 import { PropDetailsModal } from '../../components/prop-history/PropDetailsModal';
 import { ProviderLabel } from '../../components/providers/ProviderLabel';
 import { PageHeader } from '../../components/ui/PageHeader';
-import { StatusPill } from '../../components/ui/StatusPill';
-import { appTableRowSx, stackedRowActionsSx } from '../../components/ui/appTableStyles';
-import { compactActionButtonSx, lockedActionButtonSx, removeActionButtonSx, secondaryGhostButtonSx } from '../../components/ui/buttonStyles';
+import { appTableRowSx } from '../../components/ui/appTableStyles';
+import { lockedActionButtonSx, removeActionButtonSx } from '../../components/ui/buttonStyles';
+import { AppDataTable } from '../../components/ui/AppDataTable';
+import { AppRowActions, desktopRowActionButtonSx, desktopRowDetailsButtonSx } from '../../components/ui/AppRowActions';
 import { useEntryBuilder } from '../../hooks/useEntryBuilder';
 import { useTopPicksData } from '../../hooks/useMarketData';
 import { useResponsiveView } from '../../hooks/useResponsiveView';
@@ -246,8 +246,7 @@ function RankedPicksTable({ markets, builder }: { markets: MarketOpportunity[]; 
 
   return (
     <>
-      <Box sx={{ overflowX: 'auto', border: '1px solid rgba(148,163,184,.16)', borderRadius: 4, bgcolor: 'rgba(8,13,26,.28)' }}>
-        <Table size="small" stickyHeader sx={{ minWidth: 1040 }}>
+      <AppDataTable minWidth={1040}>
           <TableHead>
             <TableRow>
               <TableCell>Rank</TableCell>
@@ -280,10 +279,6 @@ function RankedPicksTable({ markets, builder }: { markets: MarketOpportunity[]; 
                     <Typography variant="body2" color="text.secondary">
                       {market.side} {market.propType} {market.line} - {market.sport}
                     </Typography>
-                    <Stack direction="row" gap={0.6} flexWrap="wrap">
-                      <StatusPill label={market.strategyClassification} />
-                      <ProjectionModifierBadge modifier={market.projectionModifier} />
-                    </Stack>
                   </Stack>
                 </TableCell>
                 <TableCell sx={{ minWidth: 160 }}>
@@ -305,7 +300,7 @@ function RankedPicksTable({ markets, builder }: { markets: MarketOpportunity[]; 
                   </Typography>
                 </TableCell>
                 <TableCell align="center" sx={{ minWidth: 130 }}>
-                  <Stack spacing={0.65} sx={{ ...stackedRowActionsSx, mx: 'auto' }}>
+                  <AppRowActions sx={{ mx: 'auto' }}>
                     <Button
                       startIcon={selected ? <RemoveCircleOutlineRoundedIcon /> : incompatible ? <LockRoundedIcon /> : <AddCircleOutlineRoundedIcon />}
                       size="small"
@@ -319,27 +314,19 @@ function RankedPicksTable({ markets, builder }: { markets: MarketOpportunity[]; 
                     <Button startIcon={<InfoOutlinedIcon />} size="small" variant="outlined" onClick={() => setDetailsMarket(market)} sx={compareButtonSx}>
                       Details
                     </Button>
-                  </Stack>
+                  </AppRowActions>
                 </TableCell>
               </TableRow>
               );
             })}
           </TableBody>
-        </Table>
-      </Box>
+      </AppDataTable>
       <PropDetailsModal market={detailsMarket} open={Boolean(detailsMarket)} onClose={() => setDetailsMarket(null)} />
     </>
   );
 }
 
-const actionButtonSx = {
-  ...compactActionButtonSx,
-  width: 98,
-  minWidth: 98,
-  height: 32,
-  fontSize: 12,
-  whiteSpace: 'nowrap'
-};
+const actionButtonSx = desktopRowActionButtonSx;
 
 function entryButtonSx(selected: boolean, incompatible: boolean) {
   if (selected) {
@@ -360,11 +347,5 @@ function entryButtonSx(selected: boolean, incompatible: boolean) {
 }
 
 const compareButtonSx = {
-  ...secondaryGhostButtonSx,
-  width: 98,
-  minWidth: 98,
-  height: 32,
-  fontSize: 12,
-  fontWeight: 850,
-  whiteSpace: 'nowrap'
+  ...desktopRowDetailsButtonSx
 };

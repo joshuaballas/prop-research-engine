@@ -3,7 +3,7 @@ import ExpandMoreRoundedIcon from '@mui/icons-material/ExpandMoreRounded';
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
 import LockRoundedIcon from '@mui/icons-material/LockRounded';
 import RemoveCircleOutlineRoundedIcon from '@mui/icons-material/RemoveCircleOutlineRounded';
-import { Accordion, AccordionDetails, AccordionSummary, Box, Button, Divider, Stack, Table, TableBody, TableCell, TableHead, TableRow, Typography } from '@mui/material';
+import { Accordion, AccordionDetails, AccordionSummary, Box, Button, Divider, Stack, TableBody, TableCell, TableHead, TableRow, Typography } from '@mui/material';
 import { useState } from 'react';
 import { useEntryBuilder } from '../../hooks/useEntryBuilder';
 import { palette } from '../../theme/palette';
@@ -15,8 +15,17 @@ import { TrustValue } from '../metrics/TrustValue';
 import { PropDetailsModal } from '../prop-history/PropDetailsModal';
 import { ProviderLabel } from '../providers/ProviderLabel';
 import { StatusPill } from '../ui/StatusPill';
-import { appTableRowSx, stackedRowActionsSx } from '../ui/appTableStyles';
-import { compactActionButtonSx, lockedActionButtonSx, removeActionButtonSx, secondaryGhostButtonSx } from '../ui/buttonStyles';
+import { appTableRowSx } from '../ui/appTableStyles';
+import { lockedActionButtonSx, removeActionButtonSx } from '../ui/buttonStyles';
+import { AppDataTable } from '../ui/AppDataTable';
+import {
+  AppMobileCardActions,
+  AppRowActions,
+  desktopRowActionButtonSx,
+  desktopRowDetailsButtonSx,
+  mobileCardActionButtonSx,
+  mobileCardDetailsButtonSx
+} from '../ui/AppRowActions';
 import { ProjectionModifierBadge } from './ProjectionModifierBadge';
 
 export function LineShoppingTable({ markets, showActions = true }: { markets: MarketOpportunity[]; showActions?: boolean }) {
@@ -25,8 +34,7 @@ export function LineShoppingTable({ markets, showActions = true }: { markets: Ma
 
   return (
     <>
-      <Box sx={{ overflowX: 'auto', border: '1px solid rgba(148,163,184,.16)', borderRadius: 4, bgcolor: 'rgba(8,13,26,.28)' }}>
-        <Table size="small" stickyHeader sx={{ minWidth: showActions ? 980 : 820 }}>
+      <AppDataTable minWidth={showActions ? 980 : 820}>
         <TableHead>
           <TableRow>
             <TableCell>Market</TableCell>
@@ -44,8 +52,7 @@ export function LineShoppingTable({ markets, showActions = true }: { markets: Ma
             <LineShoppingRow key={market.id} market={market} showActions={showActions} onDetails={() => setDetailsMarket(market)} />
           ))}
         </TableBody>
-      </Table>
-      </Box>
+      </AppDataTable>
       <PropDetailsModal market={detailsMarket} open={Boolean(detailsMarket)} onClose={() => setDetailsMarket(null)} />
     </>
   );
@@ -68,10 +75,6 @@ function LineShoppingRow({ market, showActions, onDetails }: { market: MarketOpp
                   <Typography variant="body2" color="text.secondary" sx={{ lineHeight: 1.35 }}>
                     {market.side} {market.propType} {market.line} - {market.event}
                   </Typography>
-                  <Stack direction="row" gap={0.6} flexWrap="wrap">
-                    <StatusPill label={market.strategyClassification} />
-                    <ProjectionModifierBadge modifier={market.projectionModifier} />
-                  </Stack>
                 </Stack>
               </TableCell>
               <TableCell sx={{ minWidth: 150 }}>
@@ -118,7 +121,7 @@ function LineShoppingActionCell({ market, onDetails }: { market: MarketOpportuni
 
   return (
     <TableCell align="center" sx={{ minWidth: 130 }}>
-      <Stack spacing={0.65} sx={{ ...stackedRowActionsSx, mx: 'auto' }}>
+      <AppRowActions sx={{ mx: 'auto' }}>
         <Button
           startIcon={selected ? <RemoveCircleOutlineRoundedIcon /> : incompatible ? <LockRoundedIcon /> : <AddCircleOutlineRoundedIcon />}
           size="small"
@@ -132,7 +135,7 @@ function LineShoppingActionCell({ market, onDetails }: { market: MarketOpportuni
         <Button startIcon={<InfoOutlinedIcon />} size="small" variant="outlined" onClick={onDetails} sx={detailsButtonSx}>
           Details
         </Button>
-      </Stack>
+      </AppRowActions>
     </TableCell>
   );
 }
@@ -196,21 +199,21 @@ export function LineShoppingCard({ market }: { market: MarketOpportunity }) {
           <DetailLine label="Reference lines" value={market.sportsbookContext ?? 'No reference line'} />
           <ProviderLineGroup title="DFS lines" lines={dfsLines} marketId={market.id} />
           <ProviderLineGroup title="Reference lines" lines={referenceLines} marketId={market.id} emptyText="No reference-line details available." />
-          <Stack direction="row" spacing={1} flexWrap="nowrap" pt={0.2}>
+          <AppMobileCardActions sx={{ pt: 0.2 }}>
             <Button
               startIcon={selected ? <RemoveCircleOutlineRoundedIcon /> : incompatible ? <LockRoundedIcon /> : <AddCircleOutlineRoundedIcon />}
               size="small"
               variant="contained"
               disabled={!selected && !canAdd}
               onClick={() => (selected || canAdd ? builder.toggleLeg(market) : undefined)}
-              sx={entryButtonSx(selected, incompatible)}
+              sx={mobileEntryButtonSxFor(selected, incompatible)}
             >
               {selected ? 'Remove' : incompatible ? 'Locked' : 'Add leg'}
             </Button>
-            <Button startIcon={<InfoOutlinedIcon />} size="small" variant="outlined" onClick={() => setDetailsOpen(true)} sx={detailsButtonSx}>
+            <Button startIcon={<InfoOutlinedIcon />} size="small" variant="outlined" onClick={() => setDetailsOpen(true)} sx={mobileDetailsButtonSx}>
               Details
             </Button>
-          </Stack>
+          </AppMobileCardActions>
         </Stack>
       </AccordionDetails>
       <PropDetailsModal market={market} open={detailsOpen} onClose={() => setDetailsOpen(false)} />
@@ -265,16 +268,7 @@ function DetailLine({ label, value, tone = 'text.primary', metric }: { label: st
   );
 }
 
-const addLegButtonSx = {
-  ...compactActionButtonSx,
-  width: 98,
-  minWidth: 98,
-  height: 32,
-  minHeight: 32,
-  px: 1,
-  fontSize: 12,
-  whiteSpace: 'nowrap'
-};
+const addLegButtonSx = desktopRowActionButtonSx;
 
 function entryButtonSx(selected: boolean, incompatible: boolean) {
   if (selected) {
@@ -294,17 +288,28 @@ function entryButtonSx(selected: boolean, incompatible: boolean) {
   return addLegButtonSx;
 }
 
-const detailsButtonSx = {
-  ...secondaryGhostButtonSx,
-  width: 98,
-  minWidth: 98,
-  height: 32,
-  minHeight: 32,
-  px: 1,
-  fontSize: 12,
-  fontWeight: 850,
-  whiteSpace: 'nowrap'
-};
+const detailsButtonSx = desktopRowDetailsButtonSx;
+
+const mobileEntryButtonSx = mobileCardActionButtonSx;
+const mobileDetailsButtonSx = mobileCardDetailsButtonSx;
+
+function mobileEntryButtonSxFor(selected: boolean, incompatible: boolean) {
+  if (selected) {
+    return {
+      ...mobileEntryButtonSx,
+      ...removeActionButtonSx
+    };
+  }
+
+  if (incompatible) {
+    return {
+      ...mobileEntryButtonSx,
+      ...lockedActionButtonSx
+    };
+  }
+
+  return mobileEntryButtonSx;
+}
 
 function cleanWarning(warning: string) {
   const replacements: Record<string, string> = {
