@@ -981,8 +981,8 @@ public static partial class TheOddsApiDebugEndpoints
             var executionBlockedReason = ResolveScheduledRefreshExecutionBlockedReason(scheduledOptions, plannerConfig);
             var willCallExternalApis = executionBlockedReason is null;
             var postRefreshReadBuffer = scheduledOptions.GetPostRefreshReadBuffer();
-            var nextRefreshDueUtc = scheduledOptions.Enabled && latestSuccessfulRefreshCompletedAtUtc.HasValue
-                ? latestSuccessfulRefreshCompletedAtUtc.Value.Add(scheduledInterval)
+            var nextRefreshDueUtc = scheduledOptions.Enabled
+                ? currentPlan.NextEligibleRefreshUtc
                 : (DateTimeOffset?)null;
             var nextDataAvailableEstimateUtc = nextRefreshDueUtc?.Add(postRefreshReadBuffer);
             var nextRunEstimateUtc = nextDataAvailableEstimateUtc;
@@ -1050,6 +1050,13 @@ public static partial class TheOddsApiDebugEndpoints
                     currentPlan.ProviderAvailable,
                     currentPlan.ProviderStatus,
                     currentPlan.ProviderRejectedKeyDetected,
+                    currentPlan.CadenceRule,
+                    currentPlan.LastSuccessfulRefreshAtUtc,
+                    currentPlan.MinutesSinceLastSuccessfulRefresh,
+                    currentPlan.LastAttemptAtUtc,
+                    currentPlan.LastFailedAttemptAtUtc,
+                    currentPlan.MinutesSinceLastAttempt,
+                    currentPlan.NextEligibleRefreshUtc,
                     budgetSummary = currentPlan.Budget,
                     recommendedAction = currentPlanRecommendedAction
                 },

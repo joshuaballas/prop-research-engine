@@ -78,7 +78,7 @@ public sealed class TheOddsRefreshPlannerService(
             .CountAsync(row => row.TheOddsRefreshRunId == providerHealthRun.Id, cancellationToken);
         var latestHadUsableMarketData = activeSnapshotCount > 0 || topPickSnapshotCount > 0;
         var providerStatus = ResolveProviderStatus(providerHealthRun, latestHadUsableMarketData, providerDiagnostics);
-        var providerAvailable = providerStatus is "Healthy" or "Degraded" &&
+        var providerAvailable = providerStatus is not "Unavailable" &&
             !providerDiagnostics.ProviderRejectedKeyDetected &&
             providerDiagnostics.RequestsRemaining is null or > 0;
 
@@ -86,10 +86,20 @@ public sealed class TheOddsRefreshPlannerService(
         var minutesUntilNextEventStart = nextEventStart == default
             ? (decimal?)null
             : Math.Round((decimal)(nextEventStart - generatedAtUtc).TotalMinutes, 2);
-        var cadence = ResolveCadence(plannerOptions, scheduledOptions, minutesUntilNextEventStart, estimateSource);
         var lastSuccessfulAt = latestSuccessfulRun?.CompletedAtUtc ?? latestSuccessfulRun?.StartedAtUtc;
-        var nextEligibleRefreshUtc = lastSuccessfulAt?.AddMinutes(cadence.RefreshEveryMinutes) ?? generatedAtUtc;
-        var cadenceAllowsRefresh = !lastSuccessfulAt.HasValue || generatedAtUtc >= nextEligibleRefreshUtc;
+        var latestAttemptAt = latestRun?.CompletedAtUtc ?? latestRun?.StartedAtUtc;
+        var latestFailedAttemptAt = IsRetryableFailedLiveAttempt(latestRun, plannerOptions.DefaultBookmakerPreset, lastSuccessfulAt)
+            ? latestAttemptAt
+            : null;
+        var cadence = ResolveCadence(
+            plannerOptions,
+            scheduledOptions,
+            minutesUntilNextEventStart,
+            estimateSource,
+            latestFailedAttemptAt);
+        var cadenceAnchorAt = latestFailedAttemptAt ?? lastSuccessfulAt;
+        var nextEligibleRefreshUtc = cadenceAnchorAt?.AddMinutes(cadence.RefreshEveryMinutes) ?? generatedAtUtc;
+        var cadenceAllowsRefresh = !cadenceAnchorAt.HasValue || generatedAtUtc >= nextEligibleRefreshUtc;
         var budget = await BuildBudgetAsync(plannerOptions, providerDiagnostics, estimatedApiCalls, generatedAtUtc, cancellationToken);
         var stopAfterStartTriggered = plannerOptions.StopAfterEventStart &&
             eventStartTimes.Length > 0 &&
@@ -120,6 +130,11 @@ public sealed class TheOddsRefreshPlannerService(
             LastSuccessfulRefreshAtUtc: lastSuccessfulAt,
             MinutesSinceLastSuccessfulRefresh: lastSuccessfulAt.HasValue
                 ? Math.Round((decimal)(generatedAtUtc - lastSuccessfulAt.Value).TotalMinutes, 2)
+                : null,
+            LastAttemptAtUtc: latestAttemptAt,
+            LastFailedAttemptAtUtc: latestFailedAttemptAt,
+            MinutesSinceLastAttempt: latestAttemptAt.HasValue
+                ? Math.Round((decimal)(generatedAtUtc - latestAttemptAt.Value).TotalMinutes, 2)
                 : null,
             NextEligibleRefreshUtc: nextEligibleRefreshUtc,
             Budget: budget,
@@ -230,6 +245,9 @@ public sealed class TheOddsRefreshPlannerService(
                 plan.EstimateSource,
                 plan.CadenceRule,
                 plan.Budget,
+                plan.LastAttemptAtUtc,
+                plan.LastFailedAttemptAtUtc,
+                plan.MinutesSinceLastAttempt,
                 plan.HasUsableMarketData,
                 plan.ShouldRefresh,
                 plan.SkipReason,
@@ -247,6 +265,7 @@ public sealed class TheOddsRefreshPlannerService(
                     plannerOptions.HardStopAtMonthlyPercent,
                     plannerOptions.ProviderRemainingHardStopCredits,
                     plannerOptions.StopAfterEventStart,
+                    plannerOptions.RetryAfterFailureMinutes,
                     scheduledOptions.AllowEventDiscoveryWhenNoPersistedEvents,
                     scheduledOptions.FallbackEstimatedApiCalls
                 }
@@ -283,7 +302,7 @@ public sealed class TheOddsRefreshPlannerService(
             return diagnostics.RequestsRemaining is <= 5 ? "Degraded" : "Healthy";
         }
 
-        return latestRun.Succeeded ? "Degraded" : "Unavailable";
+        return "Degraded";
     }
 
     private static string? BuildSkipReason(
@@ -321,12 +340,42 @@ public sealed class TheOddsRefreshPlannerService(
         };
     }
 
+    private static bool IsRetryableFailedLiveAttempt(
+        SportsBetting.Api.Models.TheOddsRefreshRun? latestRun,
+        string bookmakerPreset,
+        DateTimeOffset? lastSuccessfulAt)
+    {
+        if (latestRun is null ||
+            !latestRun.Failed ||
+            latestRun.DryRun ||
+            latestRun.Blocked ||
+            !latestRun.ForceLive ||
+            !latestRun.BookmakerPreset.Equals(bookmakerPreset, StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        var latestAttemptAt = latestRun.CompletedAtUtc ?? latestRun.StartedAtUtc;
+        return !lastSuccessfulAt.HasValue || latestAttemptAt > lastSuccessfulAt.Value;
+    }
+
     private static PlannerCadenceRule ResolveCadence(
         TheOddsRefreshPlannerOptions options,
         TheOddsScheduledRefreshOptions scheduledOptions,
         decimal? minutesUntilNextEventStart,
-        string estimateSource)
+        string estimateSource,
+        DateTimeOffset? latestFailedAttemptAt)
     {
+        if (latestFailedAttemptAt.HasValue)
+        {
+            return new PlannerCadenceRule(
+                "RetryAfterFailure",
+                null,
+                null,
+                options.GetRetryAfterFailureMinutes(),
+                "Latest live refresh attempt failed after the last success; retry on the short recovery cadence.");
+        }
+
         if (!minutesUntilNextEventStart.HasValue)
         {
             if (estimateSource == "EventDiscoveryFallback")
@@ -541,8 +590,10 @@ public sealed class TheOddsRefreshPlannerOptions
     public int NearLockRefreshMinutes { get; set; } = 5;
     public int FarOutMaxMinutes { get; set; } = 1440;
     public bool StopAfterEventStart { get; set; } = false;
+    public int RetryAfterFailureMinutes { get; set; } = 1;
 
     public TimeSpan GetPlannerInterval() => TimeSpan.FromSeconds(Math.Max(10, PlannerIntervalSeconds));
+    public int GetRetryAfterFailureMinutes() => Math.Clamp(RetryAfterFailureMinutes, 1, 15);
 }
 
 public sealed record TheOddsRefreshPlanResult(
@@ -561,6 +612,9 @@ public sealed record TheOddsRefreshPlanResult(
     decimal? MinutesUntilNextEventStart,
     DateTimeOffset? LastSuccessfulRefreshAtUtc,
     decimal? MinutesSinceLastSuccessfulRefresh,
+    DateTimeOffset? LastAttemptAtUtc,
+    DateTimeOffset? LastFailedAttemptAtUtc,
+    decimal? MinutesSinceLastAttempt,
     DateTimeOffset NextEligibleRefreshUtc,
     TheOddsRefreshBudgetSummary Budget,
     bool HasUsableMarketData,
