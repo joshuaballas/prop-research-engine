@@ -79,11 +79,13 @@ export function buildEntryReview(legs: EntryLeg[], rules: EntryRule[], amount: n
   const payout = estimatePayout(legs, amount, rules, selectedType);
   const multiplierRule = rule?.multiplierTable?.find((item) => item.entryType === selectedType && item.legCount === legCount);
   const payoutUnavailableReason =
-    legs.length && payout.multiplier === null && selectedType
-      ? 'Multiplier data is not configured for this entry type and leg count.'
-      : legs.length && payout.multiplier === null
-        ? 'Multiplier data is not configured for this provider and leg count.'
-        : undefined;
+    legs.length && payout.multiplier === null
+      ? payout.unavailableReason ?? (
+        selectedType
+          ? 'Multiplier data is not configured for this entry type and leg count.'
+          : 'Multiplier data is not configured for this provider and leg count.'
+      )
+      : undefined;
   if (legs.length && payout.multiplier === null) {
     warnings.push(payoutUnavailableReason ?? 'Estimated multiplier unavailable for this provider, entry type, and leg count.');
   }

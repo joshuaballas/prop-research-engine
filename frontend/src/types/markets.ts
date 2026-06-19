@@ -2,7 +2,19 @@ import type { SportCode } from './sports';
 
 export type ProviderCategory = 'DFS' | 'Sportsbook';
 export type StrategyClassification = 'Candidate' | 'Watchlist' | 'Research' | 'Avoid' | 'ResearchOnly';
-export type ProjectionModifier = 'Normal' | 'Demon' | 'Goblin' | 'Discount' | 'Payout Boost' | 'Bonus Lineup' | 'Unknown Promo';
+export type ProjectionModifier =
+  | 'Normal'
+  | 'Alternate'
+  | 'Demon'
+  | 'Goblin'
+  | 'Taco'
+  | 'Promo'
+  | 'Discount'
+  | 'Payout Boost'
+  | 'Bonus Lineup'
+  | 'Special'
+  | 'Unknown Promo'
+  | 'Unknown';
 
 export interface MarketOpportunity {
   id: string;
@@ -36,6 +48,11 @@ export interface MarketOpportunity {
   historicalSampleSize: number;
   freshness: 'Fresh' | 'Stale' | 'Unavailable';
   projectionModifier: ProjectionModifier;
+  projectionType?: string;
+  projectionTypeConfidence?: 'Known' | 'Inferred' | 'Unknown' | string;
+  isAlternateMarket?: boolean;
+  payoutMultiplierMayDiffer?: boolean;
+  specialProjectionWarning?: string | null;
   reasons: string[];
   warnings: string[];
   sportsbookContext?: string;

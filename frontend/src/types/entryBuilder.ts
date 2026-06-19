@@ -26,6 +26,7 @@ export interface PayoutEstimate {
   multiplier: number | null;
   estimatedPayout: number | null;
   warning?: string;
+  unavailableReason?: string;
   modifiers: ProjectionModifier[];
 }
 
@@ -33,6 +34,7 @@ export interface EntryMultiplierRule {
   entryType: string;
   legCount: number;
   multiplier: number;
+  appliesToProjectionType?: 'StandardOnly' | 'IncludesSpecial' | 'Demon' | 'Goblin' | 'Taco' | 'Mixed' | string;
   sourceConfidence: 'Known' | 'Assumed' | 'NeedsVerification';
   lastVerifiedAtUtc?: string | null;
   notes: string[];

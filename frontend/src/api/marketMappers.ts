@@ -52,10 +52,16 @@ function mapMarketGroupToOpportunity(group: MarketGroupDto, index: number, sourc
   const player = readString(group, 'player', 'Player') ?? 'Unknown player';
   const eventId = readString(group, 'eventId', 'EventId');
   const bookmakerPrices = readArray<BookmakerPriceDto>(group, 'bookmakerPrices', 'BookmakerPrices') ?? [];
+  const projectionType = readString(group, 'projectionType', 'ProjectionType');
+  const projectionTypeConfidence = readString(group, 'projectionTypeConfidence', 'ProjectionTypeConfidence');
+  const isAlternateMarket = readBoolean(group, 'isAlternateMarket', 'IsAlternateMarket') ?? false;
+  const payoutMultiplierMayDiffer = readBoolean(group, 'payoutMultiplierMayDiffer', 'PayoutMultiplierMayDiffer') ?? false;
+  const specialProjectionWarning = readString(group, 'specialProjectionWarning', 'SpecialProjectionWarning') ?? null;
   const warnings = [
     ...strategyWarnings,
     ...(sampleWarning ? [sampleWarning] : []),
-    ...(entryRuleWarning && providerCategory !== 'DFS' ? [entryRuleWarning] : [])
+    ...(entryRuleWarning && providerCategory !== 'DFS' ? [entryRuleWarning] : []),
+    ...(specialProjectionWarning ? [specialProjectionWarning] : [])
   ]
     .map(cleanWarning)
     .filter(Boolean);
@@ -91,7 +97,12 @@ function mapMarketGroupToOpportunity(group: MarketGroupDto, index: number, sourc
     marketShape: readString(group, 'marketShape', 'MarketShape') ?? readString(group, 'marketClassification', 'MarketClassification') ?? 'Market row',
     historicalSampleSize: readNumber(group, 'historicalSampleSize', 'HistoricalSampleSize') ?? 0,
     freshness: isFresh ? 'Fresh' : isStale ? 'Stale' : 'Unavailable',
-    projectionModifier: normalizeModifier(readStringArray(group, 'riskTags', 'RiskTags')),
+    projectionModifier: normalizeModifier(readStringArray(group, 'riskTags', 'RiskTags'), projectionType, isAlternateMarket),
+    projectionType,
+    projectionTypeConfidence,
+    isAlternateMarket,
+    payoutMultiplierMayDiffer,
+    specialProjectionWarning,
     reasons: (strategyReasons.length ? strategyReasons : ['Persisted market row']).map(cleanReason),
     warnings,
     sportsbookContext: formatReferenceContext(bookmakerPrices),
@@ -159,14 +170,32 @@ function normalizeStrategy(value: string | undefined, group: MarketGroupDto): St
   return strategy === 'Research' ? 'Research' : 'Research';
 }
 
-function normalizeModifier(tags?: string[]): ProjectionModifier {
+function normalizeModifier(tags?: string[], projectionType?: string, isAlternateMarket = false): ProjectionModifier {
+  const normalizedProjectionType = projectionType?.trim().toLowerCase();
+  if (normalizedProjectionType) {
+    if (normalizedProjectionType === 'standard') return 'Normal';
+    if (normalizedProjectionType === 'alternate') return 'Alternate';
+    if (normalizedProjectionType === 'demon') return 'Demon';
+    if (normalizedProjectionType === 'goblin') return 'Goblin';
+    if (normalizedProjectionType === 'taco') return 'Taco';
+    if (normalizedProjectionType === 'promo' || normalizedProjectionType === 'promotional') return 'Promo';
+    if (normalizedProjectionType === 'boost' || normalizedProjectionType === 'payout boost') return 'Payout Boost';
+    if (normalizedProjectionType === 'discount') return 'Discount';
+    if (normalizedProjectionType === 'special') return 'Special';
+    if (normalizedProjectionType === 'unknown') return 'Unknown';
+  }
+
   const normalized = (tags ?? []).join(' ').toLowerCase();
   if (normalized.includes('demon')) return 'Demon';
   if (normalized.includes('goblin')) return 'Goblin';
+  if (normalized.includes('taco')) return 'Taco';
+  if (normalized.includes('alternate')) return 'Alternate';
   if (normalized.includes('discount')) return 'Discount';
   if (normalized.includes('payout boost')) return 'Payout Boost';
   if (normalized.includes('bonus lineup')) return 'Bonus Lineup';
-  if (normalized.includes('promo')) return 'Unknown Promo';
+  if (normalized.includes('promo')) return 'Promo';
+  if (normalized.includes('special')) return 'Special';
+  if (isAlternateMarket) return 'Alternate';
   return 'Normal';
 }
 

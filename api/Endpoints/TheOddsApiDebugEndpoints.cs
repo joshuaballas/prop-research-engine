@@ -200,6 +200,7 @@ public static partial class TheOddsApiDebugEndpoints
                     actionableCandidateCount = groups.Count(group => ClassifyTheOddsLineShoppingStrategy(group).IsCandidate && group.IsActionableForUser),
                     sportsbookContextCandidateCount = groups.Count(group => ClassifyTheOddsLineShoppingStrategy(group).IsCandidate && !group.IsActionableForUser),
                     dfsCandidateCount = groups.Count(group => ClassifyTheOddsLineShoppingStrategy(group).IsCandidate && string.Equals(group.ProviderCategory, "DFS", StringComparison.OrdinalIgnoreCase)),
+                    projectionMetadataBreakdown = BuildTheOddsProjectionMetadataSummary(rows, groups),
                     providerCategoryBreakdown = groups
                         .GroupBy(group => group.ProviderCategory, StringComparer.OrdinalIgnoreCase)
                         .Select(group => new
@@ -3518,7 +3519,7 @@ public static partial class TheOddsApiDebugEndpoints
                 row.PropTypeId,
                 row.PlayerName,
                 row.PropType,
-                ExtractMarketClassification(row.Metadata),
+                BuildMarketClassification(row.Metadata),
                 ExtractProviderCategory(row.Metadata),
                 ExtractMetadataRootString(row.Metadata, "region") ?? "us",
                 ExtractMetadataRootBool(row.Metadata, "isActionableForUser") ?? false,
@@ -3528,6 +3529,16 @@ public static partial class TheOddsApiDebugEndpoints
                 ExtractEventString(row.Metadata, "homeTeam"),
                 ExtractEventString(row.Metadata, "awayTeam"),
                 ExtractMetadataString(row.Metadata, "market", "key"),
+                BuildTheOddsProjectionMetadata(
+                    ExtractMetadataString(row.Metadata, "market", "key"),
+                    ExtractMetadataString(row.Metadata, "bookmaker", "key"),
+                    ExtractAmericanPrice(row.Metadata, "higher"),
+                    ExtractAmericanPrice(row.Metadata, "lower"),
+                    ExtractMetadataRootString(row.Metadata, "projectionType"),
+                    ExtractMetadataRootString(row.Metadata, "projectionTypeConfidence"),
+                    ExtractMetadataRootBool(row.Metadata, "isAlternateMarket"),
+                    ExtractMetadataRootBool(row.Metadata, "payoutMultiplierMayDiffer"),
+                    ExtractMetadataRootString(row.Metadata, "specialProjectionWarning")),
                 ExtractAmericanPrice(row.Metadata, "higher"),
                 ExtractAmericanPrice(row.Metadata, "lower"),
                 ExtractDecimalPrice(row.Metadata, "higher"),
@@ -3563,6 +3574,12 @@ public static partial class TheOddsApiDebugEndpoints
             platformProp.PropType,
             platformProp.CurrentLine,
             platformProp.MarketClassification,
+            platformProp.MarketKey,
+            platformProp.ProjectionMetadata.ProjectionType,
+            platformProp.ProjectionMetadata.ProjectionTypeConfidence,
+            platformProp.ProjectionMetadata.IsAlternateMarket,
+            platformProp.ProjectionMetadata.PayoutMultiplierMayDiffer,
+            platformProp.ProjectionMetadata.SpecialProjectionWarning,
             platformProp.ProviderCategory,
             platformProp.Region,
             platformProp.IsActionableForUser,
@@ -3665,6 +3682,12 @@ public static partial class TheOddsApiDebugEndpoints
                 row.PropType,
                 row.Line,
                 row.MarketClassification,
+                row.MarketKey,
+                row.ProjectionType,
+                row.ProjectionTypeConfidence,
+                row.IsAlternateMarket,
+                row.PayoutMultiplierMayDiffer,
+                row.SpecialProjectionWarning,
                 row.ProviderCategory))
             .Select(group => BuildLineShoppingGroup(group.Key, group.ToList(), now, freshnessMinutes))
             .OrderByDescending(group => group.BestEstimatedEv ?? decimal.MinValue)
@@ -3729,6 +3752,12 @@ public static partial class TheOddsApiDebugEndpoints
             key.NormalizedPropType,
             key.Line,
             key.MarketClassification,
+            key.MarketKey,
+            key.ProjectionType,
+            key.ProjectionTypeConfidence,
+            key.IsAlternateMarket,
+            key.PayoutMultiplierMayDiffer,
+            key.SpecialProjectionWarning,
             key.ProviderCategory,
             rows.Any(row => row.IsActionableForUser),
             rows.Any(row => row.IsIndicativeOdds),
@@ -3757,6 +3786,12 @@ public static partial class TheOddsApiDebugEndpoints
                     row.Bookmaker,
                     row.BookmakerKey,
                     row.ProviderCategory,
+                    row.MarketKey,
+                    row.ProjectionType,
+                    row.ProjectionTypeConfidence,
+                    row.IsAlternateMarket,
+                    row.PayoutMultiplierMayDiffer,
+                    row.SpecialProjectionWarning,
                     row.PlatformPropId,
                     row.ObservedAt,
                     row.OverAvailable,
@@ -3825,7 +3860,13 @@ public static partial class TheOddsApiDebugEndpoints
             canonicalPlayerId = group.PlayerId,
             normalizedPropType = group.NormalizedPropType,
             line = group.Line,
+            group.MarketKey,
             group.MarketClassification,
+            group.ProjectionType,
+            group.ProjectionTypeConfidence,
+            group.IsAlternateMarket,
+            group.PayoutMultiplierMayDiffer,
+            group.SpecialProjectionWarning,
             group.ProviderCategory,
             group.Region,
             group.IsActionableForUser,
@@ -4015,6 +4056,17 @@ public static partial class TheOddsApiDebugEndpoints
         if (isResearchOnly)
         {
             riskTags.Add("ResearchOnlySample");
+        }
+
+        if (group.PayoutMultiplierMayDiffer)
+        {
+            riskTags.Add(group.ProjectionType);
+            if (group.IsAlternateMarket)
+            {
+                riskTags.Add("Alternate");
+            }
+
+            warnings.Add(group.SpecialProjectionWarning ?? "Special or alternate projections can change payout. Confirm final payout in the provider app.");
         }
 
         var isPlusMoneyBatterLinePointFive = isBatterProp && group.Line == 0.5m && group.BestDecimalPrice >= 2.00m;
@@ -4232,6 +4284,72 @@ public static partial class TheOddsApiDebugEndpoints
             .OrderBy(row => row.providerCategory)
             .Cast<object>()
             .ToArray();
+    }
+
+    private static object BuildTheOddsProjectionMetadataSummary(
+        IReadOnlyCollection<TheOddsLineShoppingSourceRow> rows,
+        IReadOnlyCollection<TheOddsLineShoppingGroup> groups)
+    {
+        return new
+        {
+            groupCounts = new
+            {
+                byProvider = groups
+                    .GroupBy(group => group.BestBookmaker ?? "Unknown", StringComparer.OrdinalIgnoreCase)
+                    .Select(group => new { provider = group.Key, count = group.Count() })
+                    .OrderBy(row => row.provider)
+                    .ToArray(),
+                byMarketKey = groups
+                    .GroupBy(group => group.MarketKey ?? "Unknown", StringComparer.OrdinalIgnoreCase)
+                    .Select(group => new { marketKey = group.Key, count = group.Count() })
+                    .OrderBy(row => row.marketKey)
+                    .ToArray(),
+                byAlternateMarket = groups
+                    .GroupBy(group => group.IsAlternateMarket)
+                    .Select(group => new { isAlternateMarket = group.Key, count = group.Count() })
+                    .OrderBy(row => row.isAlternateMarket)
+                    .ToArray(),
+                byProjectionType = groups
+                    .GroupBy(group => group.ProjectionType, StringComparer.OrdinalIgnoreCase)
+                    .Select(group => new { projectionType = group.Key, count = group.Count() })
+                    .OrderBy(row => row.projectionType)
+                    .ToArray(),
+                byProjectionTypeConfidence = groups
+                    .GroupBy(group => group.ProjectionTypeConfidence, StringComparer.OrdinalIgnoreCase)
+                    .Select(group => new { projectionTypeConfidence = group.Key, count = group.Count() })
+                    .OrderBy(row => row.projectionTypeConfidence)
+                    .ToArray(),
+                byPayoutMultiplierMayDiffer = groups
+                    .GroupBy(group => group.PayoutMultiplierMayDiffer)
+                    .Select(group => new { payoutMultiplierMayDiffer = group.Key, count = group.Count() })
+                    .OrderBy(row => row.payoutMultiplierMayDiffer)
+                    .ToArray()
+            },
+            providerMarketCounts = rows
+                .GroupBy(row => new
+                {
+                    row.Bookmaker,
+                    MarketKey = row.MarketKey ?? "Unknown",
+                    row.IsAlternateMarket,
+                    row.ProjectionType,
+                    row.ProjectionTypeConfidence,
+                    row.PayoutMultiplierMayDiffer
+                })
+                .Select(group => new
+                {
+                    provider = group.Key.Bookmaker,
+                    marketKey = group.Key.MarketKey,
+                    group.Key.IsAlternateMarket,
+                    group.Key.ProjectionType,
+                    group.Key.ProjectionTypeConfidence,
+                    group.Key.PayoutMultiplierMayDiffer,
+                    rowCount = group.Count()
+                })
+                .OrderBy(row => row.provider)
+                .ThenBy(row => row.marketKey)
+                .ThenBy(row => row.ProjectionType)
+                .ToArray()
+        };
     }
 
     private static object[] BuildTheOddsBestBookmakerDistribution(
@@ -4464,6 +4582,82 @@ public static partial class TheOddsApiDebugEndpoints
             && classification.ValueKind == JsonValueKind.String
             ? classification.GetString() ?? "Unknown"
             : "Unknown";
+    }
+
+    private static string BuildMarketClassification(JsonDocument? metadata)
+    {
+        var marketKey = ExtractMetadataString(metadata, "market", "key");
+        if (IsAlternateMarketKey(marketKey))
+        {
+            return "Alternate";
+        }
+
+        var classification = ExtractMarketClassification(metadata);
+        return string.Equals(classification, "Unknown", StringComparison.OrdinalIgnoreCase)
+            && !string.IsNullOrWhiteSpace(marketKey)
+            ? "Standard"
+            : classification;
+    }
+
+    private static TheOddsProjectionMetadata BuildTheOddsProjectionMetadata(
+        string? marketKey,
+        string? bookmakerKey,
+        int? overAmericanPrice,
+        int? underAmericanPrice,
+        string? storedProjectionType,
+        string? storedProjectionTypeConfidence,
+        bool? storedIsAlternateMarket,
+        bool? storedPayoutMultiplierMayDiffer,
+        string? storedSpecialProjectionWarning)
+    {
+        if (!string.IsNullOrWhiteSpace(storedProjectionType))
+        {
+            var storedType = storedProjectionType.Trim();
+            var isAlternate = storedIsAlternateMarket ?? IsAlternateMarketKey(marketKey);
+            var payoutMayDiffer = storedPayoutMultiplierMayDiffer ?? !string.Equals(storedType, "Standard", StringComparison.OrdinalIgnoreCase);
+            return new TheOddsProjectionMetadata(
+                storedType,
+                string.IsNullOrWhiteSpace(storedProjectionTypeConfidence) ? "Unknown" : storedProjectionTypeConfidence.Trim(),
+                isAlternate,
+                payoutMayDiffer,
+                storedSpecialProjectionWarning);
+        }
+
+        if (string.IsNullOrWhiteSpace(marketKey))
+        {
+            return new TheOddsProjectionMetadata(
+                "Unknown",
+                "Unknown",
+                false,
+                true,
+                "Projection type is unknown. Confirm final payout in the provider app.");
+        }
+
+        if (!IsAlternateMarketKey(marketKey))
+        {
+            return new TheOddsProjectionMetadata("Standard", "Known", false, false, null);
+        }
+
+        var normalizedBookmakerKey = NormalizeTheOddsBookmakerKey(bookmakerKey, bookmakerKey);
+        var isPrizePicks = string.Equals(normalizedBookmakerKey, "prizepicks", StringComparison.OrdinalIgnoreCase);
+        var projectionType = isPrizePicks && (overAmericanPrice == 100 || underAmericanPrice == 100)
+            ? "Demon"
+            : "Alternate";
+
+        return new TheOddsProjectionMetadata(
+            projectionType,
+            "Inferred",
+            true,
+            true,
+            isPrizePicks
+                ? "Special or alternate projections can change payout. Confirm final payout in PrizePicks."
+                : "Special or alternate projections can change payout. Confirm final payout in the provider app.");
+    }
+
+    private static bool IsAlternateMarketKey(string? marketKey)
+    {
+        return !string.IsNullOrWhiteSpace(marketKey)
+            && marketKey.Trim().EndsWith("_alternate", StringComparison.OrdinalIgnoreCase);
     }
 
     private static string ExtractProviderCategory(JsonDocument? metadata)
@@ -9642,12 +9836,20 @@ public static partial class TheOddsApiDebugEndpoints
         string? HomeTeam,
         string? AwayTeam,
         string? MarketKey,
+        TheOddsProjectionMetadata ProjectionMetadata,
         int? PriceOver,
         int? PriceUnder,
         decimal? PriceOverDecimal,
         decimal? PriceUnderDecimal,
         TheOddsMlbBacktestResultDate BacktestResultDate,
         bool HasTheOddsDataProvider);
+
+    private sealed record TheOddsProjectionMetadata(
+        string ProjectionType,
+        string ProjectionTypeConfidence,
+        bool IsAlternateMarket,
+        bool PayoutMultiplierMayDiffer,
+        string? SpecialProjectionWarning);
 
     private sealed record TheOddsMlbBacktestResultDate(
         DateTimeOffset? EventStartTimeUtc,
@@ -9990,6 +10192,12 @@ public static partial class TheOddsApiDebugEndpoints
         string PropType,
         decimal Line,
         string MarketClassification,
+        string? MarketKey,
+        string ProjectionType,
+        string ProjectionTypeConfidence,
+        bool IsAlternateMarket,
+        bool PayoutMultiplierMayDiffer,
+        string? SpecialProjectionWarning,
         string ProviderCategory,
         string Region,
         bool IsActionableForUser,
@@ -10036,12 +10244,24 @@ public static partial class TheOddsApiDebugEndpoints
         string NormalizedPropType,
         decimal Line,
         string MarketClassification,
+        string? MarketKey,
+        string ProjectionType,
+        string ProjectionTypeConfidence,
+        bool IsAlternateMarket,
+        bool PayoutMultiplierMayDiffer,
+        string? SpecialProjectionWarning,
         string ProviderCategory);
 
     private sealed record TheOddsBookmakerPriceRow(
         string Bookmaker,
         string BookmakerKey,
         string ProviderCategory,
+        string? MarketKey,
+        string ProjectionType,
+        string ProjectionTypeConfidence,
+        bool IsAlternateMarket,
+        bool PayoutMultiplierMayDiffer,
+        string? SpecialProjectionWarning,
         string PlatformPropId,
         DateTimeOffset ObservedAt,
         bool OverAvailable,
@@ -10121,6 +10341,12 @@ public static partial class TheOddsApiDebugEndpoints
         string NormalizedPropType,
         decimal Line,
         string MarketClassification,
+        string? MarketKey,
+        string ProjectionType,
+        string ProjectionTypeConfidence,
+        bool IsAlternateMarket,
+        bool PayoutMultiplierMayDiffer,
+        string? SpecialProjectionWarning,
         string ProviderCategory,
         bool IsActionableForUser,
         bool IsIndicativeOdds,

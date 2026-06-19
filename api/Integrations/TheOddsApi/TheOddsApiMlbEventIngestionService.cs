@@ -686,6 +686,7 @@ public sealed class TheOddsApiMlbEventIngestionService(
     {
         var over = group.Records.FirstOrDefault(record => record.Side == "Over");
         var under = group.Records.FirstOrDefault(record => record.Side == "Under");
+        var projection = BuildProjectionMetadata(group.Key.MarketKey, group.Key.BookmakerKey, over, under);
 
         return JsonSerializer.SerializeToDocument(new
         {
@@ -694,7 +695,12 @@ public sealed class TheOddsApiMlbEventIngestionService(
             region = string.IsNullOrWhiteSpace(request.Region) ? "us" : request.Region.Trim(),
             isActionableForUser = request.IsActionableForUser,
             isIndicativeOdds = request.IsIndicativeOdds,
-            marketClassification = "Standard",
+            marketClassification = projection.ProjectionType == "Standard" ? "Standard" : "Alternate",
+            projectionType = projection.ProjectionType,
+            projectionTypeConfidence = projection.ProjectionTypeConfidence,
+            isAlternateMarket = projection.IsAlternateMarket,
+            payoutMultiplierMayDiffer = projection.PayoutMultiplierMayDiffer,
+            specialProjectionWarning = projection.SpecialProjectionWarning,
             bookmaker = new
             {
                 key = group.Key.BookmakerKey,
@@ -732,6 +738,46 @@ public sealed class TheOddsApiMlbEventIngestionService(
             })
         }, JsonOptions);
     }
+
+    private static ProjectionMetadata BuildProjectionMetadata(
+        string? marketKey,
+        string? bookmakerKey,
+        TheOddsApiPlayerPropSpikeRecord? over,
+        TheOddsApiPlayerPropSpikeRecord? under)
+    {
+        var normalizedMarketKey = marketKey?.Trim().ToLowerInvariant() ?? string.Empty;
+        var normalizedBookmakerKey = bookmakerKey?.Trim().ToLowerInvariant() ?? string.Empty;
+        var isAlternateMarket = normalizedMarketKey.EndsWith("_alternate", StringComparison.OrdinalIgnoreCase);
+        if (!isAlternateMarket)
+        {
+            return new ProjectionMetadata("Standard", "Known", false, false, null);
+        }
+
+        var isPrizePicks = normalizedBookmakerKey is "prizepicks" or "prize_picks";
+        var hasEvenOdds = IsEvenOdds(over?.PriceAmerican) || IsEvenOdds(under?.PriceAmerican);
+        var projectionType = isPrizePicks && hasEvenOdds ? "Demon" : "Alternate";
+
+        return new ProjectionMetadata(
+            projectionType,
+            "Inferred",
+            true,
+            true,
+            isPrizePicks
+                ? "Special or alternate projections can change payout. Confirm final payout in PrizePicks."
+                : "Special or alternate projections can change payout. Confirm final payout in the provider app.");
+    }
+
+    private static bool IsEvenOdds(int? americanPrice)
+    {
+        return americanPrice == 100;
+    }
+
+    private sealed record ProjectionMetadata(
+        string ProjectionType,
+        string ProjectionTypeConfidence,
+        bool IsAlternateMarket,
+        bool PayoutMultiplierMayDiffer,
+        string? SpecialProjectionWarning);
 
     private static object? ToOptionMetadata(TheOddsApiPlayerPropSpikeRecord? record)
     {

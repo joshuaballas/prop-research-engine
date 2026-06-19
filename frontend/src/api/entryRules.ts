@@ -48,6 +48,8 @@ interface EntryMultiplierRuleDto {
   LegCount?: number;
   multiplier?: number;
   Multiplier?: number;
+  appliesToProjectionType?: string;
+  AppliesToProjectionType?: string;
   sourceConfidence?: string;
   SourceConfidence?: string;
   lastVerifiedAtUtc?: string | null;
@@ -104,6 +106,7 @@ function normalizeMultiplierRules(rules: EntryMultiplierRuleDto[]): EntryRule['m
       entryType: rule.entryType ?? rule.EntryType ?? '',
       legCount: rule.legCount ?? rule.LegCount ?? 0,
       multiplier: rule.multiplier ?? rule.Multiplier ?? 0,
+      appliesToProjectionType: rule.appliesToProjectionType ?? rule.AppliesToProjectionType ?? 'StandardOnly',
       sourceConfidence: normalizeSourceConfidence(rule.sourceConfidence ?? rule.SourceConfidence),
       lastVerifiedAtUtc: rule.lastVerifiedAtUtc ?? rule.LastVerifiedAtUtc ?? null,
       notes: rule.notes ?? rule.Notes ?? []

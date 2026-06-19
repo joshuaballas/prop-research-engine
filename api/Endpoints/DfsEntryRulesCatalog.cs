@@ -22,10 +22,11 @@ public static class DfsEntryRulesCatalog
                 notes: new[]
                 {
                     "PrizePicks entries should use PrizePicks legs only.",
-                    "Current PrizePicks rows should come through The Odds API us_dfs."
+                    "Current PrizePicks rows should come through The Odds API us_dfs.",
+                    "Standard Player Pick payout rates can vary by lineup submission, promotions, pick combinations, special projections, and other pre-established factors disclosed by PrizePicks before submission."
                 },
                 sourceConfidence: "NeedsVerification",
-                payoutMultipliers: Array.Empty<DfsEntryPayoutMultiplierRow>()),
+                payoutMultipliers: BuildPrizePicksStandardPlayerPickMultipliers()),
             BuildEntryRule(
                 "Underdog",
                 "DFS",
@@ -161,6 +162,32 @@ public static class DfsEntryRulesCatalog
             payoutMultipliers);
     }
 
+    private static IReadOnlyList<DfsEntryPayoutMultiplierRow> BuildPrizePicksStandardPlayerPickMultipliers()
+    {
+        var verifiedAtUtc = new DateTimeOffset(2026, 6, 19, 0, 0, 0, TimeSpan.Zero);
+        const string confidence = "Known";
+        var notes = new[]
+        {
+            "Standard Player Pick payout rate from PrizePicks Help Center Payouts page, last updated Apr 23, 2026.",
+            "This row represents the all-correct top payout for the selected entry type and leg count.",
+            "Actual payout can vary by lineup submission, promotions, pick combinations, special projections, ties, DNP/Reboot handling, and other factors disclosed by PrizePicks before submission.",
+            "Flex Play partial-hit payouts are not modeled in Entry Builder estimated payout."
+        };
+
+        return new[]
+        {
+            new DfsEntryPayoutMultiplierRow("Power", 2, 3m, "StandardOnly", confidence, verifiedAtUtc, notes),
+            new DfsEntryPayoutMultiplierRow("Power", 3, 6m, "StandardOnly", confidence, verifiedAtUtc, notes),
+            new DfsEntryPayoutMultiplierRow("Power", 4, 10m, "StandardOnly", confidence, verifiedAtUtc, notes),
+            new DfsEntryPayoutMultiplierRow("Power", 5, 20m, "StandardOnly", confidence, verifiedAtUtc, notes),
+            new DfsEntryPayoutMultiplierRow("Power", 6, 37.5m, "StandardOnly", confidence, verifiedAtUtc, notes),
+            new DfsEntryPayoutMultiplierRow("Flex", 3, 3m, "StandardOnly", confidence, verifiedAtUtc, notes),
+            new DfsEntryPayoutMultiplierRow("Flex", 4, 6m, "StandardOnly", confidence, verifiedAtUtc, notes),
+            new DfsEntryPayoutMultiplierRow("Flex", 5, 10m, "StandardOnly", confidence, verifiedAtUtc, notes),
+            new DfsEntryPayoutMultiplierRow("Flex", 6, 25m, "StandardOnly", confidence, verifiedAtUtc, notes)
+        };
+    }
+
     private sealed record DfsEntryRuleRow(
         string Provider,
         string ProviderCategory,
@@ -182,6 +209,7 @@ public static class DfsEntryRulesCatalog
         string EntryType,
         int LegCount,
         decimal Multiplier,
+        string AppliesToProjectionType,
         string SourceConfidence,
         DateTimeOffset? LastVerifiedAtUtc,
         IReadOnlyList<string> Notes);

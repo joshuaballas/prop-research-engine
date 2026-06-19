@@ -284,7 +284,17 @@ public sealed class RefreshSafetyTests
         Assert.DoesNotContain(rules, row => row.GetProperty("providerCategory").GetString() == "Sportsbook");
         Assert.All(rules, row => Assert.True(row.TryGetProperty("payoutMultipliers", out _)));
         var prizePicks = rules.Single(row => row.GetProperty("provider").GetString() == "PrizePicks");
-        Assert.Empty(prizePicks.GetProperty("payoutMultipliers").EnumerateArray());
+        var prizePicksMultipliers = prizePicks.GetProperty("payoutMultipliers").EnumerateArray().ToArray();
+        Assert.Equal(9, prizePicksMultipliers.Length);
+        AssertMultiplier(prizePicksMultipliers, "Power", 2, 3m);
+        AssertMultiplier(prizePicksMultipliers, "Power", 3, 6m);
+        AssertMultiplier(prizePicksMultipliers, "Power", 4, 10m);
+        AssertMultiplier(prizePicksMultipliers, "Power", 5, 20m);
+        AssertMultiplier(prizePicksMultipliers, "Power", 6, 37.5m);
+        AssertMultiplier(prizePicksMultipliers, "Flex", 3, 3m);
+        AssertMultiplier(prizePicksMultipliers, "Flex", 4, 6m);
+        AssertMultiplier(prizePicksMultipliers, "Flex", 5, 10m);
+        AssertMultiplier(prizePicksMultipliers, "Flex", 6, 25m);
     }
 
     [Fact]
@@ -414,6 +424,19 @@ public sealed class RefreshSafetyTests
             var body = await response.Content.ReadAsStringAsync();
             Assert.Fail($"Expected status code {(int)expectedStatusCode} {expectedStatusCode} but received {(int)response.StatusCode} {response.StatusCode}. Body: {body}");
         }
+    }
+
+    private static void AssertMultiplier(JsonElement[] multipliers, string entryType, int legCount, decimal expectedMultiplier)
+    {
+        var row = Assert.Single(multipliers, multiplier =>
+            multiplier.GetProperty("entryType").GetString() == entryType
+            && multiplier.GetProperty("legCount").GetInt32() == legCount);
+
+        Assert.Equal(expectedMultiplier, row.GetProperty("multiplier").GetDecimal());
+        Assert.Equal("StandardOnly", row.GetProperty("appliesToProjectionType").GetString());
+        Assert.Equal("Known", row.GetProperty("sourceConfidence").GetString());
+        Assert.Equal(JsonValueKind.String, row.GetProperty("lastVerifiedAtUtc").ValueKind);
+        Assert.NotEmpty(row.GetProperty("notes").EnumerateArray());
     }
 }
 
