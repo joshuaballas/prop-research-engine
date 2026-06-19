@@ -1,6 +1,6 @@
 import { Box, Grid, Stack, Typography } from '@mui/material';
 import { useMemo, useState } from 'react';
-import { LineShoppingCard, LineShoppingTable } from '../../components/markets/LineShoppingTable';
+import { LineShoppingCard, LineShoppingComparisonList } from '../../components/markets/LineShoppingTable';
 import { MarketFilters, type MarketFilterOption, type MarketFilterValues } from '../../components/markets/MarketFilters';
 import { PageHeader } from '../../components/ui/PageHeader';
 import { useEntryBuilder } from '../../hooks/useEntryBuilder';
@@ -45,9 +45,7 @@ export function LineShoppingPage() {
   const bestEv = visibleMarkets.length ? Math.max(...visibleMarkets.map((market) => market.estimatedEv)) : 0;
   const dfsProviderCount = new Set(visibleMarkets.map((market) => market.provider)).size;
   const activeComparisons = visibleMarkets.filter((market) => market.freshness === 'Fresh').length;
-  const referenceCoverage = visibleMarkets.filter(
-    (market) => Boolean(market.sportsbookContext) || market.providerLines?.some((line) => line.providerCategory === 'Sportsbook')
-  ).length;
+  const referenceCoverage = visibleMarkets.filter(hasLineShoppingReferenceLine).length;
   const clearFilters = () => {
     setFilters(defaultLineShoppingFilters);
     setCandidateOnly(true);
@@ -98,19 +96,19 @@ export function LineShoppingPage() {
         onClearFilters={clearFilters}
       />
       <Typography variant="body2" color="text.secondary" sx={{ mt: -1.25 }}>
-        Reference lines are sportsbook prices used for comparison. They are not added to entries.
+        Sportsbook lines are for comparison only. Provider lines are the picks you can add to an entry.
       </Typography>
       {lineShoppingQuery.loading ? (
         <ApiStateCard message="Loading latest line-shopping rows..." />
       ) : lineShoppingQuery.error ? (
         <ApiStateCard tone="error" message="Line-shopping rows could not be loaded from the market API." />
       ) : isMobile ? (
-        <Stack spacing={1.5}>
+        <Stack sx={{ gap: 1.5 }}>
           {visibleMarkets.length ? visibleMarkets.map((market) => (
             <LineShoppingCard key={market.id} market={market} />
           )) : <ApiStateCard message="No line-shopping opportunities match these filters." />}
         </Stack>
-      ) : visibleMarkets.length ? <LineShoppingTable markets={visibleMarkets} /> : <ApiStateCard message="No line-shopping opportunities match these filters." />}
+      ) : visibleMarkets.length ? <LineShoppingComparisonList markets={visibleMarkets} /> : <ApiStateCard message="No line-shopping opportunities match these filters." />}
     </Stack>
   );
 }
@@ -150,6 +148,10 @@ function lineShoppingMarketMatchesFilters(
 function isEntryCompatibleMarket(market: MarketOpportunity, builder: ReturnType<typeof useEntryBuilder>) {
   const selected = builder.isSelected(market.id);
   return selected || (market.canAddToEntry && market.estimatedEv > 0 && builder.isCompatible(market));
+}
+
+function hasLineShoppingReferenceLine(market: MarketOpportunity) {
+  return market.providerLines?.some((line) => line.providerCategory === 'Sportsbook') ?? false;
 }
 
 function ApiStateCard({ message, tone = 'default' }: { message: string; tone?: 'default' | 'error' }) {
