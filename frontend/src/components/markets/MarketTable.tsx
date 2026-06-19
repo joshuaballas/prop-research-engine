@@ -1,11 +1,11 @@
 import AddCircleOutlineRoundedIcon from '@mui/icons-material/AddCircleOutlineRounded';
 import RemoveCircleOutlineRoundedIcon from '@mui/icons-material/RemoveCircleOutlineRounded';
-import { Box, Button, Stack, TableBody, TableCell, TableHead, TableRow, Typography } from '@mui/material';
+import { Button, Stack, TableBody, TableCell, TableHead, TableRow, Typography } from '@mui/material';
 import { useState } from 'react';
 import { useEntryBuilder } from '../../hooks/useEntryBuilder';
 import type { MarketOpportunity } from '../../types/markets';
 import { formatPercent } from '../../utils/formatters';
-import { getMarketCautions, isPlayableMarket } from '../../utils/marketCautions';
+import { isPlayableMarket } from '../../utils/marketCautions';
 import { MetricLabelWithHelp } from '../metrics/MetricLabelWithHelp';
 import { TrustValue } from '../metrics/TrustValue';
 import { PropDetailsModal } from '../prop-history/PropDetailsModal';
@@ -16,41 +16,48 @@ import { removeActionButtonSx } from '../ui/buttonStyles';
 import { appTableRowSx } from '../ui/appTableStyles';
 import { AppDataTable } from '../ui/AppDataTable';
 import { AppRowActions, desktopRowActionButtonSx, desktopRowDetailsButtonSx } from '../ui/AppRowActions';
+import { AppTableEvValue, AppTableMetricValue, AppTablePrimaryText, AppTableSecondaryText } from '../ui/AppTableTypography';
+import { OpportunityPickText } from '../ui/OpportunityCard';
 import { TagsLabelWithHelp } from './TagsLabelWithHelp';
 import { marketTagLabel } from '../../utils/marketTags';
-import { CautionLabels } from './CautionLabels';
 
 export function MarketTable({ markets }: { markets: MarketOpportunity[] }) {
   const builder = useEntryBuilder();
   const [detailsMarket, setDetailsMarket] = useState<MarketOpportunity | null>(null);
+  const showSportColumn = new Set(markets.map((market) => market.sport)).size > 1;
+  const meaningfulTags = new Set(
+    markets.flatMap((market) => [
+      marketTagLabel(market.strategyClassification),
+      market.projectionModifier === 'Unknown Promo' || market.projectionModifier === 'Normal' ? null : market.projectionModifier
+    ].filter(Boolean))
+  );
+  const showTagsColumn = meaningfulTags.size > 1;
+  const minWidth = 1130 - (showSportColumn ? 0 : 64) - (showTagsColumn ? 0 : 200);
+
   return (
     <>
-      <AppDataTable minWidth={1330} sx={{ borderRadius: 3 }} tableSx={{ tableLayout: 'fixed' }}>
+      <AppDataTable minWidth={minWidth} sx={{ borderRadius: 3 }} tableSx={{ tableLayout: 'fixed' }}>
         <colgroup>
-          <col style={{ width: '25%' }} />
-          <col style={{ width: 64 }} />
+          <col style={{ width: '28%' }} />
+          {showSportColumn ? <col style={{ width: 64 }} /> : null}
           <col style={{ width: 150 }} />
-          <col style={{ width: 95 }} />
           <col style={{ width: 95 }} />
           <col style={{ width: 95 }} />
           <col style={{ width: 115 }} />
           <col style={{ width: 95 }} />
-          <col style={{ width: 200 }} />
-          <col style={{ width: 210 }} />
+          {showTagsColumn ? <col style={{ width: 200 }} /> : null}
           <col style={{ width: 130 }} />
         </colgroup>
         <TableHead>
           <TableRow>
-            <TableCell>Market</TableCell>
-            <TableCell>Sport</TableCell>
+            <TableCell>Opportunity</TableCell>
+            {showSportColumn ? <TableCell>Sport</TableCell> : null}
             <TableCell>Provider</TableCell>
-            <TableCell>Line</TableCell>
             <TableCell align="right"><MetricLabelWithHelp metric="ev" align="right" variant="table" /></TableCell>
             <TableCell align="right"><MetricLabelWithHelp metric="edge" align="right" variant="table" /></TableCell>
             <TableCell align="right"><MetricLabelWithHelp metric="hitChance" align="right" variant="table" /></TableCell>
             <TableCell><MetricLabelWithHelp metric="trust" variant="table" /></TableCell>
-            <TableCell><TagsLabelWithHelp /></TableCell>
-            <TableCell><MetricLabelWithHelp metric="caution" variant="table" /></TableCell>
+            {showTagsColumn ? <TableCell><TagsLabelWithHelp /></TableCell> : null}
             <TableCell sx={{ pl: 1.5, pr: 2 }}>Action</TableCell>
           </TableRow>
         </TableHead>
@@ -60,7 +67,6 @@ export function MarketTable({ markets }: { markets: MarketOpportunity[] }) {
             const selected = builder.isSelected(market.id);
             const incompatible = !selected && !builder.isCompatible(market);
             const canAddFromScanner = addable && !incompatible;
-            const cautions = getMarketCautions(market, { locked: incompatible && addable });
             return (
               <TableRow
                 key={market.id}
@@ -68,57 +74,59 @@ export function MarketTable({ markets }: { markets: MarketOpportunity[] }) {
                 sx={appTableRowSx}
               >
                 <TableCell sx={{ overflow: 'hidden', py: 1.05 }}>
-                  <Typography fontWeight={950} noWrap>{market.player}</Typography>
-                  <Typography color="text.secondary" fontSize={12} noWrap>
-                    {market.side} {market.propType} {market.line}
-                  </Typography>
-                  <Typography color="text.secondary" fontSize={12} noWrap>
+                  <AppTablePrimaryText>{market.player}</AppTablePrimaryText>
+                  <OpportunityPickText
+                    side={market.side}
+                    propType={market.propType}
+                    line={market.line}
+                    sx={{
+                      fontSize: 13,
+                      flexWrap: 'nowrap',
+                      overflow: 'hidden',
+                      '& .MuiTypography-root': { fontSize: 'inherit', fontWeight: 500 }
+                    }}
+                  />
+                  <AppTableSecondaryText>
                     {market.event} - {market.startTime}
-                  </Typography>
+                  </AppTableSecondaryText>
                 </TableCell>
-                <TableCell sx={{ py: 1.05 }}>
-                  <Typography fontWeight={850}>{market.sport}</Typography>
-                </TableCell>
+                {showSportColumn ? (
+                  <TableCell sx={{ py: 1.05 }}>
+                    <AppTableMetricValue>{market.sport}</AppTableMetricValue>
+                  </TableCell>
+                ) : null}
                 <TableCell sx={{ overflow: 'hidden', py: 1.05 }}>
                   {market.providerCategory === 'Sportsbook' ? (
                     <Stack spacing={0.2}>
-                      <Typography fontWeight={900} noWrap>Reference only</Typography>
-                      <Typography variant="caption" color="text.secondary">
+                      <AppTableMetricValue>Reference only</AppTableMetricValue>
+                      <AppTableSecondaryText>
                         Sportsbook line
-                      </Typography>
+                      </AppTableSecondaryText>
                     </Stack>
                   ) : (
                     <ProviderLabel provider={market.provider} category={market.providerCategory} compact />
                   )}
                 </TableCell>
-                <TableCell sx={{ py: 1.05 }}>
-                  <Typography fontWeight={900}>
-                    {market.side} {market.line}
-                  </Typography>
-                </TableCell>
                 <TableCell align="right" sx={{ py: 1.05 }}>
-                  <Typography color={market.estimatedEv > 0 ? 'success.main' : 'error.main'} fontWeight={950}>
+                  <AppTableEvValue positive={market.estimatedEv > 0}>
                     {formatPercent(market.estimatedEv, { signed: true })}
-                  </Typography>
+                  </AppTableEvValue>
                 </TableCell>
                 <TableCell align="right" sx={{ py: 1.05 }}>
-                  <Typography fontWeight={900}>{formatPercent(market.probabilityEdge, { signed: true })}</Typography>
+                  <AppTableMetricValue>{formatPercent(market.probabilityEdge, { signed: true })}</AppTableMetricValue>
                 </TableCell>
                 <TableCell align="right" sx={{ py: 1.05 }}>
-                  <Typography fontWeight={900}>{formatPercent(market.modelProbability)}</Typography>
+                  <AppTableMetricValue>{formatPercent(market.modelProbability)}</AppTableMetricValue>
                 </TableCell>
                 <TableCell sx={{ py: 1.05 }}><TrustValue level={market.trustLevel} /></TableCell>
-                <TableCell sx={{ overflow: 'hidden', py: 1.05 }}>
-                  <Stack direction="row" gap={0.6} flexWrap="wrap" useFlexGap>
-                    <StatusPill label={marketTagLabel(market.strategyClassification)} />
-                    {market.projectionModifier === 'Unknown Promo' ? null : <ProjectionModifierBadge modifier={market.projectionModifier} />}
-                  </Stack>
-                </TableCell>
-                <TableCell sx={{ py: 1.05, verticalAlign: 'middle' }}>
-                  <Box sx={{ minHeight: 64, display: 'flex', alignItems: 'center' }}>
-                    <CautionLabels cautions={cautions} />
-                  </Box>
-                </TableCell>
+                {showTagsColumn ? (
+                  <TableCell sx={{ overflow: 'hidden', py: 1.05 }}>
+                    <Stack direction="row" gap={0.6} flexWrap="wrap" useFlexGap>
+                      <StatusPill label={marketTagLabel(market.strategyClassification)} />
+                      {market.projectionModifier === 'Unknown Promo' ? null : <ProjectionModifierBadge modifier={market.projectionModifier} />}
+                    </Stack>
+                  </TableCell>
+                ) : null}
                 <TableCell sx={{ width: 130, pl: 1.5, pr: 2, py: 1.05 }}>
                   <AppRowActions>
                     {canAddFromScanner || selected ? (

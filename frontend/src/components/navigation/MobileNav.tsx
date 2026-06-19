@@ -8,7 +8,7 @@ import { useLocation, useNavigate } from 'react-router-dom';
 
 const mobileItems = [
   { label: 'Home', to: '/app/dashboard', icon: <DashboardOutlinedIcon /> },
-  { label: 'Markets', to: '/app/markets', icon: <SearchOutlinedIcon /> },
+  { label: 'Props', to: '/app/markets', icon: <SearchOutlinedIcon /> },
   { label: 'Picks', to: '/app/top-picks', icon: <AutoGraphOutlinedIcon /> },
   { label: 'Lines', to: '/app/line-shopping', icon: <StackedLineChartOutlinedIcon /> },
   { label: 'Entry', to: '/app/entry-builder', icon: <ShoppingCartOutlinedIcon /> }

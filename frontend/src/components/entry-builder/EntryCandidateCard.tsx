@@ -1,20 +1,24 @@
 import AddCircleOutlineRoundedIcon from '@mui/icons-material/AddCircleOutlineRounded';
-import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
 import LockRoundedIcon from '@mui/icons-material/LockRounded';
 import RemoveCircleOutlineRoundedIcon from '@mui/icons-material/RemoveCircleOutlineRounded';
-import { Box, Button, Stack, Typography } from '@mui/material';
+import { Button, Stack, Typography } from '@mui/material';
 import { useState } from 'react';
 import type { MarketOpportunity } from '../../types/markets';
 import { palette } from '../../theme/palette';
-import { renderWarningText } from '../../utils/warnings';
+import { renderOpportunityCautionText } from '../../utils/warnings';
 import { MetricLabelWithHelp } from '../metrics/MetricLabelWithHelp';
 import { TrustValue } from '../metrics/TrustValue';
 import { PropDetailsModal } from '../prop-history/PropDetailsModal';
-import { AppCard } from '../ui/AppCard';
 import { ProjectionModifierBadge } from '../markets/ProjectionModifierBadge';
-import { ProviderLabel } from '../providers/ProviderLabel';
 import { StatusPill } from '../ui/StatusPill';
 import { compactActionButtonSx, lockedActionButtonSx, removeActionButtonSx, secondaryGhostButtonSx } from '../ui/buttonStyles';
+import {
+  OpportunityCardLayout,
+  OpportunityMetricGrid,
+  OpportunityMetricItem,
+  OpportunityPickText,
+  OpportunityProviderRow
+} from '../ui/OpportunityCard';
 
 interface EntryCandidateCardProps {
   market: MarketOpportunity;
@@ -26,152 +30,88 @@ interface EntryCandidateCardProps {
 export function EntryCandidateCard({ market, lockedProvider, selected = false, onAdd }: EntryCandidateCardProps) {
   const [detailsOpen, setDetailsOpen] = useState(false);
   const incompatible = Boolean(lockedProvider && lockedProvider !== market.entryProvider);
-  const warning = renderWarningText(market.warnings);
+  const warning = renderOpportunityCautionText(market.warnings);
+  const actions = (
+    <>
+      <Button
+        variant="contained"
+        size="small"
+        startIcon={selected ? <RemoveCircleOutlineRoundedIcon /> : incompatible ? <LockRoundedIcon /> : <AddCircleOutlineRoundedIcon />}
+        onClick={() => onAdd(market)}
+        disabled={incompatible}
+        sx={{
+          ...compactActionButtonSx,
+          minWidth: 106,
+          ...(selected
+            ? {
+                ...removeActionButtonSx
+              }
+            : incompatible
+              ? {
+                  ...lockedActionButtonSx
+                }
+              : undefined)
+        }}
+      >
+        {selected ? 'Remove' : incompatible ? 'Locked' : 'Add leg'}
+      </Button>
+      <Button
+        variant="outlined"
+        size="small"
+        onClick={() => setDetailsOpen(true)}
+        sx={{ ...secondaryGhostButtonSx, minWidth: 106 }}
+      >
+        Details
+      </Button>
+    </>
+  );
 
   return (
-    <AppCard
-      contentSx={{
-        p: 1.75,
-        pb: '76px',
-        '&:last-child': { pb: '76px' },
-        flex: 1,
-        display: 'flex',
-        flexDirection: 'column'
-      }}
-      sx={{
-        position: 'relative',
-        width: '100%',
-        height: '100%',
-        display: 'flex',
-        flexDirection: 'column',
-        borderColor: selected ? 'rgba(34,211,238,.42)' : incompatible ? 'rgba(245,158,11,.28)' : palette.border
-      }}
-    >
-      <Stack spacing={1.35} sx={{ flex: 1, minHeight: 0 }}>
-        <Stack direction="row" justifyContent="space-between" alignItems="flex-start" gap={1.25}>
-          <Box sx={{ minWidth: 0 }}>
-            <Stack direction="row" gap={0.65} rowGap={0.55} alignItems="center" flexWrap="wrap" sx={{ mb: 0.45 }}>
-              <Typography variant="caption" color="primary.main" fontWeight={900}>
-                {market.sport}
-              </Typography>
-              {market.strategyClassification === 'Candidate' ? <StatusPill label="Top Pick" sx={{ height: 22 }} /> : <StatusPill label={market.strategyClassification} sx={{ height: 22 }} />}
-              <ProjectionModifierBadge modifier={market.projectionModifier} sx={{ height: 22 }} />
-            </Stack>
-            <Typography variant="h6" fontWeight={950} sx={{ lineHeight: 1.08 }}>
-              {market.player}
+    <>
+      <OpportunityCardLayout
+        context={
+          <>
+            <Typography variant="caption" color="primary.main" fontWeight={900}>
+              {market.sport}
             </Typography>
-            <Typography variant="body2" color="text.secondary" sx={{ mt: 0.35 }}>
-              {market.event} - {market.startTime}
-            </Typography>
-          </Box>
+            <StatusPill label={market.strategyClassification} sx={{ height: 22 }} />
+            <ProjectionModifierBadge modifier={market.projectionModifier} sx={{ height: 22 }} />
+          </>
+        }
+        title={market.player}
+        value={
           <Stack alignItems="flex-end" spacing={0.25} sx={{ flexShrink: 0 }}>
             <MetricLabelWithHelp metric="ev" align="right" />
             <Typography color={market.estimatedEv > 0 ? 'success.main' : 'error.main'} fontWeight={950}>
               {formatSignedPercent(market.estimatedEv)}
             </Typography>
           </Stack>
-        </Stack>
-
-        <Typography fontWeight={950}>
-          {market.side} {market.propType} {market.line}
-        </Typography>
-
-        <Stack direction="row" alignItems="center" justifyContent="space-between" gap={1} flexWrap="wrap">
-          <ProviderLabel provider={market.entryProvider} category={market.providerCategory} compact />
-          <TrustValue level={market.trustLevel} showSuffix size="small" />
-        </Stack>
-
-        <Box
-          sx={{
-            display: 'grid',
-            gridTemplateColumns: { xs: 'repeat(2, minmax(0, 1fr))', sm: 'repeat(4, minmax(0, 1fr))' },
-            gap: 1,
-            borderTop: `1px solid ${palette.border}`,
-            pt: 1.15
-          }}
-        >
-          <Metric label="Edge" value={formatSignedPercent(market.probabilityEdge)} metric="edge" />
-          <Metric label="Hit chance" value={formatPercent(market.modelProbability)} metric="hitChance" />
-          <Metric label="Sample" value={String(market.historicalSampleSize)} />
-          <Metric label="Line" value={String(market.line)} />
-        </Box>
-
-        <Stack spacing={0.5} sx={{ minHeight: 42 }}>
-          <Typography variant="body2" color="text.secondary">
-            {normalizeReason(market.reasons[0])}
-          </Typography>
-          {warning ? (
-            <Typography variant="body2" color="warning.main" fontWeight={800}>
-              {warning}
-            </Typography>
-          ) : null}
-          {incompatible ? (
-            <Typography variant="body2" color="warning.main" fontWeight={800}>
-              Locked to {lockedProvider}
-            </Typography>
-          ) : null}
-        </Stack>
-
-        <Stack
-          direction="row"
-          spacing={1}
-          sx={{
-            position: 'absolute',
-            left: 14,
-            right: 14,
-            bottom: 14
-          }}
-        >
-          <Button
-            variant="contained"
-            size="small"
-            startIcon={selected ? <RemoveCircleOutlineRoundedIcon /> : incompatible ? <LockRoundedIcon /> : <AddCircleOutlineRoundedIcon />}
-            onClick={() => onAdd(market)}
-            disabled={incompatible}
-            sx={{
-              ...compactActionButtonSx,
-              minWidth: 106,
-              ...(selected
-                ? {
-                    ...removeActionButtonSx
-                  }
-                : incompatible
-                  ? {
-                      ...lockedActionButtonSx
-                    }
-                  : undefined)
-            }}
-          >
-            {selected ? 'Remove' : incompatible ? 'Locked' : 'Add leg'}
-          </Button>
-          <Button
-            variant="outlined"
-            size="small"
-            startIcon={<InfoOutlinedIcon />}
-            onClick={() => setDetailsOpen(true)}
-            sx={{ ...secondaryGhostButtonSx, minWidth: 106 }}
-          >
-            Details
-          </Button>
-        </Stack>
-      </Stack>
+        }
+        event={`${market.event} - ${market.startTime}`}
+        market={<OpportunityPickText side={market.side} propType={market.propType} line={market.line} />}
+        provider={
+          <OpportunityProviderRow provider={market.entryProvider} category={market.providerCategory} />
+        }
+        metrics={
+          <OpportunityMetricGrid columns={{ xs: 2, sm: 4 }} sx={{ borderTop: 0, pt: 0 }}>
+            <OpportunityMetricItem label="Edge" value={formatSignedPercent(market.probabilityEdge)} metric="edge" />
+            <OpportunityMetricItem label="Hit chance" value={formatPercent(market.modelProbability)} metric="hitChance" />
+            <OpportunityMetricItem label="Trust" value={<TrustValue level={market.trustLevel} sx={{ fontSize: 14, fontWeight: 950, lineHeight: 1.5 }} />} metric="trust" />
+            <OpportunityMetricItem label="Sample" value={String(market.historicalSampleSize)} />
+          </OpportunityMetricGrid>
+        }
+        caution={warning || (incompatible ? `Locked to ${lockedProvider}` : undefined)}
+        actions={actions}
+        shellSx={{
+          position: 'relative',
+          width: '100%',
+          height: '100%',
+          borderColor: selected ? 'rgba(34,211,238,.42)' : incompatible ? 'rgba(245,158,11,.28)' : palette.border
+        }}
+        contentSx={{ p: 1.75 }}
+      />
       <PropDetailsModal market={market} open={detailsOpen} onClose={() => setDetailsOpen(false)} />
-    </AppCard>
-  );
-}
-
-function Metric({ label, value, metric }: { label: string; value: string; metric?: 'ev' | 'edge' | 'hitChance' | 'trust' | 'warning' }) {
-  return (
-    <Box sx={{ minWidth: 0 }}>
-      {metric ? <MetricLabelWithHelp metric={metric} /> : (
-        <Typography variant="caption" color="text.secondary" fontWeight={900}>
-          {label}
-        </Typography>
-      )}
-      <Typography variant="body2" fontWeight={950} noWrap>
-        {value}
-      </Typography>
-    </Box>
+    </>
   );
 }
 
@@ -182,9 +122,4 @@ function formatPercent(value: number) {
 function formatSignedPercent(value: number) {
   const formatted = `${Math.abs(value * 100).toFixed(2)}%`;
   return value >= 0 ? `+${formatted}` : `-${formatted}`;
-}
-
-function normalizeReason(value?: string) {
-  if (!value) return 'Positive model edge';
-  return value.replace('Line 1.5 profile', 'Line shape matches strategy').replace('Discount projection', 'Discounted line context');
 }

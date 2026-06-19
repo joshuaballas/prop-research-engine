@@ -1,56 +1,52 @@
 import DeleteOutlineRoundedIcon from '@mui/icons-material/DeleteOutlineRounded';
-import { Box, IconButton, Stack, Typography } from '@mui/material';
+import { Button, Typography } from '@mui/material';
 import type { EntryLeg } from '../../types/entryBuilder';
-import { palette } from '../../theme/palette';
-import { renderWarningText } from '../../utils/warnings';
+import { formatPercent } from '../../utils/formatters';
+import { renderOpportunityCautionText } from '../../utils/warnings';
 import { ProjectionModifierBadge } from '../markets/ProjectionModifierBadge';
-import { ProviderLabel } from '../providers/ProviderLabel';
+import { TrustValue } from '../metrics/TrustValue';
+import { mobileCardActionButtonSx } from '../ui/AppRowActions';
+import { removeActionButtonSx } from '../ui/buttonStyles';
+import { OpportunityCardLayout, OpportunityMetricGrid, OpportunityMetricItem, OpportunityPickText, OpportunityProviderRow } from '../ui/OpportunityCard';
 
 export function EntryLegCard({ leg, onRemove }: { leg: EntryLeg; onRemove?: (id: string) => void }) {
-  const warning = renderWarningText(leg.warnings);
+  const warning = renderOpportunityCautionText(leg.warnings);
 
   return (
-    <Box
-      sx={{
-        border: `1px solid ${palette.border}`,
-        borderRadius: 3,
-        p: 1.35,
-        background: palette.cardSurface
-      }}
-    >
-      <Stack direction="row" justifyContent="space-between" gap={1.25} alignItems="flex-start">
-        <Stack spacing={0.75} sx={{ minWidth: 0, flex: 1 }}>
-          <Stack direction="row" justifyContent="space-between" gap={1} alignItems="flex-start">
-            <Box sx={{ minWidth: 0 }}>
-              <Typography fontWeight={950}>{leg.player}</Typography>
-              <Typography variant="body2" color="text.secondary">
-                {leg.side} {leg.propType} {leg.line} - {leg.sport}
-              </Typography>
-            </Box>
-            <Typography color={leg.estimatedEv > 0 ? 'success.main' : 'error.main'} fontWeight={950} sx={{ flexShrink: 0 }}>
-              {formatSignedPercent(leg.estimatedEv)}
-            </Typography>
-          </Stack>
-
-          <Stack direction="row" gap={0.8} flexWrap="wrap" alignItems="center">
-            <ProviderLabel provider={leg.entryProvider} category={leg.providerCategory} compact />
-            <ProjectionModifierBadge modifier={leg.projectionModifier} />
-          </Stack>
-
-          {warning ? (
-            <Typography variant="body2" color="warning.main" fontWeight={800}>
-              {warning}
-            </Typography>
-          ) : null}
-        </Stack>
-
-        {onRemove ? (
-          <IconButton onClick={() => onRemove(leg.id)} size="small" sx={{ flexShrink: 0 }}>
-            <DeleteOutlineRoundedIcon />
-          </IconButton>
-        ) : null}
-      </Stack>
-    </Box>
+    <OpportunityCardLayout
+      compact
+      shellSx={{ borderRadius: 3 }}
+      contentSx={{ p: 1.35, '&:last-child': { pb: 1.35 } }}
+      title={leg.player}
+      value={
+        <Typography color={leg.estimatedEv > 0 ? 'success.main' : 'error.main'} fontWeight={950} sx={{ flexShrink: 0 }}>
+          {formatSignedPercent(leg.estimatedEv)}
+        </Typography>
+      }
+      event={leg.sport}
+      market={<OpportunityPickText side={leg.side} propType={leg.propType} line={leg.line} />}
+      provider={
+        <OpportunityProviderRow provider={leg.entryProvider} category={leg.providerCategory} sx={{ justifyContent: 'flex-start', gap: 0.8 }}>
+          <ProjectionModifierBadge modifier={leg.projectionModifier} />
+        </OpportunityProviderRow>
+      }
+      metrics={
+        <OpportunityMetricGrid columns={{ xs: 2, sm: 4 }} sx={{ borderTop: 0, pt: 0 }}>
+          <OpportunityMetricItem label="Edge" value={formatSignedPercent(leg.probabilityEdge)} metric="edge" />
+          <OpportunityMetricItem label="Hit chance" value={formatPercent(leg.modelProbability)} metric="hitChance" />
+          <OpportunityMetricItem label="Trust" value={<TrustValue level={leg.trustLevel} sx={{ fontSize: 14, fontWeight: 950, lineHeight: 1.5 }} />} metric="trust" />
+          <OpportunityMetricItem label="Sample" value={String(leg.historicalSampleSize)} />
+        </OpportunityMetricGrid>
+      }
+      caution={warning}
+      actions={
+        onRemove ? (
+          <Button startIcon={<DeleteOutlineRoundedIcon />} onClick={() => onRemove(leg.id)} size="small" variant="contained" sx={{ ...mobileCardActionButtonSx, ...removeActionButtonSx }}>
+            Remove
+          </Button>
+        ) : null
+      }
+    />
   );
 }
 

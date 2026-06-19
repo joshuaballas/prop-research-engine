@@ -80,6 +80,19 @@ export function getMarketCautions(market: MarketOpportunity, options: { locked?:
     }));
 }
 
+export function getOperationalMarketCautions(market: MarketOpportunity, options: { locked?: boolean } = {}) {
+  const operationalKeys = new Set<CautionKey>([
+    'No longer available',
+    'Expired',
+    'Started',
+    'Locked',
+    'Provider issue',
+    'Stale'
+  ]);
+
+  return getMarketCautions(market, options).filter((caution) => operationalKeys.has(caution.key));
+}
+
 function cautionKeyFromText(value: string | null | undefined): CautionKey | null {
   const text = String(value ?? '').trim();
   if (!text || ['none', 'null', 'undefined'].includes(text.toLowerCase())) return null;

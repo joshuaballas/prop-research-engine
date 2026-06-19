@@ -24,8 +24,10 @@ interface MarketFiltersProps {
   classificationLabel?: string;
   candidateOnly?: boolean;
   dfsActionableOnly?: boolean;
+  dfsActionableLabel?: string;
   onCandidateOnlyChange?: (value: boolean) => void;
   onDfsActionableOnlyChange?: (value: boolean) => void;
+  showClassificationFilter?: boolean;
   scannerFields?: boolean;
   compactMobile?: boolean;
   values?: MarketFilterValues;
@@ -46,8 +48,10 @@ export function MarketFilters({
   classificationLabel = 'Strategy',
   candidateOnly,
   dfsActionableOnly,
+  dfsActionableLabel = 'DFS actionable',
   onCandidateOnlyChange,
   onDfsActionableOnlyChange,
+  showClassificationFilter = true,
   scannerFields = false,
   compactMobile = false,
   values,
@@ -125,19 +129,21 @@ export function MarketFilters({
           ))}
         </TextField>
       ) : null}
-      <TextField
-        label={classificationLabel}
-        size="small"
-        select
-        {...fieldProps('trust')}
-        sx={{ minWidth: { xs: '100%', md: 126 }, width: { md: 126 } }}
-      >
-        {(trustOptions ?? (classificationLabel === 'Trust' ? ['All', 'Strong', 'Medium', 'Weak'] : ['All', 'Candidate', 'Watchlist', 'Research', 'Avoid']).map((item) => ({ label: item, value: item }))).map((item) => (
-          <MenuItem key={item.value} value={item.value}>
-            {item.label}
-          </MenuItem>
-        ))}
-      </TextField>
+      {showClassificationFilter ? (
+        <TextField
+          label={classificationLabel}
+          size="small"
+          select
+          {...fieldProps('trust')}
+          sx={{ minWidth: { xs: '100%', md: 126 }, width: { md: 126 } }}
+        >
+          {(trustOptions ?? (classificationLabel === 'Trust' ? ['All', 'Strong', 'Medium', 'Weak'] : ['All', 'Candidate', 'Watchlist', 'Research', 'Avoid']).map((item) => ({ label: item, value: item }))).map((item) => (
+            <MenuItem key={item.value} value={item.value}>
+              {item.label}
+            </MenuItem>
+          ))}
+        </TextField>
+      ) : null}
       {scannerFields ? (
         <>
           {(opportunityOptions?.length ?? 0) > 1 || !controlled ? (
@@ -175,6 +181,13 @@ export function MarketFilters({
 
   const toggleControls = controlled ? (
     <Stack direction="row" spacing={0.75} useFlexGap alignItems="center" sx={{ flex: '0 0 auto', flexWrap: 'wrap', userSelect: 'none' }}>
+      {candidateOnly !== undefined && onCandidateOnlyChange ? (
+        <FilterToggleButton
+          label="Candidate only"
+          active={candidateOnly}
+          onToggle={() => onCandidateOnlyChange(!candidateOnly)}
+        />
+      ) : null}
       {showCanAddOnly ? (
         <FilterToggleButton
           label={canAddOnlyLabel}
@@ -192,6 +205,7 @@ export function MarketFilters({
     <FilterToggleGroup
       candidateOnly={candidateOnly}
       dfsActionableOnly={dfsActionableOnly}
+      dfsActionableLabel={dfsActionableLabel}
       onCandidateOnlyChange={onCandidateOnlyChange}
       onDfsActionableOnlyChange={onDfsActionableOnlyChange}
     />
@@ -308,11 +322,13 @@ function FilterToggleButton({ label, active, onToggle }: { label: string; active
 function FilterToggleGroup({
   candidateOnly,
   dfsActionableOnly,
+  dfsActionableLabel,
   onCandidateOnlyChange,
   onDfsActionableOnlyChange
 }: {
   candidateOnly?: boolean;
   dfsActionableOnly?: boolean;
+  dfsActionableLabel?: string;
   onCandidateOnlyChange?: (value: boolean) => void;
   onDfsActionableOnlyChange?: (value: boolean) => void;
 }) {
@@ -331,7 +347,7 @@ function FilterToggleGroup({
       }
     },
     {
-      label: 'DFS actionable',
+      label: dfsActionableLabel ?? 'DFS actionable',
       active: activeDfsActionableOnly,
       onToggle: () => {
         const nextValue = !activeDfsActionableOnly;

@@ -91,7 +91,7 @@ export function MarketsPage() {
 
   return (
     <Stack spacing={3} sx={{ px: { xs: 0.75, sm: 0 } }}>
-      <PageHeader title="Markets" description="Browse current provider lines with hit chance, edge, trust, and entry status." />
+      <PageHeader title="Prop Scanner" description="Browse current provider props with hit chance, edge, trust, and entry status." />
 
       {isMobile ? (
         <MobileSummaryStrip
@@ -103,13 +103,13 @@ export function MarketsPage() {
       ) : (
         <Grid container spacing={1.5}>
           <Grid size={{ xs: 12, sm: 6, lg: 3 }}>
-            <SummaryMetric label="Active lines" value={String(filteredMarkets.length)} helper="Lines matching filters" />
+            <SummaryMetric label="Active props" value={String(filteredMarkets.length)} helper="Props matching filters" />
           </Grid>
           <Grid size={{ xs: 12, sm: 6, lg: 3 }}>
             <SummaryMetric label="Providers" value={String(dfsProviderCount)} helper="Entry-supported platforms" />
           </Grid>
           <Grid size={{ xs: 12, sm: 6, lg: 3 }}>
-            <SummaryMetric label="Best EV" value={formatPercent(bestEv, { signed: true })} helper="Highest-EV line" tone="success" />
+            <SummaryMetric label="Best EV" value={formatPercent(bestEv, { signed: true })} helper="Highest-EV prop" tone="success" />
           </Grid>
           <Grid size={{ xs: 12, sm: 6, lg: 3 }}>
             <SummaryMetric label="Low-sample lines" value={String(lowSampleRows)} helper="Use extra caution" tone="warning" />
@@ -133,24 +133,24 @@ export function MarketsPage() {
         onClearFilters={() => setFilters(defaultFilters)}
       />
 
-      <SectionHeader title="Line scanner" description="Review available lines, open Details for player history, and add eligible picks to an entry." />
+      <SectionHeader title="Available props" description="Review available props, open Details for player history, and add eligible picks to an entry." />
       {marketsQuery.loading ? (
-        <ApiStateCard message="Loading market scanner rows..." />
+        <ApiStateCard message="Loading prop scanner rows..." />
       ) : marketsQuery.error ? (
-        <ApiStateCard tone="error" message="Market scanner rows could not be loaded from the market API." />
+        <ApiStateCard tone="error" message="Prop scanner rows could not be loaded from the market API." />
       ) : isMobile ? (
         sortedMarkets.length ? (
           <>
             <Grid container spacing={2}>{visibleMarkets.map((market) => <Grid key={market.id} size={12}><MarketCard market={market} /></Grid>)}</Grid>
-            <AppTablePagination count={sortedMarkets.length} page={page} pageSize={pageSize} itemLabel="markets" onChange={setPage} />
+            <AppTablePagination count={sortedMarkets.length} page={page} pageSize={pageSize} itemLabel="props" onChange={setPage} />
           </>
-        ) : <ApiStateCard message="No markets match these filters." />
+        ) : <ApiStateCard message="No props match these filters." />
       ) : sortedMarkets.length ? (
         <>
           <MarketTable markets={visibleMarkets} />
-          <AppTablePagination count={sortedMarkets.length} page={page} pageSize={pageSize} itemLabel="markets" onChange={setPage} />
+          <AppTablePagination count={sortedMarkets.length} page={page} pageSize={pageSize} itemLabel="props" onChange={setPage} />
         </>
-      ) : <ApiStateCard message="No markets match these filters." />}
+      ) : <ApiStateCard message="No props match these filters." />}
     </Stack>
   );
 }
@@ -278,7 +278,7 @@ function MobileSummaryStrip({
   lowSampleRows: number;
 }) {
   const items = [
-    { value: String(marketCount), label: 'Markets' },
+    { value: String(marketCount), label: 'Props' },
     { value: String(dfsProviderCount), label: 'DFS providers' },
     { value: formatPercent(bestEv, { signed: true }), label: 'Best EV', tone: 'success' },
     { value: String(lowSampleRows), label: 'Low sample', tone: 'warning' }

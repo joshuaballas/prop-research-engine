@@ -33,6 +33,15 @@ export function renderWarningText(input: WarningInput, emptyValue = '') {
   return warnings.length ? warnings.join(', ') : emptyValue;
 }
 
+export function normalizeOpportunityCautions(input: WarningInput) {
+  return normalizeWarnings(input).filter(isOperationalOpportunityWarning);
+}
+
+export function renderOpportunityCautionText(input: WarningInput, emptyValue = '') {
+  const warnings = normalizeOpportunityCautions(input);
+  return warnings.length ? warnings.join(', ') : emptyValue;
+}
+
 export function formatWarningLabel(value: string | null | undefined) {
   const trimmed = String(value ?? '').trim();
   if (emptyWarningValues.has(trimmed.toLowerCase())) return null;
@@ -47,4 +56,40 @@ function humanizeWarning(value: string) {
     .replace(/\s+/g, ' ')
     .trim()
     .replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+function isOperationalOpportunityWarning(value: string) {
+  const normalized = value.toLowerCase();
+
+  if (
+    normalized.includes('low sample') ||
+    normalized.includes('limited history') ||
+    normalized.includes('sample is thin') ||
+    normalized.includes('insufficient historical sample') ||
+    normalized.includes('model caution') ||
+    normalized.includes('research only') ||
+    normalized.includes('research row') ||
+    normalized.includes('non-positive ev') ||
+    normalized.includes('non positive ev') ||
+    normalized.includes('low trust') ||
+    normalized.includes('low confidence') ||
+    normalized.includes('underperformed') ||
+    normalized.includes('backtest')
+  ) {
+    return false;
+  }
+
+  return (
+    normalized.includes('stale') ||
+    normalized.includes('locked') ||
+    normalized.includes('expired') ||
+    normalized.includes('started') ||
+    normalized.includes('no longer available') ||
+    normalized.includes('provider unavailable') ||
+    normalized.includes('provider issue') ||
+    normalized.includes('provider pulled') ||
+    normalized.includes('pulled') ||
+    normalized.includes('unavailable') ||
+    normalized.includes('slate locked')
+  );
 }

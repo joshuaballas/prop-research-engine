@@ -18,6 +18,13 @@ import { AppCard } from '../../components/ui/AppCard';
 import { DataStateBanner } from '../../components/ui/DataStateBanner';
 import { MetadataText } from '../../components/ui/MetadataText';
 import { MetricCard } from '../../components/ui/MetricCard';
+import {
+  OpportunityCardLayout,
+  OpportunityMetricGrid,
+  OpportunityMetricItem,
+  OpportunityPickText,
+  OpportunityProviderRow
+} from '../../components/ui/OpportunityCard';
 import { PageHeader } from '../../components/ui/PageHeader';
 import { SectionHeader } from '../../components/ui/SectionHeader';
 import { StatusPill } from '../../components/ui/StatusPill';
@@ -30,7 +37,7 @@ import type { MarketOpportunity } from '../../types/markets';
 import type { SportCode } from '../../types/sports';
 import { formatPercent } from '../../utils/formatters';
 import { buildAvailableSportOptions, getAvailableSportCodes } from '../../utils/sportOptions';
-import { hasRenderableWarning, renderWarningText } from '../../utils/warnings';
+import { hasRenderableWarning, renderOpportunityCautionText, renderWarningText } from '../../utils/warnings';
 
 export function DashboardPage() {
   const sports = useSelectedSports();
@@ -223,86 +230,59 @@ export function DashboardPage() {
 
 function DashboardOpportunityCard({ market, builder }: { market: MarketOpportunity; builder: ReturnType<typeof useEntryBuilder> }) {
   const [detailsOpen, setDetailsOpen] = useState(false);
-  const warning = renderWarningText(market.warnings);
+  const warning = renderOpportunityCautionText(market.warnings);
   const selected = builder.isSelected(market.id);
   const incompatible = !selected && !builder.isCompatible(market);
   const canAdd = market.canAddToEntry && market.estimatedEv > 0 && !incompatible;
+  const actions = (
+    <>
+      <Button
+        size="small"
+        variant="contained"
+        startIcon={selected ? <RemoveCircleOutlineRoundedIcon /> : incompatible ? <LockRoundedIcon /> : <AddCircleOutlineRoundedIcon />}
+        disabled={!selected && !canAdd}
+        onClick={() => (selected || canAdd ? builder.toggleLeg(market) : undefined)}
+        sx={entryButtonSx(selected, incompatible)}
+      >
+        {selected ? 'Remove' : incompatible ? 'Locked' : 'Add leg'}
+      </Button>
+      <Button size="small" variant="outlined" onClick={() => setDetailsOpen(true)} sx={compareButtonSx}>
+        Details
+      </Button>
+    </>
+  );
 
   return (
-    <AppCard
-      sx={{ height: '100%', display: 'flex', flexDirection: 'column' }}
-      contentSx={{ flex: 1, display: 'grid', gridTemplateRows: '1fr auto', rowGap: 1.35 }}
-    >
-      <Box>
-        <Stack spacing={1.35}>
-          <Stack direction="row" justifyContent="space-between" gap={1.5} alignItems="flex-start">
-            <Box minWidth={0}>
-              <Typography fontWeight={950} noWrap>
-                {market.player}
-              </Typography>
-              <Typography variant="body2" color="text.secondary">
-                {market.side} {market.propType} {market.line}
-              </Typography>
-            </Box>
-            <EvValue value={market.estimatedEv} />
-          </Stack>
-
-          <ProviderLabel provider={market.provider} category={market.providerCategory} compact />
-
-          <Stack direction="row" gap={0.75} flexWrap="wrap">
-            <StatusPill label={market.strategyClassification} />
-            <ProjectionModifierBadge modifier={market.projectionModifier} />
-          </Stack>
-
-          <Divider />
-
-          <Grid container spacing={1.2}>
-            <Grid size={{ xs: 4 }}>
-              <CompactMetric label="Edge" value={formatPercent(market.probabilityEdge, { signed: true })} metric="edge" />
-            </Grid>
-            <Grid size={{ xs: 4 }}>
-              <CompactMetric label="Hit chance" value={formatPercent(market.modelProbability)} metric="hitChance" />
-            </Grid>
-            <Grid size={{ xs: 4 }}>
-              <CompactMetric label="Trust" value={market.trustLevel} metric="trust" />
-            </Grid>
-          </Grid>
-
-          {warning ? (
-            <Typography variant="body2" color="warning.main">
-              {warning}
-            </Typography>
-          ) : getDashboardReason(market) ? (
-            <Typography variant="body2" color="text.secondary">
-              {getDashboardReason(market)}
-            </Typography>
-          ) : null}
-
-          {market.historicalSampleSize > 0 ? (
-            <Typography variant="caption" color="text.secondary">
-              Based on {market.historicalSampleSize} results
-            </Typography>
-          ) : null}
-        </Stack>
-      </Box>
-
-      <Stack direction="row" spacing={1}>
-        <Button
-          size="small"
-          variant="contained"
-          startIcon={selected ? <RemoveCircleOutlineRoundedIcon /> : incompatible ? <LockRoundedIcon /> : <AddCircleOutlineRoundedIcon />}
-          disabled={!selected && !canAdd}
-          onClick={() => (selected || canAdd ? builder.toggleLeg(market) : undefined)}
-          sx={entryButtonSx(selected, incompatible)}
-        >
-          {selected ? 'Remove' : incompatible ? 'Locked' : 'Add leg'}
-        </Button>
-        <Button size="small" variant="outlined" onClick={() => setDetailsOpen(true)} sx={compareButtonSx}>
-          Details
-        </Button>
-      </Stack>
+    <>
+      <OpportunityCardLayout
+        title={market.player}
+        value={<EvValue value={market.estimatedEv} />}
+        market={<OpportunityPickText side={market.side} propType={market.propType} line={market.line} />}
+        provider={
+          <OpportunityProviderRow provider={market.provider} category={market.providerCategory}>
+            <Stack direction="row" gap={0.75} flexWrap="wrap" justifyContent="flex-end">
+              <StatusPill label={market.strategyClassification} />
+              <ProjectionModifierBadge modifier={market.projectionModifier} />
+            </Stack>
+          </OpportunityProviderRow>
+        }
+        metrics={
+          <OpportunityMetricGrid columns={{ xs: 2, sm: 3 }} sx={{ borderTop: 0, pt: 0 }}>
+            <OpportunityMetricItem label="Edge" value={formatPercent(market.probabilityEdge, { signed: true })} metric="edge" />
+            <OpportunityMetricItem label="Hit chance" value={formatPercent(market.modelProbability)} metric="hitChance" />
+            <OpportunityMetricItem
+              label="Trust"
+              value={<TrustValue level={market.trustLevel} sx={{ fontSize: '0.875rem', fontWeight: 900, lineHeight: 1.43 }} />}
+              metric="trust"
+            />
+            <OpportunityMetricItem label="Sample" value={String(market.historicalSampleSize)} />
+          </OpportunityMetricGrid>
+        }
+        caution={warning}
+        actions={actions}
+      />
       <PropDetailsModal market={market} open={detailsOpen} onClose={() => setDetailsOpen(false)} />
-    </AppCard>
+    </>
   );
 }
 
@@ -340,25 +320,17 @@ function LineShoppingPreview({ markets }: { markets: MarketOpportunity[] }) {
 }
 
 function LineShoppingPreviewCard({ market, showReference }: { market: MarketOpportunity; showReference: boolean }) {
-  const warning = renderWarningText(market.warnings);
+  const warning = renderOpportunityCautionText(market.warnings);
 
   return (
-    <AppCard sx={{ background: palette.cardSurface }} contentSx={{ p: 1.7, '&:last-child': { pb: 1.7 } }}>
-      <Stack spacing={0.85}>
-        <Stack direction="row" justifyContent="space-between" alignItems="flex-start" gap={2}>
-          <Box minWidth={0}>
-            <Typography fontWeight={900} noWrap>
-              {market.player}
-            </Typography>
-            <Typography variant="caption" color="text.secondary">
-              {market.side} {market.propType} {market.line}
-            </Typography>
-          </Box>
-          <EvValue value={market.estimatedEv} />
-        </Stack>
-
-        <Stack direction={{ xs: 'column', sm: 'row' }} spacing={{ xs: 0.8, sm: 1.4 }} alignItems={{ sm: 'center' }} flexWrap="wrap" useFlexGap>
-          <ProviderLabel provider={market.provider} category={market.providerCategory} compact />
+    <OpportunityCardLayout
+      compact
+      contentSx={{ p: 1.7, '&:last-child': { pb: 1.7 } }}
+      title={market.player}
+      value={<EvValue value={market.estimatedEv} />}
+      market={<OpportunityPickText side={market.side} propType={market.propType} line={market.line} />}
+      provider={
+        <OpportunityProviderRow provider={market.provider} category={market.providerCategory} sx={{ justifyContent: 'flex-start', columnGap: 1.4, rowGap: 0.8 }}>
           <Typography variant="body2" color="text.secondary">
             Best DFS line
           </Typography>
@@ -367,15 +339,10 @@ function LineShoppingPreviewCard({ market, showReference }: { market: MarketOppo
               Reference: <Box component="span" sx={{ color: 'text.primary', fontWeight: 850 }}>{market.sportsbookContext}</Box>
             </Typography>
           ) : null}
-        </Stack>
-
-        {warning ? (
-          <Typography variant="body2" color="warning.main">
-            {warning}
-          </Typography>
-        ) : null}
-      </Stack>
-    </AppCard>
+        </OpportunityProviderRow>
+      }
+      caution={warning}
+    />
   );
 }
 
@@ -452,9 +419,17 @@ function EntryBuilderPreview({ provider, legs, sports }: { provider: string; leg
               <Stack direction="row" justifyContent="space-between" gap={1}>
                 <Box minWidth={0}>
                   <Typography fontWeight={900} noWrap>{leg.player}</Typography>
-                  <Typography variant="caption" color="text.secondary">
-                    {leg.side} {leg.propType} {leg.line}
-                  </Typography>
+                  <OpportunityPickText
+                    side={leg.side}
+                    propType={leg.propType}
+                    line={leg.line}
+                    sx={{
+                      fontSize: 12,
+                      flexWrap: 'nowrap',
+                      overflow: 'hidden',
+                      '& .MuiTypography-root': { fontSize: 'inherit' }
+                    }}
+                  />
                 </Box>
                 <Typography color={leg.estimatedEv > 0 ? 'success.main' : 'error.main'} fontWeight={950}>
                   {formatPercent(leg.estimatedEv, { signed: true })}
@@ -472,34 +447,6 @@ function EntryBuilderPreview({ provider, legs, sports }: { provider: string; leg
       </Stack>
     </AppCard>
   );
-}
-
-function CompactMetric({ label, value, metric }: { label: string; value: string; metric?: 'ev' | 'edge' | 'hitChance' | 'trust' | 'warning' }) {
-  return (
-    <Stack spacing={0.2} minWidth={0}>
-      <Typography variant="caption" color="text.secondary" fontWeight={800}>
-        {label}
-      </Typography>
-      {metric === 'trust' ? (
-        <TrustValue
-          level={value}
-          sx={{
-            fontSize: '0.875rem',
-            fontWeight: 900,
-            lineHeight: 1.43
-          }}
-        />
-      ) : (
-        <Typography variant="body2" fontWeight={900} noWrap>
-          {value}
-        </Typography>
-      )}
-    </Stack>
-  );
-}
-
-function getDashboardReason(market: MarketOpportunity) {
-  return market.reasons.find((reason) => !/matches\s+conservative\s+candidate\s+strategy/i.test(reason));
 }
 
 function MiniMetric({ label, value, tone = 'default' }: { label: string; value: string; tone?: 'default' | 'warning' }) {

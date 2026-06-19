@@ -13,7 +13,7 @@ import { palette } from '../../theme/palette';
 
 const navItems = [
   { label: 'Dashboard', to: '/app/dashboard', icon: <DashboardOutlinedIcon /> },
-  { label: 'Markets', to: '/app/markets', icon: <SearchOutlinedIcon /> },
+  { label: 'Prop Scanner', to: '/app/markets', icon: <SearchOutlinedIcon /> },
   { label: 'Top Picks', to: '/app/top-picks', icon: <AutoGraphOutlinedIcon /> },
   { label: 'Line Shopping', to: '/app/line-shopping', icon: <StackedLineChartOutlinedIcon /> },
   { label: 'Player Research', to: '/app/player-research', icon: <PersonSearchOutlinedIcon /> },

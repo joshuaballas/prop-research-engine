@@ -1,21 +1,24 @@
 import AddCircleOutlineRoundedIcon from '@mui/icons-material/AddCircleOutlineRounded';
 import RemoveCircleOutlineRoundedIcon from '@mui/icons-material/RemoveCircleOutlineRounded';
-import { Box, Button, Grid, Stack, Typography } from '@mui/material';
-import type { ReactNode } from 'react';
+import { Box, Button, Stack, Typography } from '@mui/material';
 import { useState } from 'react';
 import { useEntryBuilder } from '../../hooks/useEntryBuilder';
 import type { MarketOpportunity } from '../../types/markets';
 import { formatPercent } from '../../utils/formatters';
-import { getMarketCautions, isPlayableMarket } from '../../utils/marketCautions';
-import { MetricLabelWithHelp } from '../metrics/MetricLabelWithHelp';
+import { getOperationalMarketCautions, isPlayableMarket } from '../../utils/marketCautions';
 import { TrustValue } from '../metrics/TrustValue';
 import { PropDetailsModal } from '../prop-history/PropDetailsModal';
-import { ProviderLabel } from '../providers/ProviderLabel';
-import { AppCard } from '../ui/AppCard';
 import { StatusPill } from '../ui/StatusPill';
 import { ProjectionModifierBadge } from './ProjectionModifierBadge';
 import { removeActionButtonSx } from '../ui/buttonStyles';
-import { AppMobileCardActions, mobileCardActionButtonSx, mobileCardDetailsButtonSx } from '../ui/AppRowActions';
+import { mobileCardActionButtonSx, mobileCardDetailsButtonSx } from '../ui/AppRowActions';
+import {
+  OpportunityCardLayout,
+  OpportunityMetricGrid,
+  OpportunityMetricItem,
+  OpportunityPickText,
+  OpportunityProviderRow
+} from '../ui/OpportunityCard';
 import { marketTagLabel } from '../../utils/marketTags';
 import { CautionLabels } from './CautionLabels';
 
@@ -26,18 +29,35 @@ export function MarketCard({ market }: { market: MarketOpportunity }) {
   const selected = builder.isSelected(market.id);
   const incompatible = !selected && !builder.isCompatible(market);
   const canAddFromScanner = addable && !incompatible;
-  const cautions = getMarketCautions(market, { locked: incompatible && addable });
+  const cautions = getOperationalMarketCautions(market, { locked: incompatible && addable });
+  const actions = (
+    <>
+      {canAddFromScanner || selected ? (
+        <Button
+          size="small"
+          variant="contained"
+          startIcon={selected ? <RemoveCircleOutlineRoundedIcon /> : <AddCircleOutlineRoundedIcon />}
+          onClick={() => builder.toggleLeg(market)}
+          sx={entryButtonSx(selected)}
+        >
+          {selected ? 'Remove' : 'Add leg'}
+        </Button>
+      ) : null}
+      <Button size="small" variant="outlined" onClick={() => setDetailsOpen(true)} sx={secondaryActionButtonSx}>
+        Details
+      </Button>
+    </>
+  );
+
   return (
-    <AppCard sx={{ minHeight: 292, display: 'flex' }} contentSx={{ p: 1.75, flex: 1, display: 'flex' }}>
-      <Stack spacing={1.2} sx={{ flex: 1, minHeight: 0 }}>
-        <Stack direction="row" justifyContent="space-between" alignItems="flex-start" gap={1}>
-          <Stack spacing={0.2} minWidth={0}>
-            <Typography fontWeight={950} noWrap>{market.player}</Typography>
-            <Typography color="text.secondary" variant="body2" sx={{ lineHeight: 1.35 }}>
-              {market.side} {market.propType} {market.line}
-            </Typography>
-          </Stack>
-          <Stack spacing={0.1} alignItems="flex-end" flexShrink={0}>
+    <>
+      <OpportunityCardLayout
+        compact
+        actionMode="stacked"
+        shellSx={{ minHeight: 292 }}
+        title={market.player}
+        value={
+          <Stack spacing={0.1} alignItems="flex-end">
             <Typography variant="caption" color="text.secondary" fontWeight={850} lineHeight={1}>
               EV
             </Typography>
@@ -45,88 +65,64 @@ export function MarketCard({ market }: { market: MarketOpportunity }) {
               {formatPercent(market.estimatedEv, { signed: true })}
             </Typography>
           </Stack>
-        </Stack>
-
-        <Typography
-          color="text.secondary"
-          variant="body2"
-          title={`${market.sport} - ${market.event} - ${market.startTime}`}
-          sx={{
-            lineHeight: 1.35,
-            minHeight: 38,
-            display: '-webkit-box',
-            WebkitLineClamp: 2,
-            WebkitBoxOrient: 'vertical',
-            overflow: 'hidden'
-          }}
-        >
-          {market.sport} - {market.event} - {market.startTime}
-        </Typography>
-
-        <Stack direction="row" justifyContent="space-between" alignItems="center" gap={1} flexWrap="wrap" useFlexGap sx={{ minHeight: 28 }}>
-          {market.providerCategory === 'Sportsbook' ? (
-            <Stack spacing={0}>
-              <Typography fontWeight={900}>Reference only</Typography>
-              <Typography variant="caption" color="text.secondary">
-                Sportsbook line
-              </Typography>
+        }
+        event={
+          <Box
+            component="span"
+            title={`${market.sport} - ${market.event} - ${market.startTime}`}
+            sx={{
+              minHeight: 38,
+              display: '-webkit-box',
+              WebkitLineClamp: 2,
+              WebkitBoxOrient: 'vertical',
+              overflow: 'hidden'
+            }}
+          >
+            {market.sport} - {market.event} - {market.startTime}
+          </Box>
+        }
+        market={<OpportunityPickText side={market.side} propType={market.propType} line={market.line} />}
+        provider={
+          market.providerCategory === 'Sportsbook' ? (
+            <Stack direction="row" justifyContent="space-between" alignItems="center" gap={1} flexWrap="wrap" useFlexGap sx={{ minHeight: 28 }}>
+              <Stack spacing={0}>
+                <Typography fontWeight={900}>Reference only</Typography>
+                <Typography variant="caption" color="text.secondary">
+                  Sportsbook line
+                </Typography>
+              </Stack>
+              <StatusRow market={market} />
             </Stack>
           ) : (
-            <ProviderLabel provider={market.provider} category={market.providerCategory} compact />
-          )}
-          <Stack direction="row" gap={0.6} flexWrap="wrap" useFlexGap justifyContent="flex-end">
-            <StatusPill label={marketTagLabel(market.strategyClassification)} />
-            {market.projectionModifier === 'Unknown Promo' ? null : <ProjectionModifierBadge modifier={market.projectionModifier} />}
-          </Stack>
-        </Stack>
-
-        <Box sx={{ borderTop: '1px solid rgba(148,163,184,.14)', pt: 1 }}>
-          <Grid container spacing={1}>
-            <Grid size={3}>
-              <Metric label="Edge" value={formatPercent(market.probabilityEdge, { signed: true })} metric="edge" />
-            </Grid>
-            <Grid size={3}>
-              <Metric label="Hit chance" value={formatPercent(market.modelProbability)} metric="hitChance" />
-            </Grid>
-            <Grid size={3}>
-              <Metric label="Trust" value={<TrustValue level={market.trustLevel} sx={{ fontSize: 14, fontWeight: 950, lineHeight: 1.5 }} />} metric="trust" />
-            </Grid>
-            <Grid size={3}>
-              <Metric label="Line" value={String(market.line)} />
-            </Grid>
-          </Grid>
-          {market.historicalSampleSize > 0 ? (
-            <Typography variant="caption" color="text.secondary" fontWeight={750} sx={{ display: 'block', mt: 0.75 }}>
-              Based on {market.historicalSampleSize} results
-            </Typography>
-          ) : null}
-        </Box>
-
-        {cautions.length ? (
-          <Box sx={{ display: 'flex', alignItems: 'center' }}>
-            <CautionLabels cautions={cautions} />
+            <OpportunityProviderRow provider={market.provider} category={market.providerCategory} sx={{ minHeight: 28 }}>
+              <StatusRow market={market} />
+            </OpportunityProviderRow>
+          )
+        }
+        metrics={
+          <Box>
+            <OpportunityMetricGrid columns={{ xs: 2, sm: 4 }} sx={{ borderTop: 0, pt: 0 }}>
+              <OpportunityMetricItem label="Edge" value={formatPercent(market.probabilityEdge, { signed: true })} metric="edge" />
+              <OpportunityMetricItem label="Hit chance" value={formatPercent(market.modelProbability)} metric="hitChance" />
+              <OpportunityMetricItem label="Trust" value={<TrustValue level={market.trustLevel} sx={{ fontSize: 14, fontWeight: 950, lineHeight: 1.5 }} />} metric="trust" />
+              <OpportunityMetricItem label="Sample" value={String(market.historicalSampleSize)} />
+            </OpportunityMetricGrid>
           </Box>
-        ) : null}
-
-        <AppMobileCardActions>
-          {canAddFromScanner || selected ? (
-            <Button
-              size="small"
-              variant="contained"
-              startIcon={selected ? <RemoveCircleOutlineRoundedIcon /> : <AddCircleOutlineRoundedIcon />}
-              onClick={() => builder.toggleLeg(market)}
-              sx={entryButtonSx(selected)}
-            >
-              {selected ? 'Remove' : 'Add leg'}
-            </Button>
-          ) : null}
-          <Button size="small" variant="outlined" onClick={() => setDetailsOpen(true)} sx={secondaryActionButtonSx}>
-            Details
-          </Button>
-        </AppMobileCardActions>
-      </Stack>
+        }
+        caution={cautions.length ? <CautionLabels cautions={cautions} /> : null}
+        actions={actions}
+      />
       <PropDetailsModal market={market} open={detailsOpen} onClose={() => setDetailsOpen(false)} />
-    </AppCard>
+    </>
+  );
+}
+
+function StatusRow({ market }: { market: MarketOpportunity }) {
+  return (
+    <Stack direction="row" gap={0.6} flexWrap="wrap" useFlexGap justifyContent="flex-end">
+      <StatusPill label={marketTagLabel(market.strategyClassification)} />
+      {market.projectionModifier === 'Unknown Promo' ? null : <ProjectionModifierBadge modifier={market.projectionModifier} />}
+    </Stack>
   );
 }
 
@@ -142,17 +138,4 @@ function entryButtonSx(selected: boolean) {
   }
 
   return baseActionButtonSx;
-}
-
-function Metric({ label, value, metric }: { label: string; value: ReactNode; metric?: 'ev' | 'edge' | 'hitChance' | 'trust' | 'warning' }) {
-  return (
-    <Stack spacing={0.2} minWidth={0}>
-      {metric ? <MetricLabelWithHelp metric={metric} /> : (
-        <Typography variant="caption" color="text.secondary" fontWeight={850} sx={{ lineHeight: 1.1, whiteSpace: 'nowrap' }}>
-          {label}
-        </Typography>
-      )}
-      {typeof value === 'string' ? <Typography fontWeight={950} sx={{ lineHeight: 1.45 }}>{value}</Typography> : value}
-    </Stack>
-  );
 }

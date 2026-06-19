@@ -1,21 +1,19 @@
 import AddCircleOutlineRoundedIcon from '@mui/icons-material/AddCircleOutlineRounded';
-import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
 import LockRoundedIcon from '@mui/icons-material/LockRounded';
 import RemoveCircleOutlineRoundedIcon from '@mui/icons-material/RemoveCircleOutlineRounded';
-import { Box, Button, Divider, Stack, Typography } from '@mui/material';
+import { Button, Stack, Typography } from '@mui/material';
 import { useState } from 'react';
-import { formatAmericanOdds, formatDecimal, formatPercent, formatRiskToWin } from '../../utils/formatters';
+import { formatAmericanOdds, formatDecimal, formatPercent } from '../../utils/formatters';
 import type { MarketOpportunity } from '../../types/markets';
 import { MetricLabelWithHelp } from '../metrics/MetricLabelWithHelp';
 import { TrustValue } from '../metrics/TrustValue';
 import { PropDetailsModal } from '../prop-history/PropDetailsModal';
-import { AppCard } from '../ui/AppCard';
 import { StatusPill } from '../ui/StatusPill';
 import { ProjectionModifierBadge } from './ProjectionModifierBadge';
-import { ProviderLabel } from '../providers/ProviderLabel';
 import { compactActionButtonSx, lockedActionButtonSx, removeActionButtonSx, secondaryGhostButtonSx } from '../ui/buttonStyles';
-import { AppMobileCardActions, mobileCardActionButtonSx, mobileCardDetailsButtonSx } from '../ui/AppRowActions';
-import { hasRenderableWarning, renderWarningText } from '../../utils/warnings';
+import { mobileCardActionButtonSx, mobileCardDetailsButtonSx } from '../ui/AppRowActions';
+import { OpportunityCardLayout, OpportunityMetricGrid, OpportunityMetricItem, OpportunityPickText, OpportunityProviderRow } from '../ui/OpportunityCard';
+import { hasRenderableWarning, renderOpportunityCautionText, renderWarningText } from '../../utils/warnings';
 
 interface TopPickCardProps {
   market: MarketOpportunity;
@@ -28,255 +26,191 @@ interface TopPickCardProps {
 
 export function TopPickCard({ market, onAdd, hideActions = false, variant = 'default', selected = false, incompatible = false }: TopPickCardProps) {
   const [detailsOpen, setDetailsOpen] = useState(false);
-  const warningText = renderWarningText(market.warnings);
+  const warningText = renderOpportunityCautionText(market.warnings);
   const confidence = resolveConfidence(market);
-
-  if (variant === 'featured') {
-    return (
-      <AppCard
-        sx={{ height: '100%', display: 'flex', flexDirection: 'column' }}
-        contentSx={{ flex: 1, display: 'grid', gridTemplateRows: '1fr auto', rowGap: 1.25 }}
-      >
-        <Box>
-          <Stack spacing={1.55}>
-            <Stack direction="row" justifyContent="space-between" gap={1.2}>
-              <Stack spacing={0.35} minWidth={0}>
-                <Typography variant="caption" color="primary.main" fontWeight={950}>
-                  #{market.rank ?? '-'} {market.sport}
-                </Typography>
-                <Typography variant="h5" lineHeight={1.08}>
-                  {market.player}
-                </Typography>
-                <Typography variant="body2" color="text.secondary" sx={{ lineHeight: 1.35 }}>
-                  {market.event} - {market.startTime}
-                </Typography>
-              </Stack>
-              <Stack direction="row" spacing={0.6} alignItems="flex-start" flexWrap="wrap" justifyContent="flex-end" maxWidth="48%">
-                <StatusPill label="Top Pick" />
-                <ProjectionModifierBadge modifier={market.projectionModifier} />
-              </Stack>
-            </Stack>
-
-            <Typography fontWeight={950} sx={{ fontSize: 17, lineHeight: 1.25 }}>
-              {market.side} {market.propType} {market.line}
-            </Typography>
-
-            <Stack direction="row" justifyContent="space-between" alignItems="center" gap={1.2} flexWrap="wrap">
-              <ProviderLabel provider={market.provider} category={market.providerCategory} compact />
-              <Stack direction="row" spacing={0.7} alignItems="center">
-                <MetricLabelWithHelp metric="trust" />
-                <TrustValue level={confidence} variant="badge" size="small" />
-              </Stack>
-            </Stack>
-
-            <Divider />
-
-            <Stack direction="row" flexWrap="wrap" gap={1.75} rowGap={1.25}>
-              <Metric label="Odds" value={`${formatAmericanOdds(market.bestAmericanPrice)} / ${formatDecimal(market.bestDecimalPrice)}`} />
-              <Metric label="Risk" value={formatRiskToWin(market.bestAmericanPrice)} />
-              <Metric label="Hit chance" value={formatPercent(market.modelProbability)} metric="hitChance" />
-              <Metric label="Break-even" value={formatPercent(market.impliedProbability)} />
-              <Metric label="Edge" value={formatPercent(market.probabilityEdge, { signed: true })} metric="edge" />
-              <Metric label="EV" value={formatPercent(market.estimatedEv, { signed: true })} metric="ev" />
-              <Metric label="Sample" value={`${market.historicalSampleSize}`} />
-            </Stack>
-
-            <Stack spacing={0.65}>
-              {cleanReasons(market.reasons).length ? (
-                <Typography variant="body2" color="text.secondary" sx={{ lineHeight: 1.45 }}>
-                  {cleanReasons(market.reasons).slice(0, 2).join(' - ')}
-                </Typography>
-              ) : null}
-              {warningText ? (
-                <Typography variant="body2" color="warning.main" sx={{ lineHeight: 1.45 }}>
-                  {warningText}
-                </Typography>
-              ) : null}
-            </Stack>
-          </Stack>
-
-        </Box>
-
-        {hideActions ? null : (
-          <Stack direction="row" spacing={1} alignSelf="end">
-            <Button
-              startIcon={selected ? <RemoveCircleOutlineRoundedIcon /> : incompatible ? <LockRoundedIcon /> : <AddCircleOutlineRoundedIcon />}
-              variant="contained"
-              disabled={!market.canAddToEntry || incompatible}
-              onClick={() => onAdd?.(market)}
-              sx={entryButtonSx(selected, incompatible)}
-            >
-              {selected ? 'Remove' : incompatible ? 'Locked' : 'Add leg'}
-            </Button>
-            <Button startIcon={<InfoOutlinedIcon />} variant="outlined" onClick={() => setDetailsOpen(true)} sx={compareButtonSx}>
-              Details
-            </Button>
-          </Stack>
-        )}
-        <PropDetailsModal market={market} open={detailsOpen} onClose={() => setDetailsOpen(false)} />
-      </AppCard>
-    );
-  }
-
-  if (variant === 'compact') {
-    return (
-      <AppCard sx={{ height: '100%' }} contentSx={{ p: 1.45, '&:last-child': { pb: 1.45 } }}>
-        <Stack spacing={1.05}>
-          <Stack direction="row" justifyContent="space-between" alignItems="flex-start" gap={1}>
-            <Stack spacing={0.35} minWidth={0}>
-              <Stack direction="row" spacing={0.65} alignItems="center" flexWrap="wrap">
-                <Typography variant="caption" color="primary.main" fontWeight={950}>
-                  #{market.rank ?? '-'} {market.sport}
-                </Typography>
-                <StatusPill label={market.strategyClassification} />
-                <ProjectionModifierBadge modifier={market.projectionModifier} />
-              </Stack>
-              <Typography variant="subtitle1" lineHeight={1.1} noWrap>
-                {market.player}
-              </Typography>
-              <Typography variant="body2" color="text.secondary" sx={{ lineHeight: 1.3 }}>
-                {market.side} {market.propType} {market.line}
-              </Typography>
-            </Stack>
-            <Stack alignItems="flex-end" spacing={0.1} flexShrink={0}>
-              <Typography color={market.estimatedEv > 0 ? 'success.main' : 'error.main'} fontWeight={950}>
-                {formatPercent(market.estimatedEv, { signed: true })}
-              </Typography>
-              <MetricLabelWithHelp metric="ev" align="right" />
-            </Stack>
-          </Stack>
-
-          <Stack direction="row" justifyContent="space-between" alignItems="center" gap={1} flexWrap="wrap">
-            <ProviderLabel provider={market.provider} category={market.providerCategory} compact />
-            <TrustValue level={confidence} showSuffix size="small" />
-          </Stack>
-
-          <Divider />
-
-          <Stack direction="row" flexWrap="wrap" gap={1.4} rowGap={0.75}>
-            <Metric label="Edge" value={formatPercent(market.probabilityEdge, { signed: true })} compact metric="edge" />
-            <Metric label="Hit chance" value={formatPercent(market.modelProbability)} compact metric="hitChance" />
-            <Metric label="Sample" value={`${market.historicalSampleSize}`} compact />
-          </Stack>
-
-          {warningText ? (
-            <Typography variant="body2" color="warning.main" sx={{ lineHeight: 1.45 }}>
-              {warningText}
-            </Typography>
-          ) : null}
-
-          {hideActions ? null : (
-            <AppMobileCardActions>
-              <Button
-                startIcon={selected ? <RemoveCircleOutlineRoundedIcon /> : incompatible ? <LockRoundedIcon /> : <AddCircleOutlineRoundedIcon />}
-                variant="contained"
-                disabled={!market.canAddToEntry || incompatible}
-                onClick={() => onAdd?.(market)}
-                sx={mobileEntryButtonSx(selected, incompatible)}
-              >
-                {selected ? 'Remove' : incompatible ? 'Locked' : 'Add leg'}
-              </Button>
-              <Button startIcon={<InfoOutlinedIcon />} variant="outlined" onClick={() => setDetailsOpen(true)} sx={mobileCardDetailsButtonSx}>
-                Details
-              </Button>
-            </AppMobileCardActions>
-          )}
-          <PropDetailsModal market={market} open={detailsOpen} onClose={() => setDetailsOpen(false)} />
-        </Stack>
-      </AppCard>
-    );
-  }
+  const compact = variant === 'compact';
+  const featured = variant === 'featured';
+  const actions = hideActions ? undefined : (
+    compact ? (
+      <TopPickMobileActions market={market} selected={selected} incompatible={incompatible} onAdd={onAdd} onDetails={() => setDetailsOpen(true)} />
+    ) : (
+      <TopPickActions market={market} selected={selected} incompatible={incompatible} onAdd={onAdd} onDetails={() => setDetailsOpen(true)} />
+    )
+  );
 
   return (
-    <AppCard sx={{ height: '100%' }}>
-      <Stack spacing={1.5}>
-        <Stack direction="row" justifyContent="space-between" gap={1}>
-          <Stack spacing={0.2}>
-            <Typography variant="caption" color="primary" fontWeight={950}>
-              #{market.rank ?? '-'} {market.sport}
-            </Typography>
-            <Typography variant="h6" lineHeight={1.1}>
-              {market.player}
-            </Typography>
-            <Typography variant="body2" color="text.secondary">
-              {market.event} - {market.startTime}
-            </Typography>
-          </Stack>
-          <Stack direction="row" spacing={0.6} alignItems="flex-start" flexWrap="wrap" justifyContent="flex-end">
-            <StatusPill label={market.side} />
-            <StatusPill label={market.strategyClassification} />
-            <ProjectionModifierBadge modifier={market.projectionModifier} />
-          </Stack>
-        </Stack>
-
-        <Typography fontWeight={950}>
-          {market.side} {market.propType} {market.line}
-        </Typography>
-
-        <Stack direction="row" flexWrap="wrap" gap={1}>
-          <StatusPill label={market.providerCategory} />
-          <ProviderLabel provider={market.provider} category={market.providerCategory} compact />
-          <TrustValue level={market.trustLevel} variant="badge" size="small" />
-          <StatusPill label={market.marketShape} />
-        </Stack>
-
-        <Divider />
-
-        <Stack direction="row" flexWrap="wrap" gap={2}>
-          <Metric label="Odds" value={`${formatAmericanOdds(market.bestAmericanPrice)} / ${formatDecimal(market.bestDecimalPrice)}`} />
-          <Metric label="Risk" value={formatRiskToWin(market.bestAmericanPrice)} />
-          <Metric label="Hit chance" value={formatPercent(market.modelProbability)} metric="hitChance" />
-          <Metric label="Break-even" value={formatPercent(market.impliedProbability)} />
-          <Metric label="Edge" value={formatPercent(market.probabilityEdge, { signed: true })} metric="edge" />
-          <Metric label="EV" value={formatPercent(market.estimatedEv, { signed: true })} metric="ev" />
-          <Metric label="Sample" value={`${market.historicalSampleSize}`} />
-        </Stack>
-
-        <Typography variant="body2" color="text.secondary">
-          {market.reasons.join(' - ')}
-        </Typography>
-        {warningText ? (
-          <Typography variant="body2" color="warning.main">
-            {warningText}
-          </Typography>
-        ) : null}
-
-        {hideActions ? null : (
-          <Stack direction="row" spacing={1}>
-            <Button
-              startIcon={selected ? <RemoveCircleOutlineRoundedIcon /> : incompatible ? <LockRoundedIcon /> : <AddCircleOutlineRoundedIcon />}
-              variant="contained"
-              disabled={!market.canAddToEntry || incompatible}
-              onClick={() => onAdd?.(market)}
-              sx={entryButtonSx(selected, incompatible)}
-            >
-              {selected ? 'Remove' : incompatible ? 'Locked' : 'Add leg'}
-            </Button>
-            <Button startIcon={<InfoOutlinedIcon />} variant="outlined" onClick={() => setDetailsOpen(true)} sx={compareButtonSx}>
-              Details
-            </Button>
-          </Stack>
-        )}
-        <PropDetailsModal market={market} open={detailsOpen} onClose={() => setDetailsOpen(false)} />
-      </Stack>
-    </AppCard>
+    <>
+      <OpportunityCardLayout
+        compact={compact}
+        actionMode={compact ? 'stacked' : 'inline'}
+        shellSx={{ height: '100%' }}
+        context={<TopPickStatus market={market} includeRank={!compact} label={featured || compact ? 'Top Pick' : market.strategyClassification} />}
+        title={featured ? <Typography variant="h5" lineHeight={1.08}>{market.player}</Typography> : market.player}
+        value={<TopPickEv market={market} compact={compact} />}
+        event={`${market.event} - ${market.startTime}`}
+        market={<OpportunityPickText side={market.side} propType={market.propType} line={market.line} />}
+        provider={<TopPickProviderRow market={market} confidence={confidence} showTrust={!compact} />}
+        metrics={<TopPickMetrics market={market} detailed={!compact} confidence={confidence} />}
+        caution={warningText}
+        actions={actions}
+      />
+      <PropDetailsModal market={market} open={detailsOpen} onClose={() => setDetailsOpen(false)} />
+    </>
   );
 }
 
-function Metric({ label, value, compact = false, metric }: { label: string; value: string; compact?: boolean; metric?: 'ev' | 'edge' | 'hitChance' | 'trust' | 'warning' }) {
+function TopPickStatus({
+  market,
+  includeRank,
+  label
+}: {
+  market: MarketOpportunity;
+  includeRank?: boolean;
+  label?: string;
+}) {
   return (
-    <Stack minWidth={compact ? 68 : 92} spacing={0.2}>
-      {metric ? (
-        <MetricLabelWithHelp metric={metric} />
-      ) : (
-        <Typography variant="caption" color="text.secondary" fontWeight={800}>
-          {label}
+    <>
+      {includeRank ? (
+        <Typography variant="caption" color="primary.main" fontWeight={950}>
+          #{market.rank ?? '-'} {market.sport}
         </Typography>
-      )}
-      <Typography variant="body2" fontWeight={900}>
-        {value}
+      ) : null}
+      {label ? <StatusPill label={label} /> : null}
+      <ProjectionModifierBadge modifier={market.projectionModifier} />
+    </>
+  );
+}
+
+function TopPickEv({ market, compact = false }: { market: MarketOpportunity; compact?: boolean }) {
+  return (
+    <Stack spacing={0.1} alignItems="flex-end">
+      <MetricLabelWithHelp metric="ev" align="right" />
+      <Typography
+        color={market.estimatedEv >= 0 ? 'success.main' : 'error.main'}
+        fontWeight={950}
+        fontSize={compact ? 14 : undefined}
+        whiteSpace="nowrap"
+        lineHeight={1.1}
+      >
+        {formatPercent(market.estimatedEv, { signed: true })}
       </Typography>
     </Stack>
+  );
+}
+
+function TopPickProviderRow({ market, confidence, showTrust = true }: { market: MarketOpportunity; confidence: 'Strong' | 'Medium' | 'Weak'; showTrust?: boolean }) {
+  return (
+    <OpportunityProviderRow provider={market.provider} category={market.providerCategory}>
+      {showTrust ? (
+        <Stack
+          direction="row"
+          alignItems="center"
+          gap={0.65}
+          sx={{
+            '& .MuiTypography-root': {
+              lineHeight: 1.1
+            }
+          }}
+        >
+          <MetricLabelWithHelp metric="trust" iconPosition="before" />
+          <Typography component="span" color="text.secondary" aria-hidden sx={{ lineHeight: 1.1 }}>
+            ·
+          </Typography>
+          <TrustValue level={confidence} showSuffix size="small" />
+        </Stack>
+      ) : null}
+    </OpportunityProviderRow>
+  );
+}
+
+function TopPickMetrics({ market, detailed, confidence }: { market: MarketOpportunity; detailed: boolean; confidence: 'Strong' | 'Medium' | 'Weak' }) {
+  return (
+    <OpportunityMetricGrid columns={{ xs: 2, sm: detailed ? 4 : 3 }} sx={{ borderTop: 0, pt: 0 }}>
+      {detailed ? (
+        <>
+          <OpportunityMetricItem
+            label="Odds"
+            value={`${formatAmericanOdds(market.bestAmericanPrice)} / ${formatDecimal(market.bestDecimalPrice)}`}
+            noWrap={false}
+          />
+          <OpportunityMetricItem label="Modifier" value={market.projectionModifier === 'Normal' ? '-' : market.projectionModifier} noWrap={false} />
+        </>
+      ) : null}
+      <OpportunityMetricItem label="Hit chance" value={formatPercent(market.modelProbability)} metric="hitChance" />
+      {detailed ? <OpportunityMetricItem label="Break-even" value={formatPercent(market.impliedProbability)} /> : null}
+      <OpportunityMetricItem label="Edge" value={formatPercent(market.probabilityEdge, { signed: true })} metric="edge" />
+      {detailed ? <OpportunityMetricItem label="EV" value={formatPercent(market.estimatedEv, { signed: true })} metric="ev" /> : null}
+      {!detailed ? (
+        <>
+          <OpportunityMetricItem label="Trust" value={<TrustValue level={confidence} sx={{ fontSize: 14, fontWeight: 950, lineHeight: 1.5 }} />} metric="trust" />
+        </>
+      ) : null}
+      <OpportunityMetricItem label="Sample" value={String(market.historicalSampleSize)} />
+    </OpportunityMetricGrid>
+  );
+}
+
+function TopPickActions({
+  market,
+  selected,
+  incompatible,
+  onAdd,
+  onDetails
+}: {
+  market: MarketOpportunity;
+  selected: boolean;
+  incompatible: boolean;
+  onAdd?: (market: MarketOpportunity) => void;
+  onDetails: () => void;
+}) {
+  return (
+    <>
+      <Button
+        variant="contained"
+        size="small"
+        startIcon={selected ? <RemoveCircleOutlineRoundedIcon /> : incompatible ? <LockRoundedIcon /> : <AddCircleOutlineRoundedIcon />}
+        onClick={() => onAdd?.(market)}
+        disabled={incompatible}
+        sx={entryButtonSx(selected, incompatible)}
+      >
+        {selected ? 'Remove' : incompatible ? 'Locked' : 'Add leg'}
+      </Button>
+      <Button variant="outlined" size="small" onClick={onDetails} sx={compareButtonSx}>
+        Details
+      </Button>
+    </>
+  );
+}
+
+function TopPickMobileActions({
+  market,
+  selected,
+  incompatible,
+  onAdd,
+  onDetails
+}: {
+  market: MarketOpportunity;
+  selected: boolean;
+  incompatible: boolean;
+  onAdd?: (market: MarketOpportunity) => void;
+  onDetails: () => void;
+}) {
+  return (
+    <>
+      <Button
+        variant="contained"
+        size="small"
+        startIcon={selected ? <RemoveCircleOutlineRoundedIcon /> : incompatible ? <LockRoundedIcon /> : <AddCircleOutlineRoundedIcon />}
+        onClick={() => onAdd?.(market)}
+        disabled={incompatible}
+        sx={mobileEntryButtonSx(selected, incompatible)}
+      >
+        {selected ? 'Remove' : incompatible ? 'Locked' : 'Add leg'}
+      </Button>
+      <Button variant="outlined" size="small" onClick={onDetails} sx={mobileCardDetailsButtonSx}>
+        Details
+      </Button>
+    </>
   );
 }
 
@@ -311,18 +245,6 @@ function cleanWarning(warning: string) {
   };
 
   return replacements[warning] ?? warning;
-}
-
-function cleanReasons(reasons: string[]) {
-  return reasons
-    .filter((reason) => reason !== 'Line 1.5 profile' && reason !== 'Promo-adjusted')
-    .map((reason) => {
-      const replacements: Record<string, string> = {
-        'Discount projection': 'Discounted line context'
-      };
-
-      return replacements[reason] ?? reason;
-    });
 }
 
 export function getTopPickConfidence(market: MarketOpportunity): 'Strong' | 'Medium' | 'Weak' {

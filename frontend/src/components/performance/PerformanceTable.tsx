@@ -2,9 +2,9 @@ import { Stack, TableBody, TableCell, TableHead, TableRow, Typography } from '@m
 import type { PerformanceGroup } from '../../types/performance';
 import { formatPercent } from '../../utils/formatters';
 import { MetadataText } from '../ui/MetadataText';
-import { palette } from '../../theme/palette';
 import { appTableRowSx } from '../ui/appTableStyles';
 import { AppDataTable } from '../ui/AppDataTable';
+import { AppTableEvValue, AppTableMetricValue, AppTablePrimaryText, AppTableSecondaryText } from '../ui/AppTableTypography';
 
 function getSampleWarning(row: PerformanceGroup) {
   if (row.warning) {
@@ -41,24 +41,27 @@ export function PerformanceTable({ rows, category }: { rows: PerformanceGroup[];
                 >
                   <TableCell>
                     <Stack spacing={0.25}>
-                      <Typography fontWeight={900}>{row.groupKey.replace(/([a-z])([A-Z])/g, '$1 $2')}</Typography>
-                      <Typography variant="caption" color="text.secondary">
+                      <AppTablePrimaryText noWrap={false}>{row.groupKey.replace(/([a-z])([A-Z])/g, '$1 $2')}</AppTablePrimaryText>
+                      <AppTableSecondaryText noWrap={false}>
                         {row.groupType}
-                      </Typography>
+                      </AppTableSecondaryText>
                     </Stack>
                   </TableCell>
-                  <TableCell align="right">{row.gradedPicks}</TableCell>
+                  <TableCell align="right"><AppTableMetricValue>{row.gradedPicks}</AppTableMetricValue></TableCell>
                   <TableCell align="right">
-                    {row.wins}-{row.losses}-{row.pushes}
+                    <AppTableMetricValue>{row.wins}-{row.losses}-{row.pushes}</AppTableMetricValue>
                   </TableCell>
-                  <TableCell align="right">{row.wins + row.losses > 0 ? formatPercent(row.hitRate) : '-'}</TableCell>
-                  <TableCell
-                    align="right"
-                    sx={{ color: row.roi >= 0 ? palette.success : palette.danger, fontWeight: 900 }}
-                  >
-                    {row.gradedPicks > 0 ? formatPercent(row.roi, { signed: true }) : '-'}
+                  <TableCell align="right">
+                    <AppTableMetricValue>{row.wins + row.losses > 0 ? formatPercent(row.hitRate) : '-'}</AppTableMetricValue>
                   </TableCell>
-                  <TableCell align="right">{formatPercent(row.averageEv, { signed: true })}</TableCell>
+                  <TableCell align="right">
+                    {row.gradedPicks > 0 ? (
+                      <AppTableEvValue positive={row.roi >= 0}>{formatPercent(row.roi, { signed: true })}</AppTableEvValue>
+                    ) : (
+                      <AppTableMetricValue>-</AppTableMetricValue>
+                    )}
+                  </TableCell>
+                  <TableCell align="right"><AppTableMetricValue>{formatPercent(row.averageEv, { signed: true })}</AppTableMetricValue></TableCell>
                   <TableCell>
                     {warningTone ? (
                       <MetadataText tone={warningTone}>{warning}</MetadataText>

@@ -1,15 +1,14 @@
 import AddCircleOutlineRoundedIcon from '@mui/icons-material/AddCircleOutlineRounded';
-import ExpandMoreRoundedIcon from '@mui/icons-material/ExpandMoreRounded';
-import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
 import LockRoundedIcon from '@mui/icons-material/LockRounded';
 import RemoveCircleOutlineRoundedIcon from '@mui/icons-material/RemoveCircleOutlineRounded';
+import ExpandMoreRoundedIcon from '@mui/icons-material/ExpandMoreRounded';
 import { Accordion, AccordionDetails, AccordionSummary, Box, Button, Divider, Stack, TableBody, TableCell, TableHead, TableRow, Typography } from '@mui/material';
 import { useState } from 'react';
 import { useEntryBuilder } from '../../hooks/useEntryBuilder';
-import { palette } from '../../theme/palette';
 import type { MarketOpportunity } from '../../types/markets';
 import { formatPercent } from '../../utils/formatters';
-import { hasRenderableWarning, renderWarningText } from '../../utils/warnings';
+import { hasRenderableWarning, renderOpportunityCautionText, renderWarningText } from '../../utils/warnings';
+import { palette } from '../../theme/palette';
 import { MetricLabelWithHelp } from '../metrics/MetricLabelWithHelp';
 import { TrustValue } from '../metrics/TrustValue';
 import { PropDetailsModal } from '../prop-history/PropDetailsModal';
@@ -26,30 +25,39 @@ import {
   mobileCardActionButtonSx,
   mobileCardDetailsButtonSx
 } from '../ui/AppRowActions';
+import { AppTableEvValue, AppTableMetricValue, AppTablePrimaryText, AppTableSecondaryText } from '../ui/AppTableTypography';
+import { OpportunityMetricGrid, OpportunityMetricItem, OpportunityPickText } from '../ui/OpportunityCard';
 import { ProjectionModifierBadge } from './ProjectionModifierBadge';
 
 export function LineShoppingTable({ markets, showActions = true }: { markets: MarketOpportunity[]; showActions?: boolean }) {
   const [detailsMarket, setDetailsMarket] = useState<MarketOpportunity | null>(null);
   const visibleMarkets = markets.filter((market) => market.providerCategory === 'DFS');
+  const showReferenceLines = visibleMarkets.some(hasReferenceLine);
+  const minWidth = (showActions ? 800 : 680) + 95 - (showReferenceLines ? 0 : 170);
 
   return (
     <>
-      <AppDataTable minWidth={showActions ? 980 : 820}>
+      {!showReferenceLines ? (
+        <Typography variant="body2" color="text.secondary" sx={{ mb: 1.4 }}>
+          Reference lines unavailable. Showing best provider lines only.
+        </Typography>
+      ) : null}
+      <AppDataTable minWidth={minWidth}>
         <TableHead>
           <TableRow>
-            <TableCell>Market</TableCell>
-            <TableCell>Best DFS / Source</TableCell>
-            <TableCell>DFS Line</TableCell>
-            <TableCell>Reference Lines</TableCell>
+            <TableCell>Opportunity</TableCell>
+            <TableCell>Provider</TableCell>
+            {showReferenceLines ? <TableCell>Reference Lines</TableCell> : null}
+            <TableCell align="right"><MetricLabelWithHelp metric="edge" align="right" variant="table" /></TableCell>
             <TableCell align="right"><MetricLabelWithHelp metric="ev" align="right" variant="table" /></TableCell>
+            <TableCell align="right"><MetricLabelWithHelp metric="hitChance" align="right" variant="table" /></TableCell>
             <TableCell><MetricLabelWithHelp metric="trust" variant="table" /></TableCell>
-            <TableCell><MetricLabelWithHelp metric="warning" variant="table" /></TableCell>
             {showActions ? <TableCell align="center">Action</TableCell> : null}
           </TableRow>
         </TableHead>
         <TableBody>
           {visibleMarkets.map((market) => (
-            <LineShoppingRow key={market.id} market={market} showActions={showActions} onDetails={() => setDetailsMarket(market)} />
+            <LineShoppingRow key={market.id} market={market} showActions={showActions} showReferenceLines={showReferenceLines} onDetails={() => setDetailsMarket(market)} />
           ))}
         </TableBody>
       </AppDataTable>
@@ -58,9 +66,18 @@ export function LineShoppingTable({ markets, showActions = true }: { markets: Ma
   );
 }
 
-function LineShoppingRow({ market, showActions, onDetails }: { market: MarketOpportunity; showActions: boolean; onDetails: () => void }) {
+function LineShoppingRow({
+  market,
+  showActions,
+  showReferenceLines,
+  onDetails
+}: {
+  market: MarketOpportunity;
+  showActions: boolean;
+  showReferenceLines: boolean;
+  onDetails: () => void;
+}) {
   const confidence = resolveConfidence(market);
-  const warning = renderWarningText(market.warnings);
 
   return (
     <TableRow
@@ -69,44 +86,49 @@ function LineShoppingRow({ market, showActions, onDetails }: { market: MarketOpp
     >
               <TableCell sx={{ minWidth: 220 }}>
                 <Stack spacing={0.45}>
-                  <Typography fontWeight={900} noWrap>
-                    {market.player}
-                  </Typography>
-                  <Typography variant="body2" color="text.secondary" sx={{ lineHeight: 1.35 }}>
-                    {market.side} {market.propType} {market.line} - {market.event}
-                  </Typography>
+                  <AppTablePrimaryText>{market.player}</AppTablePrimaryText>
+                  <OpportunityPickText
+                    side={market.side}
+                    propType={market.propType}
+                    line={market.line}
+                    sport={market.sport}
+                    sx={{
+                      fontSize: 13,
+                      flexWrap: 'nowrap',
+                      overflow: 'hidden',
+                      '& .MuiTypography-root': { fontSize: 'inherit' }
+                    }}
+                  />
+                  <AppTableSecondaryText>
+                    {market.event}
+                  </AppTableSecondaryText>
                 </Stack>
               </TableCell>
               <TableCell sx={{ minWidth: 150 }}>
-                <Stack spacing={0.35}>
-                  <ProviderLabel provider={market.provider} category={market.providerCategory} compact />
-                  <Typography variant="caption" color="text.secondary">
-                    {market.entryCompatibilityGroup}
-                  </Typography>
-                </Stack>
+                <ProviderLabel provider={market.provider} category={market.providerCategory} compact />
               </TableCell>
-              <TableCell sx={{ minWidth: 112 }}>
-                <Typography fontWeight={900}>{market.side} {market.line}</Typography>
-              </TableCell>
-              <TableCell sx={{ minWidth: 170 }}>
-                <Typography variant="body2" color="text.secondary" sx={{ lineHeight: 1.4 }}>
-                  {market.sportsbookContext ?? 'No reference line'}
-                </Typography>
+              {showReferenceLines ? (
+                <TableCell sx={{ minWidth: 170 }}>
+                  <AppTableSecondaryText noWrap={false} sx={{ lineHeight: 1.4 }}>
+                    {market.sportsbookContext ?? 'No reference line'}
+                  </AppTableSecondaryText>
+                </TableCell>
+              ) : null}
+              <TableCell align="right">
+                <AppTableMetricValue>{formatPercent(market.probabilityEdge, { signed: true })}</AppTableMetricValue>
               </TableCell>
               <TableCell align="right">
-                <Typography color={market.estimatedEv > 0 ? 'success.main' : 'error.main'} fontWeight={950}>
+                <AppTableEvValue positive={market.estimatedEv > 0}>
                   {formatPercent(market.estimatedEv, { signed: true })}
-                </Typography>
+                </AppTableEvValue>
+              </TableCell>
+              <TableCell align="right">
+                <AppTableMetricValue>{formatPercent(market.modelProbability)}</AppTableMetricValue>
               </TableCell>
               <TableCell sx={{ minWidth: 145 }}>
                 <Stack direction="row" gap={0.6} flexWrap="wrap">
-                  <TrustValue level={confidence} variant="badge" size="small" />
+                  <TrustValue level={confidence} />
                 </Stack>
-              </TableCell>
-              <TableCell sx={{ minWidth: 185, maxWidth: 230 }}>
-                <Typography variant="body2" color={warning ? 'warning.main' : 'text.secondary'} sx={{ lineHeight: 1.4 }}>
-                  {warning || '-'}
-                </Typography>
               </TableCell>
               {showActions ? <LineShoppingActionCell market={market} onDetails={onDetails} /> : null}
     </TableRow>
@@ -132,7 +154,7 @@ function LineShoppingActionCell({ market, onDetails }: { market: MarketOpportuni
         >
           {selected ? 'Remove' : incompatible ? 'Locked' : 'Add leg'}
         </Button>
-        <Button startIcon={<InfoOutlinedIcon />} size="small" variant="outlined" onClick={onDetails} sx={detailsButtonSx}>
+        <Button size="small" variant="outlined" onClick={onDetails} sx={detailsButtonSx}>
           Details
         </Button>
       </AppRowActions>
@@ -142,82 +164,99 @@ function LineShoppingActionCell({ market, onDetails }: { market: MarketOpportuni
 
 export function LineShoppingCard({ market }: { market: MarketOpportunity }) {
   const [detailsOpen, setDetailsOpen] = useState(false);
+  const confidence = resolveConfidence(market);
   const dfsLines = market.providerLines?.filter((line) => line.providerCategory === 'DFS') ?? [];
   const referenceLines = market.providerLines?.filter((line) => line.providerCategory === 'Sportsbook') ?? [];
-  const confidence = resolveConfidence(market);
   const builder = useEntryBuilder();
   const selected = builder.isSelected(market.id);
   const incompatible = !selected && !builder.isCompatible(market);
   const canAdd = market.canAddToEntry && market.estimatedEv > 0 && !incompatible;
-  const warning = renderWarningText(market.warnings);
+  const warning = renderOpportunityCautionText(market.warnings);
+  const actions = (
+    <>
+      <Button
+        startIcon={selected ? <RemoveCircleOutlineRoundedIcon /> : incompatible ? <LockRoundedIcon /> : <AddCircleOutlineRoundedIcon />}
+        size="small"
+        variant="contained"
+        disabled={!selected && !canAdd}
+        onClick={() => (selected || canAdd ? builder.toggleLeg(market) : undefined)}
+        sx={mobileEntryButtonSxFor(selected, incompatible)}
+      >
+        {selected ? 'Remove' : incompatible ? 'Locked' : 'Add leg'}
+      </Button>
+      <Button size="small" variant="outlined" onClick={() => setDetailsOpen(true)} sx={mobileDetailsButtonSx}>
+        Details
+      </Button>
+    </>
+  );
 
   return (
-    <Accordion
-      disableGutters
-      sx={{
-        border: '1px solid rgba(148,163,184,.16)',
-        borderRadius: '16px !important',
-        bgcolor: palette.cardSurface,
-        overflow: 'hidden',
-        '&:before': { display: 'none' }
-      }}
-    >
-      <AccordionSummary expandIcon={<ExpandMoreRoundedIcon />} sx={{ px: 1.6 }}>
-        <Stack spacing={0.75} width="100%">
-          <Stack direction="row" justifyContent="space-between" alignItems="flex-start" gap={1.5}>
-            <Box minWidth={0}>
-              <Typography fontWeight={900} noWrap>
-                {market.player}
-              </Typography>
-              <Typography variant="body2" color="text.secondary">
-                {market.side} {market.propType} {market.line}
-              </Typography>
-              <Stack direction="row" gap={0.7} flexWrap="wrap" mt={0.65}>
+    <>
+      <Accordion
+        disableGutters
+        sx={{
+          border: '1px solid rgba(148,163,184,.16)',
+          borderRadius: '16px !important',
+          bgcolor: palette.cardSurface,
+          overflow: 'hidden',
+          '&:before': { display: 'none' }
+        }}
+      >
+        <AccordionSummary expandIcon={<ExpandMoreRoundedIcon />} sx={{ px: 1.6 }}>
+          <Stack spacing={0.75} width="100%" minWidth={0}>
+            <Stack direction="row" justifyContent="space-between" alignItems="flex-start" gap={1.5}>
+              <Box minWidth={0}>
+                <Typography fontWeight={950} noWrap>
+                  {market.player}
+                </Typography>
+                <Typography variant="caption" color="text.secondary" noWrap component="div">
+                  {market.event}
+                </Typography>
+              </Box>
+              <Stack spacing={0.1} alignItems="flex-end" flexShrink={0}>
+                <Typography variant="caption" color="text.secondary" fontWeight={850} lineHeight={1}>
+                  EV
+                </Typography>
+                <Typography color={market.estimatedEv > 0 ? 'success.main' : 'error.main'} fontWeight={950} lineHeight={1.1}>
+                  {formatPercent(market.estimatedEv, { signed: true })}
+                </Typography>
+              </Stack>
+            </Stack>
+            <OpportunityPickText side={market.side} propType={market.propType} line={market.line} />
+            <Stack direction="row" justifyContent="space-between" alignItems="center" gap={1.2} flexWrap="wrap">
+              <ProviderLabel provider={market.provider} category={market.providerCategory} compact />
+              <Stack direction="row" gap={0.6} flexWrap="wrap" useFlexGap justifyContent="flex-end">
                 <StatusPill label={market.strategyClassification} />
                 <ProjectionModifierBadge modifier={market.projectionModifier} />
               </Stack>
-            </Box>
-            <Typography color={market.estimatedEv > 0 ? 'success.main' : 'error.main'} fontWeight={950} flexShrink={0}>
-              {formatPercent(market.estimatedEv, { signed: true })}
-            </Typography>
+            </Stack>
+            {warning ? (
+              <Typography variant="body2" color="warning.main">
+                {warning}
+              </Typography>
+            ) : null}
           </Stack>
-          <Stack direction="row" justifyContent="space-between" alignItems="center" gap={1.2} flexWrap="wrap">
-            <ProviderLabel provider={market.provider} category={market.providerCategory} compact />
+        </AccordionSummary>
+        <AccordionDetails>
+          <Stack spacing={1.1}>
+            <Divider />
+            <OpportunityMetricGrid columns={{ xs: 2 }} sx={{ borderTop: 0, pt: 0 }}>
+              <OpportunityMetricItem label="Trust" value={<TrustValue level={confidence} sx={{ fontSize: 14, fontWeight: 950, lineHeight: 1.5 }} />} metric="trust" />
+              <OpportunityMetricItem label="Edge" value={formatPercent(market.probabilityEdge, { signed: true })} metric="edge" />
+              <OpportunityMetricItem label="Hit chance" value={formatPercent(market.modelProbability)} metric="hitChance" />
+              <OpportunityMetricItem label="Sample" value={String(market.historicalSampleSize)} />
+              <OpportunityMetricItem label="Reference" value={market.sportsbookContext ?? 'No reference line'} noWrap={false} />
+            </OpportunityMetricGrid>
+            <ProviderLineGroup title="Provider lines" lines={dfsLines} marketId={market.id} />
+            <ProviderLineGroup title="Reference lines" lines={referenceLines} marketId={market.id} emptyText="No reference-line details available." />
+            <AppMobileCardActions sx={{ mt: 2.45, pt: 0.2 }}>
+              {actions}
+            </AppMobileCardActions>
           </Stack>
-          {warning ? (
-            <Typography variant="body2" color="warning.main">
-              {warning}
-            </Typography>
-          ) : null}
-        </Stack>
-      </AccordionSummary>
-      <AccordionDetails>
-        <Stack spacing={1.1}>
-          <Divider />
-          <DetailLine label="Best DFS line" value={`${market.provider} - ${market.side} ${market.line}`} />
-          <DetailLine label="Trust" value={confidence} metric="trust" />
-          <DetailLine label="Reference lines" value={market.sportsbookContext ?? 'No reference line'} />
-          <ProviderLineGroup title="DFS lines" lines={dfsLines} marketId={market.id} />
-          <ProviderLineGroup title="Reference lines" lines={referenceLines} marketId={market.id} emptyText="No reference-line details available." />
-          <AppMobileCardActions sx={{ pt: 0.2 }}>
-            <Button
-              startIcon={selected ? <RemoveCircleOutlineRoundedIcon /> : incompatible ? <LockRoundedIcon /> : <AddCircleOutlineRoundedIcon />}
-              size="small"
-              variant="contained"
-              disabled={!selected && !canAdd}
-              onClick={() => (selected || canAdd ? builder.toggleLeg(market) : undefined)}
-              sx={mobileEntryButtonSxFor(selected, incompatible)}
-            >
-              {selected ? 'Remove' : incompatible ? 'Locked' : 'Add leg'}
-            </Button>
-            <Button startIcon={<InfoOutlinedIcon />} size="small" variant="outlined" onClick={() => setDetailsOpen(true)} sx={mobileDetailsButtonSx}>
-              Details
-            </Button>
-          </AppMobileCardActions>
-        </Stack>
-      </AccordionDetails>
+        </AccordionDetails>
+      </Accordion>
       <PropDetailsModal market={market} open={detailsOpen} onClose={() => setDetailsOpen(false)} />
-    </Accordion>
+    </>
   );
 }
 
@@ -225,7 +264,7 @@ function ProviderLineGroup({
   title,
   lines,
   marketId,
-  emptyText = 'No DFS provider-line details available.'
+  emptyText = 'No provider-line details available.'
 }: {
   title: string;
   lines: NonNullable<MarketOpportunity['providerLines']>;
@@ -319,6 +358,11 @@ function cleanWarning(warning: string) {
   };
 
   return replacements[warning] ?? warning;
+}
+
+function hasReferenceLine(market: MarketOpportunity) {
+  const context = String(market.sportsbookContext ?? '').trim().toLowerCase();
+  return Boolean(context && !context.includes('no sportsbook reference') && context !== 'no reference line' && context !== 'none');
 }
 
 function resolveConfidence(market: MarketOpportunity): 'Strong' | 'Medium' | 'Weak' {
