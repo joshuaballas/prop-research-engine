@@ -184,6 +184,8 @@ Important status values:
 
 Append-only lifecycle event history for line availability and movement. Events include `FirstSeen`, `LineChanged`, `PriceChanged`, `LineAndPriceChanged`, `MissingFromRefresh`, `ProviderPulled`, `EventLocked`, `MarkedStale`, `MarkedExpired`, `ProviderUnavailable`, and `Reactivated`.
 
+Lifecycle events are inserted as append-only history and should not be updated by refresh tracking. The refresh tracker treats the logical event identity as lifecycle id, refresh run id, event type, previous/new status, and previous/new line. If an equivalent event already exists for the refresh, it is skipped as idempotent rather than attached or updated. Defensive save cleanup detaches any tracked historical lifecycle event that appears as `Modified` or `Deleted` before `SaveChanges`.
+
 The event table is intentionally debug/admin oriented. Public market endpoints should expose only compact lifecycle fields when needed, not the event firehose.
 
 ## Results

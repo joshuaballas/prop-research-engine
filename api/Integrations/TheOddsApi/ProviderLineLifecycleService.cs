@@ -18,6 +18,8 @@ public sealed record ProviderLineLifecycleTrackingResult(
     int LifecycleRowsInserted,
     int LifecycleRowsUpdated,
     int LifecycleEventsInserted,
+    int LifecycleEventsSkippedExisting,
+    int LifecycleEventModifiedEntriesDetached,
     int DuplicateLifecycleKeys,
     bool ConcurrencyRetryAttempted,
     bool ConcurrencyRetrySucceeded,
@@ -73,6 +75,8 @@ public sealed class ProviderLineLifecycleService(
                     LifecycleRowsInserted: 0,
                     LifecycleRowsUpdated: 0,
                     LifecycleEventsInserted: 0,
+                    LifecycleEventsSkippedExisting: 0,
+                    LifecycleEventModifiedEntriesDetached: 0,
                     DuplicateLifecycleKeys: 0,
                     ConcurrencyRetryAttempted: retryAttempted,
                     ConcurrencyRetrySucceeded: false,
@@ -80,7 +84,7 @@ public sealed class ProviderLineLifecycleService(
             }
         }
 
-        return firstFailure ?? new ProviderLineLifecycleTrackingResult(false, 0, 0, 0, 0, 0, 0, retryAttempted, false, "Lifecycle tracking did not complete.");
+        return firstFailure ?? new ProviderLineLifecycleTrackingResult(false, 0, 0, 0, 0, 0, 0, 0, 0, retryAttempted, false, "Lifecycle tracking did not complete.");
     }
 
     private async Task<ProviderLineLifecycleTrackingResult> TrackRefreshAttemptAsync(
@@ -96,7 +100,7 @@ public sealed class ProviderLineLifecycleService(
             .FirstOrDefaultAsync(row => row.Id == refreshRunId, cancellationToken);
         if (refreshRun is null || !refreshRun.Succeeded)
         {
-            return new ProviderLineLifecycleTrackingResult(true, 0, 0, 0, 0, 0, 0, retryAttempted, retrySucceeded, null);
+            return new ProviderLineLifecycleTrackingResult(true, 0, 0, 0, 0, 0, 0, 0, 0, retryAttempted, retrySucceeded, null);
         }
 
         var snapshots = await dbContext.MarketLineShoppingSnapshots
@@ -111,7 +115,7 @@ public sealed class ProviderLineLifecycleService(
 
         if (snapshots.Count == 0)
         {
-            return new ProviderLineLifecycleTrackingResult(true, 0, 0, 0, 0, 0, 0, retryAttempted, retrySucceeded, null);
+            return new ProviderLineLifecycleTrackingResult(true, 0, 0, 0, 0, 0, 0, 0, 0, retryAttempted, retrySucceeded, null);
         }
 
         var now = refreshRun.CompletedAtUtc ?? DateTimeOffset.UtcNow;
@@ -135,6 +139,7 @@ public sealed class ProviderLineLifecycleService(
             group => group.Key,
             group => group.OrderByDescending(row => row.LastSeenUtc).ThenByDescending(row => row.UpdatedAtUtc).First(),
             LifecycleKey.Comparer);
+        var eventContext = new LifecycleEventContext(await LoadExistingEventKeysAsync(refreshRunId, lifecycleRows, cancellationToken));
         var seenKeys = new HashSet<LifecycleKey>(LifecycleKey.Comparer);
 
         foreach (var seenLine in seenRows)
@@ -145,6 +150,7 @@ public sealed class ProviderLineLifecycleService(
                 lifecycle = CreateLifecycle(refreshRun, seenLine, now);
                 dbContext.ProviderLineLifecycles.Add(lifecycle);
                 AddEvent(
+                    eventContext,
                     lifecycle,
                     refreshRun.Id,
                     ProviderLineLifecycleEventTypes.FirstSeen,
@@ -164,7 +170,7 @@ public sealed class ProviderLineLifecycleService(
                 continue;
             }
 
-            UpdateSeenLifecycle(lifecycle, refreshRun, seenLine, now);
+            UpdateSeenLifecycle(eventContext, lifecycle, refreshRun, seenLine, now);
         }
 
         foreach (var lifecycle in lifecycleRows)
@@ -175,9 +181,10 @@ public sealed class ProviderLineLifecycleService(
                 continue;
             }
 
-            UpdateMissingLifecycle(lifecycle, refreshRun, now);
+            UpdateMissingLifecycle(eventContext, lifecycle, refreshRun, now);
         }
 
+        var lifecycleEventModifiedEntriesDetached = DetachUnsafeLifecycleEventEntries(refreshRunId);
         var lifecycleRowsInserted = dbContext.ChangeTracker.Entries<ProviderLineLifecycle>().Count(entry => entry.State == EntityState.Added);
         var lifecycleRowsUpdated = dbContext.ChangeTracker.Entries<ProviderLineLifecycle>().Count(entry => entry.State == EntityState.Modified);
         var lifecycleEventsInserted = dbContext.ChangeTracker.Entries<ProviderLineLifecycleEvent>().Count(entry => entry.State == EntityState.Added);
@@ -191,6 +198,8 @@ public sealed class ProviderLineLifecycleService(
             LifecycleRowsInserted: lifecycleRowsInserted,
             LifecycleRowsUpdated: lifecycleRowsUpdated,
             LifecycleEventsInserted: lifecycleEventsInserted,
+            LifecycleEventsSkippedExisting: eventContext.SkippedExistingCount,
+            LifecycleEventModifiedEntriesDetached: lifecycleEventModifiedEntriesDetached,
             DuplicateLifecycleKeys: duplicateLifecycleKeys,
             ConcurrencyRetryAttempted: retryAttempted,
             ConcurrencyRetrySucceeded: retrySucceeded,
@@ -205,6 +214,8 @@ public sealed class ProviderLineLifecycleService(
             LifecycleRowsInserted: 0,
             LifecycleRowsUpdated: 0,
             LifecycleEventsInserted: 0,
+            LifecycleEventsSkippedExisting: 0,
+            LifecycleEventModifiedEntriesDetached: 0,
             DuplicateLifecycleKeys: 0,
             ConcurrencyRetryAttempted: retryAttempted,
             ConcurrencyRetrySucceeded: false,
@@ -218,6 +229,61 @@ public sealed class ProviderLineLifecycleService(
         {
             entry.State = EntityState.Detached;
         }
+    }
+
+    private async Task<HashSet<LifecycleEventKey>> LoadExistingEventKeysAsync(
+        Guid refreshRunId,
+        IReadOnlyCollection<ProviderLineLifecycle> lifecycleRows,
+        CancellationToken cancellationToken)
+    {
+        var lifecycleIds = lifecycleRows.Select(row => row.Id).ToArray();
+        if (lifecycleIds.Length == 0)
+        {
+            return new HashSet<LifecycleEventKey>(LifecycleEventKey.Comparer);
+        }
+
+        var existingEvents = await dbContext.ProviderLineLifecycleEvents
+            .AsNoTracking()
+            .Where(row => row.RefreshRunId == refreshRunId && lifecycleIds.Contains(row.ProviderLineLifecycleId))
+            .Select(row => new ExistingLifecycleEvent(
+                row.ProviderLineLifecycleId,
+                row.RefreshRunId,
+                row.EventType,
+                row.PreviousStatus,
+                row.NewStatus,
+                row.PreviousLine,
+                row.NewLine))
+            .ToListAsync(cancellationToken);
+
+        return existingEvents
+            .Select(row => new LifecycleEventKey(
+                row.ProviderLineLifecycleId,
+                row.RefreshRunId,
+                row.EventType,
+                NormalizeToken(row.PreviousStatus),
+                NormalizeToken(row.NewStatus),
+                NormalizeEventLine(row.PreviousLine),
+                NormalizeEventLine(row.NewLine)))
+            .ToHashSet(LifecycleEventKey.Comparer);
+    }
+
+    private int DetachUnsafeLifecycleEventEntries(Guid refreshRunId)
+    {
+        var unsafeEventEntries = dbContext.ChangeTracker.Entries<ProviderLineLifecycleEvent>()
+            .Where(entry => entry.State is EntityState.Modified or EntityState.Deleted)
+            .ToArray();
+
+        foreach (var entry in unsafeEventEntries)
+        {
+            logger.LogWarning(
+                "Provider line lifecycle event tracked as {State} before save for refresh {RefreshRunId}; detaching because lifecycle events are append-only. Entry: {Entry}",
+                entry.State,
+                refreshRunId,
+                JsonSerializer.Serialize(BuildConcurrencyEntryLog(entry)));
+            entry.State = EntityState.Detached;
+        }
+
+        return unsafeEventEntries.Length;
     }
 
     private void LogLifecycleConcurrencyException(DbUpdateConcurrencyException exception, Guid refreshRunId, int attempt)
@@ -287,6 +353,7 @@ public sealed class ProviderLineLifecycleService(
     }
 
     private void UpdateSeenLifecycle(
+        LifecycleEventContext eventContext,
         ProviderLineLifecycle lifecycle,
         TheOddsRefreshRun refreshRun,
         SeenProviderLine seenLine,
@@ -319,6 +386,7 @@ public sealed class ProviderLineLifecycleService(
             lifecycle.LastChangedUtc = now;
             lifecycle.ChangedCount++;
             AddEvent(
+                eventContext,
                 lifecycle,
                 refreshRun.Id,
                 lineChanged && priceChanged
@@ -340,6 +408,7 @@ public sealed class ProviderLineLifecycleService(
         if (wasInactive)
         {
             AddEvent(
+                eventContext,
                 lifecycle,
                 refreshRun.Id,
                 ProviderLineLifecycleEventTypes.Reactivated,
@@ -357,6 +426,7 @@ public sealed class ProviderLineLifecycleService(
         if (options.Value.RecordSeenUnchangedEvents)
         {
             AddEvent(
+                eventContext,
                 lifecycle,
                 refreshRun.Id,
                 ProviderLineLifecycleEventTypes.SeenUnchanged,
@@ -371,7 +441,11 @@ public sealed class ProviderLineLifecycleService(
         }
     }
 
-    private void UpdateMissingLifecycle(ProviderLineLifecycle lifecycle, TheOddsRefreshRun refreshRun, DateTimeOffset now)
+    private void UpdateMissingLifecycle(
+        LifecycleEventContext eventContext,
+        ProviderLineLifecycle lifecycle,
+        TheOddsRefreshRun refreshRun,
+        DateTimeOffset now)
     {
         var previousStatus = lifecycle.CurrentStatus;
         var expireAfter = TimeSpan.FromHours(Math.Max(1, options.Value.ExpireAfterHours));
@@ -380,14 +454,14 @@ public sealed class ProviderLineLifecycleService(
 
         if (lifecycle.EventStartTimeUtc.HasValue && now >= lifecycle.EventStartTimeUtc.Value.Add(expireAfter))
         {
-            SetStatusWithEvent(lifecycle, refreshRun.Id, now, ProviderLineLifecycleStatuses.Expired, ProviderLineLifecycleEventTypes.MarkedExpired);
+            SetStatusWithEvent(eventContext, lifecycle, refreshRun.Id, now, ProviderLineLifecycleStatuses.Expired, ProviderLineLifecycleEventTypes.MarkedExpired);
             lifecycle.ExpiredAtUtc ??= now;
             return;
         }
 
         if (lifecycle.EventStartTimeUtc.HasValue && now >= lifecycle.EventStartTimeUtc.Value)
         {
-            SetStatusWithEvent(lifecycle, refreshRun.Id, now, ProviderLineLifecycleStatuses.Locked, ProviderLineLifecycleEventTypes.EventLocked);
+            SetStatusWithEvent(eventContext, lifecycle, refreshRun.Id, now, ProviderLineLifecycleStatuses.Locked, ProviderLineLifecycleEventTypes.EventLocked);
             lifecycle.LockedAtUtc ??= now;
             return;
         }
@@ -395,6 +469,7 @@ public sealed class ProviderLineLifecycleService(
         lifecycle.MissingCount++;
         lifecycle.UpdatedAtUtc = now;
         AddEvent(
+            eventContext,
             lifecycle,
             refreshRun.Id,
             ProviderLineLifecycleEventTypes.MissingFromRefresh,
@@ -409,14 +484,14 @@ public sealed class ProviderLineLifecycleService(
 
         if (lifecycle.MissingCount >= pulledAfterMisses)
         {
-            SetStatusWithEvent(lifecycle, refreshRun.Id, now, ProviderLineLifecycleStatuses.Pulled, ProviderLineLifecycleEventTypes.ProviderPulled);
+            SetStatusWithEvent(eventContext, lifecycle, refreshRun.Id, now, ProviderLineLifecycleStatuses.Pulled, ProviderLineLifecycleEventTypes.ProviderPulled);
             lifecycle.PulledAtUtc ??= now;
             return;
         }
 
         if (now - lifecycle.LastSeenUtc > staleAfter)
         {
-            SetStatusWithEvent(lifecycle, refreshRun.Id, now, ProviderLineLifecycleStatuses.Stale, ProviderLineLifecycleEventTypes.MarkedStale);
+            SetStatusWithEvent(eventContext, lifecycle, refreshRun.Id, now, ProviderLineLifecycleStatuses.Stale, ProviderLineLifecycleEventTypes.MarkedStale);
         }
     }
 
@@ -451,6 +526,7 @@ public sealed class ProviderLineLifecycleService(
         };
 
     private void SetStatusWithEvent(
+        LifecycleEventContext eventContext,
         ProviderLineLifecycle lifecycle,
         Guid refreshRunId,
         DateTimeOffset now,
@@ -467,6 +543,7 @@ public sealed class ProviderLineLifecycleService(
         lifecycle.CurrentStatus = newStatus;
         lifecycle.UpdatedAtUtc = now;
         AddEvent(
+            eventContext,
             lifecycle,
             refreshRunId,
             eventType,
@@ -480,7 +557,8 @@ public sealed class ProviderLineLifecycleService(
             null);
     }
 
-    private static void AddEvent(
+    private void AddEvent(
+        LifecycleEventContext eventContext,
         ProviderLineLifecycle lifecycle,
         Guid? refreshRunId,
         string eventType,
@@ -493,9 +571,25 @@ public sealed class ProviderLineLifecycleService(
         string? newStatus,
         object? metadata)
     {
-        lifecycle.Events.Add(new ProviderLineLifecycleEvent
+        var eventKey = new LifecycleEventKey(
+            lifecycle.Id,
+            refreshRunId,
+            eventType,
+            NormalizeToken(previousStatus),
+            NormalizeToken(newStatus),
+            NormalizeEventLine(previousLine),
+            NormalizeEventLine(newLine));
+
+        if (!eventContext.EventKeys.Add(eventKey))
+        {
+            eventContext.SkippedExistingCount++;
+            return;
+        }
+
+        dbContext.ProviderLineLifecycleEvents.Add(new ProviderLineLifecycleEvent
         {
             Id = Guid.NewGuid(),
+            ProviderLineLifecycleId = lifecycle.Id,
             RefreshRunId = refreshRunId,
             OccurredAtUtc = occurredAtUtc,
             EventType = eventType,
@@ -573,6 +667,9 @@ public sealed class ProviderLineLifecycleService(
         return decimal.Round(left.Value, 6) == decimal.Round(right.Value, 6);
     }
 
+    private static decimal? NormalizeEventLine(decimal? value) =>
+        value.HasValue ? decimal.Round(value.Value, 4) : null;
+
     private static string FirstNonEmpty(params string?[] values) =>
         values.FirstOrDefault(value => !string.IsNullOrWhiteSpace(value))?.Trim() ?? string.Empty;
 
@@ -606,6 +703,56 @@ public sealed class ProviderLineLifecycleService(
         string Side,
         decimal? Line,
         decimal? Price);
+
+    private sealed class LifecycleEventContext(HashSet<LifecycleEventKey> eventKeys)
+    {
+        public HashSet<LifecycleEventKey> EventKeys { get; } = eventKeys;
+        public int SkippedExistingCount { get; set; }
+    }
+
+    private sealed record ExistingLifecycleEvent(
+        Guid ProviderLineLifecycleId,
+        Guid? RefreshRunId,
+        string EventType,
+        string? PreviousStatus,
+        string? NewStatus,
+        decimal? PreviousLine,
+        decimal? NewLine);
+
+    private sealed record LifecycleEventKey(
+        Guid ProviderLineLifecycleId,
+        Guid? RefreshRunId,
+        string EventType,
+        string PreviousStatus,
+        string NewStatus,
+        decimal? PreviousLine,
+        decimal? NewLine)
+    {
+        public static IEqualityComparer<LifecycleEventKey> Comparer { get; } = new LifecycleEventKeyComparer();
+
+        private sealed class LifecycleEventKeyComparer : IEqualityComparer<LifecycleEventKey>
+        {
+            public bool Equals(LifecycleEventKey? x, LifecycleEventKey? y) =>
+                x is not null && y is not null &&
+                x.ProviderLineLifecycleId == y.ProviderLineLifecycleId &&
+                x.RefreshRunId == y.RefreshRunId &&
+                string.Equals(x.EventType, y.EventType, StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(x.PreviousStatus, y.PreviousStatus, StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(x.NewStatus, y.NewStatus, StringComparison.OrdinalIgnoreCase) &&
+                x.PreviousLine == y.PreviousLine &&
+                x.NewLine == y.NewLine;
+
+            public int GetHashCode(LifecycleEventKey obj) =>
+                HashCode.Combine(
+                    obj.ProviderLineLifecycleId,
+                    obj.RefreshRunId,
+                    StringComparer.OrdinalIgnoreCase.GetHashCode(obj.EventType),
+                    StringComparer.OrdinalIgnoreCase.GetHashCode(obj.PreviousStatus),
+                    StringComparer.OrdinalIgnoreCase.GetHashCode(obj.NewStatus),
+                    obj.PreviousLine,
+                    obj.NewLine);
+        }
+    }
 
     private sealed record LifecycleKey(
         string Sport,

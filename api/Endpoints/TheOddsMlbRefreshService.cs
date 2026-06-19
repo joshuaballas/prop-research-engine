@@ -698,6 +698,8 @@ public static partial class TheOddsApiDebugEndpoints
             node["lifecycleRowsInserted"] = lifecycleTracking.LifecycleRowsInserted;
             node["lifecycleRowsUpdated"] = lifecycleTracking.LifecycleRowsUpdated;
             node["lifecycleEventsInserted"] = lifecycleTracking.LifecycleEventsInserted;
+            node["lifecycleEventsSkippedExisting"] = lifecycleTracking.LifecycleEventsSkippedExisting;
+            node["lifecycleEventModifiedEntriesDetached"] = lifecycleTracking.LifecycleEventModifiedEntriesDetached;
             node["lifecycleSnapshotsRead"] = lifecycleTracking.SnapshotsRead;
             node["lifecycleSeenLines"] = lifecycleTracking.SeenLines;
             node["lifecycleDuplicateKeys"] = lifecycleTracking.DuplicateLifecycleKeys;

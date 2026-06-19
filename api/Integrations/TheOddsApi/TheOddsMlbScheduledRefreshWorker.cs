@@ -33,25 +33,56 @@ public sealed class TheOddsMlbScheduledRefreshWorker(
         {
             while (!stoppingToken.IsCancellationRequested)
             {
+                var schedulingPlan = await BuildSchedulingPlanAsync(stoppingToken);
+                var schedulingObservedAt = DateTimeOffset.UtcNow;
+                if (ShouldWaitForCadence(schedulingPlan, schedulingObservedAt))
+                {
+                    var cadenceWakeAt = schedulingPlan.NextEligibleRefreshUtc;
+                    state.MarkWaiting(schedulingObservedAt, cadenceWakeAt);
+                    logger.LogInformation(
+                        "The Odds API MLB scheduled refresh waiting for cadence. Next eligible refresh: {NextEligibleRefreshUtc}.",
+                        cadenceWakeAt);
+
+                    await DelayUntilAsync(cadenceWakeAt, stoppingToken);
+                    continue;
+                }
+
                 logger.LogInformation("The Odds API MLB scheduled refresh worker running planning cycle.");
                 var plan = await RunGuardedCycleAsync(stoppingToken);
                 var observedAt = DateTimeOffset.UtcNow;
                 var nextWakeAt = ResolveNextWakeAt(plan, observedAt, interval);
                 state.MarkWaiting(observedAt, nextWakeAt);
 
-                var delay = nextWakeAt - DateTimeOffset.UtcNow;
-                if (delay < TimeSpan.FromSeconds(1))
-                {
-                    delay = TimeSpan.FromSeconds(1);
-                }
-
-                await Task.Delay(delay, stoppingToken);
+                await DelayUntilAsync(nextWakeAt, stoppingToken);
             }
         }
         catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
         {
             logger.LogInformation("The Odds API MLB scheduled refresh worker is stopping.");
         }
+    }
+
+    private async Task<TheOddsRefreshPlanResult> BuildSchedulingPlanAsync(CancellationToken cancellationToken)
+    {
+        await using var scope = scopeFactory.CreateAsyncScope();
+        var planner = scope.ServiceProvider.GetRequiredService<ITheOddsRefreshPlannerService>();
+        var plan = await planner.BuildPlanAsync(cancellationToken);
+        state.MarkPlan(plan);
+        return plan;
+    }
+
+    private static bool ShouldWaitForCadence(TheOddsRefreshPlanResult plan, DateTimeOffset observedAt)
+    {
+        return plan.SkipReason == "CadenceNotDue" &&
+            plan.NextEligibleRefreshUtc > observedAt;
+    }
+
+    private static Task DelayUntilAsync(DateTimeOffset wakeAt, CancellationToken cancellationToken)
+    {
+        var delay = wakeAt - DateTimeOffset.UtcNow;
+        return delay <= TimeSpan.Zero
+            ? Task.CompletedTask
+            : Task.Delay(delay, cancellationToken);
     }
 
     private static DateTimeOffset ResolveNextWakeAt(
