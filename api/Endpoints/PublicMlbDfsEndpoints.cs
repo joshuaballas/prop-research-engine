@@ -73,11 +73,13 @@ public static class PublicMlbDfsEndpoints
 
         endpoints.MapGet("/api/markets/provider-status", async (
             int? freshnessMinutes,
+            ITheOddsRefreshPlannerService planner,
             ApplicationDbContext dbContext,
             CancellationToken cancellationToken) =>
         {
             return Results.Ok(await BuildMarketProviderStatusResponseAsync(
                 freshnessMinutes,
+                planner,
                 dbContext,
                 cancellationToken));
         })
@@ -475,6 +477,7 @@ public static class PublicMlbDfsEndpoints
 
     private static async Task<object> BuildMarketProviderStatusResponseAsync(
         int? freshnessMinutes,
+        ITheOddsRefreshPlannerService planner,
         ApplicationDbContext dbContext,
         CancellationToken cancellationToken)
     {
@@ -482,13 +485,51 @@ public static class PublicMlbDfsEndpoints
             freshnessMinutes,
             dbContext,
             cancellationToken);
+        var plan = await planner.BuildPlanAsync(cancellationToken);
 
         return new
         {
             generatedAtUtc = DateTimeOffset.UtcNow,
             callsExternalApis = false,
             readOnly = true,
-            providers = new object[] { providerStatus }
+            providers = new object[]
+            {
+                providerStatus with
+                {
+                    budgetAllowed = plan.Budget.BudgetAllowed,
+                    budgetBlockReason = plan.Budget.BudgetBlockReason,
+                    budgetExplanation = plan.Budget.BudgetExplanation,
+                    plannerEnforcementEnabled = plan.Budget.PlannerEnforcementEnabled,
+                    localBudgetEnforcementEnabled = plan.Budget.LocalBudgetEnforcementEnabled,
+                    dailyBudgetEnforcementEnabled = plan.Budget.LocalDailyBudgetEnforcementEnabled,
+                    monthlyBudgetEnforcementEnabled = plan.Budget.LocalMonthlyBudgetEnforcementEnabled,
+                    localDailyBudgetEnforcementEnabled = plan.Budget.LocalDailyBudgetEnforcementEnabled,
+                    localMonthlyBudgetEnforcementEnabled = plan.Budget.LocalMonthlyBudgetEnforcementEnabled,
+                    perRunEstimateBlockingEnabled = plan.Budget.PerRunEstimateBlockingEnabled,
+                    providerCreditBlockingEnabled = plan.Budget.ProviderCreditBlockingEnabled,
+                    dailyBudgetEnabled = plan.Budget.DailyBudgetEnabled,
+                    maxDailyCredits = plan.Budget.ConfiguredDailyCreditBudget,
+                    maxEstimatedCallsPerRun = plan.Budget.ConfiguredMaxEstimatedCallsPerRun,
+                    legacyConfiguredMaxDailyCredits = plan.Budget.ConfiguredDailyCreditBudget,
+                    legacyConfiguredMaxMonthlyCredits = plan.Budget.ConfiguredMonthlyCreditBudget,
+                    monthlyBudgetAllowed = !plan.Budget.LocalMonthlyBudgetEnforcementEnabled || !plan.Budget.MonthlyHardStop,
+                    localBudgetExceeded = plan.Budget.IsBlockedByLocalBudget,
+                    configuredMonthlyCreditLimit = plan.Budget.ConfiguredMonthlyCreditBudget,
+                    configuredReservedCreditBuffer = plan.Budget.ConfiguredReservedCreditBuffer,
+                    providerReportedRequestsUsed = plan.Budget.ProviderReportedRequestsUsed,
+                    providerReportedRequestsRemaining = plan.Budget.ProviderReportedRequestsRemaining,
+                    providerCreditTelemetryAgeMinutes = plan.Budget.ProviderCreditTelemetryAgeMinutes,
+                    providerTelemetryUsedForBlocking = plan.Budget.ProviderTelemetryUsedForBlocking,
+                    localBudgetUsedEstimate = plan.Budget.MonthlyUsedCredits,
+                    localBudgetRemainingEstimate = Math.Max(0, plan.Budget.ConfiguredMonthlyCreditBudget - plan.Budget.MonthlyAfterEstimate),
+                    isProviderTelemetryStale = plan.Budget.IsProviderTelemetryStale,
+                    isBlockedByProviderCredits = plan.Budget.IsBlockedByProviderCredits,
+                    isBlockedByLocalBudget = plan.Budget.IsBlockedByLocalBudget,
+                    isBlockedByPerRunEstimate = plan.Budget.IsBlockedByPerRunEstimate,
+                    plannerWouldBlockIfEnforced = plan.Budget.PlannerWouldBlockIfEnforced,
+                    plannerWarnings = plan.Budget.PlannerWarnings
+                }
+            }
         };
     }
 
@@ -518,7 +559,11 @@ public static class PublicMlbDfsEndpoints
                 requestsUsed = plan.RequestsUsed,
                 requestsRemaining = plan.RequestsRemaining,
                 providerRejectedKeyDetected = plan.ProviderRejectedKeyDetected,
-                providerAvailable = plan.ProviderAvailable
+                providerAvailable = plan.ProviderAvailable,
+                providerReportedRequestsUsed = plan.Budget.ProviderReportedRequestsUsed,
+                providerReportedRequestsRemaining = plan.Budget.ProviderReportedRequestsRemaining,
+                providerCreditTelemetryAgeMinutes = plan.Budget.ProviderCreditTelemetryAgeMinutes,
+                isProviderTelemetryStale = plan.Budget.IsProviderTelemetryStale
             },
             budgetSummary = plan.Budget,
             plans = new[]
@@ -544,6 +589,37 @@ public static class PublicMlbDfsEndpoints
                     plan.SkipReason,
                     plan.NextEligibleRefreshUtc,
                     budgetAllowed = plan.Budget.BudgetAllowed,
+                    budgetBlockReason = plan.Budget.BudgetBlockReason,
+                    budgetExplanation = plan.Budget.BudgetExplanation,
+                    plannerEnforcementEnabled = plan.Budget.PlannerEnforcementEnabled,
+                    maxEstimatedCallsPerRun = plan.Budget.ConfiguredMaxEstimatedCallsPerRun,
+                    localBudgetEnforcementEnabled = plan.Budget.LocalBudgetEnforcementEnabled,
+                    dailyBudgetEnforcementEnabled = plan.Budget.LocalDailyBudgetEnforcementEnabled,
+                    monthlyBudgetEnforcementEnabled = plan.Budget.LocalMonthlyBudgetEnforcementEnabled,
+                    localDailyBudgetEnforcementEnabled = plan.Budget.LocalDailyBudgetEnforcementEnabled,
+                    localMonthlyBudgetEnforcementEnabled = plan.Budget.LocalMonthlyBudgetEnforcementEnabled,
+                    perRunEstimateBlockingEnabled = plan.Budget.PerRunEstimateBlockingEnabled,
+                    providerCreditBlockingEnabled = plan.Budget.ProviderCreditBlockingEnabled,
+                    dailyBudgetEnabled = plan.Budget.DailyBudgetEnabled,
+                    maxDailyCredits = plan.Budget.ConfiguredDailyCreditBudget,
+                    legacyConfiguredMaxDailyCredits = plan.Budget.ConfiguredDailyCreditBudget,
+                    legacyConfiguredMaxMonthlyCredits = plan.Budget.ConfiguredMonthlyCreditBudget,
+                    monthlyBudgetAllowed = !plan.Budget.LocalMonthlyBudgetEnforcementEnabled || !plan.Budget.MonthlyHardStop,
+                    localBudgetExceeded = plan.Budget.IsBlockedByLocalBudget,
+                    configuredMonthlyCreditLimit = plan.Budget.ConfiguredMonthlyCreditBudget,
+                    configuredReservedCreditBuffer = plan.Budget.ConfiguredReservedCreditBuffer,
+                    providerReportedRequestsUsed = plan.Budget.ProviderReportedRequestsUsed,
+                    providerReportedRequestsRemaining = plan.Budget.ProviderReportedRequestsRemaining,
+                    providerCreditTelemetryAgeMinutes = plan.Budget.ProviderCreditTelemetryAgeMinutes,
+                    providerTelemetryUsedForBlocking = plan.Budget.ProviderTelemetryUsedForBlocking,
+                    localBudgetUsedEstimate = plan.Budget.MonthlyUsedCredits,
+                    localBudgetRemainingEstimate = Math.Max(0, plan.Budget.ConfiguredMonthlyCreditBudget - plan.Budget.MonthlyAfterEstimate),
+                    isProviderTelemetryStale = plan.Budget.IsProviderTelemetryStale,
+                    isBlockedByProviderCredits = plan.Budget.IsBlockedByProviderCredits,
+                    isBlockedByLocalBudget = plan.Budget.IsBlockedByLocalBudget,
+                    isBlockedByPerRunEstimate = plan.Budget.IsBlockedByPerRunEstimate,
+                    plannerWouldBlockIfEnforced = plan.Budget.PlannerWouldBlockIfEnforced,
+                    plannerWarnings = plan.Budget.PlannerWarnings,
                     plan.ProviderAvailable,
                     hasUsableMarketData = plan.HasUsableMarketData,
                     plan.RecommendedAction
@@ -3948,7 +4024,41 @@ public static class PublicMlbDfsEndpoints
         int lineShoppingSnapshotCount,
         int topPickSnapshotCount,
         int activeGroupCount,
-        int staleOrExpiredGroupCount);
+        int staleOrExpiredGroupCount)
+    {
+        public bool? budgetAllowed { get; init; }
+        public string? budgetBlockReason { get; init; }
+        public string? budgetExplanation { get; init; }
+        public bool? plannerEnforcementEnabled { get; init; }
+        public int? maxEstimatedCallsPerRun { get; init; }
+        public bool? localBudgetEnforcementEnabled { get; init; }
+        public bool? dailyBudgetEnforcementEnabled { get; init; }
+        public bool? monthlyBudgetEnforcementEnabled { get; init; }
+        public bool? localDailyBudgetEnforcementEnabled { get; init; }
+        public bool? localMonthlyBudgetEnforcementEnabled { get; init; }
+        public bool? perRunEstimateBlockingEnabled { get; init; }
+        public bool? providerCreditBlockingEnabled { get; init; }
+        public bool? dailyBudgetEnabled { get; init; }
+        public int? maxDailyCredits { get; init; }
+        public int? legacyConfiguredMaxDailyCredits { get; init; }
+        public int? legacyConfiguredMaxMonthlyCredits { get; init; }
+        public bool? monthlyBudgetAllowed { get; init; }
+        public bool? localBudgetExceeded { get; init; }
+        public int? configuredMonthlyCreditLimit { get; init; }
+        public int? configuredReservedCreditBuffer { get; init; }
+        public int? providerReportedRequestsUsed { get; init; }
+        public int? providerReportedRequestsRemaining { get; init; }
+        public decimal? providerCreditTelemetryAgeMinutes { get; init; }
+        public bool? providerTelemetryUsedForBlocking { get; init; }
+        public int? localBudgetUsedEstimate { get; init; }
+        public int? localBudgetRemainingEstimate { get; init; }
+        public bool? isProviderTelemetryStale { get; init; }
+        public bool? isBlockedByProviderCredits { get; init; }
+        public bool? isBlockedByLocalBudget { get; init; }
+        public bool? isBlockedByPerRunEstimate { get; init; }
+        public bool? plannerWouldBlockIfEnforced { get; init; }
+        public string[]? plannerWarnings { get; init; }
+    }
 
     private sealed record ProviderStatusDiagnostics(
         int? RequestsUsed,

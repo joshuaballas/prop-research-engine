@@ -15,9 +15,11 @@ public sealed class TheOddsScheduledRefreshOptions
     public bool AllowScheduledLiveRefresh { get; set; } = false;
     public bool AllowEventDiscoveryWhenNoPersistedEvents { get; set; } = true;
     public int FallbackEstimatedApiCalls { get; set; } = 8;
+    public int MaxEstimatedCallsPerRun { get; set; } = 0;
     public int PostRefreshReadBufferSeconds { get; set; } = 30;
 
     public TimeSpan GetInterval() => TimeSpan.FromMinutes(Math.Max(15, IntervalMinutes));
     public int GetFallbackEstimatedApiCalls() => Math.Max(1, FallbackEstimatedApiCalls);
+    public int? GetMaxEstimatedCallsPerRun() => MaxEstimatedCallsPerRun > 0 ? MaxEstimatedCallsPerRun : null;
     public TimeSpan GetPostRefreshReadBuffer() => TimeSpan.FromSeconds(Math.Max(0, PostRefreshReadBufferSeconds));
 }

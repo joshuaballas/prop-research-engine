@@ -21,6 +21,182 @@ namespace SportsBetting.Api.Tests;
 public sealed class RefreshSafetyTests
 {
     [Fact]
+    public async Task Planner_AllowsBudget_WhenLocalDailyAndMonthlyCapsAreConfiguredButEnforcementIsDisabled()
+    {
+        await using var factory = new SafetyTestApplicationFactory(new Dictionary<string, string?>
+        {
+            ["TheOddsRefreshPlanner:MaxDailyCredits"] = "1",
+            ["TheOddsRefreshPlanner:MaxMonthlyCredits"] = "1"
+        });
+        using var client = factory.CreateClient();
+        await factory.SeedCreditTelemetryRefreshAsync(requestsUsed: 2360, requestsRemaining: 97640, observedMinutesAgo: 10);
+
+        var response = await client.GetAsync("/api/markets/refresh-plan");
+
+        await EnsureSuccessWithBodyAsync(response);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        var plan = json.GetProperty("plans")[0];
+        Assert.True(plan.GetProperty("budgetAllowed").GetBoolean());
+        Assert.Equal(JsonValueKind.Null, plan.GetProperty("budgetBlockReason").ValueKind);
+        Assert.False(plan.GetProperty("plannerEnforcementEnabled").GetBoolean());
+        Assert.False(plan.GetProperty("localBudgetEnforcementEnabled").GetBoolean());
+        Assert.False(plan.GetProperty("dailyBudgetEnforcementEnabled").GetBoolean());
+        Assert.False(plan.GetProperty("monthlyBudgetEnforcementEnabled").GetBoolean());
+        Assert.False(plan.GetProperty("localDailyBudgetEnforcementEnabled").GetBoolean());
+        Assert.False(plan.GetProperty("localMonthlyBudgetEnforcementEnabled").GetBoolean());
+        Assert.False(plan.GetProperty("perRunEstimateBlockingEnabled").GetBoolean());
+        Assert.False(plan.GetProperty("providerCreditBlockingEnabled").GetBoolean());
+        Assert.False(plan.GetProperty("dailyBudgetEnabled").GetBoolean());
+        Assert.Equal(1, plan.GetProperty("maxDailyCredits").GetInt32());
+        Assert.True(plan.GetProperty("monthlyBudgetAllowed").GetBoolean());
+        Assert.False(plan.GetProperty("localBudgetExceeded").GetBoolean());
+        Assert.False(plan.GetProperty("isBlockedByLocalBudget").GetBoolean());
+        Assert.Equal(1, plan.GetProperty("configuredMonthlyCreditLimit").GetInt32());
+        Assert.Equal(2360, plan.GetProperty("providerReportedRequestsUsed").GetInt32());
+        Assert.True(plan.GetProperty("plannerWouldBlockIfEnforced").GetBoolean());
+    }
+
+    [Fact]
+    public async Task Planner_AllowsEstimatedCalls_WhenProviderTelemetryDoesNotBlockAndNoPerRunCap()
+    {
+        await using var factory = new SafetyTestApplicationFactory(new Dictionary<string, string?>
+        {
+            ["TheOddsRefreshPlanner:MaxDailyCredits"] = "1",
+            ["TheOddsRefreshPlanner:MaxMonthlyCredits"] = "1"
+        });
+        using var client = factory.CreateClient();
+        await factory.SeedCreditTelemetryRefreshAsync(requestsUsed: 2360, requestsRemaining: 97640, observedMinutesAgo: 10);
+
+        var response = await client.GetAsync("/api/markets/refresh-plan");
+
+        await EnsureSuccessWithBodyAsync(response);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        var plan = json.GetProperty("plans")[0];
+        Assert.True(plan.GetProperty("budgetAllowed").GetBoolean());
+        Assert.Equal(JsonValueKind.Null, plan.GetProperty("budgetBlockReason").ValueKind);
+        Assert.False(plan.GetProperty("dailyBudgetEnabled").GetBoolean());
+        Assert.True(plan.GetProperty("monthlyBudgetAllowed").GetBoolean());
+        Assert.False(plan.GetProperty("localBudgetExceeded").GetBoolean());
+        Assert.False(plan.GetProperty("isBlockedByLocalBudget").GetBoolean());
+        Assert.False(plan.GetProperty("isBlockedByProviderCredits").GetBoolean());
+    }
+
+    [Fact]
+    public async Task Planner_IgnoresStaleProviderCreditTelemetry_ForProviderCreditHardStop()
+    {
+        await using var factory = new SafetyTestApplicationFactory(new Dictionary<string, string?>
+        {
+            ["TheOddsRefreshPlanner:MaxMonthlyCredits"] = "100000",
+            ["TheOddsRefreshPlanner:ProviderTelemetryStaleAfterMinutes"] = "60"
+        });
+        using var client = factory.CreateClient();
+        await factory.SeedCreditTelemetryRefreshAsync(requestsUsed: 2360, requestsRemaining: 2, observedMinutesAgo: 180);
+
+        var response = await client.GetAsync("/api/markets/refresh-plan");
+
+        await EnsureSuccessWithBodyAsync(response);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        var plan = json.GetProperty("plans")[0];
+        Assert.True(plan.GetProperty("budgetAllowed").GetBoolean());
+        Assert.Equal(JsonValueKind.Null, plan.GetProperty("budgetBlockReason").ValueKind);
+        Assert.True(plan.GetProperty("isProviderTelemetryStale").GetBoolean());
+        Assert.False(plan.GetProperty("isBlockedByProviderCredits").GetBoolean());
+    }
+
+    [Fact]
+    public async Task Planner_WarnsButAllowsProviderCreditsExceeded_WhenEnforcementIsDisabled()
+    {
+        await using var factory = new SafetyTestApplicationFactory(new Dictionary<string, string?>
+        {
+            ["TheOddsRefreshPlanner:MaxMonthlyCredits"] = "100000"
+        });
+        using var client = factory.CreateClient();
+        await factory.SeedCreditTelemetryRefreshAsync(requestsUsed: 2360, requestsRemaining: 2, observedMinutesAgo: 10);
+
+        var response = await client.GetAsync("/api/markets/refresh-plan");
+
+        await EnsureSuccessWithBodyAsync(response);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        var plan = json.GetProperty("plans")[0];
+        Assert.True(plan.GetProperty("budgetAllowed").GetBoolean());
+        Assert.Equal(JsonValueKind.Null, plan.GetProperty("budgetBlockReason").ValueKind);
+        Assert.False(plan.GetProperty("isBlockedByProviderCredits").GetBoolean());
+        Assert.True(plan.GetProperty("plannerWouldBlockIfEnforced").GetBoolean());
+        Assert.False(plan.GetProperty("providerTelemetryUsedForBlocking").GetBoolean());
+        Assert.False(plan.GetProperty("isBlockedByLocalBudget").GetBoolean());
+    }
+
+    [Fact]
+    public async Task Planner_BlocksWithProviderCreditsExceeded_WhenEnforcementAndProviderCreditBlockingAreEnabled()
+    {
+        await using var factory = new SafetyTestApplicationFactory(new Dictionary<string, string?>
+        {
+            ["TheOddsRefreshPlanner:EnforcementEnabled"] = "true",
+            ["TheOddsRefreshPlanner:BlockOnProviderCredits"] = "true",
+            ["TheOddsRefreshPlanner:MaxMonthlyCredits"] = "100000"
+        });
+        using var client = factory.CreateClient();
+        await factory.SeedCreditTelemetryRefreshAsync(requestsUsed: 2360, requestsRemaining: 2, observedMinutesAgo: 10);
+
+        var response = await client.GetAsync("/api/markets/refresh-plan");
+
+        await EnsureSuccessWithBodyAsync(response);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        var plan = json.GetProperty("plans")[0];
+        Assert.False(plan.GetProperty("budgetAllowed").GetBoolean());
+        Assert.Equal("ProviderCreditsExceeded", plan.GetProperty("budgetBlockReason").GetString());
+        Assert.True(plan.GetProperty("isBlockedByProviderCredits").GetBoolean());
+        Assert.True(plan.GetProperty("providerCreditBlockingEnabled").GetBoolean());
+        Assert.True(plan.GetProperty("providerTelemetryUsedForBlocking").GetBoolean());
+    }
+
+    [Fact]
+    public async Task Planner_WarnsButAllowsPerRunEstimateExceeded_WhenEnforcementIsDisabled()
+    {
+        await using var factory = new SafetyTestApplicationFactory(new Dictionary<string, string?>
+        {
+            ["TheOddsRefreshPlanner:MaxMonthlyCredits"] = "100000",
+            ["TheOddsScheduledRefresh:MaxEstimatedCallsPerRun"] = "5"
+        });
+        using var client = factory.CreateClient();
+        await factory.SeedCreditTelemetryRefreshAsync(requestsUsed: 2360, requestsRemaining: 97640, observedMinutesAgo: 10);
+
+        var response = await client.GetAsync("/api/markets/refresh-plan");
+
+        await EnsureSuccessWithBodyAsync(response);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        var plan = json.GetProperty("plans")[0];
+        Assert.True(plan.GetProperty("budgetAllowed").GetBoolean());
+        Assert.Equal(JsonValueKind.Null, plan.GetProperty("budgetBlockReason").ValueKind);
+        Assert.False(plan.GetProperty("isBlockedByPerRunEstimate").GetBoolean());
+        Assert.True(plan.GetProperty("plannerWouldBlockIfEnforced").GetBoolean());
+    }
+
+    [Fact]
+    public async Task Planner_BlocksWithPerRunEstimateExceeded_WhenEnforcementAndPerRunBlockingAreEnabled()
+    {
+        await using var factory = new SafetyTestApplicationFactory(new Dictionary<string, string?>
+        {
+            ["TheOddsRefreshPlanner:EnforcementEnabled"] = "true",
+            ["TheOddsRefreshPlanner:BlockOnPerRunEstimate"] = "true",
+            ["TheOddsRefreshPlanner:MaxMonthlyCredits"] = "100000",
+            ["TheOddsScheduledRefresh:MaxEstimatedCallsPerRun"] = "5"
+        });
+        using var client = factory.CreateClient();
+        await factory.SeedCreditTelemetryRefreshAsync(requestsUsed: 2360, requestsRemaining: 97640, observedMinutesAgo: 10);
+
+        var response = await client.GetAsync("/api/markets/refresh-plan");
+
+        await EnsureSuccessWithBodyAsync(response);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        var plan = json.GetProperty("plans")[0];
+        Assert.False(plan.GetProperty("budgetAllowed").GetBoolean());
+        Assert.Equal("PerRunEstimateExceeded", plan.GetProperty("budgetBlockReason").GetString());
+        Assert.True(plan.GetProperty("isBlockedByPerRunEstimate").GetBoolean());
+        Assert.True(plan.GetProperty("perRunEstimateBlockingEnabled").GetBoolean());
+    }
+
+    [Fact]
     public async Task DryRunRefreshCurrent_DoesNotCallProvider_AndDoesNotWriteRefreshArtifacts()
     {
         await using var factory = new SafetyTestApplicationFactory();
@@ -121,9 +297,27 @@ public sealed class RefreshSafetyTests
         var json = await response.Content.ReadFromJsonAsync<JsonElement>();
         var plan = json.GetProperty("plans")[0];
         Assert.False(plan.GetProperty("shouldRefresh").GetBoolean());
-        Assert.Equal("ProviderUnavailable", plan.GetProperty("skipReason").GetString());
-        Assert.False(plan.GetProperty("budgetAllowed").GetBoolean());
+        Assert.Equal("ProviderRejectedKey", plan.GetProperty("skipReason").GetString());
+        Assert.True(plan.GetProperty("budgetAllowed").GetBoolean());
         Assert.False(plan.GetProperty("providerAvailable").GetBoolean());
+        Assert.Equal(JsonValueKind.Null, plan.GetProperty("budgetBlockReason").ValueKind);
+    }
+
+    [Fact]
+    public async Task Planner_BlocksOnRecentProviderQuotaFailureBackoff_WhenEnforcementIsDisabled()
+    {
+        await using var factory = new SafetyTestApplicationFactory();
+        using var client = factory.CreateClient();
+        await factory.SeedProviderQuotaFailureAsync();
+
+        var response = await client.GetAsync("/api/markets/refresh-plan");
+
+        await EnsureSuccessWithBodyAsync(response);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        var plan = json.GetProperty("plans")[0];
+        Assert.False(plan.GetProperty("shouldRefresh").GetBoolean());
+        Assert.True(plan.GetProperty("budgetAllowed").GetBoolean());
+        Assert.Equal("RecentProviderFailureBackoff", plan.GetProperty("skipReason").GetString());
     }
 
     [Fact]
@@ -203,12 +397,14 @@ public sealed class RefreshSafetyTests
 public sealed class SafetyTestApplicationFactory : WebApplicationFactory<Program>
 {
     private readonly SqliteConnection databaseConnection = new("Data Source=:memory:");
+    private readonly IReadOnlyDictionary<string, string?> configOverrides;
 
     public CountingTheOddsAdapter TheOddsAdapter { get; } = new();
     public CountingUnderdogAdapter UnderdogAdapter { get; } = new();
 
-    public SafetyTestApplicationFactory()
+    public SafetyTestApplicationFactory(IReadOnlyDictionary<string, string?>? configOverrides = null)
     {
+        this.configOverrides = configOverrides ?? new Dictionary<string, string?>();
         databaseConnection.Open();
     }
 
@@ -217,7 +413,7 @@ public sealed class SafetyTestApplicationFactory : WebApplicationFactory<Program
         builder.UseEnvironment("Testing");
         builder.ConfigureAppConfiguration((_, config) =>
         {
-            config.AddInMemoryCollection(new Dictionary<string, string?>
+            var settings = new Dictionary<string, string?>
             {
                 ["ConnectionStrings:SportsBettingDb"] = "Host=localhost;Database=test;Username=test;Password=test",
                 ["DebugAdmin:Enabled"] = "true",
@@ -230,7 +426,14 @@ public sealed class SafetyTestApplicationFactory : WebApplicationFactory<Program
                 ["TheOddsScheduledRefresh:AllowScheduledLiveRefresh"] = "false",
                 ["UnderdogIngestion:Enabled"] = "false",
                 ["MlbResultImportWorker:Enabled"] = "false"
-            });
+            };
+
+            foreach (var (key, value) in configOverrides)
+            {
+                settings[key] = value;
+            }
+
+            config.AddInMemoryCollection(settings);
         });
         builder.ConfigureTestServices(services =>
         {
@@ -373,6 +576,106 @@ public sealed class SafetyTestApplicationFactory : WebApplicationFactory<Program
             });
         }
 
+        await dbContext.SaveChangesAsync();
+    }
+
+    public async Task SeedCreditTelemetryRefreshAsync(int requestsUsed, int requestsRemaining, int observedMinutesAgo)
+    {
+        using var scope = Services.CreateScope();
+        var dbContext = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+        await dbContext.Database.EnsureDeletedAsync();
+        await dbContext.Database.EnsureCreatedAsync();
+
+        var observedAt = DateTimeOffset.UtcNow.AddMinutes(-observedMinutesAgo);
+        var refreshRun = new TheOddsRefreshRun
+        {
+            Id = Guid.NewGuid(),
+            Provider = "The Odds API",
+            Sport = "MLB",
+            SlateDate = DateOnly.FromDateTime(DateTime.UtcNow),
+            StartedAtUtc = observedAt.AddMinutes(-1),
+            CompletedAtUtc = observedAt,
+            Succeeded = true,
+            Failed = false,
+            Blocked = false,
+            DryRun = false,
+            ForceLive = true,
+            BookmakerPreset = "dfsOnly",
+            ProviderCategoriesIncluded = "DFS",
+            SportsbookBookmakersRequested = string.Empty,
+            DfsBookmakersRequested = "prizepicks,underdog,pick6,betr_us_dfs",
+            MarketsRequested = "batter_hits,batter_total_bases,pitcher_strikeouts",
+            EstimatedApiCalls = 8,
+            ActualApiCalls = 8,
+            PredictionCount = 12,
+            LineShoppingGroupCount = 12,
+            DiagnosticsJson = JsonSerializer.SerializeToDocument(new
+            {
+                events = Enumerable.Range(1, 7).Select(index => new
+                {
+                    eventId = $"event-{index}",
+                    eventStartTime = DateTimeOffset.UtcNow.AddHours(4 + index)
+                }),
+                creditUsage = new
+                {
+                    requestsUsed,
+                    requestsRemaining,
+                    requestsLast = 0
+                }
+            })
+        };
+
+        dbContext.TheOddsRefreshRuns.Add(refreshRun);
+        await dbContext.SaveChangesAsync();
+    }
+
+    public async Task SeedProviderQuotaFailureAsync()
+    {
+        using var scope = Services.CreateScope();
+        var dbContext = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+        await dbContext.Database.EnsureDeletedAsync();
+        await dbContext.Database.EnsureCreatedAsync();
+
+        var refreshRun = new TheOddsRefreshRun
+        {
+            Id = Guid.NewGuid(),
+            Provider = "The Odds API",
+            Sport = "MLB",
+            SlateDate = DateOnly.FromDateTime(DateTime.UtcNow),
+            StartedAtUtc = DateTimeOffset.UtcNow.AddSeconds(-30),
+            CompletedAtUtc = DateTimeOffset.UtcNow.AddSeconds(-20),
+            Succeeded = false,
+            Failed = true,
+            Blocked = false,
+            DryRun = false,
+            ForceLive = true,
+            BookmakerPreset = "dfsOnly",
+            ProviderCategoriesIncluded = "DFS",
+            SportsbookBookmakersRequested = string.Empty,
+            DfsBookmakersRequested = "prizepicks,underdog,pick6,betr_us_dfs",
+            MarketsRequested = "batter_hits,batter_total_bases,pitcher_strikeouts",
+            EstimatedApiCalls = 8,
+            ActualApiCalls = 1,
+            PredictionCount = 0,
+            LineShoppingGroupCount = 0,
+            DiagnosticsJson = JsonSerializer.SerializeToDocument(new
+            {
+                events = Enumerable.Range(1, 7).Select(index => new
+                {
+                    eventId = $"event-{index}",
+                    eventStartTime = DateTimeOffset.UtcNow.AddHours(4 + index)
+                }),
+                error = "The Odds API quota or rate limit was exceeded.",
+                creditUsage = new
+                {
+                    requestsUsed = 2360,
+                    requestsRemaining = 2,
+                    requestsLast = 1
+                }
+            })
+        };
+
+        dbContext.TheOddsRefreshRuns.Add(refreshRun);
         await dbContext.SaveChangesAsync();
     }
 

@@ -63,9 +63,15 @@ public sealed class TheOddsRefreshPlannerService(
             : allowEventDiscoveryFallback
                 ? scheduledOptions.GetFallbackEstimatedApiCalls()
                 : 0;
-        var latestRunDiagnostics = ExtractProviderDiagnostics(latestRun?.DiagnosticsJson);
-        var latestSuccessfulRunDiagnostics = ExtractProviderDiagnostics(latestSuccessfulRun?.DiagnosticsJson);
-        var providerDiagnostics = ResolveEffectiveProviderDiagnostics(latestRunDiagnostics, latestSuccessfulRunDiagnostics);
+        var latestRunObservedAtUtc = latestRun?.CompletedAtUtc ?? latestRun?.StartedAtUtc;
+        var latestSuccessfulRunObservedAtUtc = latestSuccessfulRun?.CompletedAtUtc ?? latestSuccessfulRun?.StartedAtUtc;
+        var latestRunDiagnostics = ExtractProviderDiagnostics(latestRun?.DiagnosticsJson, latestRunObservedAtUtc);
+        var latestSuccessfulRunDiagnostics = ExtractProviderDiagnostics(latestSuccessfulRun?.DiagnosticsJson, latestSuccessfulRunObservedAtUtc);
+        var providerDiagnostics = ResolveEffectiveProviderDiagnostics(
+            latestRunDiagnostics,
+            latestSuccessfulRunDiagnostics,
+            generatedAtUtc,
+            plannerOptions);
         var providerHealthRun = latestSuccessfulRun ?? latestRun;
         var activeSnapshotCount = providerHealthRun is null ? 0 : await dbContext.MarketLineShoppingSnapshots
             .AsNoTracking()
@@ -79,8 +85,7 @@ public sealed class TheOddsRefreshPlannerService(
         var latestHadUsableMarketData = activeSnapshotCount > 0 || topPickSnapshotCount > 0;
         var providerStatus = ResolveProviderStatus(providerHealthRun, latestHadUsableMarketData, providerDiagnostics);
         var providerAvailable = providerStatus is not "Unavailable" &&
-            !providerDiagnostics.ProviderRejectedKeyDetected &&
-            providerDiagnostics.RequestsRemaining is null or > 0;
+            !providerDiagnostics.ProviderRejectedKeyDetected;
 
         var nextEventStart = eventStartTimes.FirstOrDefault(value => value > generatedAtUtc);
         var minutesUntilNextEventStart = nextEventStart == default
@@ -100,15 +105,27 @@ public sealed class TheOddsRefreshPlannerService(
         var cadenceAnchorAt = latestFailedAttemptAt ?? lastSuccessfulAt;
         var nextEligibleRefreshUtc = cadenceAnchorAt?.AddMinutes(cadence.RefreshEveryMinutes) ?? generatedAtUtc;
         var cadenceAllowsRefresh = !cadenceAnchorAt.HasValue || generatedAtUtc >= nextEligibleRefreshUtc;
-        var budget = await BuildBudgetAsync(plannerOptions, providerDiagnostics, estimatedApiCalls, generatedAtUtc, cancellationToken);
+        var recentProviderFailureBackoff = latestFailedAttemptAt.HasValue &&
+            IsProviderQuotaOrRateLimitFailure(latestRun?.DiagnosticsJson) &&
+            !cadenceAllowsRefresh;
+        var budget = await BuildBudgetAsync(
+            plannerOptions,
+            scheduledOptions,
+            providerDiagnostics,
+            estimatedApiCalls,
+            generatedAtUtc,
+            cancellationToken);
         var stopAfterStartTriggered = plannerOptions.StopAfterEventStart &&
             eventStartTimes.Length > 0 &&
             eventStartTimes.All(value => value <= generatedAtUtc);
         var skipReason = BuildSkipReason(
             plannerOptions,
+            providerDiagnostics.ProviderRejectedKeyDetected,
             providerAvailable,
             budget.BudgetAllowed,
+            budget.BudgetBlockReason,
             cadenceAllowsRefresh,
+            recentProviderFailureBackoff,
             stopAfterStartTriggered,
             estimatedSlateEvents,
             allowEventDiscoveryFallback);
@@ -141,11 +158,12 @@ public sealed class TheOddsRefreshPlannerService(
             HasUsableMarketData: latestHadUsableMarketData,
             ShouldRefresh: skipReason is null,
             SkipReason: skipReason,
-            RecommendedAction: BuildRecommendedAction(skipReason, estimateSource, providerDiagnostics));
+            RecommendedAction: BuildRecommendedAction(skipReason, estimateSource, providerDiagnostics, budget));
     }
 
     private async Task<TheOddsRefreshBudgetSummary> BuildBudgetAsync(
         TheOddsRefreshPlannerOptions plannerOptions,
+        TheOddsScheduledRefreshOptions scheduledOptions,
         ProviderDiagnostics diagnostics,
         int estimatedApiCalls,
         DateTimeOffset generatedAtUtc,
@@ -167,36 +185,113 @@ public sealed class TheOddsRefreshPlannerService(
                 && !row.Blocked
                 && row.StartedAtUtc >= monthStart)
             .SumAsync(row => row.ActualApiCalls, cancellationToken);
-        var monthlyUsedCredits = Math.Max(persistedMonthlyUsedCredits, diagnostics.RequestsUsed ?? 0);
+        var providerReportedRequestsUsedForBudget = diagnostics.IsProviderCreditTelemetryStale
+            ? null
+            : diagnostics.RequestsUsed;
+        var monthlyUsedCredits = Math.Max(persistedMonthlyUsedCredits, providerReportedRequestsUsedForBudget ?? 0);
         var dailyAfterEstimate = dailyUsedCredits + estimatedApiCalls;
         var monthlyAfterEstimate = monthlyUsedCredits + estimatedApiCalls;
-        var dailyPercentAfterEstimate = Percent(dailyAfterEstimate, plannerOptions.MaxDailyCredits);
-        var monthlyPercentAfterEstimate = Percent(monthlyAfterEstimate, plannerOptions.MaxMonthlyCredits);
-        var dailyHardStop = dailyPercentAfterEstimate >= plannerOptions.HardStopAtDailyPercent;
-        var monthlyHardStop = monthlyPercentAfterEstimate >= plannerOptions.HardStopAtMonthlyPercent;
-        var providerRemainingHardStop = diagnostics.RequestsRemaining.HasValue &&
-            (diagnostics.RequestsRemaining.Value <= plannerOptions.ProviderRemainingHardStopCredits ||
-                diagnostics.RequestsRemaining.Value < estimatedApiCalls);
+        var localDailyBudgetBlockingEnabled = plannerOptions.EnforcementEnabled &&
+            plannerOptions.BlockOnLocalDailyBudget &&
+            plannerOptions.MaxDailyCredits > 0;
+        var localMonthlyBudgetBlockingEnabled = plannerOptions.EnforcementEnabled &&
+            plannerOptions.BlockOnLocalMonthlyBudget &&
+            plannerOptions.MaxMonthlyCredits > 0;
+        var perRunEstimateBlockingEnabled = plannerOptions.EnforcementEnabled &&
+            plannerOptions.BlockOnPerRunEstimate;
+        var providerCreditBlockingEnabled = plannerOptions.EnforcementEnabled &&
+            plannerOptions.BlockOnProviderCredits;
+        var localBudgetEnforcementEnabled = localDailyBudgetBlockingEnabled || localMonthlyBudgetBlockingEnabled;
+        var dailyPercentAfterEstimate = plannerOptions.MaxDailyCredits > 0
+            ? Percent(dailyAfterEstimate, plannerOptions.MaxDailyCredits)
+            : 0m;
+        var monthlyPercentAfterEstimate = plannerOptions.MaxMonthlyCredits > 0
+            ? Percent(monthlyAfterEstimate, plannerOptions.MaxMonthlyCredits)
+            : 0m;
+        var dailyHardStop = plannerOptions.MaxDailyCredits > 0 &&
+            dailyPercentAfterEstimate >= plannerOptions.HardStopAtDailyPercent;
+        var monthlyHardStop = plannerOptions.MaxMonthlyCredits > 0 &&
+            monthlyPercentAfterEstimate >= plannerOptions.HardStopAtMonthlyPercent;
+        var providerRemainingHardStop = !diagnostics.IsProviderCreditTelemetryStale &&
+            diagnostics.RequestsRemaining.HasValue &&
+            diagnostics.RequestsRemaining.Value < estimatedApiCalls;
+        var providerTelemetryUsedForBlocking = providerCreditBlockingEnabled &&
+            !diagnostics.IsProviderCreditTelemetryStale &&
+            diagnostics.RequestsRemaining.HasValue;
+        var maxEstimatedCallsPerRun = scheduledOptions.GetMaxEstimatedCallsPerRun();
+        var perRunEstimateHardStop = maxEstimatedCallsPerRun.HasValue &&
+            estimatedApiCalls > maxEstimatedCallsPerRun.Value;
+        var isBlockedByLocalBudget = (dailyHardStop && localDailyBudgetBlockingEnabled) ||
+            (monthlyHardStop && localMonthlyBudgetBlockingEnabled);
+        var isBlockedByProviderCredits = providerRemainingHardStop && providerCreditBlockingEnabled;
+        var isBlockedByPerRunEstimate = perRunEstimateHardStop && perRunEstimateBlockingEnabled;
+        var plannerWouldBlockIfEnforced = dailyHardStop ||
+            monthlyHardStop ||
+            providerRemainingHardStop ||
+            perRunEstimateHardStop;
+        var budgetBlockReason = isBlockedByPerRunEstimate
+            ? "PerRunEstimateExceeded"
+            : isBlockedByProviderCredits
+                ? "ProviderCreditsExceeded"
+                : isBlockedByLocalBudget
+                    ? "LocalBudgetExceeded"
+                    : null;
+        var plannerWarnings = BuildPlannerWarnings(
+            plannerOptions,
+            diagnostics,
+            estimatedApiCalls,
+            maxEstimatedCallsPerRun,
+            dailyHardStop,
+            monthlyHardStop,
+            providerRemainingHardStop,
+            perRunEstimateHardStop);
 
         return new TheOddsRefreshBudgetSummary(
+            plannerOptions.EnforcementEnabled,
             plannerOptions.MaxDailyCredits,
+            localDailyBudgetBlockingEnabled,
             plannerOptions.MaxMonthlyCredits,
+            localBudgetEnforcementEnabled,
+            localDailyBudgetBlockingEnabled,
+            localMonthlyBudgetBlockingEnabled,
+            perRunEstimateBlockingEnabled,
+            providerCreditBlockingEnabled,
+            plannerOptions.ProviderRemainingHardStopCredits,
+            maxEstimatedCallsPerRun,
             dailyUsedCredits,
             monthlyUsedCredits,
             persistedMonthlyUsedCredits,
             diagnostics.RequestsUsed,
             diagnostics.RequestsRemaining,
+            diagnostics.CreditTelemetryObservedAtUtc,
+            diagnostics.ProviderCreditTelemetryAgeMinutes,
+            diagnostics.IsProviderCreditTelemetryStale,
+            providerTelemetryUsedForBlocking,
             estimatedApiCalls,
             dailyAfterEstimate,
             monthlyAfterEstimate,
             dailyPercentAfterEstimate,
             monthlyPercentAfterEstimate,
-            dailyPercentAfterEstimate >= plannerOptions.WarnAtDailyPercent,
-            monthlyPercentAfterEstimate >= plannerOptions.WarnAtMonthlyPercent,
+            plannerOptions.MaxDailyCredits > 0 && dailyPercentAfterEstimate >= plannerOptions.WarnAtDailyPercent,
+            plannerOptions.MaxMonthlyCredits > 0 && monthlyPercentAfterEstimate >= plannerOptions.WarnAtMonthlyPercent,
             dailyHardStop,
             monthlyHardStop,
             providerRemainingHardStop,
-            !dailyHardStop && !monthlyHardStop && !providerRemainingHardStop);
+            perRunEstimateHardStop,
+            isBlockedByLocalBudget,
+            isBlockedByProviderCredits,
+            isBlockedByPerRunEstimate,
+            plannerWouldBlockIfEnforced,
+            plannerWarnings,
+            budgetBlockReason,
+            BuildBudgetExplanation(
+                budgetBlockReason,
+                plannerOptions,
+                maxEstimatedCallsPerRun,
+                diagnostics,
+                estimatedApiCalls,
+                plannerWouldBlockIfEnforced),
+            budgetBlockReason is null);
     }
 
     public async Task<TheOddsRefreshPlannerDecision> PersistDecisionAsync(
@@ -263,6 +358,11 @@ public sealed class TheOddsRefreshPlannerService(
                     plannerOptions.WarnAtMonthlyPercent,
                     plannerOptions.HardStopAtDailyPercent,
                     plannerOptions.HardStopAtMonthlyPercent,
+                    plannerOptions.EnforcementEnabled,
+                    plannerOptions.BlockOnProviderCredits,
+                    plannerOptions.BlockOnPerRunEstimate,
+                    plannerOptions.BlockOnLocalMonthlyBudget,
+                    plannerOptions.BlockOnLocalDailyBudget,
                     plannerOptions.ProviderRemainingHardStopCredits,
                     plannerOptions.StopAfterEventStart,
                     plannerOptions.RetryAfterFailureMinutes,
@@ -292,11 +392,6 @@ public sealed class TheOddsRefreshPlannerService(
             return "Unavailable";
         }
 
-        if (diagnostics.RequestsRemaining is <= 0)
-        {
-            return "Unavailable";
-        }
-
         if (latestRun.Succeeded && hasUsableMarketData)
         {
             return diagnostics.RequestsRemaining is <= 5 ? "Degraded" : "Healthy";
@@ -307,31 +402,43 @@ public sealed class TheOddsRefreshPlannerService(
 
     private static string? BuildSkipReason(
         TheOddsRefreshPlannerOptions plannerOptions,
+        bool providerRejectedKeyDetected,
         bool providerAvailable,
         bool budgetAllowed,
+        string? budgetBlockReason,
         bool cadenceAllowsRefresh,
+        bool recentProviderFailureBackoff,
         bool stopAfterStartTriggered,
         int estimatedSlateEvents,
         bool allowEventDiscoveryFallback)
     {
         if (!plannerOptions.Enabled) return "PlannerDisabled";
+        if (providerRejectedKeyDetected) return "ProviderRejectedKey";
         if (!providerAvailable) return "ProviderUnavailable";
-        if (!budgetAllowed) return "CreditBudgetExceeded";
+        if (!budgetAllowed) return budgetBlockReason ?? "BudgetBlocked";
+        if (recentProviderFailureBackoff) return "RecentProviderFailureBackoff";
         if (stopAfterStartTriggered) return "StopAfterEventStart";
         if (estimatedSlateEvents <= 0 && !allowEventDiscoveryFallback) return "NoPersistedSlateEvents";
         if (!cadenceAllowsRefresh) return "CadenceNotDue";
         return null;
     }
 
-    private static string BuildRecommendedAction(string? skipReason, string estimateSource, ProviderDiagnostics diagnostics)
+    private static string BuildRecommendedAction(
+        string? skipReason,
+        string estimateSource,
+        ProviderDiagnostics diagnostics,
+        TheOddsRefreshBudgetSummary budget)
     {
         return skipReason switch
         {
             null when estimateSource == "EventDiscoveryFallback" => "Refresh is eligible. No persisted events are available, so scheduled refresh will discover events from The Odds before fetching lines.",
             null => "Refresh is eligible by persisted planner state. Scheduled live execution still requires explicit scheduled live config.",
-            "ProviderUnavailable" when diagnostics.ProviderRejectedKeyDetected => "Check TheOddsApi:ApiKey and account credit status before live refreshes.",
+            "ProviderRejectedKey" => "Check TheOddsApi:ApiKey before live refreshes.",
             "ProviderUnavailable" => "Provider is unavailable or degraded beyond planner limits; skip scheduled refresh.",
-            "CreditBudgetExceeded" => "Skip refresh because estimated calls would exceed the configured credit budget or provider remaining credits.",
+            "ProviderCreditsExceeded" => budget.BudgetExplanation,
+            "PerRunEstimateExceeded" => budget.BudgetExplanation,
+            "BudgetBlocked" => budget.BudgetExplanation,
+            "RecentProviderFailureBackoff" => "Recent provider quota or rate-limit failure detected; wait for the short retry/backoff window before the next live attempt.",
             "CadenceNotDue" => "Skip refresh until the configured cadence window is due.",
             "StopAfterEventStart" => "Skip refresh because TheOddsRefreshPlanner:StopAfterEventStart is enabled for this target.",
             "NoPersistedSlateEvents" => "No persisted slate events are available for estimation.",
@@ -410,11 +517,94 @@ public sealed class TheOddsRefreshPlannerService(
         return new PlannerCadenceRule("FarOut", options.SameDayMaxMinutes, options.FarOutMaxMinutes, options.FarOutRefreshMinutes, "720-1440+ minutes before first pitch.");
     }
 
-    private static ProviderDiagnostics ExtractProviderDiagnostics(JsonDocument? diagnosticsJson)
+    private static string BuildBudgetExplanation(
+        string? budgetBlockReason,
+        TheOddsRefreshPlannerOptions plannerOptions,
+        int? maxEstimatedCallsPerRun,
+        ProviderDiagnostics diagnostics,
+        int estimatedApiCalls,
+        bool plannerWouldBlockIfEnforced)
+    {
+        return budgetBlockReason switch
+        {
+            null when diagnostics.IsProviderCreditTelemetryStale =>
+                $"Budget allowed. Provider credit telemetry is stale ({diagnostics.ProviderCreditTelemetryAgeMinutes} minutes old), so provider remaining credits were treated as unknown. Local daily/monthly budget enforcement is disabled.",
+            null when !plannerOptions.EnforcementEnabled && plannerWouldBlockIfEnforced =>
+                "Budget allowed because TheOddsRefreshPlanner:EnforcementEnabled=false. Planner budget and estimate checks are diagnostics only.",
+            null when !plannerOptions.EnforcementEnabled =>
+                "Budget allowed. Planner enforcement is disabled; local budget, per-run estimate, and provider credit estimates are diagnostics only.",
+            null => "Budget allowed. No enabled planner budget gate is blocking this refresh.",
+            "PerRunEstimateExceeded" =>
+                $"Blocked because estimated calls for this run ({estimatedApiCalls}) exceed TheOddsScheduledRefresh:MaxEstimatedCallsPerRun ({maxEstimatedCallsPerRun}).",
+            "ProviderCreditsExceeded" =>
+                $"Blocked because fresh provider-reported remaining credits ({diagnostics.RequestsRemaining}) are below the estimated calls ({estimatedApiCalls}).",
+            "LocalBudgetExceeded" =>
+                "Blocked because an explicitly enabled local daily/monthly budget gate exceeded its configured hard stop.",
+            _ => "Blocked by refresh budget guardrail."
+        };
+    }
+
+    private static string[] BuildPlannerWarnings(
+        TheOddsRefreshPlannerOptions plannerOptions,
+        ProviderDiagnostics diagnostics,
+        int estimatedApiCalls,
+        int? maxEstimatedCallsPerRun,
+        bool dailyHardStop,
+        bool monthlyHardStop,
+        bool providerRemainingHardStop,
+        bool perRunEstimateHardStop)
+    {
+        var warnings = new List<string>();
+        if (!plannerOptions.EnforcementEnabled)
+        {
+            warnings.Add("Planner enforcement is disabled; local budget, provider credit, and per-run estimate checks are diagnostics only.");
+        }
+
+        if (dailyHardStop)
+        {
+            warnings.Add("Daily local budget hard-stop threshold would be exceeded if local daily budget blocking were enabled.");
+        }
+
+        if (monthlyHardStop)
+        {
+            warnings.Add("Monthly local budget hard-stop threshold would be exceeded if local monthly budget blocking were enabled.");
+        }
+
+        if (providerRemainingHardStop)
+        {
+            warnings.Add($"Fresh provider-reported remaining credits ({diagnostics.RequestsRemaining}) are below estimated calls ({estimatedApiCalls}).");
+        }
+
+        if (perRunEstimateHardStop)
+        {
+            warnings.Add($"Estimated calls ({estimatedApiCalls}) exceed configured per-run estimate cap ({maxEstimatedCallsPerRun}).");
+        }
+
+        return warnings.ToArray();
+    }
+
+    private static bool IsProviderQuotaOrRateLimitFailure(JsonDocument? diagnosticsJson)
     {
         if (diagnosticsJson is null)
         {
-            return new ProviderDiagnostics(null, null, null, ProviderRejectedKeyDetected: false);
+            return false;
+        }
+
+        var root = diagnosticsJson.RootElement;
+        return ContainsText(root, "quota") ||
+            ContainsText(root, "rate limit") ||
+            ContainsText(root, "rate-limit") ||
+            ContainsText(root, "credits") ||
+            ContainsText(root, "payment may be exhausted");
+    }
+
+    private static ProviderDiagnostics ExtractProviderDiagnostics(
+        JsonDocument? diagnosticsJson,
+        DateTimeOffset? observedAtUtc)
+    {
+        if (diagnosticsJson is null)
+        {
+            return new ProviderDiagnostics(null, null, null, ProviderRejectedKeyDetected: false, observedAtUtc, null, false);
         }
 
         var root = diagnosticsJson.RootElement;
@@ -422,20 +612,28 @@ public sealed class TheOddsRefreshPlannerService(
             FindFirstIntProperty(root, "requestsUsed", "RequestsUsed", "requests_used"),
             FindFirstIntProperty(root, "requestsRemaining", "RequestsRemaining", "requests_remaining"),
             FindFirstIntProperty(root, "requestsLast", "RequestsLast", "requests_last"),
-            ContainsText(root, "rejected the configured API key") || ContainsText(root, "INVALID_KEY"));
+            ContainsText(root, "rejected the configured API key") || ContainsText(root, "INVALID_KEY"),
+            observedAtUtc,
+            null,
+            false);
     }
 
     private static ProviderDiagnostics ResolveEffectiveProviderDiagnostics(
         ProviderDiagnostics latestRunDiagnostics,
-        ProviderDiagnostics latestSuccessfulRunDiagnostics)
+        ProviderDiagnostics latestSuccessfulRunDiagnostics,
+        DateTimeOffset generatedAtUtc,
+        TheOddsRefreshPlannerOptions plannerOptions)
     {
-        if (latestRunDiagnostics.ProviderRejectedKeyDetected ||
-            latestRunDiagnostics.RequestsRemaining is <= 0)
+        var latestRunWithAge = latestRunDiagnostics.WithTelemetryAge(generatedAtUtc, plannerOptions.GetProviderTelemetryStaleAfter());
+        var latestSuccessfulRunWithAge = latestSuccessfulRunDiagnostics.WithTelemetryAge(generatedAtUtc, plannerOptions.GetProviderTelemetryStaleAfter());
+
+        if (latestRunWithAge.ProviderRejectedKeyDetected ||
+            (latestRunWithAge.RequestsRemaining is <= 0 && !latestRunWithAge.IsProviderCreditTelemetryStale))
         {
-            return latestRunDiagnostics;
+            return latestRunWithAge;
         }
 
-        return latestSuccessfulRunDiagnostics.HasAnyValue ? latestSuccessfulRunDiagnostics : latestRunDiagnostics;
+        return latestSuccessfulRunWithAge.HasAnyValue ? latestSuccessfulRunWithAge : latestRunWithAge;
     }
 
     private static int ExtractEstimatedSlateEvents(JsonDocument? diagnosticsJson)
@@ -557,13 +755,36 @@ public sealed class TheOddsRefreshPlannerService(
         int? RequestsUsed,
         int? RequestsRemaining,
         int? RequestsLast,
-        bool ProviderRejectedKeyDetected)
+        bool ProviderRejectedKeyDetected,
+        DateTimeOffset? CreditTelemetryObservedAtUtc,
+        decimal? ProviderCreditTelemetryAgeMinutes,
+        bool IsProviderCreditTelemetryStale)
     {
         public bool HasAnyValue =>
             RequestsUsed.HasValue ||
             RequestsRemaining.HasValue ||
             RequestsLast.HasValue ||
             ProviderRejectedKeyDetected;
+
+        public ProviderDiagnostics WithTelemetryAge(DateTimeOffset generatedAtUtc, TimeSpan staleAfter)
+        {
+            var hasTelemetry = RequestsUsed.HasValue || RequestsRemaining.HasValue || RequestsLast.HasValue;
+            if (!hasTelemetry || !CreditTelemetryObservedAtUtc.HasValue)
+            {
+                return this with
+                {
+                    ProviderCreditTelemetryAgeMinutes = null,
+                    IsProviderCreditTelemetryStale = false
+                };
+            }
+
+            var ageMinutes = Math.Round((decimal)(generatedAtUtc - CreditTelemetryObservedAtUtc.Value).TotalMinutes, 2);
+            return this with
+            {
+                ProviderCreditTelemetryAgeMinutes = ageMinutes,
+                IsProviderCreditTelemetryStale = ageMinutes > (decimal)staleAfter.TotalMinutes
+            };
+        }
     }
 }
 
@@ -572,15 +793,22 @@ public sealed class TheOddsRefreshPlannerOptions
     public const string SectionName = "TheOddsRefreshPlanner";
 
     public bool Enabled { get; set; } = true;
+    public bool EnforcementEnabled { get; set; } = false;
     public string DefaultBookmakerPreset { get; set; } = "dfsOnly";
     public int PlannerIntervalSeconds { get; set; } = 60;
-    public int MaxDailyCredits { get; set; } = 500;
+    public int MaxDailyCredits { get; set; } = 0;
+    public bool EnforceDailyCreditBudget { get; set; } = false;
+    public bool BlockOnLocalDailyBudget { get; set; } = false;
+    public bool BlockOnLocalMonthlyBudget { get; set; } = false;
+    public bool BlockOnProviderCredits { get; set; } = false;
+    public bool BlockOnPerRunEstimate { get; set; } = false;
     public int MaxMonthlyCredits { get; set; } = 500;
     public decimal WarnAtDailyPercent { get; set; } = 80m;
     public decimal WarnAtMonthlyPercent { get; set; } = 80m;
     public decimal HardStopAtDailyPercent { get; set; } = 100m;
     public decimal HardStopAtMonthlyPercent { get; set; } = 100m;
     public int ProviderRemainingHardStopCredits { get; set; } = 5;
+    public int ProviderTelemetryStaleAfterMinutes { get; set; } = 360;
     public int FarOutRefreshMinutes { get; set; } = 60;
     public int SameDayMaxMinutes { get; set; } = 720;
     public int SameDayRefreshMinutes { get; set; } = 30;
@@ -594,6 +822,7 @@ public sealed class TheOddsRefreshPlannerOptions
 
     public TimeSpan GetPlannerInterval() => TimeSpan.FromSeconds(Math.Max(10, PlannerIntervalSeconds));
     public int GetRetryAfterFailureMinutes() => Math.Clamp(RetryAfterFailureMinutes, 1, 15);
+    public TimeSpan GetProviderTelemetryStaleAfter() => TimeSpan.FromMinutes(Math.Clamp(ProviderTelemetryStaleAfterMinutes, 1, 10080));
 }
 
 public sealed record TheOddsRefreshPlanResult(
@@ -630,13 +859,26 @@ public sealed record PlannerCadenceRule(
     string Description);
 
 public sealed record TheOddsRefreshBudgetSummary(
+    bool PlannerEnforcementEnabled,
     int ConfiguredDailyCreditBudget,
+    bool DailyBudgetEnabled,
     int ConfiguredMonthlyCreditBudget,
+    bool LocalBudgetEnforcementEnabled,
+    bool LocalDailyBudgetEnforcementEnabled,
+    bool LocalMonthlyBudgetEnforcementEnabled,
+    bool PerRunEstimateBlockingEnabled,
+    bool ProviderCreditBlockingEnabled,
+    int ConfiguredReservedCreditBuffer,
+    int? ConfiguredMaxEstimatedCallsPerRun,
     int DailyUsedCredits,
     int MonthlyUsedCredits,
     int PersistedMonthlyUsedCredits,
     int? ProviderReportedRequestsUsed,
     int? ProviderReportedRequestsRemaining,
+    DateTimeOffset? ProviderCreditTelemetryObservedAtUtc,
+    decimal? ProviderCreditTelemetryAgeMinutes,
+    bool IsProviderTelemetryStale,
+    bool ProviderTelemetryUsedForBlocking,
     int EstimatedApiCalls,
     int DailyAfterEstimate,
     int MonthlyAfterEstimate,
@@ -647,4 +889,12 @@ public sealed record TheOddsRefreshBudgetSummary(
     bool DailyHardStop,
     bool MonthlyHardStop,
     bool ProviderRemainingHardStop,
+    bool PerRunEstimateHardStop,
+    bool IsBlockedByLocalBudget,
+    bool IsBlockedByProviderCredits,
+    bool IsBlockedByPerRunEstimate,
+    bool PlannerWouldBlockIfEnforced,
+    string[] PlannerWarnings,
+    string? BudgetBlockReason,
+    string BudgetExplanation,
     bool BudgetAllowed);
