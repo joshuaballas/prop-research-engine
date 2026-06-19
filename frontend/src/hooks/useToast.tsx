@@ -32,7 +32,7 @@ export function ToastProvider({ children }: PropsWithChildren) {
         open={Boolean(toast)}
         autoHideDuration={toast?.severity === 'error' || toast?.severity === 'warning' ? 6500 : 2400}
         onClose={() => setToast(null)}
-        anchorOrigin={{ vertical: isMobile ? 'top' : 'bottom', horizontal: isMobile ? 'center' : 'left' }}
+        anchorOrigin={{ vertical: isMobile ? 'top' : 'bottom', horizontal: 'center' }}
         sx={{
           ...(isMobile
             ? {
@@ -49,7 +49,65 @@ export function ToastProvider({ children }: PropsWithChildren) {
             severity={toast.severity}
             variant="filled"
             onClose={() => setToast(null)}
-            sx={{ borderRadius: 2, fontWeight: 800, width: isMobile ? '100%' : undefined }}
+            sx={{
+              ...toastSeveritySx[toast.severity],
+              borderRadius: 2,
+              border: `1px solid ${toastSeveritySx[toast.severity].borderColor}`,
+              boxShadow: 'none',
+              alignItems: 'center',
+              backgroundImage: 'none',
+              display: 'flex',
+              fontWeight: 800,
+              minHeight: 0,
+              outline: 'none',
+              py: 0.55,
+              px: 1.2,
+              width: isMobile ? '100%' : undefined,
+              '&.MuiAlert-root, &.MuiAlert-filled, &.MuiAlert-filledSuccess, &.MuiAlert-filledInfo, &.MuiAlert-filledWarning, &.MuiAlert-filledError': {
+                border: `1px solid ${toastSeveritySx[toast.severity].borderColor}`,
+                boxShadow: 'none',
+                outline: 'none'
+              },
+              '&:focus, &:focus-visible': {
+                outline: 'none'
+              },
+              '& .MuiAlert-icon': {
+                alignItems: 'center',
+                color: 'rgba(255,255,255,.92)',
+                display: 'flex',
+                mr: 1,
+                py: 0
+              },
+              '& .MuiAlert-message': {
+                alignItems: 'center',
+                display: 'flex',
+                flex: 1,
+                lineHeight: 1.35,
+                py: 0
+              },
+              '& .MuiAlert-action': {
+                alignItems: 'center',
+                alignSelf: 'center',
+                display: 'flex',
+                ml: 1,
+                pl: 0,
+                py: 0
+              },
+              '& .MuiAlert-action .MuiIconButton-root': {
+                alignItems: 'center',
+                color: 'rgba(255,255,255,.72)',
+                display: 'inline-flex',
+                height: 28,
+                justifyContent: 'center',
+                p: 0.4,
+                width: 28,
+                boxShadow: 'none'
+              },
+              '& .MuiAlert-action .MuiIconButton-root:hover': {
+                color: '#fff',
+                backgroundColor: 'rgba(255,255,255,.12)'
+              }
+            }}
           >
             {toast.message}
           </Alert>
@@ -64,3 +122,26 @@ export function useToast() {
   if (!context) throw new Error('useToast must be used within ToastProvider');
   return context;
 }
+
+const toastSeveritySx: Record<ToastSeverity, { bgcolor: string; borderColor: string; color: string }> = {
+  success: {
+    bgcolor: '#14532D',
+    borderColor: 'rgba(34, 197, 94, 0.42)',
+    color: '#F0FDF4'
+  },
+  info: {
+    bgcolor: '#0E3A5A',
+    borderColor: 'rgba(56, 189, 248, 0.38)',
+    color: '#F0F9FF'
+  },
+  warning: {
+    bgcolor: '#92400E',
+    borderColor: 'rgba(251, 191, 36, 0.42)',
+    color: '#FFFBEB'
+  },
+  error: {
+    bgcolor: '#7F1D1D',
+    borderColor: 'rgba(248, 113, 113, 0.44)',
+    color: '#FEF2F2'
+  }
+};

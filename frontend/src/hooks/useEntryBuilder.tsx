@@ -1,6 +1,7 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useReducer, type PropsWithChildren } from 'react';
+import { createContext, useCallback, useContext, useEffect, useMemo, useReducer, useState, type PropsWithChildren } from 'react';
+import { getEntryRules } from '../api/entryRules';
 import { mockEntryRules } from '../data/mockEntryRules';
-import type { EntryLeg } from '../types/entryBuilder';
+import type { EntryLeg, EntryRule } from '../types/entryBuilder';
 import type { MarketOpportunity } from '../types/markets';
 import { canAddLeg } from '../utils/entryRules';
 import { useToast } from './useToast';
@@ -65,6 +66,7 @@ const EntryBuilderContext = createContext<EntryBuilderContextValue | null>(null)
 
 export function EntryBuilderProvider({ children }: PropsWithChildren) {
   const [state, dispatch] = useReducer(entryBuilderReducer, undefined, loadPersistedEntryBuilderState);
+  const [rules, setRules] = useState<EntryRule[]>(mockEntryRules);
   const { showToast } = useToast();
   const lockedProviderName = state.selectedLegs[0]?.entryProvider;
   const lockedProviderKey = state.selectedLegs[0]?.entryCompatibilityGroup;
@@ -72,19 +74,20 @@ export function EntryBuilderProvider({ children }: PropsWithChildren) {
   const addLeg = useCallback(
     (market: MarketOpportunity) => {
       if (state.selectedLegs.some((leg) => leg.id === market.id)) {
-        return true;
+        showToast('This leg is already in your entry.', 'error');
+        return false;
       }
 
-      const result = canAddLeg(state.selectedLegs, market, mockEntryRules);
+      const result = canAddLeg(state.selectedLegs, market, rules);
       if (!result.allowed) {
-        showToast(`This entry is locked to ${lockedProviderName ?? state.selectedLegs[0]?.entryProvider ?? 'the selected provider'}.`, 'warning');
+        showToast(result.reason, 'error');
         return false;
       }
 
       dispatch({ type: 'addLeg', leg: mapMarketToEntryLeg(market) });
       return true;
     },
-    [lockedProviderName, showToast, state.selectedLegs]
+    [rules, showToast, state.selectedLegs]
   );
 
   const removeLeg = useCallback((legId: string) => {
@@ -104,8 +107,11 @@ export function EntryBuilderProvider({ children }: PropsWithChildren) {
   );
 
   const clearEntry = useCallback(() => {
+    if (state.selectedLegs.length) {
+      showToast('Entry cleared.', 'info');
+    }
     dispatch({ type: 'clearEntry' });
-  }, []);
+  }, [showToast, state.selectedLegs.length]);
 
   const value = useMemo<EntryBuilderContextValue>(
     () => ({
@@ -139,6 +145,21 @@ export function EntryBuilderProvider({ children }: PropsWithChildren) {
   useEffect(() => {
     persistEntryBuilderState(state);
   }, [state]);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    getEntryRules(controller.signal)
+      .then((nextRules) => {
+        if (nextRules.length) {
+          setRules(nextRules);
+        }
+      })
+      .catch(() => {
+        setRules(mockEntryRules);
+      });
+
+    return () => controller.abort();
+  }, []);
 
   return <EntryBuilderContext.Provider value={value}>{children}</EntryBuilderContext.Provider>;
 }

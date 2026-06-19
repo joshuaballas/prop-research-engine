@@ -71,8 +71,8 @@ export function SharedEntryBuilderDrawer() {
           sx={{
             position: 'fixed',
             zIndex: (item) => item.zIndex.drawer - 1,
-            right: { xs: 16, md: 24 },
-            left: { xs: 16, md: 'auto' },
+            right: { xs: 16, md: 'auto' },
+            left: { xs: 16, md: 24 },
             bottom: { xs: 'calc(72px + env(safe-area-inset-bottom))', md: 24 },
             justifyContent: 'space-between',
             px: 2,
