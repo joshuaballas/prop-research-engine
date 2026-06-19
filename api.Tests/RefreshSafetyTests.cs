@@ -265,6 +265,29 @@ public sealed class RefreshSafetyTests
     }
 
     [Fact]
+    public async Task EntryRules_SeparateBuildableDfsProvidersFromContextOnlySportsbooks()
+    {
+        await using var factory = new SafetyTestApplicationFactory();
+        using var client = factory.CreateClient();
+
+        var response = await client.GetAsync("/api/dfs/entry-rules");
+
+        await EnsureSuccessWithBodyAsync(response);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        var buildableProviders = json.GetProperty("entryBuildableProviders").EnumerateArray().ToArray();
+        var contextOnlyProviders = json.GetProperty("contextOnlyProviders").EnumerateArray().ToArray();
+        var rules = json.GetProperty("rules").EnumerateArray().ToArray();
+
+        Assert.Contains(buildableProviders, row => row.GetProperty("provider").GetString() == "PrizePicks");
+        Assert.Contains(buildableProviders, row => row.GetProperty("provider").GetString() == "Underdog");
+        Assert.Contains(contextOnlyProviders, row => row.GetProperty("providerCategory").GetString() == "Sportsbook");
+        Assert.DoesNotContain(rules, row => row.GetProperty("providerCategory").GetString() == "Sportsbook");
+        Assert.All(rules, row => Assert.True(row.TryGetProperty("payoutMultipliers", out _)));
+        var prizePicks = rules.Single(row => row.GetProperty("provider").GetString() == "PrizePicks");
+        Assert.Empty(prizePicks.GetProperty("payoutMultipliers").EnumerateArray());
+    }
+
+    [Fact]
     public async Task ScheduledWorkerStatus_DefaultsDisabled_AndShowsPlannerSkip()
     {
         await using var factory = new SafetyTestApplicationFactory();

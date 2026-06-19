@@ -24,7 +24,8 @@ public static class DfsEntryRulesCatalog
                     "PrizePicks entries should use PrizePicks legs only.",
                     "Current PrizePicks rows should come through The Odds API us_dfs."
                 },
-                sourceConfidence: "NeedsVerification"),
+                sourceConfidence: "NeedsVerification",
+                payoutMultipliers: Array.Empty<DfsEntryPayoutMultiplierRow>()),
             BuildEntryRule(
                 "Underdog",
                 "DFS",
@@ -43,7 +44,8 @@ public static class DfsEntryRulesCatalog
                     "Underdog entries should use Underdog legs only.",
                     "Direct Underdog ingestion and The Odds API us_dfs Underdog rows are separate data paths."
                 },
-                sourceConfidence: "NeedsVerification"),
+                sourceConfidence: "NeedsVerification",
+                payoutMultipliers: Array.Empty<DfsEntryPayoutMultiplierRow>()),
             BuildEntryRule(
                 "DraftKings Pick6",
                 "DFS",
@@ -58,7 +60,8 @@ public static class DfsEntryRulesCatalog
                 supportsDemonsGoblinsOrAltLines: "Unknown",
                 sameGameAllowed: "Unknown",
                 notes: new[] { "DraftKings Pick6 entries should use DraftKings Pick6 legs only." },
-                sourceConfidence: "NeedsVerification"),
+                sourceConfidence: "NeedsVerification",
+                payoutMultipliers: Array.Empty<DfsEntryPayoutMultiplierRow>()),
             BuildEntryRule(
                 "Betr Picks",
                 "DFS",
@@ -73,26 +76,34 @@ public static class DfsEntryRulesCatalog
                 supportsDemonsGoblinsOrAltLines: "Unknown",
                 sameGameAllowed: "Unknown",
                 notes: new[] { "Betr Picks entries should use Betr Picks legs only." },
-                sourceConfidence: "NeedsVerification"),
-            BuildEntryRule(
-                "Sportsbook context providers",
-                "Sportsbook",
-                actionableForUser: false,
-                "BookmakerName",
-                minLegs: null,
-                maxLegs: null,
-                allowedLegCounts: Array.Empty<int>(),
-                entryTypes: Array.Empty<string>(),
-                supportsFlex: false,
-                supportsPower: false,
-                supportsDemonsGoblinsOrAltLines: "Unknown",
-                sameGameAllowed: "Unknown",
-                notes: new[]
-                {
-                    "Sportsbook rows are market context for this DFS-only user.",
-                    "If sportsbook parlay support is ever added, entries must remain scoped to one sportsbook/bookmaker."
-                },
-                sourceConfidence: "Assumed")
+                sourceConfidence: "NeedsVerification",
+                payoutMultipliers: Array.Empty<DfsEntryPayoutMultiplierRow>()),
+        };
+        var entryBuildableProviders = rules
+            .Where(row => row.ActionableForUser && row.ProviderCategory == "DFS")
+            .Select(row => new
+            {
+                row.Provider,
+                row.ProviderCategory,
+                row.CompatibilityGroup,
+                row.MinLegs,
+                row.MaxLegs,
+                row.AllowedLegCounts,
+                row.EntryTypes,
+                row.SourceConfidence,
+                hasConfiguredPayoutMultipliers = row.PayoutMultipliers.Count > 0
+            })
+            .ToArray();
+        var contextOnlyProviders = new[]
+        {
+            new
+            {
+                ProviderCategory = "Sportsbook",
+                CompatibilityGroup = "BookmakerName",
+                AppliesTo = "All sportsbook/bookmaker rows",
+                ActionableForUser = false,
+                Reason = "Sportsbook lines are comparison context only and are not Entry Builder legs."
+            }
         };
 
         return new
@@ -106,8 +117,11 @@ public static class DfsEntryRulesCatalog
                 crossProviderMixingAllowed = false,
                 actionableProviderCategories = new[] { "DFS" },
                 contextProviderCategories = new[] { "Sportsbook" },
-                warning = "Entry rules marked NeedsVerification must be confirmed before production use."
+                warning = "Entry rules are maintained only for explicitly supported DFS pick'em providers. Payout multiplier tables are optional configured data; final terms must be confirmed in the provider app."
             },
+            entryBuildableProviders,
+            contextOnlyProviders,
+            unsupportedProviders = Array.Empty<object>(),
             rules
         };
     }
@@ -126,7 +140,8 @@ public static class DfsEntryRulesCatalog
         string supportsDemonsGoblinsOrAltLines,
         string sameGameAllowed,
         IReadOnlyList<string> notes,
-        string sourceConfidence)
+        string sourceConfidence,
+        IReadOnlyList<DfsEntryPayoutMultiplierRow> payoutMultipliers)
     {
         return new DfsEntryRuleRow(
             provider,
@@ -142,7 +157,8 @@ public static class DfsEntryRulesCatalog
             supportsDemonsGoblinsOrAltLines,
             sameGameAllowed,
             notes,
-            sourceConfidence);
+            sourceConfidence,
+            payoutMultipliers);
     }
 
     private sealed record DfsEntryRuleRow(
@@ -159,5 +175,14 @@ public static class DfsEntryRulesCatalog
         string SupportsDemonsGoblinsOrAltLines,
         string SameGameAllowed,
         IReadOnlyList<string> Notes,
-        string SourceConfidence);
+        string SourceConfidence,
+        IReadOnlyList<DfsEntryPayoutMultiplierRow> PayoutMultipliers);
+
+    private sealed record DfsEntryPayoutMultiplierRow(
+        string EntryType,
+        int LegCount,
+        decimal Multiplier,
+        string SourceConfidence,
+        DateTimeOffset? LastVerifiedAtUtc,
+        IReadOnlyList<string> Notes);
 }

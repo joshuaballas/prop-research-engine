@@ -5,8 +5,8 @@ export interface EntryRule {
   providerCategory: 'DFS' | 'Sportsbook';
   actionableForUser: boolean;
   compatibilityGroup: string;
-  minLegs: number;
-  maxLegs: number;
+  minLegs: number | null;
+  maxLegs: number | null;
   allowedLegCounts: number[];
   entryTypes: string[];
   supportsFlex: boolean | 'Unknown';
@@ -15,6 +15,7 @@ export interface EntryRule {
   sameGameAllowed: boolean | 'Unknown';
   sourceConfidence: 'Known' | 'Assumed' | 'NeedsVerification';
   notes: string;
+  multiplierTable?: EntryMultiplierRule[];
 }
 
 export interface EntryLeg extends MarketOpportunity {
@@ -22,8 +23,17 @@ export interface EntryLeg extends MarketOpportunity {
 }
 
 export interface PayoutEstimate {
-  multiplier: number;
-  estimatedPayout: number;
+  multiplier: number | null;
+  estimatedPayout: number | null;
   warning?: string;
   modifiers: ProjectionModifier[];
+}
+
+export interface EntryMultiplierRule {
+  entryType: string;
+  legCount: number;
+  multiplier: number;
+  sourceConfidence: 'Known' | 'Assumed' | 'NeedsVerification';
+  lastVerifiedAtUtc?: string | null;
+  notes: string[];
 }

@@ -75,7 +75,7 @@ Invoke-RestMethod -Uri "http://localhost:5299/api/markets/line-shopping?sport=ML
 Invoke-RestMethod -Uri "http://localhost:5299/api/dfs/entry-rules"
 ```
 
-These endpoints are read-only, use persisted database rows only, and do not call The Odds API or Underdog. The generic market routes currently support MLB only and report `supportedSports=["MLB"]`; add future sports behind `/api/markets/*` instead of duplicating endpoint trees.
+These endpoints are read-only, use persisted database rows only, and do not call The Odds API or Underdog. The entry-rules endpoint maintains rules only for explicitly supported DFS pick'em entry providers; sportsbook rows are context/reference only and do not require min/max leg rules. Optional payout multiplier tables are configured by the app, not The Odds. If a provider, entry type, and leg count has no configured multiplier row, Entry Builder must show multiplier/payout unavailable and point the user to the provider app. The generic market routes currently support MLB only and report `supportedSports=["MLB"]`; add future sports behind `/api/markets/*` instead of duplicating endpoint trees.
 
 After a successful live The Odds refresh, the app stores stable Top Picks and line-shopping snapshots. Public market endpoints prefer those snapshots and return `snapshotBacked=true` only when snapshot rows exist for the requested filters/view. Before usable snapshots exist, the endpoints fall back to the existing dynamic persisted-row read path and return `snapshotBacked=false` with a clear `fallbackReason`.
 
@@ -367,7 +367,7 @@ The dashboard includes presets:
 - Reset
 
 The compact Top Picks panel uses the current line-shopping response and shows the top 10 active, non-stale, non-expired strategy candidates sorted by estimated EV.
-Top Picks and line-shopping rows include `entryCompatibilityGroup` and related entry-rule metadata. DFS entries are provider-scoped: PrizePicks legs cannot mix with Underdog, DraftKings Pick6, Betr Picks, or sportsbook-context legs. Sportsbook rows remain market context for this DFS-only user.
+Top Picks and line-shopping rows include `entryCompatibilityGroup` and related entry-rule metadata. Entry Builder validates only the locked DFS provider/compatibility group. PrizePicks legs cannot mix with Underdog, DraftKings Pick6, Betr Picks, or sportsbook-context rows. Sportsbook rows remain comparison context only and cannot be added to entries. The provider app is the final source of truth for available entry types, final terms, and payout; app-configured multipliers are estimates only and carry source confidence.
 
 For dashboard startup performance, `/research` initially uses a lightweight Top Picks read:
 

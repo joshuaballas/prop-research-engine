@@ -69,8 +69,8 @@ Invoke-RestMethod "http://localhost:5299/api/debug/underdog/source-coverage-audi
 | Method | Path | Purpose | Writes | External API | Credits |
 | --- | --- | --- | --- | --- | --- |
 | GET | `/api/debug/dfs/provider-expansion-plan` | Lightweight DFS/pick'em provider status and expansion plan. Shows Underdog, PrizePicks, DraftKings Pick6, and Betr Picks through The Odds API `us_dfs`, with direct Underdog disabled as an active source. | No | No | No |
-| GET | `/api/debug/dfs/entry-rules` | Read-only provider-scoped entry compatibility rules for PrizePicks, Underdog, DraftKings Pick6, Betr Picks, and sportsbook context providers. Rules are conservative and marked `NeedsVerification` where production details still need confirmation. | No | No | No |
-| GET | `/api/dfs/entry-rules` | Production-safe provider-scoped DFS entry compatibility rules. Same persisted/read-only catalog as the debug route, without `/api/debug`. | No | No | No |
+| GET | `/api/debug/dfs/entry-rules` | Read-only provider-scoped entry compatibility rules for explicitly supported DFS pick'em providers such as PrizePicks, Underdog, DraftKings Pick6, and Betr Picks. The response separates `entryBuildableProviders` from `contextOnlyProviders`; sportsbooks/bookmakers are context-only and do not require entry-rule maintenance. Rules can include optional `payoutMultipliers` rows keyed by entry type and leg count, each with source confidence and optional verification metadata. Missing multiplier rows mean estimated payout is unavailable. Rules are conservative and marked `NeedsVerification` where production details still need confirmation. | No | No | No |
+| GET | `/api/dfs/entry-rules` | Production-safe provider-scoped DFS entry compatibility rules. Same persisted/read-only catalog as the debug route, without `/api/debug`; it does not create entry submission/bet placement behavior. Entry rules and payout multiplier tables are maintained by the app, not The Odds, and the provider app remains final source of truth. | No | No | No |
 
 Example:
 

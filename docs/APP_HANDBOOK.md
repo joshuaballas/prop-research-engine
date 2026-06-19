@@ -67,7 +67,7 @@ Useful URLs:
 - Production-safe market top picks: `http://localhost:5299/api/markets/top-picks`
 - Production-safe market line-shopping: `http://localhost:5299/api/markets/line-shopping`
 - Production-safe market performance: `http://localhost:5299/api/markets/performance-summary`
-- Production-safe DFS entry rules: `http://localhost:5299/api/dfs/entry-rules`
+- Production-safe DFS entry rules: `http://localhost:5299/api/dfs/entry-rules` exposes explicitly supported DFS pick'em entry providers separately from sportsbook context-only rows. Sportsbook lines are comparison/reference data only. Optional payout multiplier tables are app-maintained configured data keyed by provider, entry type, and leg count; if a multiplier is missing, Entry Builder shows payout unavailable. Final entry availability, terms, and payout must be confirmed in the provider app.
 - System health JSON: `http://localhost:5299/api/debug/system/health`
 
 Do not commit real API keys. Keep local secrets in `api/appsettings.Local.json` or environment variables. Environment variables override local JSON.

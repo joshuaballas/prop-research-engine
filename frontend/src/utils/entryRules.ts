@@ -24,7 +24,7 @@ export function canAddLeg(existingLegs: EntryLeg[], candidate: EntryLeg, rules: 
     return { allowed: false, reason: 'This leg is already in the entry.' };
   }
 
-  if (existingLegs.length >= rule.maxLegs) {
+  if (rule.maxLegs !== null && existingLegs.length >= rule.maxLegs) {
     return { allowed: false, reason: `${rule.provider} supports up to ${rule.maxLegs} legs in this mock rule set.` };
   }
 

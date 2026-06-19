@@ -1,7 +1,10 @@
 import { Box, Button, Drawer, useMediaQuery, useTheme } from '@mui/material';
+import { useEffect, useState } from 'react';
+import { getEntryRules } from '../../api/entryRules';
 import { mockEntryRules } from '../../data/mockEntryRules';
 import { useEntryBuilder } from '../../hooks/useEntryBuilder';
 import { palette } from '../../theme/palette';
+import type { EntryRule } from '../../types/entryBuilder';
 import { EntryBuilderTray } from './EntryBuilderTray';
 
 export function SharedEntryBuilderDrawer() {
@@ -10,6 +13,20 @@ export function SharedEntryBuilderDrawer() {
   const isMobile = useMediaQuery(theme.breakpoints.down('md'));
   const lockedProvider = builder.lockedProviderName;
   const averageEv = builder.legs.length ? builder.legs.reduce((sum, leg) => sum + leg.estimatedEv, 0) / builder.legs.length : 0;
+  const [rules, setRules] = useState<EntryRule[]>(mockEntryRules);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    getEntryRules(controller.signal)
+      .then((nextRules) => {
+        if (nextRules.length) setRules(nextRules);
+      })
+      .catch(() => {
+        setRules(mockEntryRules);
+      });
+
+    return () => controller.abort();
+  }, []);
 
   return (
     <>
@@ -22,20 +39,21 @@ export function SharedEntryBuilderDrawer() {
         PaperProps={{
           sx: {
             width: { xs: '100%', md: 360 },
-            top: { md: '67px' },
-            height: { xs: '82vh', md: 'calc(100% - 67px)' },
+            top: { md: 0 },
+            height: { xs: '82dvh', md: '100vh' },
             maxHeight: { xs: 680, md: 'none' },
             borderTopLeftRadius: { xs: 4, md: 0 },
             borderTopRightRadius: { xs: 4, md: 0 },
             borderLeft: { md: '1px solid rgba(125,211,252,.22)' },
             borderTop: { xs: '1px solid rgba(125,211,252,.22)', md: 'none' },
-            backgroundColor: palette.cardSurface
+            backgroundColor: palette.bg,
+            backgroundImage: 'none'
           }
         }}
       >
         <EntryBuilderTray
           legs={builder.legs}
-          rules={mockEntryRules}
+          rules={rules}
           amount={builder.amount}
           onAmountChange={builder.setAmount}
           onRemove={builder.removeLeg}
