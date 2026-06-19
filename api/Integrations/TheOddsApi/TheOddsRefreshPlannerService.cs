@@ -63,18 +63,21 @@ public sealed class TheOddsRefreshPlannerService(
             : allowEventDiscoveryFallback
                 ? scheduledOptions.GetFallbackEstimatedApiCalls()
                 : 0;
-        var providerDiagnostics = ExtractProviderDiagnostics(latestRun?.DiagnosticsJson);
-        var activeSnapshotCount = latestRun is null ? 0 : await dbContext.MarketLineShoppingSnapshots
+        var latestRunDiagnostics = ExtractProviderDiagnostics(latestRun?.DiagnosticsJson);
+        var latestSuccessfulRunDiagnostics = ExtractProviderDiagnostics(latestSuccessfulRun?.DiagnosticsJson);
+        var providerDiagnostics = ResolveEffectiveProviderDiagnostics(latestRunDiagnostics, latestSuccessfulRunDiagnostics);
+        var providerHealthRun = latestSuccessfulRun ?? latestRun;
+        var activeSnapshotCount = providerHealthRun is null ? 0 : await dbContext.MarketLineShoppingSnapshots
             .AsNoTracking()
-            .CountAsync(row => row.TheOddsRefreshRunId == latestRun.Id
+            .CountAsync(row => row.TheOddsRefreshRunId == providerHealthRun.Id
                 && row.LifecycleStatus == "Active"
                 && !row.IsStale
                 && !row.IsExpired, cancellationToken);
-        var topPickSnapshotCount = latestRun is null ? 0 : await dbContext.MarketTopPickSnapshots
+        var topPickSnapshotCount = providerHealthRun is null ? 0 : await dbContext.MarketTopPickSnapshots
             .AsNoTracking()
-            .CountAsync(row => row.TheOddsRefreshRunId == latestRun.Id, cancellationToken);
+            .CountAsync(row => row.TheOddsRefreshRunId == providerHealthRun.Id, cancellationToken);
         var latestHadUsableMarketData = activeSnapshotCount > 0 || topPickSnapshotCount > 0;
-        var providerStatus = ResolveProviderStatus(latestRun, latestHadUsableMarketData, providerDiagnostics);
+        var providerStatus = ResolveProviderStatus(providerHealthRun, latestHadUsableMarketData, providerDiagnostics);
         var providerAvailable = providerStatus is "Healthy" or "Degraded" &&
             !providerDiagnostics.ProviderRejectedKeyDetected &&
             providerDiagnostics.RequestsRemaining is null or > 0;
@@ -373,6 +376,19 @@ public sealed class TheOddsRefreshPlannerService(
             ContainsText(root, "rejected the configured API key") || ContainsText(root, "INVALID_KEY"));
     }
 
+    private static ProviderDiagnostics ResolveEffectiveProviderDiagnostics(
+        ProviderDiagnostics latestRunDiagnostics,
+        ProviderDiagnostics latestSuccessfulRunDiagnostics)
+    {
+        if (latestRunDiagnostics.ProviderRejectedKeyDetected ||
+            latestRunDiagnostics.RequestsRemaining is <= 0)
+        {
+            return latestRunDiagnostics;
+        }
+
+        return latestSuccessfulRunDiagnostics.HasAnyValue ? latestSuccessfulRunDiagnostics : latestRunDiagnostics;
+    }
+
     private static int ExtractEstimatedSlateEvents(JsonDocument? diagnosticsJson)
     {
         if (diagnosticsJson is null) return 0;
@@ -492,7 +508,14 @@ public sealed class TheOddsRefreshPlannerService(
         int? RequestsUsed,
         int? RequestsRemaining,
         int? RequestsLast,
-        bool ProviderRejectedKeyDetected);
+        bool ProviderRejectedKeyDetected)
+    {
+        public bool HasAnyValue =>
+            RequestsUsed.HasValue ||
+            RequestsRemaining.HasValue ||
+            RequestsLast.HasValue ||
+            ProviderRejectedKeyDetected;
+    }
 }
 
 public sealed class TheOddsRefreshPlannerOptions
