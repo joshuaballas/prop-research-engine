@@ -3810,6 +3810,8 @@ public static class PublicMlbDfsEndpoints
             "HOME_RUNS" => "Home Runs",
             "STOLEN_BASES" => "Stolen Bases",
             "HITS_RUNS_RBIS" => "Hits + Runs + RBIs",
+            "BATTER_STRIKEOUTS" => "Batter Strikeouts",
+            "WALKS" => "Batter Walks",
             "PITCHER_WALKS" => "Pitcher Walks",
             "PITCHER_HITS_ALLOWED" => "Pitcher Hits Allowed",
             "PITCHER_EARNED_RUNS" => "Pitcher Earned Runs",
@@ -3954,9 +3956,26 @@ public static class PublicMlbDfsEndpoints
 
         if (string.Equals(requestedPerformanceKey, "pitcherstrikeouts", StringComparison.OrdinalIgnoreCase))
         {
-            aliases.Add("strikeouts");
             aliases.Add("pitcherks");
             aliases.Add("ks");
+        }
+        else if (string.Equals(requestedPerformanceKey, "batterstrikeouts", StringComparison.OrdinalIgnoreCase))
+        {
+            aliases.Add("strikeouts");
+            aliases.Add("strikeout");
+            aliases.Add("batterstrikeout");
+            aliases.Add("hitterstrikeouts");
+            aliases.Add("hitterstrikeout");
+        }
+        else if (string.Equals(requestedPerformanceKey, "walks", StringComparison.OrdinalIgnoreCase))
+        {
+            aliases.Add("walk");
+            aliases.Add("batterwalks");
+            aliases.Add("batterwalk");
+            aliases.Add("hitterwalks");
+            aliases.Add("hitterwalk");
+            aliases.Add("baseonballs");
+            aliases.Add("batterbaseonballs");
         }
 
         return aliases;

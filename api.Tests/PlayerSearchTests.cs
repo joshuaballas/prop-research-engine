@@ -153,6 +153,30 @@ public sealed class PlayerSearchTests
     }
 
     [Fact]
+    public async Task PlayerResearchCurrentLines_DedupesDuplicatePlatformPropsByLogicalLine()
+    {
+        await using var factory = new SafetyTestApplicationFactory();
+        using var client = factory.CreateClient();
+        var seeded = await SeedPlayersAsync(
+            factory,
+            includePaulSnapshot: false,
+            includePaulPlatformProp: true,
+            includeDuplicatePaulPlatformProps: true);
+
+        var response = await client.GetAsync($"/api/player-research/current-lines?playerId={seeded.PaulSkenesId}&take=50");
+
+        await EnsureSuccessWithBodyAsync(response);
+        var payload = await response.Content.ReadFromJsonAsync<JsonElement>();
+        var lines = payload.GetProperty("lines").EnumerateArray().ToArray();
+        Assert.Single(lines);
+        Assert.Equal(3, payload.GetProperty("audit").GetProperty("rawCurrentProviderLineCount").GetInt32());
+        Assert.Equal(2, payload.GetProperty("audit").GetProperty("duplicateCurrentProviderLineCount").GetInt32());
+        Assert.Equal("Underdog", lines[0].GetProperty("provider").GetString());
+        Assert.Equal("Pitcher Strikeouts", lines[0].GetProperty("normalizedPropType").GetString());
+        Assert.Equal(6.5m, lines[0].GetProperty("line").GetDecimal());
+    }
+
+    [Fact]
     public async Task PropHistory_LoadsPitcherStrikeoutsForPlatformPropBackedCurrentLine()
     {
         await using var factory = new SafetyTestApplicationFactory();
@@ -170,6 +194,41 @@ public sealed class PlayerSearchTests
         Assert.Equal(3, payload.GetProperty("games").EnumerateArray().Count());
         Assert.Equal(2, payload.GetProperty("summary").GetProperty("cleared").GetInt32());
         Assert.Equal(1, payload.GetProperty("summary").GetProperty("missed").GetInt32());
+        Assert.Equal("PITCHER_STRIKEOUTS", payload.GetProperty("diagnostics").GetProperty("propTypeResolved").GetString());
+    }
+
+    [Fact]
+    public async Task PropHistory_LoadsBatterWalksForPersistedWalkRows()
+    {
+        await using var factory = new SafetyTestApplicationFactory();
+        using var client = factory.CreateClient();
+        var seeded = await SeedPlayersAsync(factory, includeMookieBatterWalkResults: true);
+
+        var response = await client.GetAsync($"/api/markets/prop-history?sport=MLB&playerId={seeded.MookieBettsId}&playerName=Mookie%20Betts&propType=Batter%20Walks&side=Over&line=0.5&take=10");
+
+        await EnsureSuccessWithBodyAsync(response);
+        var payload = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal(3, payload.GetProperty("games").EnumerateArray().Count());
+        Assert.Equal("WALKS", payload.GetProperty("diagnostics").GetProperty("propTypeResolved").GetString());
+    }
+
+    [Fact]
+    public async Task PropHistory_LoadsBatterStrikeoutsWithoutPitcherStrikeoutRows()
+    {
+        await using var factory = new SafetyTestApplicationFactory();
+        using var client = factory.CreateClient();
+        var seeded = await SeedPlayersAsync(
+            factory,
+            includeMookieBatterStrikeoutResults: true,
+            includeMookiePitcherStrikeoutTrapResults: true);
+
+        var response = await client.GetAsync($"/api/markets/prop-history?sport=MLB&playerId={seeded.MookieBettsId}&playerName=Mookie%20Betts&propType=Batter%20Strikeouts&side=Over&line=0.5&take=10");
+
+        await EnsureSuccessWithBodyAsync(response);
+        var payload = await response.Content.ReadFromJsonAsync<JsonElement>();
+        var games = payload.GetProperty("games").EnumerateArray().ToArray();
+        Assert.Equal(2, games.Length);
+        Assert.All(games, game => Assert.NotEqual(9m, game.GetProperty("value").GetDecimal()));
         Assert.Equal("STRIKEOUTS", payload.GetProperty("diagnostics").GetProperty("propTypeResolved").GetString());
     }
 
@@ -524,10 +583,14 @@ public sealed class PlayerSearchTests
         bool includePaulAlias = true,
         bool includePaulSnapshot = true,
         bool includePaulPlatformProp = false,
+        bool includeDuplicatePaulPlatformProps = false,
         bool includePaulPitcherStrikeoutResultsOnSelected = false,
         bool includePaulPitcherStrikeoutResultsOnLiveDuplicate = false,
         bool includePaulMlbRefOnSelected = false,
-        bool includePaulMlbRefOnLiveDuplicate = false)
+        bool includePaulMlbRefOnLiveDuplicate = false,
+        bool includeMookieBatterWalkResults = false,
+        bool includeMookieBatterStrikeoutResults = false,
+        bool includeMookiePitcherStrikeoutTrapResults = false)
     {
         using var scope = factory.Services.CreateScope();
         var dbContext = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
@@ -540,7 +603,9 @@ public sealed class PlayerSearchTests
         var team = new Team { Id = Guid.NewGuid(), LeagueId = league.Id, League = league, Name = "New York Yankees", Abbreviation = "NYY" };
         var pirates = new Team { Id = Guid.NewGuid(), LeagueId = league.Id, League = league, Name = "Pittsburgh Pirates", Abbreviation = "PIT" };
         var propType = new PropType { Id = Guid.NewGuid(), SportId = sport.Id, Sport = sport, Name = "Total Bases", StatKey = "TOTAL_BASES" };
-        var pitcherStrikeouts = new PropType { Id = Guid.NewGuid(), SportId = sport.Id, Sport = sport, Name = "Strikeouts", StatKey = "STRIKEOUTS" };
+        var pitcherStrikeouts = new PropType { Id = Guid.NewGuid(), SportId = sport.Id, Sport = sport, Name = "Pitcher Strikeouts", StatKey = "PITCHER_STRIKEOUTS" };
+        var batterStrikeouts = new PropType { Id = Guid.NewGuid(), SportId = sport.Id, Sport = sport, Name = "Strikeouts", StatKey = "STRIKEOUTS" };
+        var batterWalks = new PropType { Id = Guid.NewGuid(), SportId = sport.Id, Sport = sport, Name = "Walks", StatKey = "WALKS" };
         var paulGoldschmidt = new Player
         {
             Id = Guid.NewGuid(),
@@ -637,7 +702,7 @@ public sealed class PlayerSearchTests
         dbContext.Sports.Add(sport);
         dbContext.Leagues.AddRange(league, liveLeague);
         dbContext.Teams.AddRange(team, pirates);
-        dbContext.PropTypes.AddRange(propType, pitcherStrikeouts);
+        dbContext.PropTypes.AddRange(propType, pitcherStrikeouts, batterStrikeouts, batterWalks);
         dbContext.Players.AddRange(players);
         var refreshRun = new TheOddsRefreshRun
         {
@@ -686,21 +751,17 @@ public sealed class PlayerSearchTests
                 IsActive = true
             };
             dbContext.Platforms.Add(platform);
-            dbContext.PlatformProps.Add(new PlatformProp
+            var platformPropRows = new List<PlatformProp>
             {
-                Id = Guid.NewGuid(),
-                PropId = paulSkenesProp.Id,
-                Prop = paulSkenesProp,
-                PlatformId = platform.Id,
-                Platform = platform,
-                PlatformPropId = $"underdog:{paulSkenes.Id:N}:pitcher-strikeouts:6.5",
-                Label = "Paul Skenes Pitcher Strikeouts",
-                CurrentLine = 6.5m,
-                OverAvailable = true,
-                UnderAvailable = true,
-                Status = "active",
-                ObservedAt = DateTimeOffset.UtcNow
-            });
+                BuildPlatformProp(platform, paulSkenesProp, $"underdog:{paulSkenes.Id:N}:pitcher-strikeouts:6.5", DateTimeOffset.UtcNow)
+            };
+            if (includeDuplicatePaulPlatformProps)
+            {
+                platformPropRows.Add(BuildPlatformProp(platform, paulSkenesProp, $"underdog:{paulSkenes.Id:N}:pitcher-strikeouts:6.5:duplicate-1", DateTimeOffset.UtcNow.AddMinutes(-1)));
+                platformPropRows.Add(BuildPlatformProp(platform, paulSkenesProp, $"underdog:{paulSkenes.Id:N}:pitcher-strikeouts:6.5:duplicate-2", DateTimeOffset.UtcNow.AddMinutes(-2)));
+            }
+
+            dbContext.PlatformProps.AddRange(platformPropRows);
         }
         if (includePaulAlias)
         {
@@ -756,6 +817,18 @@ public sealed class PlayerSearchTests
         {
             AddPitcherStrikeoutResults(dbContext, paulSkenesLiveDuplicate.Id, league.Id, pitcherStrikeouts.Id);
         }
+        if (includeMookieBatterWalkResults)
+        {
+            AddStatResults(dbContext, mookieBetts.Id, league.Id, batterWalks.Id, [0m, 1m, 2m], "mookie-walks");
+        }
+        if (includeMookieBatterStrikeoutResults)
+        {
+            AddStatResults(dbContext, mookieBetts.Id, league.Id, batterStrikeouts.Id, [1m, 2m], "mookie-batter-strikeouts");
+        }
+        if (includeMookiePitcherStrikeoutTrapResults)
+        {
+            AddStatResults(dbContext, mookieBetts.Id, league.Id, pitcherStrikeouts.Id, [9m], "mookie-pitcher-strikeout-trap");
+        }
         if (includeAmbiguousSameNameRows)
         {
             dbContext.MarketLineShoppingSnapshots.Add(BuildSnapshot(refreshRun.Id, ambiguousLinePlayer.Id, "Jordan Smith", "Total Bases", "Over", 1.5m));
@@ -765,10 +838,30 @@ public sealed class PlayerSearchTests
 
         return new SeededPlayers(
             paulGoldschmidt.Id,
+            mookieBetts.Id,
             paulSkenes.Id,
             paulSkenesLiveDuplicate.Id,
             ambiguousNoLinePlayer.Id,
             ambiguousLinePlayer.Id);
+    }
+
+    private static PlatformProp BuildPlatformProp(Platform platform, Prop prop, string platformPropId, DateTimeOffset observedAt)
+    {
+        return new PlatformProp
+        {
+            Id = Guid.NewGuid(),
+            PropId = prop.Id,
+            Prop = prop,
+            PlatformId = platform.Id,
+            Platform = platform,
+            PlatformPropId = platformPropId,
+            Label = $"{prop.Player?.DisplayName ?? "Player"} {prop.PropType?.Name ?? "Prop"}",
+            CurrentLine = 6.5m,
+            OverAvailable = true,
+            UnderAvailable = true,
+            Status = "active",
+            ObservedAt = observedAt
+        };
     }
 
     private static MarketLineShoppingSnapshot BuildSnapshot(Guid refreshRunId, Guid playerId, string playerName, string propType, string side, decimal line)
@@ -812,8 +905,12 @@ public sealed class PlayerSearchTests
 
     private static void AddPitcherStrikeoutResults(ApplicationDbContext dbContext, Guid playerId, Guid leagueId, Guid propTypeId)
     {
+        AddStatResults(dbContext, playerId, leagueId, propTypeId, [5m, 7m, 8m], "pitcher-strikeouts");
+    }
+
+    private static void AddStatResults(ApplicationDbContext dbContext, Guid playerId, Guid leagueId, Guid propTypeId, decimal[] values, string sourcePrefix)
+    {
         var today = DateOnly.FromDateTime(DateTime.UtcNow.Date);
-        var values = new[] { 5m, 7m, 8m };
         for (var index = 0; index < values.Length; index++)
         {
             dbContext.PropResults.Add(new PropResult
@@ -825,7 +922,7 @@ public sealed class PlayerSearchTests
                 EventDate = today.AddDays(-values.Length + index),
                 ActualResultValue = values[index],
                 ExternalSource = "mlb",
-                ExternalSourceIdentifier = $"game-{index + 1}",
+                ExternalSourceIdentifier = $"{sourcePrefix}-game-{index + 1}",
                 CreatedAt = DateTimeOffset.UtcNow,
                 UpdatedAt = DateTimeOffset.UtcNow
             });
@@ -992,6 +1089,7 @@ public sealed class PlayerSearchTests
 
     private sealed record SeededPlayers(
         Guid PaulGoldschmidtId,
+        Guid MookieBettsId,
         Guid PaulSkenesId,
         Guid PaulSkenesLiveDuplicateId,
         Guid AmbiguousNoLinePlayerId,

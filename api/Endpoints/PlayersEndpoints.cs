@@ -1,7 +1,9 @@
 using Microsoft.EntityFrameworkCore;
 using SportsBetting.Api.Data;
 using SportsBetting.Api.Models;
+using System.Globalization;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using SportsBetting.Api.Utilities;
 
 namespace SportsBetting.Api.Endpoints;
@@ -339,17 +341,19 @@ public static partial class PlayersEndpoints
             effectivePlayerId = selectedPlayer.Id;
         }
 
-        var snapshotCurrentLines = matchingSnapshots
+        var rawSnapshotCurrentLines = matchingSnapshots
             .OrderByDescending(row => row.SnapshotPlayerId == effectivePlayerId)
             .ThenByDescending(row => row.Snapshot.BestEstimatedEv ?? decimal.MinValue)
             .ThenBy(row => row.Snapshot.Player)
             .ThenBy(row => row.Snapshot.PropType)
-            .Take(requestedTake)
             .Select(row => ToPlayerResearchMarketLine(row.Snapshot, row.SnapshotPlayerId ?? effectivePlayerId))
             .ToArray();
-        var currentLines = snapshotCurrentLines.Length > 0
-            ? snapshotCurrentLines
+        var rawCurrentLines = rawSnapshotCurrentLines.Length > 0
+            ? rawSnapshotCurrentLines
             : await LoadPlayerResearchPlatformPropLinesAsync(dbContext, candidateIds, effectivePlayerId, requestedTake, cancellationToken);
+        var currentLines = DedupePlayerResearchMarketLines(rawCurrentLines)
+            .Take(requestedTake)
+            .ToArray();
         var candidateSummaries = await dbContext.Players
             .AsNoTracking()
             .Where(player => candidateIds.Contains(player.Id))
@@ -383,6 +387,8 @@ public static partial class PlayersEndpoints
             currentLines,
             resolutionMode,
             ExactNameLineOwnerPlayerIds: exactNameLineOwnerIdsInPlayers,
+            RawCurrentLineCount: rawCurrentLines.Length,
+            DuplicateCurrentLineCount: Math.Max(0, rawCurrentLines.Length - currentLines.Length),
             Reason: ambiguityReason ?? (currentLines.Length == 0 ? "No current provider lines matched the selected player's safe equivalent identities or an unambiguous exact-name line owner." : null));
     }
 
@@ -529,7 +535,7 @@ public static partial class PlayersEndpoints
             .ToArray();
     }
 
-    private static async Task<object[]> LoadPlayerResearchPlatformPropLinesAsync(
+    private static async Task<PlayerResearchMarketLine[]> LoadPlayerResearchPlatformPropLinesAsync(
         ApplicationDbContext dbContext,
         IReadOnlyCollection<Guid> candidatePlayerIds,
         Guid effectivePlayerId,
@@ -550,7 +556,7 @@ public static partial class PlayersEndpoints
             .ThenByDescending(platformProp => platformProp.ObservedAt)
             .ThenBy(platformProp => platformProp.Platform == null ? platformProp.Label : platformProp.Platform.Name)
             .ThenBy(platformProp => platformProp.Prop!.PropType == null ? platformProp.Label : platformProp.Prop.PropType.Name)
-            .Take(take)
+            .Take(Math.Clamp(take * 5, take, 500))
             .Select(platformProp => new
             {
                 platformProp.Id,
@@ -569,7 +575,7 @@ public static partial class PlayersEndpoints
             .ToArrayAsync(cancellationToken);
 
         return rows
-            .Select(row => ToPlayerResearchMarketLine(row.Id, row.PlayerId, row.Player, row.Sport, row.Provider, row.PropType, row.CurrentLine, SelectPlatformPropSide(row.OverAvailable, row.UnderAvailable), row.EventStartTime, row.Status))
+            .Select(row => ToPlayerResearchMarketLine(row.Id, row.PlayerId, row.Player, row.Sport, row.Provider, row.PropType, row.CurrentLine, SelectPlatformPropSide(row.OverAvailable, row.UnderAvailable), row.EventStartTime, row.Status, row.ObservedAt))
             .ToArray();
     }
 
@@ -1245,6 +1251,8 @@ public static partial class PlayersEndpoints
             "homerun" or "homeruns" or "batterhomerun" or "batterhomeruns" => "homeruns",
             "stolenbase" or "stolenbases" or "batterstolenbase" or "batterstolenbases" => "stolenbases",
             "hitsrunsrbi" or "hitsrunsrbis" or "batterhitsrunsrbi" or "batterhitsrunsrbis" => "hitsrunsrbis",
+            "batterstrikeouts" or "batterstrikeout" or "hitterstrikeouts" or "hitterstrikeout" => "batterstrikeouts",
+            "walk" or "walks" or "batterwalk" or "batterwalks" or "hitterwalk" or "hitterwalks" => "batterwalks",
             _ => normalized
         };
     }
@@ -1259,9 +1267,26 @@ public static partial class PlayersEndpoints
 
         if (string.Equals(expectedStatKey, "pitcherstrikeouts", StringComparison.OrdinalIgnoreCase))
         {
-            aliases.Add("strikeouts");
             aliases.Add("pitcherks");
             aliases.Add("ks");
+        }
+        else if (string.Equals(expectedStatKey, "batterstrikeouts", StringComparison.OrdinalIgnoreCase))
+        {
+            aliases.Add("strikeouts");
+            aliases.Add("strikeout");
+            aliases.Add("batterstrikeout");
+            aliases.Add("hitterstrikeouts");
+            aliases.Add("hitterstrikeout");
+        }
+        else if (string.Equals(expectedStatKey, "batterwalks", StringComparison.OrdinalIgnoreCase))
+        {
+            aliases.Add("walks");
+            aliases.Add("walk");
+            aliases.Add("batterwalk");
+            aliases.Add("hitterwalks");
+            aliases.Add("hitterwalk");
+            aliases.Add("baseonballs");
+            aliases.Add("batterbaseonballs");
         }
 
         return aliases;
@@ -1304,47 +1329,79 @@ public static partial class PlayersEndpoints
         return ids.ToArray();
     }
 
-    private static object ToPlayerResearchMarketLine(MarketLineShoppingSnapshot row, Guid canonicalPlayerId)
+    private static PlayerResearchMarketLine[] DedupePlayerResearchMarketLines(IReadOnlyCollection<PlayerResearchMarketLine> rows)
     {
-        return new
-        {
-            row.Sport,
-            eventId = row.EventId,
-            eventStartTimeUtc = row.EventStartTime,
-            awayTeam = row.EventName,
-            homeTeam = (string?)null,
-            playerId = canonicalPlayerId,
-            canonicalPlayerId,
-            player = row.Player,
-            normalizedPropType = row.PropType,
-            line = row.Line,
-            bestSide = row.BestSide,
-            providerCategory = row.ProviderCategory,
-            provider = row.Provider,
-            bestBookmaker = row.BestBookmaker ?? row.Bookmaker ?? row.Provider,
-            bestAmericanPrice = row.BestAmericanPrice,
-            bestDecimalPrice = row.BestDecimalPrice,
-            bestProbability = row.BestProbability,
-            bestImpliedProbability = row.BestImpliedProbability,
-            bestProbabilityEdge = row.BestProbabilityEdge,
-            bestEstimatedEv = row.BestEstimatedEv,
-            strategyClassification = row.StrategyClassification,
-            strategyTier = row.StrategyTier,
-            isCandidate = row.IsCandidate,
-            isWatchlist = row.IsWatchlist,
-            isAvoid = row.IsAvoid,
-            isResearchOnly = row.IsResearchOnly,
-            entryProvider = row.EntryProvider,
-            entryCompatibilityGroup = row.EntryCompatibilityGroup,
-            entryProviderCategory = row.EntryProviderCategory,
-            entryActionableForUser = row.EntryActionableForUser,
-            lifecycleStatus = row.LifecycleStatus,
-            isStale = row.IsStale,
-            isExpired = row.IsExpired
-        };
+        return rows
+            .GroupBy(BuildPlayerResearchMarketLineKey, StringComparer.OrdinalIgnoreCase)
+            .Select(group => group
+                .OrderByDescending(row => row.EntryActionableForUser)
+                .ThenBy(row => row.IsExpired)
+                .ThenBy(row => row.IsStale)
+                .ThenByDescending(row => row.SortObservedAtUtc)
+                .ThenByDescending(row => row.BestEstimatedEv ?? decimal.MinValue)
+                .ThenBy(row => row.Provider)
+                .ThenBy(row => row.BestBookmaker)
+                .First())
+            .OrderByDescending(row => row.PlayerId == row.CanonicalPlayerId)
+            .ThenByDescending(row => row.BestEstimatedEv ?? decimal.MinValue)
+            .ThenBy(row => row.Player)
+            .ThenBy(row => row.NormalizedPropType)
+            .ThenBy(row => row.Provider)
+            .ToArray();
     }
 
-    private static object ToPlayerResearchMarketLine(
+    private static string BuildPlayerResearchMarketLineKey(PlayerResearchMarketLine row)
+    {
+        var eventStartKey = row.EventStartTimeUtc?.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture);
+        var eventKey = FirstNonBlank(row.LogicalEventKey, row.EventId, eventStartKey);
+        var providerKey = NormalizeCompactHistoryKey(FirstNonBlank(row.BestBookmaker, row.Provider));
+        var propKey = NormalizeCompactHistoryKey(row.NormalizedPropType);
+        var sideKey = NormalizeCompactHistoryKey(row.BestSide);
+        var lineKey = row.Line.ToString("0.####", CultureInfo.InvariantCulture);
+        return string.Join("|", row.CanonicalPlayerId, eventKey, providerKey, propKey, sideKey, lineKey);
+    }
+
+    private static PlayerResearchMarketLine ToPlayerResearchMarketLine(MarketLineShoppingSnapshot row, Guid canonicalPlayerId)
+    {
+        return new PlayerResearchMarketLine(
+            row.Sport,
+            row.EventId ?? row.Id.ToString("N"),
+            row.EventStartTime,
+            row.EventName,
+            HomeTeam: null,
+            PlayerId: canonicalPlayerId,
+            CanonicalPlayerId: canonicalPlayerId,
+            row.Player,
+            row.PropType,
+            row.Line,
+            row.BestSide,
+            row.ProviderCategory,
+            row.Provider ?? "Unknown provider",
+            row.BestBookmaker ?? row.Bookmaker ?? row.Provider ?? "Unknown provider",
+            row.BestAmericanPrice,
+            row.BestDecimalPrice,
+            row.BestProbability,
+            row.BestImpliedProbability,
+            row.BestProbabilityEdge,
+            row.BestEstimatedEv,
+            row.StrategyClassification,
+            row.StrategyTier,
+            row.IsCandidate,
+            row.IsWatchlist,
+            row.IsAvoid,
+            row.IsResearchOnly,
+            row.EntryProvider,
+            row.EntryCompatibilityGroup,
+            row.EntryProviderCategory,
+            row.EntryActionableForUser,
+            row.LifecycleStatus,
+            row.IsStale,
+            row.IsExpired,
+            SortObservedAtUtc: row.GeneratedAtUtc,
+            LogicalEventKey: row.EventId);
+    }
+
+    private static PlayerResearchMarketLine ToPlayerResearchMarketLine(
         Guid lineId,
         Guid playerId,
         string player,
@@ -1354,45 +1411,46 @@ public static partial class PlayersEndpoints
         decimal line,
         string side,
         DateTimeOffset eventStartTime,
-        string status)
+        string status,
+        DateTimeOffset observedAt)
     {
         var isActive = string.Equals(status, "active", StringComparison.OrdinalIgnoreCase);
-        return new
-        {
+        return new PlayerResearchMarketLine(
             sport,
-            eventId = lineId.ToString("N"),
-            eventStartTimeUtc = eventStartTime,
-            awayTeam = "Current provider line",
-            homeTeam = (string?)null,
+            lineId.ToString("N"),
+            eventStartTime,
+            AwayTeam: "Current provider line",
+            HomeTeam: null,
             playerId,
-            canonicalPlayerId = playerId,
+            CanonicalPlayerId: playerId,
             player,
-            normalizedPropType = propType,
+            NormalizedPropType: propType,
             line,
-            bestSide = side,
-            providerCategory = "DFS",
+            BestSide: side,
+            ProviderCategory: "DFS",
             provider,
-            bestBookmaker = provider,
-            bestAmericanPrice = (int?)null,
-            bestDecimalPrice = (decimal?)null,
-            bestProbability = (decimal?)null,
-            bestImpliedProbability = (decimal?)null,
-            bestProbabilityEdge = (decimal?)null,
-            bestEstimatedEv = (decimal?)null,
-            strategyClassification = "Research",
-            strategyTier = "Research",
-            isCandidate = false,
-            isWatchlist = false,
-            isAvoid = false,
-            isResearchOnly = true,
-            entryProvider = provider,
-            entryCompatibilityGroup = provider.Replace(" ", string.Empty, StringComparison.Ordinal),
-            entryProviderCategory = "DFS",
-            entryActionableForUser = isActive,
-            lifecycleStatus = isActive ? "Active" : status,
-            isStale = false,
-            isExpired = !isActive
-        };
+            BestBookmaker: provider,
+            BestAmericanPrice: null,
+            BestDecimalPrice: null,
+            BestProbability: null,
+            BestImpliedProbability: null,
+            BestProbabilityEdge: null,
+            BestEstimatedEv: null,
+            StrategyClassification: "Research",
+            StrategyTier: "Research",
+            IsCandidate: false,
+            IsWatchlist: false,
+            IsAvoid: false,
+            IsResearchOnly: true,
+            EntryProvider: provider,
+            EntryCompatibilityGroup: provider.Replace(" ", string.Empty, StringComparison.Ordinal),
+            EntryProviderCategory: "DFS",
+            EntryActionableForUser: isActive,
+            LifecycleStatus: isActive ? "Active" : status,
+            IsStale: false,
+            IsExpired: !isActive,
+            SortObservedAtUtc: observedAt,
+            LogicalEventKey: eventStartTime.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture));
     }
 
     private static string SelectPlatformPropSide(bool overAvailable, bool underAvailable)
@@ -1532,9 +1590,11 @@ internal sealed record PlayerResearchLookup(
     IReadOnlyList<PlayerResearchCandidatePlayer> CandidatePlayerIdsConsidered,
     IReadOnlyList<PlayerResearchExternalRef> ExternalRefs,
     Guid? EffectivePlayerId,
-    IReadOnlyList<object> CurrentLines,
+    IReadOnlyList<PlayerResearchMarketLine> CurrentLines,
     string? ResolutionMode,
     IReadOnlyList<Guid> ExactNameLineOwnerPlayerIds,
+    int RawCurrentLineCount,
+    int DuplicateCurrentLineCount,
     string? Reason)
 {
     public static PlayerResearchLookup Empty(DateTimeOffset generatedAtUtc, string reason)
@@ -1550,6 +1610,8 @@ internal sealed record PlayerResearchLookup(
             CurrentLines: [],
             ResolutionMode: null,
             ExactNameLineOwnerPlayerIds: [],
+            RawCurrentLineCount: 0,
+            DuplicateCurrentLineCount: 0,
             Reason: reason);
     }
 
@@ -1571,10 +1633,49 @@ internal sealed record PlayerResearchLookup(
             resolutionMode = ResolutionMode,
             exactNameLineOwnerPlayerIds = ExactNameLineOwnerPlayerIds,
             currentProviderLineCount = CurrentLines.Count,
+            rawCurrentProviderLineCount = RawCurrentLineCount,
+            duplicateCurrentProviderLineCount = DuplicateCurrentLineCount,
             reason = Reason
         };
     }
 }
+
+internal sealed record PlayerResearchMarketLine(
+    string Sport,
+    string EventId,
+    DateTimeOffset? EventStartTimeUtc,
+    string? AwayTeam,
+    string? HomeTeam,
+    Guid PlayerId,
+    Guid CanonicalPlayerId,
+    string Player,
+    string NormalizedPropType,
+    decimal Line,
+    string BestSide,
+    string ProviderCategory,
+    string Provider,
+    string BestBookmaker,
+    int? BestAmericanPrice,
+    decimal? BestDecimalPrice,
+    decimal? BestProbability,
+    decimal? BestImpliedProbability,
+    decimal? BestProbabilityEdge,
+    decimal? BestEstimatedEv,
+    string? StrategyClassification,
+    string? StrategyTier,
+    bool IsCandidate,
+    bool IsWatchlist,
+    bool IsAvoid,
+    bool IsResearchOnly,
+    string? EntryProvider,
+    string? EntryCompatibilityGroup,
+    string? EntryProviderCategory,
+    bool EntryActionableForUser,
+    string? LifecycleStatus,
+    bool IsStale,
+    bool IsExpired,
+    [property: JsonIgnore] DateTimeOffset SortObservedAtUtc,
+    [property: JsonIgnore] string? LogicalEventKey);
 
 internal sealed record PlayerResearchSelectedPlayer(Guid Id, string DisplayName, string? League);
 
