@@ -297,6 +297,8 @@ public static class PublicMlbDfsEndpoints
             bool? candidateOnly,
             DateOnly? fromDate,
             DateOnly? toDate,
+            DateOnly? startDate,
+            DateOnly? endDate,
             int? minSampleSize,
             string? gradingMode,
             bool? topPickOnly,
@@ -311,6 +313,8 @@ public static class PublicMlbDfsEndpoints
             ApplicationDbContext dbContext,
             CancellationToken cancellationToken) =>
         {
+            var effectiveFromDate = fromDate ?? startDate;
+            var effectiveToDate = toDate ?? endDate;
             var marketSport = ResolveMarketSport(sport);
             if (marketSport.UnsupportedResponse is not null)
             {
@@ -327,8 +331,10 @@ public static class PublicMlbDfsEndpoints
                 strategyClassification,
                 strategyTier,
                 ResolveEffectiveCandidateOnly(candidateOnly, includeWatchlist, includeResearch),
-                fromDate,
-                toDate,
+                effectiveFromDate,
+                effectiveToDate,
+                startDate,
+                endDate,
                 minSampleSize,
                 gradingMode,
                 topPickOnly ?? false,
@@ -879,6 +885,8 @@ public static class PublicMlbDfsEndpoints
         bool candidateOnly,
         DateOnly? fromDate,
         DateOnly? toDate,
+        DateOnly? startDate,
+        DateOnly? endDate,
         int? minSampleSize,
         string? gradingMode,
         bool topPickOnly,
@@ -913,6 +921,8 @@ public static class PublicMlbDfsEndpoints
             candidateOnly,
             fromDate,
             toDate,
+            startDate,
+            endDate,
             minSampleSize,
             normalizedGradingMode,
             latestRefresh,
@@ -1301,6 +1311,8 @@ public static class PublicMlbDfsEndpoints
         bool candidateOnly,
         DateOnly? fromDate,
         DateOnly? toDate,
+        DateOnly? startDate,
+        DateOnly? endDate,
         int? minSampleSize,
         string normalizedGradingMode,
         TheOddsApiDebugEndpoints.MlbRefreshFreshnessResponse latestRefresh,
@@ -1455,16 +1467,16 @@ public static class PublicMlbDfsEndpoints
             .Select(row => row.CanonicalPlayerId!.Value)
             .Distinct()
             .ToArray();
-        var resultRows = resultDates.Length == 0 || playerIds.Length == 0
+        var resultRows = resultDates.Length == 0
             ? []
             : await dbContext.PropResults
                 .AsNoTracking()
-                .Where(row => resultDates.Contains(row.EventDate)
-                    && playerIds.Contains(row.PlayerId))
+                .Where(row => resultDates.Contains(row.EventDate))
                 .Select(row => new LedgerActualResultLookupRow(
                     row.Id,
                     row.EventDate,
                     row.PlayerId,
+                    row.Player != null ? row.Player.DisplayName : string.Empty,
                     row.PropTypeId,
                     row.PropType != null ? row.PropType.Name : string.Empty,
                     row.ActualResultValue))
@@ -1550,6 +1562,8 @@ public static class PublicMlbDfsEndpoints
                 includeStale,
                 includeExcluded,
                 includeNoResultDiagnostics,
+                startDate,
+                endDate,
                 fromDate,
                 toDate,
                 minSampleSize,
@@ -1618,6 +1632,9 @@ public static class PublicMlbDfsEndpoints
                     row.LifecycleStatus != "Active" ||
                     (!string.IsNullOrWhiteSpace(row.Warning) && row.Warning.Contains("stale", StringComparison.OrdinalIgnoreCase))),
                 noResultProviderInactiveRows = gradedRows.Count(row => row.MatchFailureReason == "ProviderLineForInactivePlayer"),
+                matchedViaExactPlayerIdDateStatRows = gradedRows.Count(row => row.MatchMethod == "ExactPlayerIdDateStat"),
+                matchedViaNormalizedPlayerNameDateStatRows = gradedRows.Count(row => row.MatchMethod == "NormalizedPlayerNameDateStatFallback"),
+                ambiguousFallbackRows = gradedRows.Count(row => row.MatchFailureReason == "AmbiguousNormalizedPlayerNameDateStatFallback"),
                 noResultEventDateMismatchRows = gradedRows.Count(row => row.MatchFailureReason == "EventDateMismatch"),
                 noResultUnknownRowsForCompletedDate = gradedRows.Count(row => row.MatchFailureReason == "Unknown"),
                 noResultMissingPlayerRowsForCompletedDate = gradedRows.Count(row => row.MatchFailureReason == "MissingLedgerPlayerId"),
@@ -1655,6 +1672,9 @@ public static class PublicMlbDfsEndpoints
                 unmatchedRowsForCompletedDate = unmatchedRows,
                 pendingRowsForCompletedDate = pendingRows,
                 matchedAndGradedRowsForCompletedDate = totalGraded,
+                matchedViaExactPlayerIdDateStatRowsForCompletedDate = gradedRows.Count(row => row.MatchMethod == "ExactPlayerIdDateStat"),
+                matchedViaNormalizedPlayerNameDateStatRowsForCompletedDate = gradedRows.Count(row => row.MatchMethod == "NormalizedPlayerNameDateStatFallback"),
+                ambiguousFallbackRowsForCompletedDate = gradedRows.Count(row => row.MatchFailureReason == "AmbiguousNormalizedPlayerNameDateStatFallback"),
                 providerInactiveRowsForCompletedDate = gradedRows.Count(row => row.MatchFailureReason == "ProviderLineForInactivePlayer"),
                 eventDateMismatchRowsForCompletedDate = gradedRows.Count(row => row.MatchFailureReason == "EventDateMismatch"),
                 wonRowsForCompletedDate = wonRows,
@@ -1707,6 +1727,10 @@ public static class PublicMlbDfsEndpoints
                     .Where(row => row.Outcome is null)
                     .GroupBy(row => row.MatchFailureReason ?? "Unknown")
                     .ToDictionary(group => group.Key, group => group.Count()),
+                matchMethodCounts = gradedRows
+                    .Where(row => row.Outcome is not null)
+                    .GroupBy(row => row.MatchMethod ?? "Unknown")
+                    .ToDictionary(group => group.Key, group => group.Count()),
                 noResultLedgerExamples = includeDiagnostics
                     ? BuildLedgerNoResultExamples(
                         gradedRows,
@@ -1719,7 +1743,7 @@ public static class PublicMlbDfsEndpoints
                         diagnosticResultRows,
                         Math.Clamp(diagnosticSampleSize ?? 5, 1, 25))
                     : [],
-                matchingStrategy = "recommendation_snapshots matched to prop_results by expected result date, canonical player id, and prop type id."
+                matchingStrategy = "recommendation_snapshots are graded at read time against prop_results by expected result date plus prop/stat. Exact canonical player id matches are preferred; if no exact id row exists, one unique normalized player-name/date/stat fallback row can be used. Provider, side, and line are not used to find the result row; side and line are only used to grade the found result."
             },
             groups = new
             {
@@ -1882,16 +1906,16 @@ public static class PublicMlbDfsEndpoints
             .Select(row => row.CanonicalPlayerId!.Value)
             .Distinct()
             .ToArray();
-        var resultRows = resultDates.Length == 0 || playerIds.Length == 0
+        var resultRows = resultDates.Length == 0
             ? []
             : await dbContext.PropResults
                 .AsNoTracking()
-                .Where(row => resultDates.Contains(row.EventDate)
-                    && playerIds.Contains(row.PlayerId))
+                .Where(row => resultDates.Contains(row.EventDate))
                 .Select(row => new LedgerActualResultLookupRow(
                     row.Id,
                     row.EventDate,
                     row.PlayerId,
+                    row.Player != null ? row.Player.DisplayName : string.Empty,
                     row.PropTypeId,
                     row.PropType != null ? row.PropType.Name : string.Empty,
                     row.ActualResultValue))
@@ -2065,6 +2089,7 @@ public static class PublicMlbDfsEndpoints
             or "MissingLedgerPropType"
             or "UnsupportedPropType"
             or "PropTypeNormalizationMismatch"
+            or "AmbiguousNormalizedPlayerNameDateStatFallback"
             or "Unknown";
     }
 
@@ -2549,7 +2574,11 @@ public static class PublicMlbDfsEndpoints
 
     private static string NormalizePerformancePropTypeKey(string? propType)
     {
-        return ResolveResultPropTypeKey(propType) ?? NormalizePropTypeKey(propType);
+        var resolved = ResolveResultPropTypeKey(propType);
+        var value = string.IsNullOrWhiteSpace(resolved) ? propType : resolved;
+        return string.IsNullOrWhiteSpace(value)
+            ? string.Empty
+            : string.Concat(value.Trim().ToUpperInvariant().Where(char.IsLetterOrDigit));
     }
 
     private static DateOnly? ResolveSnapshotExpectedResultDate(Models.MarketLineShoppingSnapshot snapshot)
@@ -2864,6 +2893,7 @@ public static class PublicMlbDfsEndpoints
     {
         decimal? actualResult = null;
         string? matchFailureReason = null;
+        string? matchMethod = null;
 
         if (!row.CanonicalPlayerId.HasValue)
         {
@@ -2884,6 +2914,9 @@ public static class PublicMlbDfsEndpoints
             }
             else
             {
+                var normalizedPlayerName = string.IsNullOrWhiteSpace(row.NormalizedPlayerName)
+                    ? NormalizePerformanceKey(row.PlayerName)
+                    : NormalizePerformanceKey(row.NormalizedPlayerName);
                 var matches = actualResults
                 .Where(result => result.EventDate == row.ExpectedResultDate
                     && result.PlayerId == row.CanonicalPlayerId.Value
@@ -2893,14 +2926,35 @@ public static class PublicMlbDfsEndpoints
                             normalizedPropType,
                             StringComparison.OrdinalIgnoreCase)))
                 .ToArray();
+                var normalizedNameMatches = matches.Length == 0 && !string.IsNullOrWhiteSpace(normalizedPlayerName)
+                    ? actualResults
+                        .Where(result => result.EventDate == row.ExpectedResultDate
+                            && string.Equals(result.NormalizedPlayerName, normalizedPlayerName, StringComparison.OrdinalIgnoreCase)
+                            && (result.PropTypeId == row.PropTypeId.Value ||
+                                string.Equals(
+                                    NormalizePerformancePropTypeKey(result.PropType),
+                                    normalizedPropType,
+                                    StringComparison.OrdinalIgnoreCase)))
+                        .ToArray()
+                    : [];
 
                 if (matches.Length == 1)
                 {
                     actualResult = matches[0].ActualResultValue;
+                    matchMethod = "ExactPlayerIdDateStat";
                 }
                 else if (matches.Length > 1)
                 {
                     matchFailureReason = "MultipleResultRowsForPlayerPropDate";
+                }
+                else if (normalizedNameMatches.Length == 1)
+                {
+                    actualResult = normalizedNameMatches[0].ActualResultValue;
+                    matchMethod = "NormalizedPlayerNameDateStatFallback";
+                }
+                else if (normalizedNameMatches.Length > 1)
+                {
+                    matchFailureReason = "AmbiguousNormalizedPlayerNameDateStatFallback";
                 }
                 else
                 {
@@ -2918,7 +2972,7 @@ public static class PublicMlbDfsEndpoints
             _ => null
         };
 
-        return new LedgerPerformanceRow(row, actualResult, outcome, profit, matchFailureReason);
+        return new LedgerPerformanceRow(row, actualResult, outcome, profit, matchFailureReason, matchMethod);
     }
 
     private static string BuildLedgerMatchFailureReason(
@@ -4093,9 +4147,14 @@ public static class PublicMlbDfsEndpoints
         Guid PropResultId,
         DateOnly EventDate,
         Guid PlayerId,
+        string PlayerName,
         Guid PropTypeId,
         string PropType,
-        decimal ActualResultValue);
+        decimal ActualResultValue)
+    {
+        public string NormalizedPlayerName { get; } = NormalizePerformanceKey(PlayerName);
+        public string NormalizedPropType { get; } = NormalizePerformancePropTypeKey(PropType);
+    }
 
     private sealed record LedgerDiagnosticResultRow(
         Guid PropResultId,
@@ -4116,7 +4175,8 @@ public static class PublicMlbDfsEndpoints
         decimal? ActualResult,
         string? Outcome,
         decimal? Profit,
-        string? MatchFailureReason);
+        string? MatchFailureReason,
+        string? MatchMethod);
 
     private sealed record PerformanceDateDiagnostics(
         DateOnly SlateDate,

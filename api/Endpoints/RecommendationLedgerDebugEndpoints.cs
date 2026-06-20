@@ -629,6 +629,227 @@ public static class RecommendationLedgerDebugEndpoints
         .WithName("RecommendationLedgerResultCoverageDebug")
         .WithSummary("Read-only diagnostic explaining whether captured ledger picks have matching imported MLB prop_results.");
 
+        endpoints.MapGet("/api/debug/performance/result-match-audit", async (
+            string? sport,
+            DateOnly? date,
+            ApplicationDbContext dbContext,
+            CancellationToken cancellationToken) =>
+        {
+            var effectiveSport = string.IsNullOrWhiteSpace(sport) ? "MLB" : sport.Trim().ToUpperInvariant();
+            var effectiveDate = date ?? await dbContext.PropResults
+                .AsNoTracking()
+                .Select(row => (DateOnly?)row.EventDate)
+                .MaxAsync(cancellationToken) ?? DateOnly.FromDateTime(DateTime.UtcNow);
+
+            var snapshots = await dbContext.RecommendationSnapshots
+                .AsNoTracking()
+                .Where(row => row.Sport == effectiveSport && row.ExpectedResultDate == effectiveDate)
+                .OrderByDescending(row => row.RankingScore)
+                .ThenByDescending(row => row.EstimatedEv)
+                .ToArrayAsync(cancellationToken);
+            var datesToInspect = new[] { effectiveDate.AddDays(-1), effectiveDate, effectiveDate.AddDays(1) };
+            var propResults = await dbContext.PropResults
+                .AsNoTracking()
+                .Where(row => datesToInspect.Contains(row.EventDate))
+                .Select(row => new CoveragePropResultRow(
+                    row.Id,
+                    row.EventDate,
+                    row.PlayerId,
+                    row.Player != null ? row.Player.DisplayName : string.Empty,
+                    row.PropTypeId,
+                    row.PropType != null ? row.PropType.Name : string.Empty,
+                    row.ActualResultValue))
+                .ToArrayAsync(cancellationToken);
+            var auditPropResults = propResults
+                .Select(row => new AuditPropResultRow(row.Id, row.EventDate, row.PlayerId, row.PropTypeId, row.PropType, row.ActualResultValue))
+                .ToArray();
+            var importedDates = auditPropResults
+                .Where(row => row.EventDate == effectiveDate)
+                .Select(row => row.EventDate)
+                .Distinct()
+                .ToHashSet();
+            var playerIds = snapshots
+                .Where(row => row.CanonicalPlayerId.HasValue)
+                .Select(row => row.CanonicalPlayerId!.Value)
+                .Concat(propResults.Select(row => row.PlayerId))
+                .Distinct()
+                .ToArray();
+            var externalRefsByPlayerId = playerIds.Length == 0
+                ? new Dictionary<Guid, object[]>()
+                : (await dbContext.PlayerExternalRefs
+                    .AsNoTracking()
+                    .Where(row => playerIds.Contains(row.PlayerId))
+                    .Select(row => new
+                    {
+                        row.PlayerId,
+                        row.Provider,
+                        row.ProviderPlayerId,
+                        row.ProviderDisplayName
+                    })
+                    .ToArrayAsync(cancellationToken))
+                    .GroupBy(row => row.PlayerId)
+                    .ToDictionary(
+                        group => group.Key,
+                        group => group
+                            .Select(row => new
+                            {
+                                provider = row.Provider,
+                                providerPlayerId = row.ProviderPlayerId,
+                                providerDisplayName = row.ProviderDisplayName
+                            })
+                            .Cast<object>()
+                            .ToArray());
+
+            var rows = snapshots.Select(snapshot =>
+            {
+                var normalizedPlayerName = string.IsNullOrWhiteSpace(snapshot.NormalizedPlayerName)
+                    ? NormalizeDiagnosticKey(snapshot.PlayerName)
+                    : NormalizeDiagnosticKey(snapshot.NormalizedPlayerName);
+                var normalizedPropType = string.IsNullOrWhiteSpace(snapshot.NormalizedPropType)
+                    ? NormalizeDiagnosticKey(snapshot.PropType)
+                    : NormalizeDiagnosticKey(snapshot.NormalizedPropType);
+                var sameDateRows = propResults.Where(row => row.EventDate == snapshot.ExpectedResultDate).ToArray();
+                var samePlayerIdRows = snapshot.CanonicalPlayerId.HasValue
+                    ? sameDateRows.Where(row => row.PlayerId == snapshot.CanonicalPlayerId.Value).ToArray()
+                    : [];
+                var sameNameRows = string.IsNullOrWhiteSpace(normalizedPlayerName)
+                    ? []
+                    : sameDateRows.Where(row => row.NormalizedPlayerName == normalizedPlayerName).ToArray();
+                var samePlayerNameOrIdRows = samePlayerIdRows
+                    .Concat(sameNameRows)
+                    .GroupBy(row => row.Id)
+                    .Select(group => group.First())
+                    .ToArray();
+                var samePlayerDateStatRows = samePlayerNameOrIdRows
+                    .Where(row => PropTypeMatches(snapshot, row, normalizedPropType))
+                    .ToArray();
+                var exactIdStatRows = samePlayerIdRows
+                    .Where(row => PropTypeMatches(snapshot, row, normalizedPropType))
+                    .ToArray();
+                var nameOnlyStatRows = samePlayerDateStatRows
+                    .Where(row => !snapshot.CanonicalPlayerId.HasValue || row.PlayerId != snapshot.CanonicalPlayerId.Value)
+                    .ToArray();
+                var nearbyPlayerDateStatRows = propResults
+                    .Where(row => row.EventDate != snapshot.ExpectedResultDate
+                        && Math.Abs(row.EventDate.DayNumber - snapshot.ExpectedResultDate.DayNumber) <= 1
+                        && (PlayerMatches(snapshot, row, normalizedPlayerName))
+                        && PropTypeMatches(snapshot, row, normalizedPropType))
+                    .ToArray();
+                var currentGrade = AuditGradeRecommendationWithNameFallback(snapshot, auditPropResults, propResults, importedDates);
+                var legacyGrade = AuditGradeRecommendation(snapshot, auditPropResults, importedDates);
+                var playerMappingStatus = ResolveResultMatchPlayerMappingStatus(snapshot, samePlayerIdRows, sameNameRows, samePlayerDateStatRows, normalizedPlayerName);
+
+                return new
+                {
+                    recommendationSnapshotId = snapshot.Id,
+                    snapshot.CapturedAtUtc,
+                    eventStartTimeUtc = snapshot.EventStartTimeUtc,
+                    matcherDate = snapshot.ExpectedResultDate,
+                    slateDate = snapshot.SlateDate,
+                    resultDateSource = snapshot.ResultDateSource,
+                    playerId = snapshot.CanonicalPlayerId,
+                    playerName = snapshot.PlayerName,
+                    normalizedPlayerName,
+                    externalPlayerRefs = snapshot.CanonicalPlayerId.HasValue && externalRefsByPlayerId.TryGetValue(snapshot.CanonicalPlayerId.Value, out var refs)
+                        ? refs
+                        : [],
+                    eventId = snapshot.EventId,
+                    eventName = snapshot.EventId,
+                    team = (string?)null,
+                    opponent = (string?)null,
+                    provider = snapshot.Provider,
+                    bookmaker = snapshot.Bookmaker,
+                    entryProvider = snapshot.EntryProvider,
+                    marketKey = snapshot.NormalizedPropType,
+                    rawPropType = snapshot.PropType,
+                    propType = snapshot.PropType,
+                    propTypeId = snapshot.PropTypeId,
+                    normalizedExpectedStatKey = normalizedPropType,
+                    snapshot.Side,
+                    snapshot.Line,
+                    currentMatcherOutcome = currentGrade.Status,
+                    legacyExactIdMatcherOutcome = legacyGrade.Status,
+                    noResultReasonCode = currentGrade.ReasonCode,
+                    legacyNoResultReasonCode = legacyGrade.ReasonCode,
+                    playerMappingStatus,
+                    importedResultChecks = new
+                    {
+                        anyImportedResultRowsExistForSameDate = sameDateRows.Length > 0,
+                        importedResultRowsForSameDate = sameDateRows.Length,
+                        anyImportedResultRowsExistForSamePlayerId = samePlayerIdRows.Length > 0,
+                        importedResultRowsForSamePlayerId = samePlayerIdRows.Length,
+                        anyImportedResultRowsExistForSamePlayerNameDate = sameNameRows.Length > 0,
+                        importedResultRowsForSamePlayerNameDate = sameNameRows.Length,
+                        anyImportedResultRowsExistForSamePlayerDateStat = samePlayerDateStatRows.Length > 0,
+                        importedResultRowsForSamePlayerDateStat = samePlayerDateStatRows.Length,
+                        exactIdDateStatRows = exactIdStatRows.Length,
+                        normalizedNameOnlyDateStatRows = nameOnlyStatRows.Length,
+                        nearbyPlayerDateStatRows = nearbyPlayerDateStatRows.Length
+                    },
+                    closestCandidateResultRows = BuildResultMatchAuditCandidates(snapshot, propResults, externalRefsByPlayerId, normalizedPlayerName, normalizedPropType)
+                };
+            }).ToArray();
+
+            var matched = rows.Count(row => row.currentMatcherOutcome is "Won" or "Lost" or "Pushed");
+            var noResult = rows.Length - matched;
+
+            return Results.Ok(new
+            {
+                generatedAtUtc = DateTimeOffset.UtcNow,
+                callsExternalApis = false,
+                readOnly = true,
+                sport = effectiveSport,
+                date = effectiveDate,
+                summary = new
+                {
+                    capturedRecommendations = snapshots.Length,
+                    importedResultRowsForDate = propResults.Count(row => row.EventDate == effectiveDate),
+                    matched,
+                    noResult,
+                    byNoResultReason = rows
+                        .Where(row => row.currentMatcherOutcome is not ("Won" or "Lost" or "Pushed"))
+                        .GroupBy(row => row.noResultReasonCode ?? "Unknown")
+                        .ToDictionary(group => group.Key, group => group.Count()),
+                    byExpectedStatKey = snapshots
+                        .GroupBy(row => string.IsNullOrWhiteSpace(row.NormalizedPropType) ? NormalizeDiagnosticKey(row.PropType) : NormalizeDiagnosticKey(row.NormalizedPropType))
+                        .ToDictionary(group => group.Key, group => group.Count()),
+                    byRawPropType = snapshots
+                        .GroupBy(row => row.PropType)
+                        .ToDictionary(group => group.Key, group => group.Count()),
+                    byPlayerMappingStatus = rows
+                        .GroupBy(row => row.playerMappingStatus)
+                        .ToDictionary(group => group.Key, group => group.Count()),
+                    topFailedRows = rows
+                        .Where(row => row.currentMatcherOutcome is not ("Won" or "Lost" or "Pushed"))
+                        .Take(10)
+                        .Select(row => new
+                        {
+                            row.recommendationSnapshotId,
+                            row.playerName,
+                            row.rawPropType,
+                            row.normalizedExpectedStatKey,
+                            side = row.Side,
+                            line = row.Line,
+                            row.provider,
+                            row.currentMatcherOutcome,
+                            row.noResultReasonCode,
+                            row.playerMappingStatus,
+                            row.importedResultChecks
+                        })
+                        .ToArray()
+                },
+                notes = new[]
+                {
+                    "This endpoint is read-only and compares recommendation_snapshots to persisted prop_results only.",
+                    "The public matcher uses expected result date, canonical player id or unique normalized player name fallback, and prop/stat type. Side and line are used only after a result row is found.",
+                    "Legacy exact-id outcome shows what the old canonical-player-id-only lookup would have done."
+                },
+                rows
+            });
+        })
+        .WithName("PerformanceResultMatchAuditDebug")
+        .WithSummary("Read-only row-by-row audit for performance recommendation/result matching misses.");
+
         endpoints.MapGet("/api/debug/recommendations/ledger/no-result-audit", async (
             string? sport,
             DateOnly? date,
@@ -1705,6 +1926,156 @@ public static class RecommendationLedgerDebugEndpoints
         return new AuditGradeResult(
             gradeStatus ?? "Unmatched",
             gradeStatus is "Won" or "Lost" or "Pushed" ? "MatchedAndGraded" : "Unknown");
+    }
+
+    private static AuditGradeResult AuditGradeRecommendationWithNameFallback(
+        RecommendationSnapshot snapshot,
+        IReadOnlyCollection<AuditPropResultRow> propResults,
+        IReadOnlyCollection<CoveragePropResultRow> coverageRows,
+        IReadOnlySet<DateOnly> importedDates)
+    {
+        var legacy = AuditGradeRecommendation(snapshot, propResults, importedDates);
+        if (legacy.Status is "Won" or "Lost" or "Pushed")
+        {
+            return legacy;
+        }
+
+        if (!importedDates.Contains(snapshot.ExpectedResultDate))
+        {
+            return legacy;
+        }
+
+        var normalizedPlayerName = string.IsNullOrWhiteSpace(snapshot.NormalizedPlayerName)
+            ? NormalizeDiagnosticKey(snapshot.PlayerName)
+            : NormalizeDiagnosticKey(snapshot.NormalizedPlayerName);
+        var normalizedPropType = string.IsNullOrWhiteSpace(snapshot.NormalizedPropType)
+            ? NormalizeDiagnosticKey(snapshot.PropType)
+            : NormalizeDiagnosticKey(snapshot.NormalizedPropType);
+        if (string.IsNullOrWhiteSpace(normalizedPlayerName) || string.IsNullOrWhiteSpace(normalizedPropType))
+        {
+            return legacy;
+        }
+
+        var matches = coverageRows
+            .Where(row => row.EventDate == snapshot.ExpectedResultDate
+                && row.NormalizedPlayerName == normalizedPlayerName
+                && PropTypeMatches(snapshot, row, normalizedPropType))
+            .ToArray();
+        if (matches.Length == 0)
+        {
+            return legacy;
+        }
+
+        if (matches.Length > 1)
+        {
+            return new AuditGradeResult("Unmatched", "MultipleResultRowsForPlayerPropDate");
+        }
+
+        var gradeStatus = GradeCoverageStatus(snapshot.Side, snapshot.Line, matches[0].ActualResultValue);
+        return new AuditGradeResult(
+            gradeStatus ?? "Unmatched",
+            gradeStatus is "Won" or "Lost" or "Pushed" ? "MatchedAndGradedByNormalizedPlayerName" : "Unknown");
+    }
+
+    private static string ResolveResultMatchPlayerMappingStatus(
+        RecommendationSnapshot snapshot,
+        IReadOnlyCollection<CoveragePropResultRow> samePlayerIdRows,
+        IReadOnlyCollection<CoveragePropResultRow> sameNameRows,
+        IReadOnlyCollection<CoveragePropResultRow> samePlayerDateStatRows,
+        string normalizedPlayerName)
+    {
+        if (!snapshot.CanonicalPlayerId.HasValue)
+        {
+            return string.IsNullOrWhiteSpace(normalizedPlayerName) ? "MissingPlayerIdAndName" : "MissingPlayerId";
+        }
+
+        if (samePlayerDateStatRows.Any(row => row.PlayerId == snapshot.CanonicalPlayerId.Value))
+        {
+            return "ExactPlayerIdDateStat";
+        }
+
+        if (samePlayerDateStatRows.Count > 0)
+        {
+            return "NormalizedNameDateStatOnly";
+        }
+
+        if (samePlayerIdRows.Count > 0)
+        {
+            return "ExactPlayerIdDateOnly";
+        }
+
+        if (sameNameRows.Count > 0)
+        {
+            return "NormalizedNameDateOnly";
+        }
+
+        return "NoPlayerResultOnDate";
+    }
+
+    private static object[] BuildResultMatchAuditCandidates(
+        RecommendationSnapshot snapshot,
+        IReadOnlyCollection<CoveragePropResultRow> propResults,
+        IReadOnlyDictionary<Guid, object[]> externalRefsByPlayerId,
+        string normalizedPlayerName,
+        string normalizedPropType)
+    {
+        return propResults
+            .Select(row =>
+            {
+                var dateDistance = Math.Abs(row.EventDate.DayNumber - snapshot.ExpectedResultDate.DayNumber);
+                var playerIdMatches = snapshot.CanonicalPlayerId.HasValue && row.PlayerId == snapshot.CanonicalPlayerId.Value;
+                var playerNameMatches = !string.IsNullOrWhiteSpace(normalizedPlayerName) && row.NormalizedPlayerName == normalizedPlayerName;
+                var propTypeMatches = PropTypeMatches(snapshot, row, normalizedPropType);
+                var dateMatches = row.EventDate == snapshot.ExpectedResultDate;
+                var score =
+                    (dateMatches ? 64 : Math.Max(0, 16 - dateDistance)) +
+                    (playerIdMatches ? 32 : 0) +
+                    (playerNameMatches ? 24 : 0) +
+                    (propTypeMatches ? 16 : 0);
+                return new
+                {
+                    Row = row,
+                    dateDistance,
+                    playerIdMatches,
+                    playerNameMatches,
+                    propTypeMatches,
+                    dateMatches,
+                    score
+                };
+            })
+            .Where(row => row.score > 0)
+            .OrderByDescending(row => row.score)
+            .ThenBy(row => row.dateDistance)
+            .ThenBy(row => row.Row.PlayerName)
+            .Take(5)
+            .Select(row => new
+            {
+                propResultId = row.Row.Id,
+                resultDate = row.Row.EventDate,
+                playerId = row.Row.PlayerId,
+                playerName = row.Row.PlayerName,
+                externalPlayerRefs = externalRefsByPlayerId.TryGetValue(row.Row.PlayerId, out var refs) ? refs : [],
+                propTypeId = row.Row.PropTypeId,
+                statKey = row.Row.NormalizedPropType,
+                propType = row.Row.PropType,
+                value = row.Row.ActualResultValue,
+                gameId = (string?)null,
+                gameDate = row.Row.EventDate,
+                team = (string?)null,
+                opponent = (string?)null,
+                whyItDidOrDidNotMatch = new
+                {
+                    row.dateMatches,
+                    row.playerIdMatches,
+                    row.playerNameMatches,
+                    row.propTypeMatches,
+                    wouldMatchCurrentFallback = row.dateMatches && (row.playerIdMatches || row.playerNameMatches) && row.propTypeMatches,
+                    wouldMatchLegacyExactId = row.dateMatches && row.playerIdMatches && row.propTypeMatches,
+                    dateDistanceDays = row.Row.EventDate.DayNumber - snapshot.ExpectedResultDate.DayNumber
+                }
+            })
+            .Cast<object>()
+            .ToArray();
     }
 
     private static bool IsStaleOrNonPlayable(RecommendationSnapshot snapshot)

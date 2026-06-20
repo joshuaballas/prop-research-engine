@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Net.Http.Json;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
@@ -779,6 +780,118 @@ public sealed class PerformanceGradingTests
         Assert.Equal("DiagnosticReset", capturedPick.GetProperty("performanceExclusionReason").GetString());
     }
 
+    [Fact]
+    public async Task PerformanceSummary_GradesUniqueSameNameResult_WhenInternalPlayerIdsDiffer()
+    {
+        await using var factory = new SafetyTestApplicationFactory();
+        using var client = factory.CreateClient();
+        var date = new DateOnly(2026, 6, 19);
+        await SeedPerformanceScenarioAsync(
+            factory,
+            date,
+            "Pitcher Strikeouts",
+            "Under",
+            6.5m,
+            4,
+            resultUsesDifferentPlayerIdWithSameName: true);
+
+        var response = await client.GetAsync("/api/markets/performance-summary?candidateOnly=true&gradingMode=latestCompleted");
+
+        await EnsureSuccessWithBodyAsync(response);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal(1, json.GetProperty("dataAvailability").GetProperty("gradedPicks").GetInt32());
+        var overall = json.GetProperty("groups").GetProperty("overall")[0];
+        Assert.Equal(1, overall.GetProperty("wins").GetInt32());
+        Assert.Equal(1, json.GetProperty("dataAvailability").GetProperty("matchedViaNormalizedPlayerNameDateStatRows").GetInt32());
+        Assert.Equal(0, json.GetProperty("dataAvailability").GetProperty("matchedViaExactPlayerIdDateStatRows").GetInt32());
+    }
+
+    [Fact]
+    public async Task PerformanceSummary_StartDateEndDateAliases_FilterAndExposeExactMatchCounts()
+    {
+        await using var factory = new SafetyTestApplicationFactory();
+        using var client = factory.CreateClient();
+        var olderDate = new DateOnly(2026, 6, 18);
+        var targetDate = new DateOnly(2026, 6, 19);
+        await SeedPerformanceScenarioAsync(factory, olderDate, "Total Bases", "Over", 1.5m, 2);
+        await SeedPerformanceScenarioAsync(
+            factory,
+            targetDate,
+            "Pitcher Strikeouts",
+            "Under",
+            6.5m,
+            4,
+            resetDatabase: false);
+
+        var response = await client.GetAsync($"/api/markets/performance-summary?sport=MLB&startDate={targetDate:yyyy-MM-dd}&endDate={targetDate:yyyy-MM-dd}");
+
+        await EnsureSuccessWithBodyAsync(response);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        var dataAvailability = json.GetProperty("dataAvailability");
+        Assert.Equal(1, dataAvailability.GetProperty("gradedPicks").GetInt32());
+        Assert.Equal(1, dataAvailability.GetProperty("wonRowsForCompletedDate").GetInt32());
+        Assert.Equal(1, dataAvailability.GetProperty("matchedViaExactPlayerIdDateStatRows").GetInt32());
+        Assert.Equal(0, dataAvailability.GetProperty("noResultPicks").GetInt32());
+        Assert.Equal(targetDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture), json.GetProperty("filters").GetProperty("startDate").GetString());
+        Assert.Equal(targetDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture), json.GetProperty("filters").GetProperty("endDate").GetString());
+    }
+
+    [Fact]
+    public async Task PerformanceSummary_GradesEquivalentPropKeys_WhenPropTypeIdsDiffer()
+    {
+        await using var factory = new SafetyTestApplicationFactory();
+        using var client = factory.CreateClient();
+        var date = new DateOnly(2026, 6, 19);
+        await SeedPerformanceScenarioAsync(
+            factory,
+            date,
+            "Total Bases",
+            "Under",
+            1.5m,
+            0,
+            resultUsesDifferentPropTypeIdWithEquivalentName: true);
+
+        var response = await client.GetAsync($"/api/markets/performance-summary?sport=MLB&startDate={date:yyyy-MM-dd}&endDate={date:yyyy-MM-dd}");
+
+        await EnsureSuccessWithBodyAsync(response);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        var dataAvailability = json.GetProperty("dataAvailability");
+        Assert.Equal(1, dataAvailability.GetProperty("gradedPicks").GetInt32());
+        Assert.Equal(1, dataAvailability.GetProperty("wonRowsForCompletedDate").GetInt32());
+        Assert.Equal(1, dataAvailability.GetProperty("matchedViaExactPlayerIdDateStatRows").GetInt32());
+        Assert.Equal(0, dataAvailability.GetProperty("noResultPicks").GetInt32());
+    }
+
+    [Fact]
+    public async Task PerformanceResultMatchAudit_ReportsNormalizedNameFallbackEvidence()
+    {
+        await using var factory = new SafetyTestApplicationFactory();
+        using var client = factory.CreateClient();
+        var date = new DateOnly(2026, 6, 19);
+        await SeedPerformanceScenarioAsync(
+            factory,
+            date,
+            "Pitcher Strikeouts",
+            "Under",
+            6.5m,
+            4,
+            resultUsesDifferentPlayerIdWithSameName: true);
+
+        var response = await client.GetAsync($"/api/debug/performance/result-match-audit?sport=MLB&date={date:yyyy-MM-dd}");
+
+        await EnsureSuccessWithBodyAsync(response);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        var summary = json.GetProperty("summary");
+        Assert.Equal(1, summary.GetProperty("capturedRecommendations").GetInt32());
+        Assert.Equal(1, summary.GetProperty("matched").GetInt32());
+        var row = json.GetProperty("rows")[0];
+        Assert.Equal("NormalizedNameDateStatOnly", row.GetProperty("playerMappingStatus").GetString());
+        Assert.Equal("NoResult", row.GetProperty("legacyExactIdMatcherOutcome").GetString());
+        Assert.Equal("Won", row.GetProperty("currentMatcherOutcome").GetString());
+        Assert.Equal(1, row.GetProperty("importedResultChecks").GetProperty("normalizedNameOnlyDateStatRows").GetInt32());
+        Assert.True(row.GetProperty("closestCandidateResultRows")[0].GetProperty("whyItDidOrDidNotMatch").GetProperty("wouldMatchCurrentFallback").GetBoolean());
+    }
+
     private static async Task<SeededPerformanceScenario> SeedPerformanceScenarioAsync(
         SafetyTestApplicationFactory factory,
         DateOnly date,
@@ -806,7 +919,9 @@ public sealed class PerformanceGradingTests
         bool includeEventMapping = true,
         DateTimeOffset? capturedAtUtc = null,
         decimal rankingScore = 1m,
-        decimal estimatedEv = 0.08m)
+        decimal estimatedEv = 0.08m,
+        bool resultUsesDifferentPlayerIdWithSameName = false,
+        bool resultUsesDifferentPropTypeIdWithEquivalentName = false)
     {
         using var scope = factory.Services.CreateScope();
         var dbContext = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
@@ -905,7 +1020,36 @@ public sealed class PerformanceGradingTests
 
         if (resultValue.HasValue)
         {
-            AddPropResult(dbContext, player.Id, league.Id, primaryPropType.Id, date, resultValue.Value, "primary");
+            var resultPlayerId = player.Id;
+            var resultPropTypeId = primaryPropType.Id;
+            if (resultUsesDifferentPlayerIdWithSameName)
+            {
+                var resultPlayer = new Player
+                {
+                    Id = Guid.NewGuid(),
+                    LeagueId = league.Id,
+                    DisplayName = player.DisplayName,
+                    FirstName = player.FirstName,
+                    LastName = player.LastName
+                };
+                dbContext.Players.Add(resultPlayer);
+                resultPlayerId = resultPlayer.Id;
+            }
+
+            if (resultUsesDifferentPropTypeIdWithEquivalentName)
+            {
+                var resultPropType = new PropType
+                {
+                    Id = Guid.NewGuid(),
+                    SportId = sport.Id,
+                    Name = propType.Replace(" ", "_", StringComparison.Ordinal).ToUpperInvariant(),
+                    StatKey = propType.Replace(" ", "_", StringComparison.Ordinal).ToUpperInvariant()
+                };
+                dbContext.PropTypes.Add(resultPropType);
+                resultPropTypeId = resultPropType.Id;
+            }
+
+            AddPropResult(dbContext, resultPlayerId, league.Id, resultPropTypeId, date, resultValue.Value, "primary");
         }
 
         if (duplicateMatchingResultValue.HasValue)
