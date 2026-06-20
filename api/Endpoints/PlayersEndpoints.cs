@@ -24,24 +24,23 @@ public static partial class PlayersEndpoints
         .WithSummary("Read-only persisted player search for Player Research autocomplete.");
 
         endpoints.MapGet("/api/player-research/current-lines", async (
-            Guid? playerId,
+            string? playerId,
             int? take,
             ApplicationDbContext dbContext,
             CancellationToken cancellationToken) =>
         {
-            if (!playerId.HasValue || playerId.Value == Guid.Empty)
+            if (!Guid.TryParse(playerId, out var parsedPlayerId) || parsedPlayerId == Guid.Empty)
             {
-                return Results.Ok(new
+                return Results.BadRequest(new
                 {
                     generatedAtUtc = DateTimeOffset.UtcNow,
                     callsExternalApis = false,
                     readOnly = true,
-                    lines = Array.Empty<object>(),
-                    audit = new { reason = "playerId is required." }
+                    error = "A valid playerId is required."
                 });
             }
 
-            var lookup = await BuildPlayerResearchLookupAsync(dbContext, playerId.Value, take, cancellationToken);
+            var lookup = await BuildPlayerResearchLookupAsync(dbContext, parsedPlayerId, take, cancellationToken);
             return Results.Ok(new
             {
                 lookup.GeneratedAtUtc,
@@ -351,7 +350,8 @@ public static partial class PlayersEndpoints
         var rawCurrentLines = rawSnapshotCurrentLines.Length > 0
             ? rawSnapshotCurrentLines
             : await LoadPlayerResearchPlatformPropLinesAsync(dbContext, candidateIds, effectivePlayerId, requestedTake, cancellationToken);
-        var currentLines = DedupePlayerResearchMarketLines(rawCurrentLines)
+        var identityGroupKey = BuildPlayerResearchIdentityGroupKey(candidateIds);
+        var currentLines = DedupePlayerResearchMarketLines(rawCurrentLines, identityGroupKey, selectedPlayer.Id, effectivePlayerId)
             .Take(requestedTake)
             .ToArray();
         var candidateSummaries = await dbContext.Players
@@ -1329,14 +1329,20 @@ public static partial class PlayersEndpoints
         return ids.ToArray();
     }
 
-    private static PlayerResearchMarketLine[] DedupePlayerResearchMarketLines(IReadOnlyCollection<PlayerResearchMarketLine> rows)
+    private static PlayerResearchMarketLine[] DedupePlayerResearchMarketLines(
+        IReadOnlyCollection<PlayerResearchMarketLine> rows,
+        string identityGroupKey,
+        Guid selectedPlayerId,
+        Guid effectivePlayerId)
     {
         return rows
-            .GroupBy(BuildPlayerResearchMarketLineKey, StringComparer.OrdinalIgnoreCase)
+            .GroupBy(row => BuildPlayerResearchMarketLineKey(row, identityGroupKey), StringComparer.OrdinalIgnoreCase)
             .Select(group => group
                 .OrderByDescending(row => row.EntryActionableForUser)
                 .ThenBy(row => row.IsExpired)
                 .ThenBy(row => row.IsStale)
+                .ThenByDescending(row => row.PlayerId == selectedPlayerId)
+                .ThenByDescending(row => row.PlayerId == effectivePlayerId)
                 .ThenByDescending(row => row.SortObservedAtUtc)
                 .ThenByDescending(row => row.BestEstimatedEv ?? decimal.MinValue)
                 .ThenBy(row => row.Provider)
@@ -1350,7 +1356,17 @@ public static partial class PlayersEndpoints
             .ToArray();
     }
 
-    private static string BuildPlayerResearchMarketLineKey(PlayerResearchMarketLine row)
+    private static string BuildPlayerResearchIdentityGroupKey(IEnumerable<Guid> playerIds)
+    {
+        return string.Join(
+            ",",
+            playerIds
+                .Distinct()
+                .OrderBy(id => id)
+                .Select(id => id.ToString("N")));
+    }
+
+    private static string BuildPlayerResearchMarketLineKey(PlayerResearchMarketLine row, string identityGroupKey)
     {
         var eventStartKey = row.EventStartTimeUtc?.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture);
         var eventKey = FirstNonBlank(row.LogicalEventKey, row.EventId, eventStartKey);
@@ -1358,7 +1374,7 @@ public static partial class PlayersEndpoints
         var propKey = NormalizeCompactHistoryKey(row.NormalizedPropType);
         var sideKey = NormalizeCompactHistoryKey(row.BestSide);
         var lineKey = row.Line.ToString("0.####", CultureInfo.InvariantCulture);
-        return string.Join("|", row.CanonicalPlayerId, eventKey, providerKey, propKey, sideKey, lineKey);
+        return string.Join("|", identityGroupKey, eventKey, providerKey, propKey, sideKey, lineKey);
     }
 
     private static PlayerResearchMarketLine ToPlayerResearchMarketLine(MarketLineShoppingSnapshot row, Guid canonicalPlayerId)

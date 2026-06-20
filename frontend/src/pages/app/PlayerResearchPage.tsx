@@ -54,7 +54,7 @@ export function PlayerResearchPage() {
         <EmptyResearchState />
       ) : (
         <Stack spacing={2.5}>
-          <PlayerProfile player={selectedPlayer} selectedOffering={selectedOffering} />
+          <PlayerProfile player={selectedPlayer} lines={playerLines} />
           {currentLinesQuery.loading ? (
             <ApiStateCard message="Loading current provider lines for this player." />
           ) : currentLinesQuery.error ? (
@@ -280,11 +280,13 @@ function SectionHeader({ title, description }: { title: string; description?: st
 
 function PlayerProfile({
   player,
-  selectedOffering
+  lines
 }: {
   player: PlayerSearchResultDto;
-  selectedOffering?: MarketOpportunity;
+  lines: MarketOpportunity[];
 }) {
+  const nextGame = useMemo(() => findNextGame(lines), [lines]);
+
   return (
     <AppCard contentSx={{ p: { xs: 2, md: 2.4 } }}>
       <Grid container spacing={2} alignItems="center">
@@ -295,9 +297,6 @@ function PlayerProfile({
               {player.league || player.sport ? <StatusPill label={player.league ?? player.sport ?? ''} /> : null}
               {player.position ? <StatusPill label={player.position} /> : null}
             </Stack>
-            <Typography color="text.secondary">
-              {player.subtitle ?? 'Persisted player profile'}
-            </Typography>
           </Stack>
         </Grid>
         <Grid size={{ xs: 12, md: 5 }}>
@@ -311,16 +310,60 @@ function PlayerProfile({
             }}
           >
             <Typography variant="caption" color="text.secondary" fontWeight={800}>
-              Current line context
+              Next game
             </Typography>
             <Typography fontWeight={850}>
-              {selectedOffering ? `${selectedOffering.event} - ${selectedOffering.startTime}` : 'No current provider line loaded'}
+              {nextGame ?? 'No upcoming game found'}
             </Typography>
           </Stack>
         </Grid>
       </Grid>
     </AppCard>
   );
+}
+
+function findNextGame(lines: MarketOpportunity[]) {
+  const now = Date.now();
+  const upcoming = lines
+    .map((line) => {
+      const timestamp = line.eventStartTimeUtc ? new Date(line.eventStartTimeUtc).getTime() : Number.NaN;
+      const hasGameContext = Boolean(line.event && line.event !== 'Current provider line' && line.event !== 'Upcoming event');
+      return { line, timestamp, hasGameContext };
+    })
+    .filter((row) => row.hasGameContext && Number.isFinite(row.timestamp) && row.timestamp >= now)
+    .sort((left, right) => left.timestamp - right.timestamp)[0];
+
+  if (!upcoming) {
+    return null;
+  }
+
+  return `${upcoming.line.event} - ${formatNextGameTime(upcoming.timestamp)}`;
+}
+
+function formatNextGameTime(timestamp: number) {
+  const date = new Date(timestamp);
+  const now = new Date();
+  const tomorrow = new Date(now);
+  tomorrow.setDate(now.getDate() + 1);
+  const timeLabel = new Intl.DateTimeFormat('en-US', {
+    hour: 'numeric',
+    minute: '2-digit'
+  }).format(date);
+
+  if (date.toDateString() === now.toDateString()) {
+    return `Today ${timeLabel}`;
+  }
+
+  if (date.toDateString() === tomorrow.toDateString()) {
+    return `Tomorrow ${timeLabel}`;
+  }
+
+  return new Intl.DateTimeFormat('en-US', {
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit'
+  }).format(date);
 }
 
 function PlayerResearchDashboard({
@@ -461,6 +504,8 @@ function ProviderFilter({
 }
 
 function CurrentLineCard({ line, active, onSelect }: { line: MarketOpportunity; active: boolean; onSelect: () => void }) {
+  const eventContext = formatCurrentLineEventContext(line);
+
   return (
     <Box
       role="button"
@@ -505,6 +550,27 @@ function CurrentLineCard({ line, active, onSelect }: { line: MarketOpportunity; 
               {formatLineLabel(line)}
             </Typography>
           </Stack>
+          {eventContext ? (
+            <Stack spacing={0.1} sx={{ minWidth: 0 }}>
+              <Typography
+                color="text.secondary"
+                variant="caption"
+                sx={{
+                  display: '-webkit-box',
+                  overflow: 'hidden',
+                  WebkitBoxOrient: 'vertical',
+                  WebkitLineClamp: 2,
+                  lineHeight: 1.25,
+                  overflowWrap: 'anywhere'
+                }}
+              >
+                {eventContext.matchup}
+              </Typography>
+              <Typography color="text.secondary" variant="caption" sx={{ lineHeight: 1.25 }}>
+                {eventContext.time}
+              </Typography>
+            </Stack>
+          ) : null}
         </Stack>
         <Stack alignItems="flex-end" spacing={0.45} sx={{ flexShrink: 0 }}>
           {line.projectionModifier !== 'Normal' ? <ProjectionModifierBadge modifier={line.projectionModifier} /> : null}
@@ -512,6 +578,22 @@ function CurrentLineCard({ line, active, onSelect }: { line: MarketOpportunity; 
       </Stack>
     </Box>
   );
+}
+
+function formatCurrentLineEventContext(line: MarketOpportunity) {
+  if (!line.eventStartTimeUtc || !line.event || line.event === 'Current provider line' || line.event === 'Upcoming event') {
+    return null;
+  }
+
+  const timestamp = new Date(line.eventStartTimeUtc).getTime();
+  if (!Number.isFinite(timestamp)) {
+    return null;
+  }
+
+  return {
+    matchup: line.event,
+    time: formatNextGameTime(timestamp)
+  };
 }
 
 function PropHistoryTile({

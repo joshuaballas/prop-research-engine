@@ -26,6 +26,7 @@ export interface MarketOpportunity {
   opponent?: string;
   event: string;
   startTime: string;
+  eventStartTimeUtc?: string;
   sport: Exclude<SportCode, 'ALL'>;
   propType: string;
   side: 'Over' | 'Under';

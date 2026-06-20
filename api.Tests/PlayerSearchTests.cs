@@ -177,6 +177,44 @@ public sealed class PlayerSearchTests
     }
 
     [Fact]
+    public async Task PlayerResearchCurrentLines_DedupesAliasEquivalentSnapshotsByIdentityGroup()
+    {
+        await using var factory = new SafetyTestApplicationFactory();
+        using var client = factory.CreateClient();
+        var seeded = await SeedPlayersAsync(factory, includePaulSnapshot: false, includeAliasEquivalentDuplicateSnapshots: true);
+
+        var response = await client.GetAsync($"/api/player-research/current-lines?playerId={seeded.PaulSkenesId}&take=50");
+
+        await EnsureSuccessWithBodyAsync(response);
+        var payload = await response.Content.ReadFromJsonAsync<JsonElement>();
+        var lines = payload.GetProperty("lines").EnumerateArray().ToArray();
+        Assert.Equal(3, lines.Length);
+        Assert.Equal(4, payload.GetProperty("audit").GetProperty("rawCurrentProviderLineCount").GetInt32());
+        Assert.Equal(1, payload.GetProperty("audit").GetProperty("duplicateCurrentProviderLineCount").GetInt32());
+        Assert.Single(lines, line =>
+            line.GetProperty("eventId").GetString() == "alias-duplicate-event"
+            && line.GetProperty("provider").GetString() == "PrizePicks"
+            && line.GetProperty("normalizedPropType").GetString() == "Total Bases"
+            && line.GetProperty("bestSide").GetString() == "Under"
+            && line.GetProperty("line").GetDecimal() == 1.5m);
+        Assert.Contains(lines, line => line.GetProperty("bestSide").GetString() == "Over");
+        Assert.Contains(lines, line => line.GetProperty("eventId").GetString() == "alias-second-event");
+    }
+
+    [Fact]
+    public async Task PlayerResearchCurrentLines_InvalidPlayerIdReturnsBadRequest()
+    {
+        await using var factory = new SafetyTestApplicationFactory();
+        using var client = factory.CreateClient();
+
+        var response = await client.GetAsync("/api/player-research/current-lines?playerId=not-a-guid&take=50");
+
+        Assert.Equal(System.Net.HttpStatusCode.BadRequest, response.StatusCode);
+        var payload = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal("A valid playerId is required.", payload.GetProperty("error").GetString());
+    }
+
+    [Fact]
     public async Task PropHistory_LoadsPitcherStrikeoutsForPlatformPropBackedCurrentLine()
     {
         await using var factory = new SafetyTestApplicationFactory();
@@ -584,6 +622,7 @@ public sealed class PlayerSearchTests
         bool includePaulSnapshot = true,
         bool includePaulPlatformProp = false,
         bool includeDuplicatePaulPlatformProps = false,
+        bool includeAliasEquivalentDuplicateSnapshots = false,
         bool includePaulPitcherStrikeoutResultsOnSelected = false,
         bool includePaulPitcherStrikeoutResultsOnLiveDuplicate = false,
         bool includePaulMlbRefOnSelected = false,
@@ -809,6 +848,15 @@ public sealed class PlayerSearchTests
         {
             dbContext.MarketLineShoppingSnapshots.Add(BuildSnapshot(refreshRun.Id, paulSkenesLiveDuplicate.Id, "Paul Skenes", "Pitcher Strikeouts", "Under", 6.5m));
         }
+        if (includeAliasEquivalentDuplicateSnapshots)
+        {
+            var duplicateStart = DateTimeOffset.UtcNow.AddHours(4);
+            dbContext.MarketLineShoppingSnapshots.AddRange(
+                BuildSnapshot(refreshRun.Id, paulSkenes.Id, "Paul Skenes", "Total Bases", "Under", 1.5m, "alias-duplicate-event", duplicateStart),
+                BuildSnapshot(refreshRun.Id, paulSkenesLiveDuplicate.Id, "Paul Skenes", "Total Bases", "Under", 1.5m, "alias-duplicate-event", duplicateStart),
+                BuildSnapshot(refreshRun.Id, paulSkenesLiveDuplicate.Id, "Paul Skenes", "Total Bases", "Over", 1.5m, "alias-duplicate-event", duplicateStart),
+                BuildSnapshot(refreshRun.Id, paulSkenesLiveDuplicate.Id, "Paul Skenes", "Total Bases", "Under", 1.5m, "alias-second-event", duplicateStart.AddDays(1)));
+        }
         if (includePaulPitcherStrikeoutResultsOnSelected)
         {
             AddPitcherStrikeoutResults(dbContext, paulSkenes.Id, league.Id, pitcherStrikeouts.Id);
@@ -864,7 +912,15 @@ public sealed class PlayerSearchTests
         };
     }
 
-    private static MarketLineShoppingSnapshot BuildSnapshot(Guid refreshRunId, Guid playerId, string playerName, string propType, string side, decimal line)
+    private static MarketLineShoppingSnapshot BuildSnapshot(
+        Guid refreshRunId,
+        Guid playerId,
+        string playerName,
+        string propType,
+        string side,
+        decimal line,
+        string? eventId = null,
+        DateTimeOffset? eventStartTime = null)
     {
         return new MarketLineShoppingSnapshot
         {
@@ -878,9 +934,9 @@ public sealed class PlayerSearchTests
             Provider = "PrizePicks",
             Bookmaker = "PrizePicks",
             Player = playerName,
-            EventId = Guid.NewGuid().ToString("N"),
+            EventId = eventId ?? Guid.NewGuid().ToString("N"),
             EventName = "Pittsburgh Pirates @ Chicago Cubs",
-            EventStartTime = DateTimeOffset.UtcNow.AddHours(4),
+            EventStartTime = eventStartTime ?? DateTimeOffset.UtcNow.AddHours(4),
             LifecycleStatus = "Active",
             IsStale = false,
             IsExpired = false,

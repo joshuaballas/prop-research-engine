@@ -51,6 +51,7 @@ function mapMarketGroupToOpportunity(group: MarketGroupDto, index: number, sourc
   const playerId = readString(group, 'playerId', 'PlayerId', 'canonicalPlayerId', 'CanonicalPlayerId');
   const player = readString(group, 'player', 'Player') ?? 'Unknown player';
   const eventId = readString(group, 'eventId', 'EventId');
+  const eventStartTimeUtc = readString(group, 'eventStartTimeUtc', 'EventStartTimeUtc') ?? readString(group, 'eventStartTime', 'EventStartTime') ?? undefined;
   const bookmakerPrices = readArray<BookmakerPriceDto>(group, 'bookmakerPrices', 'BookmakerPrices') ?? [];
   const projectionType = readString(group, 'projectionType', 'ProjectionType');
   const projectionTypeConfidence = readString(group, 'projectionTypeConfidence', 'ProjectionTypeConfidence');
@@ -75,7 +76,8 @@ function mapMarketGroupToOpportunity(group: MarketGroupDto, index: number, sourc
     team: readString(group, 'awayTeam', 'AwayTeam') ?? undefined,
     opponent: readString(group, 'homeTeam', 'HomeTeam') ?? undefined,
     event,
-    startTime: formatStartTime(readString(group, 'eventStartTimeUtc', 'EventStartTimeUtc') ?? readString(group, 'eventStartTime', 'EventStartTime')),
+    startTime: formatStartTime(eventStartTimeUtc),
+    eventStartTimeUtc,
     sport: normalizeSport(readString(group, 'sport', 'Sport')),
     propType,
     side,
