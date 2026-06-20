@@ -2,39 +2,39 @@ import SearchRoundedIcon from '@mui/icons-material/SearchRounded';
 import {
   Autocomplete,
   Box,
-  Button,
+  CircularProgress,
   Grid,
   Stack,
   TextField,
   Typography
 } from '@mui/material';
 import { useEffect, useMemo, useState } from 'react';
+import { getPropHistory } from '../../api/markets';
+import { getPlayerResearchCurrentLines, searchPlayers } from '../../api/players';
+import type { PlayerSearchResultDto, PropHistoryResponseDto } from '../../api/types';
+import { mapMarketGroupsToOpportunities } from '../../api/marketMappers';
 import { ProjectionModifierBadge } from '../../components/markets/ProjectionModifierBadge';
 import { PropHistoryCard } from '../../components/prop-history/PropHistoryCard';
 import { ProviderLabel } from '../../components/providers/ProviderLabel';
 import { AppCard } from '../../components/ui/AppCard';
 import { PageHeader } from '../../components/ui/PageHeader';
 import { StatusPill } from '../../components/ui/StatusPill';
-import { secondaryGhostButtonSx } from '../../components/ui/buttonStyles';
-import { mockPlayerResearchPlayers, type PlayerResearchProfile, type PlayerResearchStat } from '../../data/mockPlayerResearch';
 import { palette } from '../../theme/palette';
 import type { MarketOpportunity } from '../../types/markets';
 
 export function PlayerResearchPage() {
-  const [selectedPlayer, setSelectedPlayer] = useState<PlayerResearchProfile | null>(null);
+  const [selectedPlayer, setSelectedPlayer] = useState<PlayerSearchResultDto | null>(null);
   const [selectedLineId, setSelectedLineId] = useState<string>('');
+  const currentLinesQuery = usePlayerResearchCurrentLines(selectedPlayer);
+  const playerLines = currentLinesQuery.lines;
 
   useEffect(() => {
-    setSelectedLineId(selectedPlayer?.currentLines[0]?.id ?? '');
-  }, [selectedPlayer]);
+    setSelectedLineId(playerLines[0]?.id ?? '');
+  }, [selectedPlayer, playerLines]);
 
   const selectedOffering = useMemo(
-    () => selectedPlayer?.currentLines.find((line) => line.id === selectedLineId) ?? selectedPlayer?.currentLines[0],
-    [selectedLineId, selectedPlayer]
-  );
-  const selectedStat = useMemo(
-    () => selectedPlayer?.stats.find((stat) => stat.label === selectedOffering?.propType) ?? selectedPlayer?.stats[0],
-    [selectedOffering, selectedPlayer]
+    () => playerLines.find((line) => line.id === selectedLineId) ?? playerLines[0],
+    [selectedLineId, playerLines]
   );
 
   const handleSelectLine = (line: MarketOpportunity) => {
@@ -45,25 +45,31 @@ export function PlayerResearchPage() {
     <Stack spacing={3}>
       <PageHeader
         title="Player Research"
-        description="Search prop-relevant history, current DFS lines, and recent results before building an entry."
+        description="Search prop-relevant history, current provider lines, and recent results before building an entry."
       />
 
       <PlayerSearch value={selectedPlayer} onChange={setSelectedPlayer} />
 
       {!selectedPlayer ? (
-        <EmptyResearchState onSelect={setSelectedPlayer} />
+        <EmptyResearchState />
       ) : (
         <Stack spacing={2.5}>
-          <PlayerProfile player={selectedPlayer} />
-          {selectedStat && selectedOffering ? (
+          <PlayerProfile player={selectedPlayer} selectedOffering={selectedOffering} />
+          {currentLinesQuery.loading ? (
+            <ApiStateCard message="Loading current provider lines for this player." />
+          ) : currentLinesQuery.error ? (
+            <ApiStateCard tone="error" message="Current provider lines could not be loaded right now." />
+          ) : selectedOffering ? (
             <PlayerResearchDashboard
               player={selectedPlayer}
-              selectedStat={selectedStat}
+              lines={playerLines}
               selectedOffering={selectedOffering}
               selectedLineId={selectedOffering.id}
               onSelectLine={handleSelectLine}
             />
-          ) : null}
+          ) : (
+            <ApiStateCard message="No current provider lines found for this player. Try another player or refresh market data after new props are captured." />
+          )}
         </Stack>
       )}
     </Stack>
@@ -74,26 +80,117 @@ function PlayerSearch({
   value,
   onChange
 }: {
-  value: PlayerResearchProfile | null;
-  onChange: (player: PlayerResearchProfile | null) => void;
+  value: PlayerSearchResultDto | null;
+  onChange: (player: PlayerSearchResultDto | null) => void;
 }) {
+  const [inputValue, setInputValue] = useState('');
+  const [options, setOptions] = useState<PlayerSearchResultDto[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [searchFailed, setSearchFailed] = useState(false);
+  const [autocompleteOpen, setAutocompleteOpen] = useState(false);
+  const [completedQuery, setCompletedQuery] = useState('');
+  const canSearch = inputValue.trim().length >= 2;
+  const trimmedInputValue = inputValue.trim();
+  const shouldShowMenu = autocompleteOpen && canSearch && (loading || options.length > 0 || searchFailed || completedQuery === trimmedInputValue);
+
+  useEffect(() => {
+    const query = inputValue.trim();
+    if (query.length < 2) {
+      setOptions([]);
+      setLoading(false);
+      setSearchFailed(false);
+      setAutocompleteOpen(false);
+      setCompletedQuery('');
+      return;
+    }
+
+    const controller = new AbortController();
+    const timeoutId = window.setTimeout(() => {
+      setLoading(true);
+      setSearchFailed(false);
+      searchPlayers(query, 5, controller.signal)
+        .then((players) => {
+          setOptions(players);
+          setCompletedQuery(query);
+        })
+        .catch((error: unknown) => {
+          if (error instanceof DOMException && error.name === 'AbortError') return;
+          setOptions([]);
+          setSearchFailed(true);
+          setCompletedQuery(query);
+        })
+        .finally(() => {
+          if (!controller.signal.aborted) {
+            setLoading(false);
+          }
+        });
+    }, 250);
+
+    return () => {
+      window.clearTimeout(timeoutId);
+      controller.abort();
+    };
+  }, [inputValue]);
+
   return (
     <Autocomplete
       value={value}
-      onChange={(_, nextValue) => onChange(nextValue)}
-      options={mockPlayerResearchPlayers}
-      getOptionLabel={(option) => `${option.name} - ${option.teamOrLeague} - ${option.sport}`}
-      isOptionEqualToValue={(option, nextValue) => option.id === nextValue.id}
+      inputValue={inputValue}
+      onInputChange={(_, nextValue, reason) => {
+        if (reason !== 'reset') {
+          setInputValue(nextValue);
+          setAutocompleteOpen(nextValue.trim().length >= 2);
+        }
+      }}
+      onChange={(_, nextValue) => {
+        setInputValue(nextValue?.displayName ?? '');
+        setAutocompleteOpen(false);
+        onChange(nextValue);
+      }}
+      options={options}
+      open={shouldShowMenu}
+      onOpen={() => setAutocompleteOpen(inputValue.trim().length >= 2)}
+      onClose={() => setAutocompleteOpen(false)}
+      forcePopupIcon={false}
+      loading={loading}
+      loadingText="Searching players..."
+      noOptionsText={getNoOptionsText(inputValue, searchFailed)}
+      filterOptions={(searchOptions) => searchOptions}
+      getOptionLabel={(option) => option.displayName}
+      isOptionEqualToValue={(option, nextValue) => option.playerId === nextValue.playerId}
+      ListboxProps={{
+        sx: {
+          maxHeight: 320
+        }
+      }}
+      renderOption={(props, option) => (
+        <Box component="li" {...props}>
+          <Stack spacing={0.1} minWidth={0}>
+            <Typography fontWeight={850}>{option.displayName}</Typography>
+            {option.subtitle ? (
+              <Typography variant="caption" color="text.secondary" noWrap>
+                {option.subtitle}
+              </Typography>
+            ) : null}
+          </Stack>
+        </Box>
+      )}
       renderInput={(params) => (
         <TextField
           {...params}
-          placeholder="Search player by name, team, or sport"
+          placeholder="Search player by name"
           InputProps={{
             ...params.InputProps,
             startAdornment: (
               <>
                 <SearchRoundedIcon sx={{ color: 'text.secondary', mr: 1 }} />
                 {params.InputProps.startAdornment}
+              </>
+            ),
+            endAdornment: (
+              <>
+                {loading ? <CircularProgress color="inherit" size={18} sx={{ mr: 1 }} /> : null}
+                {params.InputProps.endAdornment}
               </>
             )
           }}
@@ -112,19 +209,19 @@ function PlayerSearch({
   );
 }
 
-function EmptyResearchState({ onSelect }: { onSelect: (player: PlayerResearchProfile) => void }) {
+function EmptyResearchState() {
   const helperCards = [
     {
       title: 'Research current lines',
-      body: 'See available DFS props with provider, confidence, EV, and modifier context.'
+      body: 'See available provider props with trust, model edge, and modifier context.'
     },
     {
       title: 'Compare recent prop history',
-      body: 'Review recent results for the stat categories that map to common DFS lines.'
+      body: 'Review persisted results for stat categories that map to current lines.'
     },
     {
       title: 'Check hit rate vs line',
-      body: 'Use line-specific hit rate and sample notes before adding a leg.'
+      body: 'Use line-specific history and sample notes before adding a leg.'
     }
   ];
 
@@ -136,45 +233,34 @@ function EmptyResearchState({ onSelect }: { onSelect: (player: PlayerResearchPro
       }}
       contentSx={{ p: { xs: 2, md: 2.6 } }}
     >
-      <Grid container spacing={2.2} alignItems="center">
-        <Grid size={{ xs: 12, md: 5 }}>
-          <Stack spacing={1}>
-            <Typography variant="h4">Start with a player</Typography>
-            <Typography color="text.secondary">
-              Pull up current prop lines, recent prop history, and sample-size context for supported DFS sports.
-            </Typography>
-          </Stack>
+      <Stack spacing={2}>
+        <Stack spacing={0.75}>
+          <Typography variant="h4">Search for a player</Typography>
+          <Typography color="text.secondary">
+            Start typing a player name to load persisted players from the database, then review current provider lines and prop history.
+          </Typography>
+        </Stack>
+        <Grid container spacing={1.2}>
+          {helperCards.map((card) => (
+            <Grid key={card.title} size={{ xs: 12, md: 4 }}>
+              <Box
+                sx={{
+                  height: '100%',
+                  p: 1.45,
+                  borderRadius: 3,
+                  border: '1px solid rgba(148,163,184,.14)',
+                  bgcolor: palette.cardSurface
+                }}
+              >
+                <Typography fontWeight={900}>{card.title}</Typography>
+                <Typography variant="body2" color="text.secondary" sx={{ mt: 0.45 }}>
+                  {card.body}
+                </Typography>
+              </Box>
+            </Grid>
+          ))}
         </Grid>
-        <Grid size={{ xs: 12, md: 7 }}>
-          <Stack direction="row" gap={1} flexWrap="wrap" useFlexGap justifyContent={{ xs: 'flex-start', md: 'flex-end' }}>
-            {mockPlayerResearchPlayers.map((player) => (
-              <Button key={player.id} variant="outlined" onClick={() => onSelect(player)} sx={secondaryGhostButtonSx}>
-                {player.name}
-              </Button>
-            ))}
-          </Stack>
-        </Grid>
-      </Grid>
-      <Grid container spacing={1.2} sx={{ mt: 2 }}>
-        {helperCards.map((card) => (
-          <Grid key={card.title} size={{ xs: 12, md: 4 }}>
-            <Box
-              sx={{
-                height: '100%',
-                p: 1.45,
-                borderRadius: 3,
-                border: '1px solid rgba(148,163,184,.14)',
-                bgcolor: palette.cardSurface
-              }}
-            >
-              <Typography fontWeight={900}>{card.title}</Typography>
-              <Typography variant="body2" color="text.secondary" sx={{ mt: 0.45 }}>
-                {card.body}
-              </Typography>
-            </Box>
-          </Grid>
-        ))}
-      </Grid>
+      </Stack>
     </AppCard>
   );
 }
@@ -192,19 +278,25 @@ function SectionHeader({ title, description }: { title: string; description?: st
   );
 }
 
-function PlayerProfile({ player }: { player: PlayerResearchProfile }) {
+function PlayerProfile({
+  player,
+  selectedOffering
+}: {
+  player: PlayerSearchResultDto;
+  selectedOffering?: MarketOpportunity;
+}) {
   return (
     <AppCard contentSx={{ p: { xs: 2, md: 2.4 } }}>
       <Grid container spacing={2} alignItems="center">
         <Grid size={{ xs: 12, md: 7 }}>
           <Stack spacing={0.75}>
-            <Typography variant="h2">{player.name}</Typography>
+            <Typography variant="h2">{player.displayName}</Typography>
             <Stack direction="row" gap={0.8} flexWrap="wrap" useFlexGap>
-              <StatusPill label={player.sport} />
+              {player.league || player.sport ? <StatusPill label={player.league ?? player.sport ?? ''} /> : null}
               {player.position ? <StatusPill label={player.position} /> : null}
             </Stack>
             <Typography color="text.secondary">
-              {player.teamOrLeague} - {player.opponentContext}
+              {player.subtitle ?? 'Persisted player profile'}
             </Typography>
           </Stack>
         </Grid>
@@ -219,9 +311,11 @@ function PlayerProfile({ player }: { player: PlayerResearchProfile }) {
             }}
           >
             <Typography variant="caption" color="text.secondary" fontWeight={800}>
-              Next event
+              Current line context
             </Typography>
-            <Typography fontWeight={850}>{player.nextEvent}</Typography>
+            <Typography fontWeight={850}>
+              {selectedOffering ? `${selectedOffering.event} - ${selectedOffering.startTime}` : 'No current provider line loaded'}
+            </Typography>
           </Stack>
         </Grid>
       </Grid>
@@ -231,13 +325,13 @@ function PlayerProfile({ player }: { player: PlayerResearchProfile }) {
 
 function PlayerResearchDashboard({
   player,
-  selectedStat,
+  lines,
   selectedOffering,
   selectedLineId,
   onSelectLine
 }: {
-  player: PlayerResearchProfile;
-  selectedStat: PlayerResearchStat;
+  player: PlayerSearchResultDto;
+  lines: MarketOpportunity[];
   selectedOffering: MarketOpportunity;
   selectedLineId: string;
   onSelectLine: (line: MarketOpportunity) => void;
@@ -245,10 +339,10 @@ function PlayerResearchDashboard({
   return (
     <Grid container spacing={1.5} alignItems="stretch">
       <Grid size={{ xs: 12, md: 6 }}>
-        <CurrentLinesTile lines={player.currentLines} selectedLineId={selectedLineId} onSelectLine={onSelectLine} />
+        <CurrentLinesTile lines={lines} selectedLineId={selectedLineId} onSelectLine={onSelectLine} />
       </Grid>
       <Grid size={{ xs: 12, md: 6 }}>
-        <PropHistoryTile stat={selectedStat} selectedOffering={selectedOffering} allLines={player.currentLines} />
+        <PropHistoryTile player={player} selectedOffering={selectedOffering} allLines={lines} />
       </Grid>
     </Grid>
   );
@@ -284,7 +378,7 @@ function CurrentLinesTile({
 
   return (
     <DashboardTile>
-      <SectionHeader title="Current lines" description="Available DFS lines for the selected player." />
+      <SectionHeader title="Current lines" description="Available provider lines for the selected player." />
       <ProviderFilter options={providerOptions} selected={providerFilter} onChange={setProviderFilter} />
       <Box
         sx={{
@@ -333,10 +427,9 @@ function ProviderFilter({
       {options.map((provider) => {
         const active = provider === selected;
         return (
-          <Button
+          <Box
+            component="button"
             key={provider}
-            size="small"
-            variant="outlined"
             onClick={() => onChange(provider)}
             sx={{
               flexShrink: 0,
@@ -344,17 +437,23 @@ function ProviderFilter({
               px: 1.15,
               borderRadius: 2,
               fontSize: 11,
+              fontWeight: 800,
               color: active ? palette.text : palette.textMuted,
-              borderColor: active ? 'rgba(34,211,238,.48)' : 'rgba(148,163,184,.18)',
+              border: active ? '1px solid rgba(34,211,238,.48)' : '1px solid rgba(148,163,184,.18)',
               bgcolor: active ? 'rgba(11,74,94,.38)' : 'rgba(15,23,42,.28)',
+              cursor: 'pointer',
               '&:hover': {
                 borderColor: active ? 'rgba(34,211,238,.58)' : 'rgba(148,163,184,.28)',
                 bgcolor: active ? 'rgba(11,74,94,.46)' : 'rgba(15,23,42,.42)'
+              },
+              '&:focus-visible': {
+                outline: '2px solid rgba(34,211,238,.42)',
+                outlineOffset: 2
               }
             }}
           >
             {provider}
-          </Button>
+          </Box>
         );
       })}
     </Box>
@@ -416,140 +515,145 @@ function CurrentLineCard({ line, active, onSelect }: { line: MarketOpportunity; 
 }
 
 function PropHistoryTile({
-  stat,
+  player,
   selectedOffering,
   allLines
 }: {
-  stat: PlayerResearchStat;
+  player: PlayerSearchResultDto;
   selectedOffering: MarketOpportunity;
   allLines: MarketOpportunity[];
 }) {
+  const historyQuery = usePropHistory(player, selectedOffering);
+
   return (
     <DashboardTile>
-      <PropHistoryCard stat={stat} selectedOffering={selectedOffering} allLines={allLines} />
+      {historyQuery.loading ? (
+        <InlineState message="Loading persisted prop history." />
+      ) : historyQuery.error ? (
+        <InlineState tone="error" message="Prop history could not be loaded for this line." />
+      ) : historyQuery.history ? (
+        <PropHistoryCard history={historyQuery.history} selectedOffering={selectedOffering} allLines={allLines} />
+      ) : (
+        <InlineState message="Prop history is not available for this line yet." />
+      )}
     </DashboardTile>
   );
 }
 
-function PropHistoryTooltip({ active, payload }: { active?: boolean; payload?: Array<{ payload: ChartDatum }> }) {
-  if (!active || !payload?.length) return null;
-  const row = payload[0].payload;
+function usePropHistory(player: PlayerSearchResultDto, selectedOffering: MarketOpportunity) {
+  const [history, setHistory] = useState<PropHistoryResponseDto | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(false);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    setLoading(true);
+    setError(false);
+    setHistory(null);
+
+    getPropHistory(
+      {
+        sport: selectedOffering.sport,
+        playerId: getEffectivePlayerId(player),
+        playerName: player.displayName,
+        propType: selectedOffering.propType,
+        side: selectedOffering.side,
+        line: selectedOffering.line,
+        provider: selectedOffering.provider,
+        take: 10
+      },
+      controller.signal
+    )
+      .then((response) => {
+        setHistory(response);
+      })
+      .catch((requestError: unknown) => {
+        if (requestError instanceof DOMException && requestError.name === 'AbortError') return;
+        setError(true);
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) {
+          setLoading(false);
+        }
+      });
+
+    return () => {
+      controller.abort();
+    };
+  }, [
+    player.displayName,
+    player.effectivePlayerId,
+    player.playerId,
+    selectedOffering.line,
+    selectedOffering.propType,
+    selectedOffering.provider,
+    selectedOffering.side,
+    selectedOffering.sport
+  ]);
+
+  return { history, loading, error };
+}
+
+function usePlayerResearchCurrentLines(player: PlayerSearchResultDto | null) {
+  const [lines, setLines] = useState<MarketOpportunity[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(false);
+
+  useEffect(() => {
+    if (!player) {
+      setLines([]);
+      setLoading(false);
+      setError(false);
+      return;
+    }
+
+    const controller = new AbortController();
+    setLoading(true);
+    setError(false);
+    setLines([]);
+
+    getPlayerResearchCurrentLines(getEffectivePlayerId(player), 50, controller.signal)
+      .then((response) => {
+        setLines(mapMarketGroupsToOpportunities(response.lines, 'player-research'));
+      })
+      .catch((requestError: unknown) => {
+        if (requestError instanceof DOMException && requestError.name === 'AbortError') return;
+        setError(true);
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) {
+          setLoading(false);
+        }
+      });
+
+    return () => {
+      controller.abort();
+    };
+  }, [player]);
+
+  return { lines, loading, error };
+}
+
+function getEffectivePlayerId(player: PlayerSearchResultDto) {
+  return player.effectivePlayerId ?? player.playerId;
+}
+
+function ApiStateCard({ message, tone = 'default' }: { message: string; tone?: 'default' | 'error' }) {
   return (
-    <Box
-      sx={{
-        p: 1.15,
-        borderRadius: 2,
-        border: '1px solid rgba(148,163,184,.22)',
-        bgcolor: 'rgba(2,6,23,.94)',
-        boxShadow: '0 16px 32px rgba(0,0,0,.28)'
-      }}
-    >
-      <Typography fontWeight={900}>{row.event}</Typography>
-      <Typography variant="caption" color="text.secondary">
-        {row.date}
+    <AppCard contentSx={{ p: { xs: 2, md: 2.4 } }}>
+      <Typography color={tone === 'error' ? 'error.main' : 'text.secondary'} fontWeight={750}>
+        {message}
       </Typography>
-      <Stack spacing={0.25} sx={{ mt: 0.8 }}>
-        <TooltipRow label="Stat value" value={row.valueLabel} />
-        <TooltipRow label="Line" value={row.lineLabel} />
-        <TooltipRow label="Result" value={row.result} color={resultColor(row.result)} />
-      </Stack>
-    </Box>
+    </AppCard>
   );
 }
 
-function TooltipRow({ label, value, color }: { label: string; value: string; color?: string }) {
+function InlineState({ message, tone = 'default' }: { message: string; tone?: 'default' | 'error' }) {
   return (
-    <Stack direction="row" spacing={2} justifyContent="space-between">
-      <Typography variant="caption" color="text.secondary">
-        {label}
+    <Stack alignItems="center" justifyContent="center" sx={{ minHeight: 260, flex: 1 }}>
+      <Typography color={tone === 'error' ? 'error.main' : 'text.secondary'} fontWeight={760} textAlign="center">
+        {message}
       </Typography>
-      <Typography variant="caption" fontWeight={850} sx={{ color: color ?? palette.text }}>
-        {value}
-      </Typography>
-    </Stack>
-  );
-}
-
-function StatSummary({
-  stat,
-  selectedOffering,
-  allLines
-}: {
-  stat: PlayerResearchStat;
-  selectedOffering: MarketOpportunity;
-  allLines: MarketOpportunity[];
-}) {
-  const hitRate = calculateHitRate(stat, selectedOffering);
-  const gradedValues = stat.log
-    .map((row) => parseStatNumber(row.value))
-    .filter((value): value is number => value !== undefined);
-  const clears = gradedValues.filter((value) => deriveResult(value, selectedOffering.line, selectedOffering.side) === 'Cleared').length;
-  const alternatives = allLines.filter((line) => line.propType === selectedOffering.propType && line.id !== selectedOffering.id);
-  const alternativeProviders = Array.from(new Set(alternatives.map((line) => line.provider))).slice(0, 3);
-  const metrics = [
-    ['Last 5', stat.last5Average],
-    ['Last 10', stat.last10Average],
-    ['Season', stat.seasonAverage],
-    ['Hit rate', hitRate],
-    ['Best', stat.bestRecentResult]
-  ];
-  const hasWarning = Boolean(stat.sampleWarning);
-  const baseContext = `${selectedOffering.provider} ${formatLineLabel(selectedOffering)}: last 5 avg ${stat.last5Average} vs selected line ${formatLineNumber(
-    selectedOffering.line
-  )}. Cleared ${clears} of ${gradedValues.length} tracked results.`;
-  const alternativeContext = alternativeProviders.length ? ` Alternatives listed from ${alternativeProviders.join(', ')}.` : '';
-
-  return (
-    <Stack spacing={0.75}>
-      <Box
-        sx={{
-          display: 'grid',
-          gridTemplateColumns: { xs: 'repeat(2, minmax(0, 1fr))', sm: 'repeat(5, max-content)' },
-          justifyContent: { xs: 'stretch', sm: 'start' },
-          alignItems: 'center',
-          px: { xs: 1.15, sm: 1.3 },
-          py: { xs: 1, sm: 0.85 },
-          columnGap: { xs: 1.15, sm: 0 },
-          rowGap: 0.85,
-          border: '1px solid rgba(148,163,184,.16)',
-          borderRadius: 3,
-          bgcolor: palette.cardSurface,
-          boxShadow: 'inset 0 1px 0 rgba(255,255,255,.025)',
-          '& > div': {
-            minWidth: 0
-          },
-          '& > div:not(:first-of-type)': {
-            borderLeft: { xs: 'none', sm: '1px solid rgba(148,163,184,.14)' },
-            pl: { xs: 0, sm: 1.5 },
-            ml: { xs: 0, sm: 1.5 }
-          }
-        }}
-      >
-        {metrics.map(([label, value]) => (
-          <Box key={label}>
-            <Typography variant="caption" color="text.secondary" fontWeight={800}>
-              {label}
-            </Typography>
-            <Typography fontWeight={850} variant="body2" sx={{ mt: 0.15 }} noWrap={label !== 'Best'}>
-              {value}
-            </Typography>
-          </Box>
-        ))}
-      </Box>
-      <Box
-        sx={{
-          p: 1.05,
-          borderRadius: 3,
-          border: hasWarning ? '1px solid rgba(245,158,11,.28)' : '1px solid rgba(148,163,184,.12)',
-          bgcolor: hasWarning ? 'rgba(54, 38, 13, 0.18)' : palette.cardSurface
-        }}
-      >
-        <Typography variant="body2" color={hasWarning ? 'warning.main' : 'text.secondary'} fontWeight={hasWarning ? 820 : 650}>
-          {hasWarning
-            ? `Limited history: ${stat.sampleWarning} ${baseContext}`
-            : `${baseContext}${alternativeContext}`}
-        </Typography>
-      </Box>
     </Stack>
   );
 }
@@ -571,43 +675,14 @@ function DashboardTile({ children }: { children: React.ReactNode }) {
   );
 }
 
-interface ChartDatum {
-  date: string;
-  event: string;
-  value: number;
-  valueLabel: string;
-  line?: number;
-  lineLabel: string;
-  result: string;
-}
-
-function parseStatNumber(value?: string) {
-  if (!value) return undefined;
-  const parsed = Number.parseFloat(value.replace(/[^\d.-]/g, ''));
-  return Number.isFinite(parsed) ? parsed : undefined;
-}
-
-function deriveResult(value: number, line?: number, _side: MarketOpportunity['side'] = 'Over') {
-  if (line === undefined) return 'No line';
-  return value >= line ? 'Cleared' : 'Missed';
-}
-
-function calculateHitRate(stat: PlayerResearchStat, selectedOffering: MarketOpportunity) {
-  const graded = stat.log
-    .map((row) => parseStatNumber(row.value))
-    .filter((value): value is number => value !== undefined);
-
-  if (!graded.length) return 'No sample';
-
-  const clears = graded.filter((value) => deriveResult(value, selectedOffering.line, selectedOffering.side) === 'Cleared').length;
-  return `${Math.round((clears / graded.length) * 100)}%`;
+function getNoOptionsText(inputValue: string, searchFailed: boolean) {
+  if (searchFailed) return 'Player search is unavailable right now.';
+  if (inputValue.trim().length < 2) return '';
+  return 'No players found.';
 }
 
 function sortCurrentLines(lines: MarketOpportunity[]) {
-  return [...lines].sort((first, second) => {
-    const priorityDelta = modifierPriority(first.projectionModifier) - modifierPriority(second.projectionModifier);
-    return priorityDelta;
-  });
+  return [...lines].sort((first, second) => modifierPriority(first.projectionModifier) - modifierPriority(second.projectionModifier));
 }
 
 function modifierPriority(modifier: MarketOpportunity['projectionModifier']) {
@@ -633,16 +708,6 @@ function formatLineLabel(line: MarketOpportunity) {
   return `${line.side} ${formatLineNumber(line.line)}`;
 }
 
-function formatOfferingLabel(line: MarketOpportunity) {
-  return `${line.provider} · ${line.propType} ${formatLineLabel(line)}`;
-}
-
 function formatLineNumber(line: number) {
   return Number.isInteger(line) ? String(line) : line.toFixed(1);
-}
-
-function resultColor(result?: string) {
-  if (result === 'Cleared') return palette.success;
-  if (result === 'Missed') return palette.danger;
-  return palette.textMuted;
 }

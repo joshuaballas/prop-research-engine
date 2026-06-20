@@ -26,6 +26,8 @@ The API allows local Vite development origins through a narrow CORS policy:
 - `GET /api/markets/top-picks`
 - `GET /api/markets/line-shopping`
 - `GET /api/markets/performance-summary`
+- `GET /api/players/search`
+- `GET /api/player-research/current-lines`
 
 The frontend has a central API client under `frontend/src/api/`. The client already calls a `getAccessToken()` stub before requests. It returns `null` for now, but it is the future attachment point for an `Authorization: Bearer <token>` header when real auth is connected.
 
@@ -36,10 +38,11 @@ The frontend has a central API client under `frontend/src/api/`. The client alre
 - Line Shopping uses `/api/markets/line-shopping`.
 - Entry Builder candidate browsing uses `/api/markets/top-picks` while selected legs remain shared in-memory React state.
 - Performance uses `/api/markets/performance-summary`.
+- Player Research uses `/api/players/search` for persisted player autocomplete, `/api/player-research/current-lines` for selected-player current provider lines with safe equivalent identity resolution, and `/api/markets/prop-history` for persisted recent stat history.
 - App topbar uses `/api/markets/freshness`.
 
 ## Known Gaps
 
-Markets currently uses `/api/markets/line-shopping` as its broad scanner source because there is not yet a separate persisted market inventory endpoint. This keeps the page on real read-only data, but it is still a scanner over persisted comparison groups rather than a full market inventory API.
+Markets still use persisted scanner/comparison endpoints for public line inventory. Player Research now has a selected-player current-line endpoint that resolves only safe equivalent identities, so duplicate persisted player rows such as MLB/MLBLIVE variants do not hide current provider lines. It still does not create player rows or call external providers on demand.
 
-Player Research, Account, Billing, and user-specific pick tracking remain mock/static for this pass. Future protected user endpoints must require JWT auth before they persist user selections, billing state, or account settings.
+Account, Billing, and user-specific pick tracking remain mock/static for this pass. Player Research search is database-backed, but it only returns players already persisted by ingestion/import workflows; it does not call external providers or create player rows on demand. Future protected user endpoints must require JWT auth before they persist user selections, billing state, or account settings.

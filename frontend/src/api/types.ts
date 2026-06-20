@@ -527,3 +527,24 @@ export interface PropHistoryDiagnosticsDto {
   observationCountAfterPropType?: number;
   observationCountAfterSeason?: number;
 }
+
+export interface PlayerSearchResultDto {
+  playerId: string;
+  effectivePlayerId?: string | null;
+  displayName: string;
+  league?: string | null;
+  sport?: string | null;
+  team?: string | null;
+  position?: string | null;
+  subtitle?: string | null;
+}
+
+export interface PlayerResearchCurrentLinesResponseDto {
+  generatedAtUtc: string;
+  callsExternalApis?: boolean;
+  readOnly?: boolean;
+  playerId?: string | null;
+  effectivePlayerId?: string | null;
+  lines?: MarketGroupDto[];
+  audit?: unknown;
+}

@@ -520,6 +520,52 @@ Invoke-RestMethod `
   -Body '{"dryRun":false,"approvedBy":"debug-auto-safe","reason":"Auto-safe normalized alias link for The Odds API MLB player"}'
 ```
 
+Manual MLB Stats mapping approval for one local player:
+
+```powershell
+$base = "http://localhost:5299"
+Invoke-RestMethod -Method Post "$base/api/debug/mlb-player-mappings/approve" `
+  -ContentType "application/json" `
+  -Body '{"playerId":"382564d5-feae-419a-807e-7b4a91bb51f0","mlbPlayerId":"694973","displayName":"Paul Skenes"}'
+```
+
+This creates a single `player_external_refs` row for provider `mlb`. It is idempotent for the same player/id pair, refuses an MLB id already mapped to another player, refuses adding a second different MLB id to a player that is already mapped, and does not merge player rows. After approving a missing MLB mapping, rerun the MLB result import/backfill for the relevant completed dates so future `prop_results` attach to the mapped player:
+
+Provider-line MLB mapping repair uses accent-insensitive compact player-name keys, so names such as `Rodriguez` and `Rodríguez`, `Diaz` and `Díaz`, or `Suarez` and `Suárez` audit together without blindly merging rows. Review local-only repair candidates:
+
+```powershell
+$base = "http://localhost:5299"
+Invoke-RestMethod "$base/api/debug/mlb-player-mappings/provider-line-repair-candidates" |
+  ConvertTo-Json -Depth 30
+```
+
+Dry-run safe local auto-approval. This does not call MLB or The Odds APIs and writes nothing by default:
+
+```powershell
+$base = "http://localhost:5299"
+Invoke-RestMethod -Method Post "$base/api/debug/mlb-player-mappings/provider-line-repair/auto-approve" `
+  -ContentType "application/json" `
+  -Body '{"dryRun":true,"approvedBy":"debug-auto-safe","reason":"Safe local MLB ref repair for provider-line players"}'
+```
+
+Commit only after reviewing the dry run:
+
+```powershell
+$base = "http://localhost:5299"
+Invoke-RestMethod -Method Post "$base/api/debug/mlb-player-mappings/provider-line-repair/auto-approve" `
+  -ContentType "application/json" `
+  -Body '{"dryRun":false,"approvedBy":"debug-auto-safe","reason":"Safe local MLB ref repair for provider-line players"}'
+```
+
+The local auto-approval path only approves unclaimed local/legacy MLB ids already present on the provider-line player. Duplicate rows that already own an MLB id are reported for manual review because `player_external_refs` enforces one `provider=mlb` mapping per MLB id and this workflow does not merge player rows.
+
+```powershell
+$base = "http://localhost:5299"
+Invoke-RestMethod -Method Post "$base/api/debug/results/import/mlb-range" `
+  -ContentType "application/json" `
+  -Body '{"startDate":"2026-06-01","endDate":"2026-06-19"}'
+```
+
 ## Worker Dry-Run
 
 The Odds worker skeleton is disabled by default. To see what it would plan without API calls or writes:

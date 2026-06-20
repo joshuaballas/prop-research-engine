@@ -159,6 +159,7 @@ app.MapTheOddsApiDebugEndpoints();
 app.MapProviderLineLifecycleDebugEndpoints();
 app.MapRecommendationLedgerDebugEndpoints();
 app.MapPublicMlbDfsEndpoints();
+app.MapPlayersEndpoints();
 
 app.Run();
 

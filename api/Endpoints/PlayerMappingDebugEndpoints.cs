@@ -5,6 +5,7 @@ using SportsBetting.Api.Ingestion;
 using SportsBetting.Api.Ingestion.Players;
 using SportsBetting.Api.Integrations.Results.Mlb;
 using SportsBetting.Api.Models;
+using SportsBetting.Api.Utilities;
 
 namespace SportsBetting.Api.Endpoints;
 
@@ -829,6 +830,115 @@ public static class PlayerMappingDebugEndpoints
         .WithName("MlbSkippedPlayerCandidateSummaryDebug")
         .WithSummary("Returns MLB skipped candidate diagnostics grouped by reason.");
 
+        endpoints.MapGet("/api/debug/mlb-player-mappings/provider-line-repair-candidates", async (
+            ApplicationDbContext dbContext,
+            CancellationToken cancellationToken) =>
+        {
+            var candidates = await BuildProviderLineMlbRepairCandidatesAsync(dbContext, cancellationToken);
+            return Results.Ok(new
+            {
+                generatedAtUtc = DateTimeOffset.UtcNow,
+                callsExternalApis = false,
+                readOnly = true,
+                unmappedProviderLinePlayers = candidates.Count,
+                safeAutoApprovalCandidates = candidates.Count(candidate => candidate.IsSafeAutoApproval),
+                ambiguousOrManualCandidates = candidates.Count(candidate => !candidate.IsSafeAutoApproval),
+                candidates
+            });
+        })
+        .WithName("ProviderLineMlbRepairCandidatesDebug")
+        .WithSummary("Local-only repair candidates for MLB provider-line players missing MLB refs.");
+
+        endpoints.MapPost("/api/debug/mlb-player-mappings/provider-line-repair/auto-approve", async (
+            ProviderLineMlbRepairAutoApproveRequest request,
+            ApplicationDbContext dbContext,
+            CancellationToken cancellationToken) =>
+        {
+            var dryRun = request.DryRun != false;
+            var candidates = await BuildProviderLineMlbRepairCandidatesAsync(dbContext, cancellationToken);
+            var safeCandidates = candidates
+                .Where(candidate => candidate.IsSafeAutoApproval)
+                .Take(Math.Clamp(request.Take ?? 100, 1, 500))
+                .ToArray();
+            var rows = new List<object>();
+            var observedAt = DateTimeOffset.UtcNow;
+
+            foreach (var candidate in safeCandidates)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var mlbId = candidate.RecommendedMlbPlayerId;
+                if (string.IsNullOrWhiteSpace(mlbId))
+                {
+                    rows.Add(new { candidate.PlayerId, candidate.DisplayName, action = "Skipped", reason = "No recommended MLB id." });
+                    continue;
+                }
+
+                var existingForPlayer = await dbContext.PlayerExternalRefs
+                    .SingleOrDefaultAsync(reference => reference.PlayerId == candidate.PlayerId
+                        && reference.Provider == "mlb", cancellationToken);
+                var existingForMlbId = await dbContext.PlayerExternalRefs
+                    .AsNoTracking()
+                    .Where(reference => reference.Provider == "mlb"
+                        && reference.ProviderPlayerId == mlbId)
+                    .Select(reference => new { reference.PlayerId, reference.ProviderPlayerId, reference.ProviderDisplayName })
+                    .ToArrayAsync(cancellationToken);
+                if (existingForPlayer is not null || existingForMlbId.Any(reference => reference.PlayerId != candidate.PlayerId))
+                {
+                    rows.Add(new
+                    {
+                        candidate.PlayerId,
+                        candidate.DisplayName,
+                        mlbPlayerId = mlbId,
+                        action = "SkippedConflict",
+                        reason = "Mapping changed after candidate generation."
+                    });
+                    continue;
+                }
+
+                if (!dryRun)
+                {
+                    dbContext.PlayerExternalRefs.Add(new PlayerExternalRef
+                    {
+                        Id = Guid.NewGuid(),
+                        PlayerId = candidate.PlayerId,
+                        Provider = "mlb",
+                        ProviderPlayerId = mlbId,
+                        ProviderDisplayName = candidate.RecommendedMlbDisplayName ?? candidate.DisplayName,
+                        CreatedAt = observedAt,
+                        UpdatedAt = observedAt
+                    });
+                }
+
+                rows.Add(new
+                {
+                    candidate.PlayerId,
+                    candidate.DisplayName,
+                    mlbPlayerId = mlbId,
+                    action = dryRun ? "WouldCreate" : "Created",
+                    reason = candidate.SafeAutoApprovalReason
+                });
+            }
+
+            if (!dryRun)
+            {
+                await dbContext.SaveChangesAsync(cancellationToken);
+            }
+
+            return Results.Ok(new
+            {
+                dryRun,
+                generatedAtUtc = DateTimeOffset.UtcNow,
+                callsExternalApis = false,
+                approvedBy = request.ApprovedBy,
+                reason = request.Reason,
+                totalCandidates = candidates.Count,
+                safeAutoApprovalCandidates = safeCandidates.Length,
+                rows
+            });
+        })
+        .WithName("ProviderLineMlbRepairAutoApproveDebug")
+        .WithSummary("Dry-run by default local-only auto-approval for safe MLB provider-line mapping repairs.");
+
         endpoints.MapPost("/api/debug/mlb-player-mappings/approve", async (
             MlbPlayerMappingApprovalRequest request,
             ApplicationDbContext dbContext,
@@ -862,6 +972,30 @@ public static class PlayerMappingDebugEndpoints
             if (canonicalPlayer.League is null || canonicalPlayer.League.Code != "MLB")
             {
                 return Results.BadRequest(new { error = "MLB player mappings can only be approved for canonical MLB players." });
+            }
+
+            var existingPlayerMlbRefs = await dbContext.PlayerExternalRefs
+                .AsNoTracking()
+                .Where(reference => reference.PlayerId == canonicalPlayer.Id
+                    && reference.Provider == "mlb")
+                .Select(reference => new
+                {
+                    reference.PlayerId,
+                    reference.Provider,
+                    reference.ProviderPlayerId,
+                    reference.ProviderDisplayName
+                })
+                .ToArrayAsync(cancellationToken);
+            var conflictingPlayerRefs = existingPlayerMlbRefs
+                .Where(reference => !string.Equals(reference.ProviderPlayerId, request.MlbPlayerId, StringComparison.OrdinalIgnoreCase))
+                .ToArray();
+            if (conflictingPlayerRefs.Length > 0)
+            {
+                return Results.Conflict(new
+                {
+                    error = "Canonical player already has a different MLB player mapping. This endpoint does not replace mappings.",
+                    existingMappings = conflictingPlayerRefs
+                });
             }
 
             var existingReference = await repository.GetByProviderPlayerIdAsync("mlb", request.MlbPlayerId, cancellationToken);
@@ -1561,6 +1695,46 @@ public static class PlayerMappingDebugEndpoints
         Guid PlayerId,
         string MlbPlayerId,
         string DisplayName);
+
+    private sealed record ProviderLineMlbRepairAutoApproveRequest(
+        bool? DryRun,
+        int? Take,
+        string? ApprovedBy,
+        string? Reason);
+
+    private sealed record ProviderLineMlbRepairCandidate(
+        Guid PlayerId,
+        string DisplayName,
+        string? League,
+        string? Team,
+        string? Position,
+        int ActivePlatformPropCount,
+        int CurrentProviderSnapshotCount,
+        IReadOnlyCollection<ProviderLineMlbRepairExternalRef> ExistingExternalRefs,
+        string AccentInsensitiveNormalizedName,
+        IReadOnlyCollection<string> LocalLegacyMlbIds,
+        IReadOnlyCollection<ProviderLineMlbRepairIdentityCandidate> CandidateMlbIdentities,
+        bool IsSafeAutoApproval,
+        string? RecommendedMlbPlayerId,
+        string? RecommendedMlbDisplayName,
+        string? SafeAutoApprovalReason,
+        string? ConflictReason);
+
+    private sealed record ProviderLineMlbRepairIdentityCandidate(
+        Guid CandidatePlayerId,
+        string DisplayName,
+        string? League,
+        string? Team,
+        string? Position,
+        IReadOnlyCollection<ProviderLineMlbRepairExternalRef> MlbRefs,
+        int PropResultCount,
+        int PitcherStrikeoutResultCount,
+        string Reason);
+
+    private sealed record ProviderLineMlbRepairExternalRef(
+        string Provider,
+        string ProviderPlayerId,
+        string ProviderDisplayName);
 
     private sealed record MlbCandidateSet(
         int TotalCanonicalPlayers,
@@ -2966,19 +3140,241 @@ public static class PlayerMappingDebugEndpoints
         return "Unknown or manual";
     }
 
-    private static string NormalizePlayerName(string displayName)
+    private static async Task<IReadOnlyList<ProviderLineMlbRepairCandidate>> BuildProviderLineMlbRepairCandidatesAsync(
+        ApplicationDbContext dbContext,
+        CancellationToken cancellationToken)
     {
-        var builder = new System.Text.StringBuilder(displayName.Length);
-
-        foreach (var character in displayName.Trim().ToUpperInvariant())
+        var players = await dbContext.Players
+            .AsNoTracking()
+            .Include(player => player.League)
+            .Include(player => player.Team)
+            .Include(player => player.ExternalProviderRefs)
+            .ToArrayAsync(cancellationToken);
+        var activePlatformCounts = await dbContext.PlatformProps
+            .AsNoTracking()
+            .Where(platformProp => platformProp.Status == "active"
+                && platformProp.Prop != null)
+            .GroupBy(platformProp => platformProp.Prop!.PlayerId)
+            .Select(group => new { PlayerId = group.Key, Count = group.Count() })
+            .ToDictionaryAsync(row => row.PlayerId, row => row.Count, cancellationToken);
+        var snapshotRows = await dbContext.MarketLineShoppingSnapshots
+            .AsNoTracking()
+            .Where(snapshot => snapshot.Sport == "MLB"
+                && snapshot.LifecycleStatus == "Active"
+                && !snapshot.IsExpired)
+            .Select(snapshot => snapshot.DetailsJson)
+            .ToArrayAsync(cancellationToken);
+        var snapshotCounts = snapshotRows
+            .Select(ExtractSnapshotPlayerId)
+            .Where(playerId => playerId.HasValue)
+            .GroupBy(playerId => playerId!.Value)
+            .ToDictionary(group => group.Key, group => group.Count());
+        var playerIdsWithLines = activePlatformCounts.Keys
+            .Concat(snapshotCounts.Keys)
+            .Distinct()
+            .ToHashSet();
+        var propResultCounts = await dbContext.PropResults
+            .AsNoTracking()
+            .GroupBy(result => result.PlayerId)
+            .Select(group => new { PlayerId = group.Key, Count = group.Count() })
+            .ToDictionaryAsync(row => row.PlayerId, row => row.Count, cancellationToken);
+        var pitcherStrikeoutAliases = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
         {
-            if (char.IsLetterOrDigit(character))
+            "PITCHERSTRIKEOUTS",
+            "PITCHERSTRIKEOUT",
+            "STRIKEOUTS",
+            "PITCHERKS",
+            "KS"
+        };
+        var allPropTypes = await dbContext.PropTypes
+            .AsNoTracking()
+            .ToArrayAsync(cancellationToken);
+        var pitcherStrikeoutPropTypeIds = allPropTypes
+            .Where(propType => pitcherStrikeoutAliases.Contains(NormalizePlayerName(propType.Name))
+                || pitcherStrikeoutAliases.Contains(NormalizePlayerName(propType.StatKey)))
+            .Select(propType => propType.Id)
+            .ToArray();
+        var pitcherStrikeoutCounts = pitcherStrikeoutPropTypeIds.Length == 0
+            ? new Dictionary<Guid, int>()
+            : await dbContext.PropResults
+                .AsNoTracking()
+                .Where(result => pitcherStrikeoutPropTypeIds.Contains(result.PropTypeId))
+                .GroupBy(result => result.PlayerId)
+                .Select(group => new { PlayerId = group.Key, Count = group.Count() })
+                .ToDictionaryAsync(row => row.PlayerId, row => row.Count, cancellationToken);
+        var mlbRefsByPlayerId = players
+            .Select(player => new
             {
-                builder.Append(character);
+                player.Id,
+                Refs = player.ExternalProviderRefs
+                    .Where(reference => string.Equals(reference.Provider, "mlb", StringComparison.OrdinalIgnoreCase))
+                    .ToArray()
+            })
+            .ToDictionary(row => row.Id, row => row.Refs);
+        var playersByNormalizedName = players
+            .Where(player => string.Equals(player.League?.Code, "MLB", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(player.League?.Code, "MLBLIVE", StringComparison.OrdinalIgnoreCase))
+            .GroupBy(player => NormalizePlayerName(player.DisplayName), StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(group => group.Key, group => group.ToArray(), StringComparer.OrdinalIgnoreCase);
+        var existingMlbIds = players
+            .SelectMany(player => player.ExternalProviderRefs
+                .Where(reference => string.Equals(reference.Provider, "mlb", StringComparison.OrdinalIgnoreCase))
+                .Select(reference => new { reference.PlayerId, reference.ProviderPlayerId }))
+            .GroupBy(reference => reference.ProviderPlayerId, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(group => group.Key, group => group.Select(reference => reference.PlayerId).Distinct().ToArray(), StringComparer.OrdinalIgnoreCase);
+        var candidates = new List<ProviderLineMlbRepairCandidate>();
+
+        foreach (var player in players
+            .Where(player => playerIdsWithLines.Contains(player.Id))
+            .Where(player => string.Equals(player.League?.Code, "MLB", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(player.League?.Code, "MLBLIVE", StringComparison.OrdinalIgnoreCase))
+            .Where(player => !mlbRefsByPlayerId.GetValueOrDefault(player.Id, []).Any())
+            .OrderBy(player => player.DisplayName))
+        {
+            var normalizedName = NormalizePlayerName(player.DisplayName);
+            playersByNormalizedName.TryGetValue(normalizedName, out var sameNamePlayers);
+            sameNamePlayers ??= [];
+            var legacyMlbIds = ExtractLegacyMlbIds(player.ExternalRefs);
+            var exactNameCandidates = sameNamePlayers
+                .Where(candidate => candidate.Id != player.Id)
+                .Select(candidate =>
+                {
+                    mlbRefsByPlayerId.TryGetValue(candidate.Id, out var candidateMlbRefs);
+                    candidateMlbRefs ??= [];
+                    return new ProviderLineMlbRepairIdentityCandidate(
+                        candidate.Id,
+                        candidate.DisplayName,
+                        candidate.League?.Code,
+                        candidate.Team?.Abbreviation ?? candidate.Team?.Name,
+                        candidate.Position,
+                        candidateMlbRefs
+                            .Select(reference => new ProviderLineMlbRepairExternalRef(reference.Provider, reference.ProviderPlayerId, reference.ProviderDisplayName))
+                            .ToArray(),
+                        propResultCounts.GetValueOrDefault(candidate.Id),
+                        pitcherStrikeoutCounts.GetValueOrDefault(candidate.Id),
+                        candidateMlbRefs.Any()
+                            ? "Accent-insensitive exact-name duplicate with existing MLB ref."
+                            : propResultCounts.GetValueOrDefault(candidate.Id) > 0
+                                ? "Accent-insensitive exact-name duplicate owns result rows but has no MLB ref."
+                                : "Accent-insensitive exact-name duplicate.");
+                })
+                .ToArray();
+            var unclaimedLegacyMlbIds = legacyMlbIds
+                .Where(id => !existingMlbIds.TryGetValue(id, out var ownerIds)
+                    || ownerIds.Length == 0
+                    || ownerIds.All(ownerId => ownerId == player.Id))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+            var conflictingLegacyMlbIds = legacyMlbIds
+                .Except(unclaimedLegacyMlbIds, StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+            var exactNameMlbRefCount = exactNameCandidates
+                .SelectMany(candidate => candidate.MlbRefs)
+                .Select(reference => reference.ProviderPlayerId)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .Count();
+            var isSafe = unclaimedLegacyMlbIds.Length == 1
+                && conflictingLegacyMlbIds.Length == 0
+                && exactNameMlbRefCount == 0;
+            var conflictReason = isSafe
+                ? null
+                : legacyMlbIds.Length == 0 && exactNameCandidates.Length == 0
+                    ? "No local MLB id or accent-insensitive exact-name candidate."
+                    : conflictingLegacyMlbIds.Length > 0
+                        ? "Legacy MLB id is already mapped to another player."
+                        : exactNameMlbRefCount > 0
+                            ? "Matching MLB id is already mapped to a different player; manual merge/alias review is required."
+                            : exactNameCandidates.Length > 1
+                                ? "Multiple accent-insensitive exact-name candidates require manual review."
+                                : "No unclaimed local MLB id is available for safe auto-approval.";
+
+            candidates.Add(new ProviderLineMlbRepairCandidate(
+                player.Id,
+                player.DisplayName,
+                player.League?.Code,
+                player.Team?.Abbreviation ?? player.Team?.Name,
+                player.Position,
+                activePlatformCounts.GetValueOrDefault(player.Id),
+                snapshotCounts.GetValueOrDefault(player.Id),
+                player.ExternalProviderRefs
+                    .OrderBy(reference => reference.Provider)
+                    .Select(reference => new ProviderLineMlbRepairExternalRef(reference.Provider, reference.ProviderPlayerId, reference.ProviderDisplayName))
+                    .ToArray(),
+                normalizedName,
+                legacyMlbIds,
+                exactNameCandidates,
+                isSafe,
+                isSafe ? unclaimedLegacyMlbIds[0] : null,
+                isSafe ? player.DisplayName : null,
+                isSafe ? "Exactly one unclaimed local/legacy MLB id is available on this provider-line player." : null,
+                conflictReason));
+        }
+
+        return candidates;
+    }
+
+    private static string[] ExtractLegacyMlbIds(JsonDocument? externalRefs)
+    {
+        if (externalRefs is null || externalRefs.RootElement.ValueKind != JsonValueKind.Object)
+        {
+            return [];
+        }
+
+        var ids = new List<string>();
+        foreach (var providerProperty in externalRefs.RootElement.EnumerateObject())
+        {
+            if (!string.Equals(providerProperty.Name, "mlb", StringComparison.OrdinalIgnoreCase)
+                || providerProperty.Value.ValueKind != JsonValueKind.Object
+                || !providerProperty.Value.TryGetProperty("player_id", out var playerIdElement))
+            {
+                continue;
+            }
+
+            var value = playerIdElement.ValueKind == JsonValueKind.String
+                ? playerIdElement.GetString()
+                : playerIdElement.GetRawText();
+            if (!string.IsNullOrWhiteSpace(value))
+            {
+                ids.Add(value.Trim());
             }
         }
 
-        return builder.ToString();
+        return ids.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+    }
+
+    private static Guid? ExtractSnapshotPlayerId(JsonDocument detailsJson)
+    {
+        var root = detailsJson.RootElement;
+        if (TryReadGuidProperty(root, "canonicalPlayerId", out var canonicalPlayerId)
+            || TryReadGuidProperty(root, "playerId", out canonicalPlayerId))
+        {
+            return canonicalPlayerId;
+        }
+
+        if (root.TryGetProperty("bestLine", out var bestLine)
+            && (TryReadGuidProperty(bestLine, "canonicalPlayerId", out canonicalPlayerId)
+                || TryReadGuidProperty(bestLine, "playerId", out canonicalPlayerId)))
+        {
+            return canonicalPlayerId;
+        }
+
+        return null;
+    }
+
+    private static bool TryReadGuidProperty(JsonElement element, string propertyName, out Guid value)
+    {
+        value = Guid.Empty;
+        if (element.ValueKind != JsonValueKind.Object || !element.TryGetProperty(propertyName, out var property))
+        {
+            return false;
+        }
+
+        return property.ValueKind == JsonValueKind.String && Guid.TryParse(property.GetString(), out value);
+    }
+
+    private static string NormalizePlayerName(string displayName)
+    {
+        return PlayerNameNormalizer.ToCompactKey(displayName).ToUpperInvariant();
     }
 
     private static decimal CalculateMlbMatchConfidence(Player canonicalPlayer, MlbPlayerRecord providerPlayer)

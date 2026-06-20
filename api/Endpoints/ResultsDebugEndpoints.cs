@@ -2,6 +2,7 @@ using SportsBetting.Api.Data;
 using SportsBetting.Api.Integrations.Results.Mlb;
 using SportsBetting.Api.Models;
 using SportsBetting.Api.Predictions;
+using SportsBetting.Api.Utilities;
 using Microsoft.EntityFrameworkCore;
 using System.Text.Json;
 
@@ -866,15 +867,7 @@ public static class ResultsDebugEndpoints
 
     private static string NormalizeResultPlayerName(string? value)
     {
-        if (string.IsNullOrWhiteSpace(value))
-        {
-            return string.Empty;
-        }
-
-        return new string(value
-            .Where(char.IsLetterOrDigit)
-            .Select(char.ToUpperInvariant)
-            .ToArray());
+        return PlayerNameNormalizer.ToCompactKey(value).ToUpperInvariant();
     }
 
     private static bool IsPitchingResultPropType(string propTypeName)

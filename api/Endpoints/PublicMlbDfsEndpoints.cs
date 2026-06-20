@@ -3575,6 +3575,41 @@ public static class PublicMlbDfsEndpoints
                 equivalentPlayerIds.Length);
         }
 
+        var resolvedName = playerResolution.ResolvedPlayerName ?? playerName;
+        var exactNamePlayerIds = await ResolveExactNamePropHistoryPlayerIdsAsync(resolvedName, dbContext, cancellationToken);
+        var directObservationCountAfterPropType = await dbContext.PropResults
+            .AsNoTracking()
+            .CountAsync(result => equivalentPlayerIds.Contains(result.PlayerId)
+                && propTypeResolution.PropTypeIds.Contains(result.PropTypeId), cancellationToken);
+        if (directObservationCountAfterPropType == 0 && exactNamePlayerIds.Length > 0)
+        {
+            var exactNameOwners = await dbContext.PropResults
+                .AsNoTracking()
+                .Where(result => exactNamePlayerIds.Contains(result.PlayerId)
+                    && propTypeResolution.PropTypeIds.Contains(result.PropTypeId))
+                .GroupBy(result => result.PlayerId)
+                .Select(group => new { PlayerId = group.Key, Count = group.Count() })
+                .ToArrayAsync(cancellationToken);
+            if (exactNameOwners.Length == 1)
+            {
+                equivalentPlayerIds = equivalentPlayerIds.Append(exactNameOwners[0].PlayerId).Distinct().ToArray();
+                playerResolution = playerResolution with
+                {
+                    LookupMode = "playerId+ExactNameHistoryOwnerFallback",
+                    ResolvedPlayerId = exactNameOwners[0].PlayerId,
+                    PlayerNameFallbackUsed = true,
+                    Warning = "Selected player id had no matching history; used the only exact-name player identity with persisted history."
+                };
+            }
+            else if (exactNameOwners.Length > 1)
+            {
+                playerResolution = playerResolution with
+                {
+                    Warning = "Multiple exact-name player identities have persisted history for this prop type; history was not combined without an explicit alias."
+                };
+            }
+        }
+
         var candidateObservationCount = await dbContext.PropResults
             .AsNoTracking()
             .CountAsync(result => equivalentPlayerIds.Contains(result.PlayerId), cancellationToken);
@@ -3739,6 +3774,30 @@ public static class PublicMlbDfsEndpoints
                 : "Player name fallback was used; results may be ambiguous. Frontend should pass playerId.");
     }
 
+    private static async Task<Guid[]> ResolveExactNamePropHistoryPlayerIdsAsync(
+        string? playerName,
+        ApplicationDbContext dbContext,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(playerName))
+        {
+            return [];
+        }
+
+        var normalizedPlayerName = NormalizeLookupText(playerName);
+        var candidates = await dbContext.Players
+            .AsNoTracking()
+            .Where(player => player.League != null && player.League.Code == "MLB")
+            .Select(player => new { player.Id, player.DisplayName })
+            .ToArrayAsync(cancellationToken);
+
+        return candidates
+            .Where(player => NormalizeLookupText(player.DisplayName) == normalizedPlayerName)
+            .Select(player => player.Id)
+            .Distinct()
+            .ToArray();
+    }
+
     private static string ResolveDisplayPropType(string? propType)
     {
         return ResolveResultPropTypeKey(propType) switch
@@ -3864,6 +3923,8 @@ public static class PublicMlbDfsEndpoints
         CancellationToken cancellationToken)
     {
         var requestedCanonicalName = CanonicalPropTypeName(normalizedPropType);
+        var requestedPerformanceKey = NormalizePerformanceKey(requestedCanonicalName);
+        var requestedAliases = BuildPropHistoryPerformanceAliases(requestedPerformanceKey);
         var propTypes = await dbContext.PropTypes
             .AsNoTracking()
             .Select(propType => new { propType.Id, propType.Name, propType.StatKey })
@@ -3872,13 +3933,33 @@ public static class PublicMlbDfsEndpoints
             .Where(propType =>
                 string.Equals(CanonicalPropTypeName(propType.Name), requestedCanonicalName, StringComparison.OrdinalIgnoreCase)
                 || string.Equals(NormalizePropTypeKey(propType.StatKey), normalizedPropType, StringComparison.OrdinalIgnoreCase)
-                || string.Equals(CanonicalPropTypeName(propType.StatKey), requestedCanonicalName, StringComparison.OrdinalIgnoreCase))
+                || string.Equals(CanonicalPropTypeName(propType.StatKey), requestedCanonicalName, StringComparison.OrdinalIgnoreCase)
+                || requestedAliases.Contains(NormalizePerformanceKey(propType.Name))
+                || requestedAliases.Contains(NormalizePerformanceKey(propType.StatKey)))
             .ToArray();
 
         return new PropHistoryPropTypeResolution(
             PropTypeResolved: matches.Select(propType => propType.StatKey ?? propType.Name).FirstOrDefault(),
             PropTypeIds: matches.Select(propType => propType.Id).Distinct().ToArray(),
             PropTypeNames: matches.Select(propType => propType.Name).Distinct(StringComparer.OrdinalIgnoreCase).ToArray());
+    }
+
+    private static HashSet<string> BuildPropHistoryPerformanceAliases(string requestedPerformanceKey)
+    {
+        var aliases = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        if (!string.IsNullOrWhiteSpace(requestedPerformanceKey))
+        {
+            aliases.Add(requestedPerformanceKey);
+        }
+
+        if (string.Equals(requestedPerformanceKey, "pitcherstrikeouts", StringComparison.OrdinalIgnoreCase))
+        {
+            aliases.Add("strikeouts");
+            aliases.Add("pitcherks");
+            aliases.Add("ks");
+        }
+
+        return aliases;
     }
 
     private static PropHistoryDiagnostics BuildPropHistoryDiagnostics(

@@ -2,6 +2,7 @@ using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using SportsBetting.Api.Data;
 using SportsBetting.Api.Models;
+using SportsBetting.Api.Utilities;
 
 namespace SportsBetting.Api.Ingestion.Players;
 
@@ -376,17 +377,7 @@ public sealed class PlayerResolutionService(
 
     private static string NormalizePlayerName(string displayName)
     {
-        var builder = new System.Text.StringBuilder(displayName.Length);
-
-        foreach (var character in displayName.Trim().ToUpperInvariant())
-        {
-            if (char.IsLetterOrDigit(character))
-            {
-                builder.Append(character);
-            }
-        }
-
-        return builder.ToString();
+        return PlayerNameNormalizer.ToCompactKey(displayName).ToUpperInvariant();
     }
 
     private static bool SetIfChanged(string? currentValue, string? newValue, Action<string?> setter)

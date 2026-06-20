@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using SportsBetting.Api.Data;
 using SportsBetting.Api.Ingestion;
+using SportsBetting.Api.Utilities;
 
 namespace SportsBetting.Api.Predictions;
 
@@ -168,16 +169,6 @@ public sealed class PlayerIdentityAliasService(ApplicationDbContext dbContext) :
 
     private static string NormalizePlayerName(string displayName)
     {
-        var builder = new System.Text.StringBuilder(displayName.Length);
-
-        foreach (var character in displayName.Trim().ToUpperInvariant())
-        {
-            if (char.IsLetterOrDigit(character))
-            {
-                builder.Append(character);
-            }
-        }
-
-        return builder.ToString();
+        return PlayerNameNormalizer.ToCompactKey(displayName).ToUpperInvariant();
     }
 }
