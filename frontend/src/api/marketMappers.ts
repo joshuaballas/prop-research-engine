@@ -18,7 +18,7 @@ export function mapPerformanceSummaryToGroups(summary: MarketPerformanceSummaryD
     ...(summary.groups.byPropType ?? []).map((row) => mapPerformanceGroup(row, 'Prop Type')),
     ...(summary.groups.byStrategyClassification ?? []).map((row) => mapPerformanceGroup(row, 'Trust')),
     ...(summary.groups.byStrategyTier ?? []).map((row) => mapPerformanceGroup(row, 'Strategy')),
-    ...(summary.groups.byProviderAndPropType ?? []).map((row) => mapPerformanceGroup(row, 'Provider + Sport'))
+    ...(summary.groups.byProviderAndPropType ?? []).map((row) => mapPerformanceGroup(row, 'Provider + Prop Type'))
   ];
 }
 
@@ -207,7 +207,7 @@ function normalizePerformanceGroupType(groupType: string, fallback: string) {
     propType: 'Prop Type',
     strategyClassification: 'Trust',
     strategyTier: 'Strategy',
-    providerAndPropType: 'Provider + Sport'
+    providerAndPropType: 'Provider + Prop Type'
   };
 
   return map[groupType] ?? fallback;

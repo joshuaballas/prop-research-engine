@@ -354,6 +354,32 @@ public static class PublicMlbDfsEndpoints
         .WithName("MarketsPerformanceSummary")
         .WithSummary("Production-safe read-only market recommendation performance summary.");
 
+        endpoints.MapGet("/api/markets/performance-results", async (
+            string? sport,
+            DateOnly? date,
+            bool? includeDiagnostics,
+            ApplicationDbContext dbContext,
+            CancellationToken cancellationToken) =>
+        {
+            var marketSport = ResolveMarketSport(sport);
+            if (marketSport.UnsupportedResponse is not null)
+            {
+                return marketSport.UnsupportedResponse;
+            }
+
+            var response = await BuildMarketPerformanceResultsResponseAsync(
+                marketSport.RequestedSport,
+                marketSport.EffectiveSport!,
+                date,
+                includeDiagnostics ?? false,
+                dbContext,
+                cancellationToken);
+
+            return Results.Ok(response);
+        })
+        .WithName("MarketsPerformanceResults")
+        .WithSummary("Production-safe read-only determined recommendation results for one completed slate date.");
+
         endpoints.MapGet("/api/markets/prop-history", async (
             string? sport,
             Guid? playerId,
@@ -1299,6 +1325,151 @@ public static class PublicMlbDfsEndpoints
         };
     }
 
+    private static async Task<object> BuildMarketPerformanceResultsResponseAsync(
+        string? requestedSport,
+        string effectiveSport,
+        DateOnly? requestedDate,
+        bool includeDiagnostics,
+        ApplicationDbContext dbContext,
+        CancellationToken cancellationToken)
+    {
+        var generatedAtUtc = DateTimeOffset.UtcNow;
+        var selectedDate = requestedDate ??
+            await dbContext.PropResults
+                .AsNoTracking()
+                .Select(row => (DateOnly?)row.EventDate)
+                .MaxAsync(cancellationToken);
+
+        if (!selectedDate.HasValue)
+        {
+            return new
+            {
+                generatedAtUtc,
+                callsExternalApis = false,
+                readOnly = true,
+                requestedSport,
+                sport = effectiveSport,
+                date = requestedDate,
+                summary = new
+                {
+                    gradedPicks = 0,
+                    won = 0,
+                    lost = 0,
+                    pushed = 0,
+                    noResultExcluded = 0,
+                    hitRate = null as decimal?,
+                    simulatedRoi = null as decimal?,
+                    avgEvAtRecommendationTime = null as decimal?
+                },
+                rows = Array.Empty<object>(),
+                diagnostics = includeDiagnostics ? new { reasonCounts = new Dictionary<string, int>(), examples = Array.Empty<object>() } : null
+            };
+        }
+
+        var ledgerQuery = dbContext.RecommendationSnapshots
+            .AsNoTracking()
+            .Where(row =>
+                row.Sport == effectiveSport &&
+                row.ExpectedResultDate == selectedDate.Value &&
+                !row.IsExcludedFromPerformance);
+
+        ledgerQuery = ApplyRecommendationPerformanceEligibility(
+            ledgerQuery,
+            candidateOnly: true,
+            topPickOnly: false,
+            includeWatchlist: false,
+            includeResearch: false,
+            includeStale: false);
+
+        var selectedRows = (await ledgerQuery
+                .OrderByDescending(row => row.RankingScore)
+                .ThenByDescending(row => row.EstimatedEv)
+                .Take(5000)
+                .ToArrayAsync(cancellationToken))
+            .Where(HasPerformanceGradeability)
+            .ToArray();
+        var gradedRows = await GradeLedgerRowsAsync(selectedRows, dbContext, cancellationToken);
+        var determinedRows = gradedRows
+            .Where(row => IsGradedOutcome(row.Outcome))
+            .OrderByDescending(row => row.Snapshot.EstimatedEv)
+            .ThenBy(row => row.Snapshot.PlayerName)
+            .ToArray();
+        var noResultRows = gradedRows
+            .Where(row => IsNoResultFailure(row.MatchFailureReason))
+            .ToArray();
+        var wins = determinedRows.Count(row => row.Outcome == "Win");
+        var losses = determinedRows.Count(row => row.Outcome == "Loss");
+        var pushes = determinedRows.Count(row => row.Outcome == "Push");
+        var decisions = wins + losses;
+        var profit = determinedRows.Sum(row => row.Profit ?? 0m);
+        var roi = determinedRows.Length == 0 ? (decimal?)null : Math.Round(profit / determinedRows.Length, 4);
+
+        return new
+        {
+            generatedAtUtc,
+            callsExternalApis = false,
+            readOnly = true,
+            requestedSport,
+            sport = effectiveSport,
+            date = selectedDate.Value,
+            summary = new
+            {
+                gradedPicks = determinedRows.Length,
+                won = wins,
+                lost = losses,
+                pushed = pushes,
+                noResultExcluded = noResultRows.Length,
+                hitRate = decisions == 0 ? (decimal?)null : Math.Round(wins / (decimal)decisions, 4),
+                simulatedRoi = roi,
+                avgEvAtRecommendationTime = AverageNullable(determinedRows.Select(row => row.Snapshot.EstimatedEv))
+            },
+            rows = determinedRows
+                .Select(row => new
+                {
+                    recommendationSnapshotId = row.Snapshot.Id,
+                    result = ToSnapshotGradeStatus(row.Outcome),
+                    playerName = row.Snapshot.PlayerName,
+                    propType = row.Snapshot.PropType,
+                    side = row.Snapshot.Side,
+                    line = row.Snapshot.Line,
+                    actualValue = row.ActualResult,
+                    provider = row.Snapshot.EntryProvider,
+                    bookmaker = row.Snapshot.Bookmaker,
+                    eventStartTimeUtc = row.Snapshot.EventStartTimeUtc,
+                    estimatedEv = row.Snapshot.EstimatedEv,
+                    hitChance = row.Snapshot.HitChance,
+                    trust = row.Snapshot.TrustLevel,
+                    sampleSize = row.Snapshot.HistoricalSampleSize,
+                    matchMethod = row.MatchMethod
+                })
+                .ToArray(),
+            diagnostics = includeDiagnostics
+                ? new
+                {
+                    noResultCounts = noResultRows
+                        .GroupBy(row => row.MatchFailureReason ?? "Unknown")
+                        .ToDictionary(group => group.Key, group => group.Count()),
+                    noResultExamples = noResultRows
+                        .Take(10)
+                        .Select(row => new
+                        {
+                            recommendationSnapshotId = row.Snapshot.Id,
+                            row.Snapshot.PlayerName,
+                            row.Snapshot.PropType,
+                            row.Snapshot.Side,
+                            row.Snapshot.Line,
+                            provider = row.Snapshot.EntryProvider,
+                            reason = row.MatchFailureReason
+                        })
+                        .ToArray(),
+                    matchMethodCounts = determinedRows
+                        .GroupBy(row => row.MatchMethod ?? "Unknown")
+                        .ToDictionary(group => group.Key, group => group.Count())
+                }
+                : null
+        };
+    }
+
     private static async Task<object?> TryBuildLedgerPerformanceSummaryResponseAsync(
         string? requestedSport,
         string effectiveSport,
@@ -1568,6 +1739,17 @@ public static class PublicMlbDfsEndpoints
                 toDate,
                 minSampleSize,
                 gradingMode = normalizedGradingMode
+            },
+            summary = new
+            {
+                gradedPicks = totalGraded,
+                won = wonRows,
+                lost = lostRows,
+                pushed = pushedRows,
+                noResultExcluded = noResultRows,
+                hitRate = wonRows + lostRows == 0 ? (decimal?)null : Math.Round(wonRows / (decimal)(wonRows + lostRows), 4),
+                simulatedRoi = totalGraded == 0 ? (decimal?)null : Math.Round(gradedRows.Sum(row => row.Profit ?? 0m) / totalGraded, 4),
+                avgEvAtRecommendationTime = AverageNullable(gradedRows.Where(row => IsGradedOutcome(row.Outcome)).Select(row => row.Snapshot.EstimatedEv))
             },
             dataAvailability = new
             {

@@ -405,6 +405,49 @@ export interface MarketPerformanceSummaryDto {
   };
 }
 
+export interface MarketPerformanceResultsDto {
+  generatedAtUtc?: string;
+  callsExternalApis?: boolean;
+  readOnly?: boolean;
+  requestedSport?: string | null;
+  sport?: string;
+  date?: string;
+  summary?: {
+    gradedPicks?: number;
+    won?: number;
+    lost?: number;
+    pushed?: number;
+    noResultExcluded?: number;
+    hitRate?: number | null;
+    simulatedRoi?: number | null;
+    avgEvAtRecommendationTime?: number | null;
+  };
+  rows?: PerformanceResultRowDto[];
+  diagnostics?: {
+    noResultCounts?: Record<string, number>;
+    noResultExamples?: unknown[];
+    matchMethodCounts?: Record<string, number>;
+  } | null;
+}
+
+export interface PerformanceResultRowDto {
+  recommendationSnapshotId: string;
+  result: 'Won' | 'Lost' | 'Pushed' | string;
+  playerName: string;
+  propType: string;
+  side: 'Over' | 'Under' | string;
+  line: number;
+  actualValue: number | null;
+  provider: string;
+  bookmaker?: string | null;
+  eventStartTimeUtc?: string | null;
+  estimatedEv?: number | null;
+  hitChance?: number | null;
+  trust?: string | null;
+  sampleSize?: number | null;
+  matchMethod?: string | null;
+}
+
 export interface PerformanceGroupDto {
   groupType: string;
   groupKey: string;

@@ -56,19 +56,26 @@ This backlog is intentionally practical and ordered around current MLB research 
    - Impact: quickly spots bad prop types/books/market classes.
    - Dependency: completed backtests.
 
-5. Persist probability/EV outputs if research validates them.
+5. Separate DFS leg-level performance from sportsbook pick performance.
+   - Impact: prevents customer-facing Performance metrics from mixing DFS pick'em leg outcomes with true sportsbook straight-pick outcomes.
+   - Dependency: provider-category filtering in `performance-summary` / `performance-results`, sportsbook-context ingestion/results, and clear frontend labeling.
+   - UX direction: split Performance into DFS Leg Results / DFS Leg History and Sportsbook Pick Results / Sportsbook Pick History. DFS copy should explain that rows are individual recommendation outcomes and not entry-level performance because DFS entries require multiple legs. Sportsbook copy should explain that sportsbook recommendations can be evaluated as single picks using simulated straight-bet results.
+   - Backend direction: support `providerCategory=DFS|Sportsbook` filters. DFS metrics should be labeled as leg-level performance. Sportsbook metrics should use sportsbook odds/prices for straight-pick W/L and simulated unit ROI.
+   - Guardrails: do not fake sportsbook stats from DFS lines; do not build DFS entry-level ROI until tracked entry construction data exists; show a neutral sportsbook empty/future state until sportsbook ingestion/results are enabled.
+
+6. Persist probability/EV outputs if research validates them.
    - Impact: avoids recomputation and supports product UI.
    - Dependency: backtest validation.
 
-6. Make The Odds worker production-ready.
+7. Make The Odds worker production-ready.
    - Impact: keeps sportsbook context and DFS pick'em supply fresh through the provider feed.
    - Dependency: credit policy, observability, retry/error handling, event selection rules.
 
-7. Disable direct Underdog by default once The Odds scheduled coverage is sufficient.
+8. Disable direct Underdog by default once The Odds scheduled coverage is sufficient.
    - Impact: moves production toward a single provider-feed source of truth while retaining direct Underdog only when explicitly configured.
    - Dependency: comparable scheduled coverage audit and acceptable freshness/market coverage.
 
-8. Remove direct Underdog if The Odds scheduled coverage makes it redundant.
+9. Remove direct Underdog if The Odds scheduled coverage makes it redundant.
    - Impact: reduces custom direct-source maintenance.
    - Dependency: sustained evidence that The Odds API `us_dfs` Underdog coverage is adequate for production needs.
 

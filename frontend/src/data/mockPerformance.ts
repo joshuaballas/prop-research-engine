@@ -16,5 +16,5 @@ export const mockPerformance: PerformanceGroup[] = [
   { groupType: 'Confidence', groupKey: 'Medium', gradedPicks: 91, wins: 48, losses: 41, pushes: 2, hitRate: 0.539, roi: 0.061, averageEv: 0.086 },
   { groupType: 'Confidence', groupKey: 'Weak', gradedPicks: 35, wins: 15, losses: 20, pushes: 0, hitRate: 0.429, roi: -0.036, averageEv: 0.052, warning: 'Research only' },
   { groupType: 'Strategy', groupKey: 'ConservativeCandidate', gradedPicks: 53, wins: 35, losses: 18, pushes: 0, hitRate: 0.66, roi: 0.121, averageEv: 0.108 },
-  { groupType: 'Provider + Sport', groupKey: 'PrizePicks MLB', gradedPicks: 45, wins: 27, losses: 17, pushes: 1, hitRate: 0.614, roi: 0.132, averageEv: 0.119 }
+  { groupType: 'Provider + Prop Type', groupKey: 'PrizePicks | Pitcher Strikeouts', gradedPicks: 45, wins: 27, losses: 17, pushes: 1, hitRate: 0.614, roi: 0.132, averageEv: 0.119 }
 ];

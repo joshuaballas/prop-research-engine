@@ -1,5 +1,5 @@
 import { useMemo } from 'react';
-import { getLineShopping, getMarketFreshness, getPerformanceSummary, getProviderStatus, getScheduledRefreshStatus, getTopPicks } from '../api/markets';
+import { getLineShopping, getMarketFreshness, getPerformanceResults, getPerformanceSummary, getProviderStatus, getScheduledRefreshStatus, getTopPicks } from '../api/markets';
 import type { PerformanceGradingMode } from '../api/markets';
 import { mapMarketGroupsToOpportunities, mapPerformanceSummaryToGroups } from '../api/marketMappers';
 import { useApiQuery } from '../api/useApiQuery';
@@ -123,6 +123,20 @@ export function usePerformanceData(gradingMode: PerformanceGradingMode = 'latest
   );
 
   return { ...query, rows, summary: query.data?.summary };
+}
+
+export function usePerformanceResults(date?: string) {
+  const refreshVersion = useMarketDataRefreshVersion();
+  return useApiQuery(
+    async (signal) => {
+      if (isDemoDataMode) {
+        return undefined;
+      }
+
+      return getPerformanceResults(signal, date);
+    },
+    [date, refreshVersion]
+  );
 }
 
 function mapDemoMarketsToOpportunities(markets: MarketOpportunity[] | undefined, sourcePrefix: string) {

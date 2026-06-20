@@ -114,6 +114,110 @@ public sealed class PerformanceGradingTests
     }
 
     [Fact]
+    public async Task PerformanceResults_ReturnsDeterminedRows_AndExcludesNoResultRows()
+    {
+        await using var factory = new SafetyTestApplicationFactory();
+        using var client = factory.CreateClient();
+        var date = new DateOnly(2026, 6, 19);
+        await SeedPerformanceScenarioAsync(factory, date, "Pitcher Strikeouts", "Under", 6.5m, 4);
+        await SeedPerformanceScenarioAsync(
+            factory,
+            date,
+            "Total Bases",
+            "Under",
+            1.5m,
+            resultValue: null,
+            sameDateOtherPlayerResultValue: 2,
+            resetDatabase: false);
+
+        var response = await client.GetAsync($"/api/markets/performance-results?sport=MLB&date={date:yyyy-MM-dd}&includeDiagnostics=true");
+
+        await EnsureSuccessWithBodyAsync(response);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        var summary = json.GetProperty("summary");
+        Assert.Equal(1, summary.GetProperty("gradedPicks").GetInt32());
+        Assert.Equal(1, summary.GetProperty("won").GetInt32());
+        Assert.Equal(1, summary.GetProperty("noResultExcluded").GetInt32());
+        Assert.Single(json.GetProperty("rows").EnumerateArray());
+        Assert.Equal("Won", json.GetProperty("rows")[0].GetProperty("result").GetString());
+        Assert.Single(json.GetProperty("diagnostics").GetProperty("noResultCounts").EnumerateObject());
+    }
+
+    [Fact]
+    public async Task PerformanceResults_CountsProviderInactiveRowsAsExcludedDiagnostics()
+    {
+        await using var factory = new SafetyTestApplicationFactory();
+        using var client = factory.CreateClient();
+        var date = new DateOnly(2026, 6, 19);
+        await SeedPerformanceScenarioAsync(
+            factory,
+            date,
+            "Total Bases",
+            "Under",
+            1.5m,
+            resultValue: null,
+            sameDateOtherPlayerResultValue: 2);
+
+        var response = await client.GetAsync($"/api/markets/performance-results?sport=MLB&date={date:yyyy-MM-dd}&includeDiagnostics=true");
+
+        await EnsureSuccessWithBodyAsync(response);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal(0, json.GetProperty("summary").GetProperty("gradedPicks").GetInt32());
+        Assert.Equal(1, json.GetProperty("summary").GetProperty("noResultExcluded").GetInt32());
+        Assert.True(json.GetProperty("diagnostics").GetProperty("noResultCounts").TryGetProperty("ProviderLineForInactivePlayer", out _));
+        Assert.Empty(json.GetProperty("rows").EnumerateArray());
+    }
+
+    [Fact]
+    public async Task PerformanceResults_GradesEquivalentPropKeys_WhenPropTypeIdsDiffer()
+    {
+        await using var factory = new SafetyTestApplicationFactory();
+        using var client = factory.CreateClient();
+        var date = new DateOnly(2026, 6, 19);
+        await SeedPerformanceScenarioAsync(
+            factory,
+            date,
+            "Total Bases",
+            "Under",
+            1.5m,
+            0,
+            resultUsesDifferentPropTypeIdWithEquivalentName: true);
+
+        var response = await client.GetAsync($"/api/markets/performance-results?sport=MLB&date={date:yyyy-MM-dd}");
+
+        await EnsureSuccessWithBodyAsync(response);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal(1, json.GetProperty("summary").GetProperty("gradedPicks").GetInt32());
+        Assert.Equal("Won", json.GetProperty("rows")[0].GetProperty("result").GetString());
+    }
+
+    [Fact]
+    public async Task PerformanceResults_AmbiguousNormalizedNameFallback_DoesNotGrade()
+    {
+        await using var factory = new SafetyTestApplicationFactory();
+        using var client = factory.CreateClient();
+        var date = new DateOnly(2026, 6, 19);
+        await SeedPerformanceScenarioAsync(
+            factory,
+            date,
+            "Pitcher Strikeouts",
+            "Under",
+            6.5m,
+            4,
+            resultUsesDifferentPlayerIdWithSameName: true,
+            additionalSameNameResultValue: 5);
+
+        var response = await client.GetAsync($"/api/markets/performance-results?sport=MLB&date={date:yyyy-MM-dd}&includeDiagnostics=true");
+
+        await EnsureSuccessWithBodyAsync(response);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal(0, json.GetProperty("summary").GetProperty("gradedPicks").GetInt32());
+        Assert.Equal(1, json.GetProperty("summary").GetProperty("noResultExcluded").GetInt32());
+        Assert.Empty(json.GetProperty("rows").EnumerateArray());
+        Assert.True(json.GetProperty("diagnostics").GetProperty("noResultCounts").TryGetProperty("AmbiguousNormalizedPlayerNameDateStatFallback", out _));
+    }
+
+    [Fact]
     public async Task PerformanceSummary_MultipleMatchingResultRows_IsUnmatched_NotLoss()
     {
         await using var factory = new SafetyTestApplicationFactory();
@@ -921,7 +1025,8 @@ public sealed class PerformanceGradingTests
         decimal rankingScore = 1m,
         decimal estimatedEv = 0.08m,
         bool resultUsesDifferentPlayerIdWithSameName = false,
-        bool resultUsesDifferentPropTypeIdWithEquivalentName = false)
+        bool resultUsesDifferentPropTypeIdWithEquivalentName = false,
+        decimal? additionalSameNameResultValue = null)
     {
         using var scope = factory.Services.CreateScope();
         var dbContext = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
@@ -1050,6 +1155,20 @@ public sealed class PerformanceGradingTests
             }
 
             AddPropResult(dbContext, resultPlayerId, league.Id, resultPropTypeId, date, resultValue.Value, "primary");
+        }
+
+        if (additionalSameNameResultValue.HasValue)
+        {
+            var additionalPlayer = new Player
+            {
+                Id = Guid.NewGuid(),
+                LeagueId = league.Id,
+                DisplayName = player.DisplayName,
+                FirstName = player.FirstName,
+                LastName = player.LastName
+            };
+            dbContext.Players.Add(additionalPlayer);
+            AddPropResult(dbContext, additionalPlayer.Id, league.Id, primaryPropType.Id, date, additionalSameNameResultValue.Value, "additional-same-name");
         }
 
         if (duplicateMatchingResultValue.HasValue)

@@ -1,6 +1,7 @@
 import { apiGet, buildQuery } from './client';
 import type {
   MarketFreshnessDto,
+  MarketPerformanceResultsDto,
   MarketPerformanceSummaryDto,
   PropHistoryResponseDto,
   ProviderStatusDto,
@@ -46,6 +47,13 @@ export function getLineShopping(signal?: AbortSignal, take = 50, topOnly = true)
 export function getPerformanceSummary(signal?: AbortSignal, gradingMode: PerformanceGradingMode = 'latestGraded') {
   return apiGet<MarketPerformanceSummaryDto>(
     `/api/markets/performance-summary${buildQuery({ sport: 'MLB', candidateOnly: true, gradingMode })}`,
+    signal
+  );
+}
+
+export function getPerformanceResults(signal?: AbortSignal, date?: string) {
+  return apiGet<MarketPerformanceResultsDto>(
+    `/api/markets/performance-results${buildQuery({ sport: 'MLB', date })}`,
     signal
   );
 }

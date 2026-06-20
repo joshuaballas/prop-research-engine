@@ -18,7 +18,7 @@ const navItems = [
   { label: 'Line Shopping', to: '/app/line-shopping', icon: <StackedLineChartOutlinedIcon /> },
   { label: 'Player Research', to: '/app/player-research', icon: <PersonSearchOutlinedIcon /> },
   { label: 'Entry Builder', to: '/app/entry-builder', icon: <ShoppingCartOutlinedIcon /> },
-  { label: 'Performance', to: '/app/performance', icon: <AnalyticsOutlinedIcon /> },
+  { label: 'Model Performance', to: '/app/performance', icon: <AnalyticsOutlinedIcon /> },
   { label: 'Account', to: '/app/account', icon: <PersonOutlineOutlinedIcon /> }
 ];
 
