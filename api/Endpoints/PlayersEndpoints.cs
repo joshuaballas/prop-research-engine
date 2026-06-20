@@ -570,12 +570,29 @@ public static partial class PlayersEndpoints
                 Player = platformProp.Prop.Player == null ? platformProp.Label : platformProp.Prop.Player.DisplayName,
                 Sport = platformProp.Prop.League == null || platformProp.Prop.League.Sport == null ? "MLB" : platformProp.Prop.League.Sport.Code,
                 PropType = platformProp.Prop.PropType == null ? platformProp.Label : platformProp.Prop.PropType.Name,
-                EventStartTime = platformProp.Prop.StartsAt
+                EventStartTime = platformProp.Prop.StartsAt,
+                AwayTeamName = platformProp.Prop.Game == null || platformProp.Prop.Game.AwayTeam == null ? null : platformProp.Prop.Game.AwayTeam.Name,
+                AwayTeamAbbreviation = platformProp.Prop.Game == null || platformProp.Prop.Game.AwayTeam == null ? null : platformProp.Prop.Game.AwayTeam.Abbreviation,
+                HomeTeamName = platformProp.Prop.Game == null || platformProp.Prop.Game.HomeTeam == null ? null : platformProp.Prop.Game.HomeTeam.Name,
+                HomeTeamAbbreviation = platformProp.Prop.Game == null || platformProp.Prop.Game.HomeTeam == null ? null : platformProp.Prop.Game.HomeTeam.Abbreviation
             })
             .ToArrayAsync(cancellationToken);
 
         return rows
-            .Select(row => ToPlayerResearchMarketLine(row.Id, row.PlayerId, row.Player, row.Sport, row.Provider, row.PropType, row.CurrentLine, SelectPlatformPropSide(row.OverAvailable, row.UnderAvailable), row.EventStartTime, row.Status, row.ObservedAt))
+            .Select(row => ToPlayerResearchMarketLine(
+                row.Id,
+                row.PlayerId,
+                row.Player,
+                row.Sport,
+                row.Provider,
+                row.PropType,
+                row.CurrentLine,
+                SelectPlatformPropSide(row.OverAvailable, row.UnderAvailable),
+                row.EventStartTime,
+                row.Status,
+                row.ObservedAt,
+                FirstNonBlank(row.AwayTeamName, row.AwayTeamAbbreviation),
+                FirstNonBlank(row.HomeTeamName, row.HomeTeamAbbreviation)))
             .ToArray();
     }
 
@@ -1383,7 +1400,7 @@ public static partial class PlayersEndpoints
             row.Sport,
             row.EventId ?? row.Id.ToString("N"),
             row.EventStartTime,
-            row.EventName,
+            SanitizePlayerResearchEventText(row.EventName),
             HomeTeam: null,
             PlayerId: canonicalPlayerId,
             CanonicalPlayerId: canonicalPlayerId,
@@ -1428,15 +1445,17 @@ public static partial class PlayersEndpoints
         string side,
         DateTimeOffset eventStartTime,
         string status,
-        DateTimeOffset observedAt)
+        DateTimeOffset observedAt,
+        string? awayTeam = null,
+        string? homeTeam = null)
     {
         var isActive = string.Equals(status, "active", StringComparison.OrdinalIgnoreCase);
         return new PlayerResearchMarketLine(
             sport,
             lineId.ToString("N"),
             eventStartTime,
-            AwayTeam: "Current provider line",
-            HomeTeam: null,
+            AwayTeam: SanitizePlayerResearchEventText(awayTeam),
+            HomeTeam: SanitizePlayerResearchEventText(homeTeam),
             playerId,
             CanonicalPlayerId: playerId,
             player,
@@ -1467,6 +1486,25 @@ public static partial class PlayersEndpoints
             IsExpired: !isActive,
             SortObservedAtUtc: observedAt,
             LogicalEventKey: eventStartTime.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture));
+    }
+
+    private static string? SanitizePlayerResearchEventText(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return null;
+        }
+
+        var trimmed = value.Trim();
+        return IsPlayerResearchPlaceholderEventText(trimmed)
+            ? null
+            : trimmed;
+    }
+
+    private static bool IsPlayerResearchPlaceholderEventText(string value)
+    {
+        return string.Equals(value, "Current provider line", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(value, "Upcoming event", StringComparison.OrdinalIgnoreCase);
     }
 
     private static string SelectPlatformPropSide(bool overAvailable, bool underAvailable)

@@ -42,7 +42,7 @@ export function PlayerResearchPage() {
   };
 
   return (
-    <Stack spacing={3}>
+    <Stack spacing={{ xs: 2, md: 3 }} sx={{ pb: { xs: 10, md: 0 } }}>
       <PageHeader
         title="Player Research"
         description="Search prop-relevant history, current provider lines, and recent results before building an entry."
@@ -288,11 +288,13 @@ function PlayerProfile({
   const nextGame = useMemo(() => findNextGame(lines), [lines]);
 
   return (
-    <AppCard contentSx={{ p: { xs: 2, md: 2.4 } }}>
-      <Grid container spacing={2} alignItems="center">
+    <AppCard contentSx={{ p: { xs: 1.45, md: 2.4 } }}>
+      <Grid container spacing={{ xs: 1.15, md: 2 }} alignItems="center">
         <Grid size={{ xs: 12, md: 7 }}>
-          <Stack spacing={0.75}>
-            <Typography variant="h2">{player.displayName}</Typography>
+          <Stack spacing={{ xs: 0.55, md: 0.75 }}>
+            <Typography variant="h2" sx={{ fontSize: { xs: 28, sm: 34, md: 42 }, lineHeight: { xs: 1.05, md: 1.08 } }}>
+              {player.displayName}
+            </Typography>
             <Stack direction="row" gap={0.8} flexWrap="wrap" useFlexGap>
               {player.league || player.sport ? <StatusPill label={player.league ?? player.sport ?? ''} /> : null}
               {player.position ? <StatusPill label={player.position} /> : null}
@@ -303,7 +305,7 @@ function PlayerProfile({
           <Stack
             spacing={0.35}
             sx={{
-              p: 1.7,
+              p: { xs: 1.1, md: 1.7 },
               borderRadius: 3,
               border: `1px solid ${palette.border}`,
               bgcolor: palette.cardSurface
@@ -312,7 +314,7 @@ function PlayerProfile({
             <Typography variant="caption" color="text.secondary" fontWeight={800}>
               Next game
             </Typography>
-            <Typography fontWeight={850}>
+            <Typography fontWeight={850} sx={{ fontSize: { xs: 13.5, md: 16 }, lineHeight: 1.35 }}>
               {nextGame ?? 'No upcoming game found'}
             </Typography>
           </Stack>
@@ -324,20 +326,50 @@ function PlayerProfile({
 
 function findNextGame(lines: MarketOpportunity[]) {
   const now = Date.now();
-  const upcoming = lines
-    .map((line) => {
-      const timestamp = line.eventStartTimeUtc ? new Date(line.eventStartTimeUtc).getTime() : Number.NaN;
-      const hasGameContext = Boolean(line.event && line.event !== 'Current provider line' && line.event !== 'Upcoming event');
-      return { line, timestamp, hasGameContext };
-    })
-    .filter((row) => row.hasGameContext && Number.isFinite(row.timestamp) && row.timestamp >= now)
+  const eventRows = lines
+    .map(toPlayerLineEventRow)
+    .filter((row): row is PlayerLineEventRow => Boolean(row));
+  const upcoming = eventRows
+    .filter((row) => row.timestamp >= now)
     .sort((left, right) => left.timestamp - right.timestamp)[0];
+  const fallback = eventRows
+    .sort((left, right) => right.timestamp - left.timestamp)[0];
+  const event = upcoming ?? fallback;
 
-  if (!upcoming) {
+  if (!event) {
     return null;
   }
 
-  return `${upcoming.line.event} - ${formatNextGameTime(upcoming.timestamp)}`;
+  return event.matchup
+    ? `${event.matchup} - ${formatNextGameTime(event.timestamp)}`
+    : formatNextGameTime(event.timestamp);
+}
+
+interface PlayerLineEventRow {
+  matchup?: string;
+  timestamp: number;
+}
+
+function toPlayerLineEventRow(line: MarketOpportunity): PlayerLineEventRow | null {
+  if (!line.eventStartTimeUtc) {
+    return null;
+  }
+
+  const timestamp = new Date(line.eventStartTimeUtc).getTime();
+  if (!Number.isFinite(timestamp)) {
+    return null;
+  }
+
+  return {
+    matchup: isPlaceholderEventLabel(line.event) ? undefined : line.event,
+    timestamp
+  };
+}
+
+function isPlaceholderEventLabel(value?: string | null) {
+  return !value
+    || value === 'Current provider line'
+    || value === 'Upcoming event';
 }
 
 function formatNextGameTime(timestamp: number) {
@@ -427,16 +459,31 @@ function CurrentLinesTile({
         sx={{
           display: 'grid',
           gridTemplateColumns: { xs: '1fr', md: 'repeat(2, minmax(0, 1fr))' },
-          gridAutoRows: { md: 'minmax(69px, auto)' },
+          gridAutoRows: 'auto',
           gap: 0.85,
           overflowY: 'auto',
-          maxHeight: { xs: 408, md: 'none' },
-          pr: { xs: 0.25, md: 0.35 },
+          maxHeight: { xs: 378, md: 'none' },
+          pr: { xs: 0.85, md: 0.85 },
+          pb: { xs: 0.5, md: 0 },
           minHeight: 0,
           flex: 1,
           alignContent: 'start',
-          scrollbarWidth: 'none',
-          '&::-webkit-scrollbar': { display: 'none' }
+          scrollbarWidth: 'thin',
+          scrollbarColor: 'rgba(148,163,184,.42) rgba(15,23,42,.34)',
+          '&::-webkit-scrollbar': {
+            width: 8
+          },
+          '&::-webkit-scrollbar-track': {
+            background: 'rgba(15,23,42,.34)',
+            borderRadius: 999
+          },
+          '&::-webkit-scrollbar-thumb': {
+            background: 'rgba(148,163,184,.42)',
+            borderRadius: 999
+          },
+          '&::-webkit-scrollbar-thumb:hover': {
+            background: 'rgba(148,163,184,.56)'
+          }
         }}
       >
         {visibleLines.map((line) => (
@@ -519,8 +566,7 @@ function CurrentLineCard({ line, active, onSelect }: { line: MarketOpportunity; 
       }}
       sx={{
         px: 1.35,
-        py: 1.25,
-        minHeight: { md: 69 },
+        py: 1.35,
         borderRadius: 3,
         border: active ? '1px solid rgba(34,211,238,.5)' : '1px solid rgba(148,163,184,.16)',
         bgcolor: active ? 'rgba(11,74,94,.26)' : palette.cardSurface,
@@ -536,8 +582,8 @@ function CurrentLineCard({ line, active, onSelect }: { line: MarketOpportunity; 
         }
       }}
     >
-      <Stack direction="row" alignItems="center" justifyContent="space-between" gap={1.2}>
-        <Stack spacing={0.5} minWidth={0}>
+      <Stack direction="row" alignItems="flex-start" justifyContent="space-between" gap={1.2}>
+        <Stack spacing={0.5} minWidth={0} width="100%">
           <ProviderLabel provider={line.provider} category={line.providerCategory} compact />
           <Stack direction="row" alignItems="center" gap={0.65} flexWrap="wrap" useFlexGap sx={{ mt: 0.15 }}>
             <Typography fontWeight={700} variant="body2">
@@ -551,22 +597,20 @@ function CurrentLineCard({ line, active, onSelect }: { line: MarketOpportunity; 
             </Typography>
           </Stack>
           {eventContext ? (
-            <Stack spacing={0.1} sx={{ minWidth: 0 }}>
-              <Typography
-                color="text.secondary"
-                variant="caption"
-                sx={{
-                  display: '-webkit-box',
-                  overflow: 'hidden',
-                  WebkitBoxOrient: 'vertical',
-                  WebkitLineClamp: 2,
-                  lineHeight: 1.25,
-                  overflowWrap: 'anywhere'
-                }}
-              >
-                {eventContext.matchup}
-              </Typography>
-              <Typography color="text.secondary" variant="caption" sx={{ lineHeight: 1.25 }}>
+            <Stack spacing={0.2} sx={{ minWidth: 0, pt: 0.05 }}>
+              {eventContext.matchup ? (
+                <Typography
+                  color="text.secondary"
+                  variant="caption"
+                  sx={{
+                    lineHeight: 1.35,
+                    overflowWrap: 'anywhere'
+                  }}
+                >
+                  {eventContext.matchup}
+                </Typography>
+              ) : null}
+              <Typography color="text.secondary" variant="caption" sx={{ display: 'block', lineHeight: 1.4 }}>
                 {eventContext.time}
               </Typography>
             </Stack>
@@ -581,18 +625,14 @@ function CurrentLineCard({ line, active, onSelect }: { line: MarketOpportunity; 
 }
 
 function formatCurrentLineEventContext(line: MarketOpportunity) {
-  if (!line.eventStartTimeUtc || !line.event || line.event === 'Current provider line' || line.event === 'Upcoming event') {
-    return null;
-  }
-
-  const timestamp = new Date(line.eventStartTimeUtc).getTime();
-  if (!Number.isFinite(timestamp)) {
+  const event = toPlayerLineEventRow(line);
+  if (!event) {
     return null;
   }
 
   return {
-    matchup: line.event,
-    time: formatNextGameTime(timestamp)
+    matchup: event.matchup,
+    time: formatNextGameTime(event.timestamp)
   };
 }
 

@@ -58,7 +58,7 @@ export function PropHistoryCard({ stat, history, selectedOffering, allLines = []
   const chartHistoryView = { ...historyView, log: getDisplayLog(historyView.log, chartGameLimit) };
 
   return (
-    <Stack spacing={0.95} sx={{ height: '100%', minHeight: 0 }}>
+    <Stack spacing={{ xs: 0.75, sm: 0.95 }} sx={{ height: '100%', minHeight: 0 }}>
       <Stack direction={{ xs: 'column', sm: 'row' }} justifyContent="space-between" alignItems={{ xs: 'stretch', sm: 'flex-start' }} gap={{ xs: 0.55, sm: 1 }}>
         <Stack spacing={0.25}>
           <Typography variant="h5">Prop history</Typography>
@@ -66,7 +66,7 @@ export function PropHistoryCard({ stat, history, selectedOffering, allLines = []
             Recent stat values against the selected line.
           </Typography>
         </Stack>
-        <Typography color="warning.main" variant="body2" fontWeight={900} textAlign={{ xs: 'left', sm: 'right' }} sx={{ overflowWrap: 'anywhere' }}>
+        <Typography color="text.secondary" variant="body2" fontWeight={850} textAlign={{ xs: 'left', sm: 'right' }} sx={{ overflowWrap: 'anywhere' }}>
           {formatOfferingLabel(selectedOffering)}
         </Typography>
       </Stack>
@@ -103,8 +103,8 @@ function PropHistoryBarChart({ stat, selectedOffering }: { stat: PropHistoryView
     <Box
       sx={{
         width: '100%',
-        height: { xs: 265, md: 280, xl: 300 },
-        minHeight: { xs: 265, md: 280 },
+        height: { xs: 235, md: 280, xl: 300 },
+        minHeight: { xs: 235, md: 280 },
         minWidth: 0,
         flex: { md: '1 1 auto' },
         flexShrink: 0,
@@ -163,7 +163,7 @@ function PropHistoryTooltip({ active, payload }: { active?: boolean; payload?: A
         borderRadius: 2,
         border: '1px solid rgba(148,163,184,.22)',
         bgcolor: 'rgba(2,6,23,.94)',
-        boxShadow: '0 16px 32px rgba(0,0,0,.28)'
+        boxShadow: 'none'
       }}
     >
       <Typography fontWeight={900}>{row.event}</Typography>
@@ -230,21 +230,21 @@ function StatSummary({
   const alternativeContext = alternativeProviders.length ? ` Alternatives listed from ${alternativeProviders.join(', ')}.` : '';
 
   return (
-    <Stack spacing={0.75}>
+    <Stack spacing={{ xs: 0.6, sm: 0.75 }}>
       <Box
         sx={{
           display: 'grid',
           gridTemplateColumns: { xs: 'repeat(2, minmax(0, 1fr))', sm: 'repeat(5, max-content)' },
           justifyContent: { xs: 'stretch', sm: 'start' },
           alignItems: 'center',
-          px: { xs: 1.15, sm: 1.3 },
-          py: { xs: 1, sm: 0.85 },
-          columnGap: { xs: 1.15, sm: 0 },
-          rowGap: 0.85,
+          px: { xs: 0.95, sm: 1.3 },
+          py: { xs: 0.8, sm: 0.85 },
+          columnGap: { xs: 0.95, sm: 0 },
+          rowGap: { xs: 0.65, sm: 0.85 },
           border: '1px solid rgba(148,163,184,.16)',
           borderRadius: 3,
           bgcolor: palette.cardSurface,
-          boxShadow: 'inset 0 1px 0 rgba(255,255,255,.025)',
+          boxShadow: 'none',
           '& > div': {
             minWidth: 0
           },

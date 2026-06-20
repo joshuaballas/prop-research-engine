@@ -153,6 +153,45 @@ public sealed class PlayerSearchTests
     }
 
     [Fact]
+    public async Task PlayerResearchCurrentLines_DoesNotReturnPlaceholderTeamTextWhenMatchupUnavailable()
+    {
+        await using var factory = new SafetyTestApplicationFactory();
+        using var client = factory.CreateClient();
+        var seeded = await SeedPlayersAsync(factory, includePaulSnapshot: false, includePaulPlatformProp: true);
+
+        var response = await client.GetAsync($"/api/player-research/current-lines?playerId={seeded.PaulSkenesId}&take=5");
+
+        await EnsureSuccessWithBodyAsync(response);
+        var payload = await response.Content.ReadFromJsonAsync<JsonElement>();
+        var line = payload.GetProperty("lines").EnumerateArray().Single();
+        Assert.Equal(JsonValueKind.Null, line.GetProperty("awayTeam").ValueKind);
+        Assert.Equal(JsonValueKind.Null, line.GetProperty("homeTeam").ValueKind);
+        Assert.NotEqual(JsonValueKind.Null, line.GetProperty("eventStartTimeUtc").ValueKind);
+        Assert.DoesNotContain("Current provider line", line.ToString(), StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task PlayerResearchCurrentLines_PreservesRealPlatformPropMatchupWhenAvailable()
+    {
+        await using var factory = new SafetyTestApplicationFactory();
+        using var client = factory.CreateClient();
+        var seeded = await SeedPlayersAsync(
+            factory,
+            includePaulSnapshot: false,
+            includePaulPlatformProp: true,
+            includePaulPlatformPropGame: true);
+
+        var response = await client.GetAsync($"/api/player-research/current-lines?playerId={seeded.PaulSkenesId}&take=5");
+
+        await EnsureSuccessWithBodyAsync(response);
+        var payload = await response.Content.ReadFromJsonAsync<JsonElement>();
+        var line = payload.GetProperty("lines").EnumerateArray().Single();
+        Assert.Equal("Pittsburgh Pirates", line.GetProperty("awayTeam").GetString());
+        Assert.Equal("New York Yankees", line.GetProperty("homeTeam").GetString());
+        Assert.NotEqual(JsonValueKind.Null, line.GetProperty("eventStartTimeUtc").ValueKind);
+    }
+
+    [Fact]
     public async Task PlayerResearchCurrentLines_DedupesDuplicatePlatformPropsByLogicalLine()
     {
         await using var factory = new SafetyTestApplicationFactory();
@@ -622,6 +661,7 @@ public sealed class PlayerSearchTests
         bool includePaulSnapshot = true,
         bool includePaulPlatformProp = false,
         bool includeDuplicatePaulPlatformProps = false,
+        bool includePaulPlatformPropGame = false,
         bool includeAliasEquivalentDuplicateSnapshots = false,
         bool includePaulPitcherStrikeoutResultsOnSelected = false,
         bool includePaulPitcherStrikeoutResultsOnLiveDuplicate = false,
@@ -779,6 +819,25 @@ public sealed class PlayerSearchTests
             NormalizedKey = "paul-skenes-pitcher-strikeouts",
             StartsAt = DateTimeOffset.UtcNow
         };
+        if (includePaulPlatformPropGame)
+        {
+            var game = new Game
+            {
+                Id = Guid.NewGuid(),
+                LeagueId = league.Id,
+                League = league,
+                HomeTeamId = team.Id,
+                HomeTeam = team,
+                AwayTeamId = pirates.Id,
+                AwayTeam = pirates,
+                ScheduledStartAt = DateTimeOffset.UtcNow.AddHours(4),
+                Status = "scheduled"
+            };
+            dbContext.Games.Add(game);
+            paulSkenesProp.GameId = game.Id;
+            paulSkenesProp.Game = game;
+            paulSkenesProp.StartsAt = game.ScheduledStartAt;
+        }
         dbContext.Props.Add(paulSkenesProp);
         if (includePaulPlatformProp)
         {
