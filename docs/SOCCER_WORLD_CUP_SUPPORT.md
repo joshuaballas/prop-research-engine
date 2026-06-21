@@ -95,6 +95,10 @@ API-Sports Football has a debug-only single-fixture result import spike for Worl
 - `POST /api/debug/soccer/results/api-sports/world-cup/backfill-completed`
 - `GET /api/debug/soccer/results/api-sports/world-cup/import-status`
 - `GET /api/debug/soccer/results/api-sports/world-cup/coverage`
+- `GET /api/debug/soccer/player-identity/api-sports/world-cup/coverage`
+- `GET /api/debug/soccer/player-identity/api-sports/world-cup/candidates`
+- `GET /api/debug/soccer/player-identity/api-sports/world-cup/link-preview`
+- `GET /api/debug/soccer/player-identity/api-sports/world-cup/platform-context`
 
 The import endpoint is force-live gated, supports `dryRun=true`, and writes only supported mappings for the requested fixture when `dryRun=false`. It reuses `prop_results` with `ExternalSource=api-sports-football`; no Soccer grading is enabled globally.
 
@@ -105,6 +109,10 @@ Supported mappings include goals, assists, shots, shots on target, passes attemp
 Soccer prop type display names are not unique because period-specific and combo markets can share customer-facing names. API-Sports result imports resolve prop types by Sport + canonical `statKey`, not display name.
 
 Unsupported mappings are skipped for now: crosses, clearances, fantasy score props, and combo props.
+
+Imported API-Sports result players are not automatically linked to The Odds/platform player identities. The player identity diagnostics are read-only and compare persisted API-Sports World Cup result players against local Soccer players, platform props, recommendation snapshots, and player external refs. They report already linked identities, high-confidence candidates, ambiguous names, conflicts, unmatched players, and blockers. They do not write aliases, merge players, or enable public Soccer grading.
+
+The platform-context diagnostic reports whether existing persisted Soccer platform/snapshot rows contain team, opponent, event, provider event id, provider player id, bookmaker, and competition context that could support identity matching. Current local diagnostics show start time, provider/bookmaker, and provider line/projection identifiers exist, but player team/opponent/event name/provider event id context is missing. Treat name-only Soccer candidates as manual review items until richer team/event identity context is persisted or a reviewed alias approval workflow exists.
 
 ## Public History Still Disabled
 
@@ -149,9 +157,26 @@ Invoke-RestMethod -Method Post "$base/api/debug/soccer/results/api-sports/world-
 
 Invoke-RestMethod "$base/api/debug/soccer/results/api-sports/world-cup/import-status?fromDate=2026-06-11&toDate=2026-06-21" |
   ConvertTo-Json -Depth 60
+
+Invoke-RestMethod "$base/api/debug/soccer/player-identity/api-sports/world-cup/coverage?fromDate=2026-06-11&toDate=2026-06-21" |
+  ConvertTo-Json -Depth 60
+
+Invoke-RestMethod "$base/api/debug/soccer/player-identity/api-sports/world-cup/coverage?fromDate=2026-06-11&toDate=2026-06-21&includeSamples=true&maxSamples=20" |
+  ConvertTo-Json -Depth 80
+
+Invoke-RestMethod "$base/api/debug/soccer/player-identity/api-sports/world-cup/candidates?fromDate=2026-06-11&toDate=2026-06-21&minConfidence=0.80&maxResults=100" |
+  ConvertTo-Json -Depth 80
+
+Invoke-RestMethod "$base/api/debug/soccer/player-identity/api-sports/world-cup/platform-context?fromDate=2026-06-11&toDate=2026-06-21" |
+  ConvertTo-Json -Depth 60
+
+Invoke-RestMethod "$base/api/debug/soccer/player-identity/api-sports/world-cup/platform-context?fromDate=2026-06-11&toDate=2026-06-21&includeSamples=true&maxSamples=20" |
+  ConvertTo-Json -Depth 80
 ```
 
 World Cup import status is persisted-only by default and does not call API-Sports. It still reports imported fixture counts, rows by fixture, total rows, and latest imported timestamps. Add `forceLive=true` only when live discovery counts and missing completed fixture diagnostics are needed.
 
 The World Cup coverage endpoint is read-only and checks whether imported API-Sports `prop_results` can connect to local Soccer platform props, recommendation snapshots, or market snapshots. It reports inventory counts, prop type coverage, join coverage, mismatch reasons, and optional samples. Public Soccer grading remains disabled until those diagnostics prove a safe join path.
+
+The player identity diagnostics are also read-only and never call external APIs. Use them before any future alias approval workflow so API-Sports result players can be reviewed against provider/platform player identities without changing data.
 

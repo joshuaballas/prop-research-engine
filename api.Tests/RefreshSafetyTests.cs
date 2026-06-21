@@ -1074,6 +1074,132 @@ public sealed class RefreshSafetyTests
     }
 
     [Fact]
+    public async Task ApiSportsSoccerPlayerIdentityCoverage_IsReadOnlyAndReportsNoCandidatesGracefully()
+    {
+        await using var factory = new SafetyTestApplicationFactory(ApiSportsLiveConfig());
+        using var client = factory.CreateClient();
+        await factory.EnsureDatabaseAsync();
+        var importResponse = await client.PostAsJsonAsync("/api/debug/soccer/results/api-sports/world-cup/backfill-completed", new
+        {
+            fromDate = "2026-06-11",
+            toDate = "2026-06-11",
+            dryRun = false,
+            forceLive = true
+        });
+        await EnsureSuccessWithBodyAsync(importResponse);
+        var before = await CountApiSportsSoccerResultsAsync(factory);
+        var callsBefore = factory.ApiSportsFootballClient.FixturePlayerStatsCallCount;
+
+        var response = await client.GetAsync("/api/debug/soccer/player-identity/api-sports/world-cup/coverage?fromDate=2026-06-11&toDate=2026-06-11&includeSamples=true&maxSamples=5");
+
+        await EnsureSuccessWithBodyAsync(response);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.False(json.GetProperty("callsExternalApis").GetBoolean());
+        Assert.True(json.GetProperty("readOnly").GetBoolean());
+        Assert.True(json.GetProperty("importedPlayers").GetProperty("distinctApiSportsPlayers").GetInt32() > 0);
+        Assert.Equal(0, json.GetProperty("existingSoccerIdentity").GetProperty("soccerPlatformProps").GetInt32());
+        Assert.True(json.GetProperty("matchSummary").GetProperty("unmatchedCount").GetInt32() > 0);
+        Assert.Equal(before, await CountApiSportsSoccerResultsAsync(factory));
+        Assert.Equal(callsBefore, factory.ApiSportsFootballClient.FixturePlayerStatsCallCount);
+    }
+
+    [Fact]
+    public async Task ApiSportsSoccerPlayerIdentityCandidates_ReturnsNormalizedNameTeamCandidates()
+    {
+        await using var factory = new SafetyTestApplicationFactory(ApiSportsLiveConfig());
+        using var client = factory.CreateClient();
+        await factory.EnsureDatabaseAsync();
+        var importResponse = await client.PostAsJsonAsync("/api/debug/soccer/results/api-sports/world-cup/backfill-completed", new
+        {
+            fromDate = "2026-06-11",
+            toDate = "2026-06-11",
+            dryRun = false,
+            forceLive = true
+        });
+        await EnsureSuccessWithBodyAsync(importResponse);
+        await factory.AddSoccerPlatformIdentityCandidateAsync("Tést-Forward", "Home FC", addApiSportsRef: true);
+
+        var response = await client.GetAsync("/api/debug/soccer/player-identity/api-sports/world-cup/candidates?fromDate=2026-06-11&toDate=2026-06-11&minConfidence=0.80&maxResults=10");
+
+        await EnsureSuccessWithBodyAsync(response);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.False(json.GetProperty("callsExternalApis").GetBoolean());
+        var candidate = Assert.Single(json.GetProperty("candidates").EnumerateArray());
+        Assert.Equal("1001", candidate.GetProperty("apiSportsPlayerId").GetString());
+        Assert.Equal("Tést-Forward", candidate.GetProperty("candidateCanonicalPlayerName").GetString());
+        Assert.True(candidate.GetProperty("confidence").GetDecimal() >= 0.95m);
+        Assert.Equal("SafeAliasLink", candidate.GetProperty("suggestedAction").GetString());
+    }
+
+    [Fact]
+    public async Task ApiSportsSoccerPlayerIdentityCoverage_ReportsAmbiguousDuplicateNames()
+    {
+        await using var factory = new SafetyTestApplicationFactory(ApiSportsLiveConfig());
+        using var client = factory.CreateClient();
+        await factory.EnsureDatabaseAsync();
+        var importResponse = await client.PostAsJsonAsync("/api/debug/soccer/results/api-sports/world-cup/backfill-completed", new
+        {
+            fromDate = "2026-06-11",
+            toDate = "2026-06-11",
+            dryRun = false,
+            forceLive = true
+        });
+        await EnsureSuccessWithBodyAsync(importResponse);
+        await factory.AddSoccerPlatformIdentityCandidateAsync("Test Forward", "Home FC");
+        await factory.AddSoccerPlatformIdentityCandidateAsync("Test Forward", "Home FC", providerName: "Underdog");
+
+        var response = await client.GetAsync("/api/debug/soccer/player-identity/api-sports/world-cup/coverage?fromDate=2026-06-11&toDate=2026-06-11&includeSamples=true&maxSamples=5");
+
+        await EnsureSuccessWithBodyAsync(response);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.True(json.GetProperty("matchSummary").GetProperty("ambiguousMatchCount").GetInt32() > 0);
+        Assert.NotEmpty(json.GetProperty("samples").GetProperty("ambiguous").EnumerateArray());
+    }
+
+    [Fact]
+    public async Task ApiSportsSoccerPlatformContext_ReturnsReadOnlyEmptyContextGracefully()
+    {
+        await using var factory = new SafetyTestApplicationFactory(ApiSportsLiveConfig());
+        using var client = factory.CreateClient();
+        await factory.EnsureDatabaseAsync();
+        var before = await CountApiSportsSoccerResultsAsync(factory);
+        var callsBefore = factory.ApiSportsFootballClient.FixturePlayerStatsCallCount;
+
+        var response = await client.GetAsync("/api/debug/soccer/player-identity/api-sports/world-cup/platform-context?fromDate=2026-06-11&toDate=2026-06-11&includeSamples=true&maxSamples=5");
+
+        await EnsureSuccessWithBodyAsync(response);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.False(json.GetProperty("callsExternalApis").GetBoolean());
+        Assert.True(json.GetProperty("readOnly").GetBoolean());
+        Assert.Equal(0, json.GetProperty("soccerPlatformProps").GetInt32());
+        Assert.Equal(0, json.GetProperty("fieldAvailability").GetProperty("hasTeamNameCount").GetInt32());
+        Assert.Equal(before, await CountApiSportsSoccerResultsAsync(factory));
+        Assert.Equal(callsBefore, factory.ApiSportsFootballClient.FixturePlayerStatsCallCount);
+    }
+
+    [Fact]
+    public async Task ApiSportsSoccerPlatformContext_ReportsPlatformTeamAndProviderFields()
+    {
+        await using var factory = new SafetyTestApplicationFactory(ApiSportsLiveConfig());
+        using var client = factory.CreateClient();
+        await factory.EnsureDatabaseAsync();
+        await factory.AddSoccerPlatformIdentityCandidateAsync("Test Forward", "Home FC");
+
+        var response = await client.GetAsync("/api/debug/soccer/player-identity/api-sports/world-cup/platform-context?fromDate=2026-06-11&toDate=2026-06-11&includeSamples=true&maxSamples=5");
+
+        await EnsureSuccessWithBodyAsync(response);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal(1, json.GetProperty("soccerPlatformProps").GetInt32());
+        Assert.Equal(1, json.GetProperty("soccerPlatformPlayers").GetInt32());
+        Assert.Equal(1, json.GetProperty("fieldAvailability").GetProperty("hasTeamNameCount").GetInt32());
+        Assert.Equal(1, json.GetProperty("fieldAvailability").GetProperty("hasStartTimeCount").GetInt32());
+        Assert.Equal(1, json.GetProperty("fieldAvailability").GetProperty("hasProviderPlayerIdCount").GetInt32());
+        var sample = Assert.Single(json.GetProperty("samples").EnumerateArray());
+        Assert.Equal("Test Forward", sample.GetProperty("playerName").GetString());
+        Assert.Equal("Home FC", sample.GetProperty("teamName").GetString());
+    }
+
+    [Fact]
     public async Task RefreshPlanHistory_ReadOnly_DoesNotCallProviders()
     {
         await using var factory = new SafetyTestApplicationFactory();
@@ -1597,6 +1723,132 @@ public sealed class SafetyTestApplicationFactory : WebApplicationFactory<Program
         });
 
         await dbContext.SaveChangesAsync();
+    }
+
+    public async Task<Guid> AddSoccerPlatformIdentityCandidateAsync(
+        string playerName,
+        string teamName,
+        string providerName = "PrizePicks",
+        bool addApiSportsRef = false)
+    {
+        using var scope = Services.CreateScope();
+        var dbContext = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+        var sport = await dbContext.Sports.SingleOrDefaultAsync(row => row.Code == "SOCCER");
+        if (sport is null)
+        {
+            sport = new Sport { Id = Guid.NewGuid(), Code = "SOCCER", Name = "Soccer" };
+            dbContext.Sports.Add(sport);
+            await dbContext.SaveChangesAsync();
+        }
+
+        var league = await dbContext.Leagues.SingleOrDefaultAsync(row => row.SportId == sport.Id && row.Code == "WC2026");
+        if (league is null)
+        {
+            league = new League
+            {
+                Id = Guid.NewGuid(),
+                SportId = sport.Id,
+                Name = "World Cup",
+                Code = "WC2026",
+                SeasonType = "2026"
+            };
+            dbContext.Leagues.Add(league);
+            await dbContext.SaveChangesAsync();
+        }
+
+        var team = await dbContext.Teams.FirstOrDefaultAsync(row => row.LeagueId == league.Id && row.Name == teamName);
+        if (team is null)
+        {
+            team = new Team
+            {
+                Id = Guid.NewGuid(),
+                LeagueId = league.Id,
+                Name = teamName
+            };
+            dbContext.Teams.Add(team);
+            await dbContext.SaveChangesAsync();
+        }
+
+        var propType = await dbContext.PropTypes.FirstOrDefaultAsync(row => row.SportId == sport.Id && row.StatKey == "SHOTS");
+        if (propType is null)
+        {
+            propType = new PropType
+            {
+                Id = Guid.NewGuid(),
+                SportId = sport.Id,
+                Name = "Shots",
+                StatKey = "SHOTS",
+                ValueType = "numeric"
+            };
+            dbContext.PropTypes.Add(propType);
+            await dbContext.SaveChangesAsync();
+        }
+
+        var platformSlug = providerName.ToLowerInvariant().Replace(" ", "-", StringComparison.Ordinal);
+        var platform = await dbContext.Platforms.FirstOrDefaultAsync(row => row.Slug == platformSlug);
+        if (platform is null)
+        {
+            platform = new Platform
+            {
+                Id = Guid.NewGuid(),
+                Name = providerName,
+                Slug = platformSlug
+            };
+            dbContext.Platforms.Add(platform);
+            await dbContext.SaveChangesAsync();
+        }
+
+        var player = new Player
+        {
+            Id = Guid.NewGuid(),
+            DisplayName = playerName,
+            TeamId = team.Id,
+            LeagueId = league.Id,
+            Position = "F"
+        };
+        var prop = new Prop
+        {
+            Id = Guid.NewGuid(),
+            PlayerId = player.Id,
+            LeagueId = league.Id,
+            PropTypeId = propType.Id,
+            NormalizedKey = $"soccer-test-{Guid.NewGuid():N}",
+            StartsAt = new DateTimeOffset(2026, 6, 11, 20, 0, 0, TimeSpan.Zero),
+            Status = "active"
+        };
+        var platformProp = new PlatformProp
+        {
+            Id = Guid.NewGuid(),
+            PropId = prop.Id,
+            PlatformId = platform.Id,
+            PlatformPropId = $"{platformSlug}-{Guid.NewGuid():N}",
+            ExternalStableKey = $"{platformSlug}:{playerName}:{teamName}",
+            Label = $"{playerName} Shots",
+            CurrentLine = 1.5m,
+            OverAvailable = true,
+            UnderAvailable = true,
+            PayoutType = "standard",
+            Status = "active",
+            ObservedAt = DateTimeOffset.UtcNow
+        };
+        dbContext.Players.Add(player);
+        dbContext.Props.Add(prop);
+        dbContext.PlatformProps.Add(platformProp);
+
+        if (addApiSportsRef)
+        {
+            dbContext.PlayerExternalRefs.Add(new PlayerExternalRef
+            {
+                Id = Guid.NewGuid(),
+                PlayerId = player.Id,
+                Provider = "api-sports-football",
+                ProviderPlayerId = "1001",
+                ProviderDisplayName = "Test Forward"
+            });
+        }
+
+        await dbContext.SaveChangesAsync();
+        return player.Id;
     }
 
     public async Task SeedProviderQuotaFailureAsync()

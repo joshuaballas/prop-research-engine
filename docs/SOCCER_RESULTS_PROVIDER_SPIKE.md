@@ -49,6 +49,10 @@ All API-Sports endpoints are debug-only and force-live gated.
 - `GET /api/debug/soccer/results/api-sports/world-cup/import-status`
 - `POST /api/debug/soccer/results/api-sports/world-cup/backfill-completed`
 - `GET /api/debug/soccer/results/api-sports/world-cup/coverage`
+- `GET /api/debug/soccer/player-identity/api-sports/world-cup/coverage`
+- `GET /api/debug/soccer/player-identity/api-sports/world-cup/candidates`
+- `GET /api/debug/soccer/player-identity/api-sports/world-cup/link-preview`
+- `GET /api/debug/soccer/player-identity/api-sports/world-cup/platform-context`
 
 Rules:
 
@@ -64,6 +68,8 @@ Rules:
 - Soccer prop type display names are not unique. API-Sports imports resolve and create `prop_types` by Sport + canonical `statKey`; display name is presentation metadata only.
 - Completed fixtures are importable when API-Sports returns `FT` or `Match Finished`; scheduled, live, postponed, and canceled fixtures are skipped with reasons.
 - No past-season Soccer backfill is supported by this spike.
+- Imported Soccer results do not currently join safely to provider markets because API-Sports player identities are not bridged to The Odds/platform identities.
+- Player identity endpoints are read-only diagnostics only; they do not create aliases, merge players, or enable public Soccer grading.
 
 Fixture diagnostics support flexible API-Sports query shapes so access can be tested safely before upgrading a plan:
 
@@ -128,6 +134,23 @@ Unsupported mappings are skipped:
 - Combo props
 
 Players with null or zero minutes are skipped. Null stat values are treated as zero only when the API-Sports field is present for a player who logged minutes.
+
+## Player Identity Bridge Diagnostics
+
+API-Sports World Cup result rows are persisted with `ExternalSource=api-sports-football`, and the API-Sports player id can be extracted from `external_source_identifier` values shaped like `api-sports-football:{fixtureId}:{playerId}:{statKey}`. Those imported result players still need a reviewed identity bridge to the canonical/provider players used by The Odds platform props and recommendation snapshots before Soccer grading can be promoted.
+
+Read-only diagnostics:
+
+- `/api/debug/soccer/player-identity/api-sports/world-cup/coverage` reports imported API-Sports player inventory, existing Soccer player/platform/ref counts, already-linked market identities, normalized-name candidates, team-aware candidates, ambiguous names, conflicts, and unmatched players.
+- `/api/debug/soccer/player-identity/api-sports/world-cup/candidates` returns candidate link rows with confidence, reasons, blockers, and suggested action.
+- `/api/debug/soccer/player-identity/api-sports/world-cup/link-preview` returns only high-confidence `SafeAliasLink` candidates, but still writes nothing.
+- `/api/debug/soccer/player-identity/api-sports/world-cup/platform-context` reports which persisted Soccer platform/snapshot fields are available for identity matching, including team, opponent, event name, start time, provider event id, provider player id, bookmaker, and competition fields.
+
+The matcher normalizes names case-insensitively, strips punctuation through the app compact player-name normalizer, handles diacritics, and uses team names when both sides have team context. Name-only candidates are review items, not automatic links. Ambiguous names or team mismatches remain blockers.
+
+Current local diagnostics show persisted Soccer platform props have start time, provider/bookmaker, and a provider line/projection identifier, but do not currently have player team, opponent, event name, provider event id, or competition context. That means safe auto-linking is not available from existing persisted data alone; manual alias review or richer persisted provider event/team context is required first.
+
+Public Soccer grading remains disabled while these diagnostics are reviewed.
 
 ## Request-Limit Strategy
 
@@ -212,6 +235,22 @@ Invoke-RestMethod -Method Post "$base/api/debug/soccer/results/api-sports/import
 # Verify local rows:
 Invoke-RestMethod "$base/api/debug/soccer/results/api-sports/import-fixture/status?fixtureId=1489393" |
   ConvertTo-Json -Depth 40
+
+# Read-only identity bridge diagnostics:
+Invoke-RestMethod "$base/api/debug/soccer/player-identity/api-sports/world-cup/coverage?fromDate=2026-06-11&toDate=2026-06-21" |
+  ConvertTo-Json -Depth 60
+
+Invoke-RestMethod "$base/api/debug/soccer/player-identity/api-sports/world-cup/coverage?fromDate=2026-06-11&toDate=2026-06-21&includeSamples=true&maxSamples=20" |
+  ConvertTo-Json -Depth 80
+
+Invoke-RestMethod "$base/api/debug/soccer/player-identity/api-sports/world-cup/candidates?fromDate=2026-06-11&toDate=2026-06-21&minConfidence=0.80&maxResults=100" |
+  ConvertTo-Json -Depth 80
+
+Invoke-RestMethod "$base/api/debug/soccer/player-identity/api-sports/world-cup/platform-context?fromDate=2026-06-11&toDate=2026-06-21" |
+  ConvertTo-Json -Depth 60
+
+Invoke-RestMethod "$base/api/debug/soccer/player-identity/api-sports/world-cup/platform-context?fromDate=2026-06-11&toDate=2026-06-21&includeSamples=true&maxSamples=20" |
+  ConvertTo-Json -Depth 80
 
 # World Cup 2026 completed-fixture backfill safety block:
 Invoke-RestMethod -Method Post "$base/api/debug/soccer/results/api-sports/world-cup/backfill-completed" `

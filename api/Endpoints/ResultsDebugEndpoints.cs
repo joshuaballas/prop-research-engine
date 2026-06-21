@@ -1004,6 +1004,246 @@ public static class ResultsDebugEndpoints
         .WithName("ApiSportsSoccerWorldCupCoverageDebug")
         .WithSummary("Read-only local coverage diagnostics for imported API-Sports World Cup Soccer prop_results.");
 
+        endpoints.MapGet("/api/debug/soccer/player-identity/api-sports/world-cup/coverage", async (
+            DateOnly? fromDate,
+            DateOnly? toDate,
+            string? fixtureId,
+            bool? includeSamples,
+            int? maxSamples,
+            ApplicationDbContext dbContext,
+            CancellationToken cancellationToken) =>
+        {
+            var range = NormalizeApiSportsWorldCupDateRange(fromDate, toDate);
+            var normalizedFixtureId = string.IsNullOrWhiteSpace(fixtureId) ? null : fixtureId.Trim();
+            var sampleLimit = Math.Clamp(maxSamples ?? 50, 1, 250);
+            var identity = await BuildApiSportsSoccerIdentityDiagnosticsAsync(
+                dbContext,
+                range,
+                normalizedFixtureId,
+                cancellationToken);
+
+            return Results.Ok(new
+            {
+                generatedAtUtc = DateTimeOffset.UtcNow,
+                callsExternalApis = false,
+                readOnly = true,
+                scope = BuildApiSportsSoccerIdentityScope(range, normalizedFixtureId),
+                importedPlayers = new
+                {
+                    distinctApiSportsPlayers = identity.ImportedPlayers.Count,
+                    resultRows = identity.ResultRowCount,
+                    rowsByTeam = identity.ImportedPlayers
+                        .GroupBy(player => string.IsNullOrWhiteSpace(player.ApiSportsTeamName) ? "Unknown" : player.ApiSportsTeamName, StringComparer.OrdinalIgnoreCase)
+                        .OrderBy(group => group.Key)
+                        .Select(group => new { teamName = group.Key, playerCount = group.Count(), resultRows = group.Sum(player => player.ResultRowCount) })
+                        .ToArray()
+                },
+                existingSoccerIdentity = new
+                {
+                    canonicalSoccerPlayers = identity.CanonicalSoccerPlayerCount,
+                    soccerPlatformPlayers = identity.SoccerPlatformPlayerCount,
+                    soccerPlayerExternalRefs = identity.SoccerPlayerExternalRefCount,
+                    soccerPlatformProps = identity.SoccerPlatformPropCount,
+                    soccerSnapshotPlayers = identity.SoccerSnapshotPlayerCount,
+                    identifiersAvailable = new[]
+                    {
+                        "API-Sports player ids are extracted from prop_results.external_source_identifier.",
+                        "Platform prop candidates use local canonical player ids and team names when present.",
+                        "Market snapshots do not carry canonical player ids, so they contribute name-only evidence."
+                    }
+                },
+                matchSummary = new
+                {
+                    alreadyLinkedCount = identity.AlreadyLinked.Count,
+                    exactNameMatchCount = identity.ExactNameCandidates.Count,
+                    normalizedNameMatchCount = identity.NormalizedNameCandidates.Count,
+                    teamAwareNameMatchCount = identity.TeamAwareCandidates.Count,
+                    ambiguousMatchCount = identity.Ambiguous.Count,
+                    unmatchedCount = identity.Unmatched.Count,
+                    conflictCount = identity.Conflicts.Count
+                },
+                samples = includeSamples == true ? new
+                {
+                    alreadyLinked = identity.AlreadyLinked.Take(sampleLimit).ToArray(),
+                    exactNameCandidates = identity.ExactNameCandidates.Take(sampleLimit).ToArray(),
+                    normalizedNameCandidates = identity.NormalizedNameCandidates.Take(sampleLimit).ToArray(),
+                    teamAwareCandidates = identity.TeamAwareCandidates.Take(sampleLimit).ToArray(),
+                    ambiguous = identity.Ambiguous.Take(sampleLimit).ToArray(),
+                    unmatched = identity.Unmatched.Take(sampleLimit).ToArray(),
+                    conflicts = identity.Conflicts.Take(sampleLimit).ToArray()
+                } : null,
+                publicSoccerGradingEnabled = false,
+                recommendation = "Use these diagnostics to review API-Sports-to-platform player identity candidates. This endpoint does not write aliases or enable Soccer grading."
+            });
+        })
+        .WithName("ApiSportsSoccerWorldCupPlayerIdentityCoverageDebug")
+        .WithSummary("Read-only API-Sports World Cup Soccer player identity reconciliation coverage.");
+
+        endpoints.MapGet("/api/debug/soccer/player-identity/api-sports/world-cup/candidates", async (
+            DateOnly? fromDate,
+            DateOnly? toDate,
+            string? fixtureId,
+            decimal? minConfidence,
+            bool? includeAmbiguous,
+            int? maxResults,
+            ApplicationDbContext dbContext,
+            CancellationToken cancellationToken) =>
+        {
+            var range = NormalizeApiSportsWorldCupDateRange(fromDate, toDate);
+            var normalizedFixtureId = string.IsNullOrWhiteSpace(fixtureId) ? null : fixtureId.Trim();
+            var minimumConfidence = Math.Clamp(minConfidence ?? 0.80m, 0m, 1m);
+            var take = Math.Clamp(maxResults ?? 100, 1, 500);
+            var identity = await BuildApiSportsSoccerIdentityDiagnosticsAsync(
+                dbContext,
+                range,
+                normalizedFixtureId,
+                cancellationToken);
+            var candidates = identity.Candidates
+                .Where(candidate => candidate.Confidence >= minimumConfidence)
+                .Where(candidate => includeAmbiguous == true || !candidate.Blockers.Contains("AmbiguousName", StringComparer.OrdinalIgnoreCase))
+                .OrderByDescending(candidate => candidate.Confidence)
+                .ThenBy(candidate => candidate.ApiSportsPlayerName)
+                .ThenBy(candidate => candidate.CandidateCanonicalPlayerName)
+                .Take(take)
+                .ToArray();
+
+            return Results.Ok(new
+            {
+                generatedAtUtc = DateTimeOffset.UtcNow,
+                callsExternalApis = false,
+                readOnly = true,
+                scope = BuildApiSportsSoccerIdentityScope(range, normalizedFixtureId),
+                filters = new
+                {
+                    minConfidence = minimumConfidence,
+                    includeAmbiguous = includeAmbiguous != false,
+                    maxResults = take
+                },
+                candidateCount = candidates.Length,
+                candidates,
+                publicSoccerGradingEnabled = false
+            });
+        })
+        .WithName("ApiSportsSoccerWorldCupPlayerIdentityCandidatesDebug")
+        .WithSummary("Read-only API-Sports World Cup Soccer player identity link candidates.");
+
+        endpoints.MapGet("/api/debug/soccer/player-identity/api-sports/world-cup/link-preview", async (
+            DateOnly? fromDate,
+            DateOnly? toDate,
+            string? fixtureId,
+            decimal? minConfidence,
+            int? maxResults,
+            ApplicationDbContext dbContext,
+            CancellationToken cancellationToken) =>
+        {
+            var range = NormalizeApiSportsWorldCupDateRange(fromDate, toDate);
+            var normalizedFixtureId = string.IsNullOrWhiteSpace(fixtureId) ? null : fixtureId.Trim();
+            var minimumConfidence = Math.Clamp(minConfidence ?? 0.95m, 0m, 1m);
+            var take = Math.Clamp(maxResults ?? 100, 1, 500);
+            var identity = await BuildApiSportsSoccerIdentityDiagnosticsAsync(
+                dbContext,
+                range,
+                normalizedFixtureId,
+                cancellationToken);
+            var candidates = identity.Candidates
+                .Where(candidate => candidate.Confidence >= minimumConfidence)
+                .Where(candidate => string.Equals(candidate.SuggestedAction, "SafeAliasLink", StringComparison.OrdinalIgnoreCase))
+                .Where(candidate => candidate.Blockers.Count == 0)
+                .OrderByDescending(candidate => candidate.Confidence)
+                .ThenBy(candidate => candidate.ApiSportsPlayerName)
+                .Take(take)
+                .ToArray();
+
+            return Results.Ok(new
+            {
+                generatedAtUtc = DateTimeOffset.UtcNow,
+                callsExternalApis = false,
+                readOnly = true,
+                writesAliases = false,
+                scope = BuildApiSportsSoccerIdentityScope(range, normalizedFixtureId),
+                filters = new
+                {
+                    minConfidence = minimumConfidence,
+                    maxResults = take
+                },
+                candidateCount = candidates.Length,
+                candidates,
+                warning = "Preview only. No player_external_refs are created by this endpoint.",
+                publicSoccerGradingEnabled = false
+            });
+        })
+        .WithName("ApiSportsSoccerWorldCupPlayerIdentityLinkPreviewDebug")
+        .WithSummary("Read-only preview of high-confidence API-Sports Soccer player links.");
+
+        endpoints.MapGet("/api/debug/soccer/player-identity/api-sports/world-cup/platform-context", async (
+            DateOnly? fromDate,
+            DateOnly? toDate,
+            bool? includeSamples,
+            int? maxSamples,
+            ApplicationDbContext dbContext,
+            CancellationToken cancellationToken) =>
+        {
+            var range = NormalizeApiSportsWorldCupDateRange(fromDate, toDate);
+            var sampleLimit = Math.Clamp(maxSamples ?? 25, 1, 100);
+            var contextRows = await LoadApiSportsSoccerPlatformContextRowsAsync(dbContext, range, cancellationToken);
+            var platformRows = contextRows.Where(row => row.SourceName == "platform_props").ToArray();
+            var snapshotRows = contextRows.Where(row => row.SourceName != "platform_props").ToArray();
+            var fieldAvailability = BuildApiSportsSoccerPlatformContextAvailability(contextRows);
+            var contextBySource = contextRows
+                .GroupBy(row => new { row.SourceName, row.TableName })
+                .OrderBy(group => group.Key.SourceName)
+                .Select(group =>
+                {
+                    var availability = BuildApiSportsSoccerPlatformContextAvailability(group);
+                    return new
+                    {
+                        group.Key.SourceName,
+                        group.Key.TableName,
+                        rowCount = group.Count(),
+                        availableFields = BuildAvailableContextFields(availability),
+                        missingFields = BuildMissingContextFields(availability)
+                    };
+                })
+                .ToArray();
+
+            return Results.Ok(new
+            {
+                generatedAtUtc = DateTimeOffset.UtcNow,
+                callsExternalApis = false,
+                readOnly = true,
+                scope = BuildApiSportsSoccerIdentityScope(range, fixtureId: null),
+                soccerPlatformProps = platformRows.Length,
+                soccerPlatformPlayers = platformRows.Select(row => row.CanonicalPlayerId).Where(id => id.HasValue).Distinct().Count(),
+                soccerSnapshots = snapshotRows.Length,
+                fieldAvailability,
+                contextBySource,
+                samples = includeSamples == true
+                    ? contextRows
+                        .Where(row => row.HasAnyContext)
+                        .Take(sampleLimit)
+                        .Select(row => new
+                        {
+                            row.SourceName,
+                            row.TableName,
+                            row.PlayerName,
+                            row.PropType,
+                            teamName = row.TeamName,
+                            opponentName = row.OpponentName,
+                            eventName = row.EventName,
+                            startTime = row.StartTime,
+                            providerEventId = row.ProviderEventId,
+                            providerPlayerId = row.ProviderPlayerId,
+                            provider = row.Provider,
+                            bookmaker = row.Bookmaker
+                        })
+                        .ToArray()
+                    : null,
+                conclusion = BuildApiSportsSoccerPlatformContextConclusion(fieldAvailability)
+            });
+        })
+        .WithName("ApiSportsSoccerWorldCupPlatformContextDebug")
+        .WithSummary("Read-only Soccer platform/snapshot context availability for API-Sports identity matching.");
+
         endpoints.MapPost("/api/debug/soccer/results/api-sports/world-cup/backfill-completed", async (
             ApiSportsWorldCupBackfillCompletedRequest request,
             IOptions<ApiSportsOptions> options,
@@ -1864,6 +2104,795 @@ public static class ResultsDebugEndpoints
         return parts.Length >= 2 && string.Equals(parts[0], ApiSportsFootballResultSource, StringComparison.OrdinalIgnoreCase)
             ? parts[1]
             : null;
+    }
+
+    private static string? ExtractApiSportsPlayerId(string externalSourceIdentifier)
+    {
+        var parts = externalSourceIdentifier.Split(':', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        return parts.Length >= 3 && string.Equals(parts[0], ApiSportsFootballResultSource, StringComparison.OrdinalIgnoreCase)
+            ? parts[2]
+            : null;
+    }
+
+    private static object BuildApiSportsSoccerIdentityScope(ApiSportsWorldCupDateRange range, string? fixtureId)
+    {
+        return new
+        {
+            sport = "SOCCER",
+            provider = "API-Sports",
+            product = "API-Sports Football",
+            competition = "World Cup",
+            season = ApiSportsWorldCupSeason,
+            range.FromDate,
+            range.ToDate,
+            fixtureId
+        };
+    }
+
+    private static async Task<ApiSportsSoccerIdentityDiagnostics> BuildApiSportsSoccerIdentityDiagnosticsAsync(
+        ApplicationDbContext dbContext,
+        ApiSportsWorldCupDateRange range,
+        string? fixtureId,
+        CancellationToken cancellationToken)
+    {
+        var resultRows = await dbContext.PropResults
+            .AsNoTracking()
+            .Include(result => result.Player)!.ThenInclude(player => player!.Team)
+            .Where(result => result.ExternalSource == ApiSportsFootballResultSource
+                && result.EventDate >= range.FromDate
+                && result.EventDate <= range.ToDate
+                && result.ExternalSourceIdentifier.StartsWith($"{ApiSportsFootballResultSource}:"))
+            .Select(result => new
+            {
+                result.PlayerId,
+                PlayerName = result.Player == null ? string.Empty : result.Player.DisplayName,
+                TeamName = result.Player == null || result.Player.Team == null ? null : result.Player.Team.Name,
+                result.ExternalSourceIdentifier
+            })
+            .ToListAsync(cancellationToken);
+
+        if (!string.IsNullOrWhiteSpace(fixtureId))
+        {
+            resultRows = resultRows
+                .Where(row => string.Equals(ExtractApiSportsFixtureId(row.ExternalSourceIdentifier), fixtureId, StringComparison.OrdinalIgnoreCase))
+                .ToList();
+        }
+
+        var importedPlayers = resultRows
+            .Select(row => new
+            {
+                ApiSportsPlayerId = ExtractApiSportsPlayerId(row.ExternalSourceIdentifier),
+                row.PlayerId,
+                row.PlayerName,
+                NormalizedPlayerName = NormalizeResultPlayerName(row.PlayerName),
+                row.TeamName,
+                NormalizedTeamName = NormalizeResultPlayerName(row.TeamName),
+                row.ExternalSourceIdentifier
+            })
+            .GroupBy(
+                row => string.IsNullOrWhiteSpace(row.ApiSportsPlayerId)
+                    ? $"local:{row.PlayerId}"
+                    : row.ApiSportsPlayerId!,
+                StringComparer.OrdinalIgnoreCase)
+            .Select(group =>
+            {
+                var first = group
+                    .OrderBy(row => string.IsNullOrWhiteSpace(row.PlayerName))
+                    .ThenBy(row => row.PlayerName)
+                    .First();
+                return new ApiSportsIdentityImportedPlayer(
+                    group.Key,
+                    first.PlayerId,
+                    first.PlayerName,
+                    first.NormalizedPlayerName,
+                    first.TeamName,
+                    first.NormalizedTeamName,
+                    group.Count());
+            })
+            .OrderBy(player => player.ApiSportsPlayerName)
+            .ToArray();
+
+        var soccerPlayers = await dbContext.Players
+            .AsNoTracking()
+            .Include(player => player.Team)
+            .Include(player => player.League)!.ThenInclude(league => league!.Sport)
+            .Where(player => player.League != null
+                && player.League.Sport != null
+                && player.League.Sport.Code == "SOCCER")
+            .Select(player => new
+            {
+                player.Id,
+                player.DisplayName,
+                TeamName = player.Team == null ? null : player.Team.Name
+            })
+            .ToListAsync(cancellationToken);
+        var soccerPlayerIds = soccerPlayers.Select(player => player.Id).ToArray();
+
+        var contextRows = await LoadApiSportsSoccerPlatformContextRowsAsync(dbContext, range, cancellationToken);
+        var contextRowsByPlayerId = contextRows
+            .Where(row => row.CanonicalPlayerId.HasValue)
+            .GroupBy(row => row.CanonicalPlayerId!.Value)
+            .ToDictionary(group => group.Key, group => group.ToArray());
+
+        var platformEvidenceRows = await dbContext.PlatformProps
+            .AsNoTracking()
+            .Include(platformProp => platformProp.Platform)
+            .Include(platformProp => platformProp.Prop)!.ThenInclude(prop => prop!.Player)!.ThenInclude(player => player!.Team)
+            .Include(platformProp => platformProp.Prop)!.ThenInclude(prop => prop!.League)!.ThenInclude(league => league!.Sport)
+            .Where(platformProp => platformProp.Prop != null
+                && platformProp.Prop.Player != null
+                && platformProp.Prop.League != null
+                && platformProp.Prop.League.Sport != null
+                && platformProp.Prop.League.Sport.Code == "SOCCER")
+            .Select(platformProp => new
+            {
+                PlayerId = platformProp.Prop!.PlayerId,
+                PlayerName = platformProp.Prop.Player == null ? string.Empty : platformProp.Prop.Player.DisplayName,
+                TeamName = platformProp.Prop.Player == null || platformProp.Prop.Player.Team == null ? null : platformProp.Prop.Player.Team.Name,
+                Provider = platformProp.Platform == null ? null : platformProp.Platform.Name,
+                ProviderPlayerId = platformProp.ExternalStableKey ?? platformProp.PlatformPropId
+            })
+            .ToListAsync(cancellationToken);
+        var platformPlayerIds = platformEvidenceRows.Select(row => row.PlayerId).Distinct().ToHashSet();
+        var platformPropsCount = platformEvidenceRows.Count;
+
+        var soccerRefs = await dbContext.PlayerExternalRefs
+            .AsNoTracking()
+            .Where(reference => soccerPlayerIds.Contains(reference.PlayerId))
+            .Select(reference => new
+            {
+                reference.PlayerId,
+                reference.Provider,
+                reference.ProviderPlayerId,
+                reference.ProviderDisplayName
+            })
+            .ToListAsync(cancellationToken);
+        var refsByApiSportsPlayerId = soccerRefs
+            .Where(reference => string.Equals(reference.Provider, ApiSportsFootballPlayerRefProvider, StringComparison.OrdinalIgnoreCase))
+            .GroupBy(reference => reference.ProviderPlayerId, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(group => group.Key, group => group.ToArray(), StringComparer.OrdinalIgnoreCase);
+        var refsByPlayerId = soccerRefs
+            .GroupBy(reference => reference.PlayerId)
+            .ToDictionary(group => group.Key, group => group.ToArray());
+
+        var snapshotRows = await LoadApiSportsSoccerSnapshotIdentityRowsAsync(dbContext, range, cancellationToken);
+        var snapshotNames = snapshotRows
+            .Select(row => row.NormalizedPlayerName)
+            .Where(name => !string.IsNullOrWhiteSpace(name))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+        var candidatePlayers = soccerPlayers
+            .GroupJoin(
+                platformEvidenceRows,
+                player => player.Id,
+                evidence => evidence.PlayerId,
+                (player, evidence) =>
+                {
+                    var evidenceRows = evidence.ToArray();
+                    var contextForPlayer = contextRowsByPlayerId.GetValueOrDefault(player.Id) ?? [];
+                    var refs = refsByPlayerId.TryGetValue(player.Id, out var playerRefs) ? playerRefs : [];
+                    var providerEvidence = evidenceRows
+                        .Select(row => row.Provider)
+                        .Where(provider => !string.IsNullOrWhiteSpace(provider))
+                        .Select(provider => provider!)
+                        .Distinct(StringComparer.OrdinalIgnoreCase)
+                        .Order()
+                        .ToArray();
+                    return new ApiSportsIdentityLocalPlayer(
+                        player.Id,
+                        player.DisplayName,
+                        NormalizeResultPlayerName(player.DisplayName),
+                        player.TeamName,
+                        NormalizeResultPlayerName(player.TeamName),
+                        contextForPlayer
+                            .SelectMany(row => new[] { row.TeamName, row.HomeTeamName, row.AwayTeamName })
+                            .Where(value => !string.IsNullOrWhiteSpace(value))
+                            .Select(NormalizeResultPlayerName)
+                            .Distinct(StringComparer.OrdinalIgnoreCase)
+                            .ToArray(),
+                        evidenceRows.Length,
+                        providerEvidence,
+                        evidenceRows.Select(row => row.ProviderPlayerId).FirstOrDefault(id => !string.IsNullOrWhiteSpace(id)),
+                        refs.Select(reference => reference.Provider).Distinct(StringComparer.OrdinalIgnoreCase).Order().ToArray());
+                })
+            .ToArray();
+        var candidatesByName = candidatePlayers
+            .Where(player => !string.IsNullOrWhiteSpace(player.NormalizedPlayerName))
+            .GroupBy(player => player.NormalizedPlayerName, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(group => group.Key, group => group.ToArray(), StringComparer.OrdinalIgnoreCase);
+
+        var candidateRows = new List<ApiSportsIdentityCandidateRow>();
+        var alreadyLinked = new List<object>();
+        var exactName = new List<object>();
+        var normalizedName = new List<object>();
+        var teamAware = new List<object>();
+        var ambiguous = new List<object>();
+        var unmatched = new List<object>();
+        var conflicts = new List<object>();
+
+        foreach (var imported in importedPlayers)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var apiRefs = refsByApiSportsPlayerId.TryGetValue(imported.ApiSportsPlayerId, out var refs)
+                ? refs
+                : [];
+            var linkedPlatformRefs = apiRefs.Where(reference => platformPlayerIds.Contains(reference.PlayerId)).ToArray();
+            var nameCandidates = candidatesByName.TryGetValue(imported.NormalizedPlayerName, out var candidates)
+                ? candidates.Where(candidate => candidate.PlayerId != imported.LocalResultPlayerId || candidate.PlatformPropCount > 0).ToArray()
+                : [];
+            var platformCandidates = nameCandidates.Where(candidate => candidate.PlatformPropCount > 0).ToArray();
+            var effectiveCandidates = platformCandidates.Length > 0 ? platformCandidates : nameCandidates;
+            var teamMatches = effectiveCandidates
+                .Where(candidate => HasAnyTeamContextMatch(imported.NormalizedTeamName, candidate))
+                .ToArray();
+            var exactDisplayMatches = effectiveCandidates
+                .Where(candidate => string.Equals(candidate.PlayerName, imported.ApiSportsPlayerName, StringComparison.OrdinalIgnoreCase))
+                .ToArray();
+            var hasSnapshotNameEvidence = snapshotNames.Contains(imported.NormalizedPlayerName, StringComparer.OrdinalIgnoreCase);
+
+            if (linkedPlatformRefs.Length > 0)
+            {
+                alreadyLinked.Add(new
+                {
+                    imported.ApiSportsPlayerId,
+                    apiSportsPlayerName = imported.ApiSportsPlayerName,
+                    imported.ApiSportsTeamName,
+                    imported.ResultRowCount,
+                    linkedPlayerIds = linkedPlatformRefs.Select(reference => reference.PlayerId).Distinct().ToArray(),
+                    reason = "API-Sports external ref resolves to a Soccer player that has platform prop identity evidence."
+                });
+            }
+
+            if (apiRefs.Length > 0 && linkedPlatformRefs.Length == 0 && apiRefs.Any(reference => reference.PlayerId != imported.LocalResultPlayerId))
+            {
+                conflicts.Add(new
+                {
+                    imported.ApiSportsPlayerId,
+                    apiSportsPlayerName = imported.ApiSportsPlayerName,
+                    imported.ApiSportsTeamName,
+                    mappedPlayerIds = apiRefs.Select(reference => reference.PlayerId).Distinct().ToArray(),
+                    reason = "API-Sports id is mapped to another Soccer player, but that player has no platform prop identity evidence in this diagnostic."
+                });
+            }
+
+            if (effectiveCandidates.Length == 0)
+            {
+                unmatched.Add(new
+                {
+                    imported.ApiSportsPlayerId,
+                    apiSportsPlayerName = imported.ApiSportsPlayerName,
+                    imported.ApiSportsTeamName,
+                    imported.ResultRowCount,
+                    hasSnapshotNameEvidence,
+                    reason = hasSnapshotNameEvidence
+                        ? "Name appears in market snapshots, but no canonical Soccer player/platform identity candidate was found."
+                        : "No normalized-name Soccer player/platform candidate was found."
+                });
+                continue;
+            }
+
+            if (exactDisplayMatches.Length > 0)
+            {
+                exactName.Add(BuildIdentitySample(imported, exactDisplayMatches, "ExactDisplayName"));
+            }
+
+            normalizedName.Add(BuildIdentitySample(imported, effectiveCandidates, "NormalizedName"));
+
+            if (teamMatches.Length > 0)
+            {
+                teamAware.Add(BuildIdentitySample(imported, teamMatches, "NormalizedNameAndTeam"));
+            }
+
+            var ambiguousCandidates = teamMatches.Length > 1 || (teamMatches.Length == 0 && effectiveCandidates.Length > 1);
+            if (ambiguousCandidates)
+            {
+                ambiguous.Add(BuildIdentitySample(imported, effectiveCandidates, "AmbiguousName"));
+            }
+
+            var teamConflict = !string.IsNullOrWhiteSpace(imported.NormalizedTeamName)
+                && teamMatches.Length == 0
+                && effectiveCandidates.Any(candidate => !string.IsNullOrWhiteSpace(candidate.NormalizedTeamName));
+            if (teamConflict)
+            {
+                conflicts.Add(BuildIdentitySample(imported, effectiveCandidates, "TeamMismatch"));
+            }
+
+            foreach (var candidate in effectiveCandidates)
+            {
+                var candidateTeamMatch = HasAnyTeamContextMatch(imported.NormalizedTeamName, candidate);
+                var directPlayerTeamMatch = NamesMatch(imported.NormalizedTeamName, candidate.NormalizedTeamName);
+                var candidateExactName = string.Equals(candidate.PlayerName, imported.ApiSportsPlayerName, StringComparison.OrdinalIgnoreCase);
+                var blockers = new List<string>();
+                var reasons = new List<string> { "Normalized player names match." };
+                if (candidateExactName)
+                {
+                    reasons.Add("Display names match ignoring case.");
+                }
+
+                if (directPlayerTeamMatch)
+                {
+                    reasons.Add("Team names match after normalization.");
+                }
+                else if (candidateTeamMatch)
+                {
+                    blockers.Add("EventTeamOnly");
+                    reasons.Add("Imported team appears in provider event context, but the candidate player's own team is missing.");
+                }
+                else if (string.IsNullOrWhiteSpace(imported.NormalizedTeamName) || (string.IsNullOrWhiteSpace(candidate.NormalizedTeamName) && candidate.NormalizedEventTeamNames.Count == 0))
+                {
+                    blockers.Add("MissingTeamContext");
+                    reasons.Add("Team context is missing on one side.");
+                }
+                else
+                {
+                    blockers.Add("TeamMismatch");
+                    reasons.Add("Team names do not match.");
+                }
+
+                if (ambiguousCandidates)
+                {
+                    blockers.Add("AmbiguousName");
+                }
+
+                if (candidate.PlatformPropCount == 0)
+                {
+                    blockers.Add("NoPlatformPropEvidence");
+                }
+
+                var confidence = CalculateApiSportsIdentityConfidence(candidateExactName, directPlayerTeamMatch, blockers);
+                var suggestedAction = DetermineApiSportsIdentitySuggestedAction(confidence, blockers);
+                candidateRows.Add(new ApiSportsIdentityCandidateRow(
+                    imported.ApiSportsPlayerId,
+                    imported.ApiSportsPlayerName,
+                    imported.ApiSportsTeamName,
+                    imported.ResultRowCount,
+                    candidate.PlayerId,
+                    candidate.PlayerName,
+                    candidate.ProviderPlayerId,
+                    candidate.Providers.FirstOrDefault(),
+                    candidate.TeamName,
+                    confidence,
+                    reasons.Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
+                    blockers.Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
+                    suggestedAction));
+            }
+        }
+
+        return new ApiSportsSoccerIdentityDiagnostics(
+            importedPlayers,
+            resultRows.Count,
+            soccerPlayers.Count,
+            platformPlayerIds.Count,
+            soccerRefs.Count,
+            platformPropsCount,
+            snapshotNames.Length,
+            alreadyLinked,
+            exactName,
+            normalizedName,
+            teamAware,
+            ambiguous,
+            unmatched,
+            conflicts,
+            candidateRows);
+    }
+
+    private static async Task<IReadOnlyList<ApiSportsCoverageSnapshotRow>> LoadApiSportsSoccerSnapshotIdentityRowsAsync(
+        ApplicationDbContext dbContext,
+        ApiSportsWorldCupDateRange range,
+        CancellationToken cancellationToken)
+    {
+        var top = await dbContext.MarketTopPickSnapshots
+            .AsNoTracking()
+            .Where(snapshot => snapshot.Sport == "SOCCER"
+                && snapshot.SlateDate >= range.FromDate
+                && snapshot.SlateDate <= range.ToDate)
+            .Select(snapshot => new ApiSportsCoverageSnapshotRow(
+                "TopPickSnapshot",
+                snapshot.Player,
+                NormalizeResultPlayerName(snapshot.Player),
+                snapshot.PropType,
+                string.Empty,
+                NormalizeResultPropTypeName(snapshot.PropType),
+                snapshot.EventStartTime.HasValue ? DateOnly.FromDateTime(snapshot.EventStartTime.Value.UtcDateTime) : snapshot.SlateDate,
+                snapshot.EventId,
+                snapshot.Bookmaker,
+                snapshot.ProviderCategory))
+            .ToListAsync(cancellationToken);
+        var lineShopping = await dbContext.MarketLineShoppingSnapshots
+            .AsNoTracking()
+            .Where(snapshot => snapshot.Sport == "SOCCER"
+                && snapshot.SlateDate >= range.FromDate
+                && snapshot.SlateDate <= range.ToDate)
+            .Select(snapshot => new ApiSportsCoverageSnapshotRow(
+                "LineShoppingSnapshot",
+                snapshot.Player,
+                NormalizeResultPlayerName(snapshot.Player),
+                snapshot.PropType,
+                string.Empty,
+                NormalizeResultPropTypeName(snapshot.PropType),
+                snapshot.EventStartTime.HasValue ? DateOnly.FromDateTime(snapshot.EventStartTime.Value.UtcDateTime) : snapshot.SlateDate,
+                snapshot.EventId,
+                snapshot.Bookmaker,
+                snapshot.ProviderCategory))
+            .ToListAsync(cancellationToken);
+        var recommendations = await dbContext.RecommendationSnapshots
+            .AsNoTracking()
+            .Where(snapshot => snapshot.Sport == "SOCCER"
+                && snapshot.ExpectedResultDate >= range.FromDate
+                && snapshot.ExpectedResultDate <= range.ToDate)
+            .Select(snapshot => new ApiSportsCoverageSnapshotRow(
+                "RecommendationSnapshot",
+                snapshot.PlayerName,
+                snapshot.NormalizedPlayerName,
+                snapshot.PropType,
+                string.Empty,
+                snapshot.NormalizedPropType,
+                snapshot.ExpectedResultDate,
+                snapshot.EventId,
+                snapshot.Bookmaker,
+                snapshot.ProviderCategory))
+            .ToListAsync(cancellationToken);
+
+        return top.Concat(lineShopping).Concat(recommendations).ToArray();
+    }
+
+    private static async Task<IReadOnlyList<ApiSportsPlatformContextRow>> LoadApiSportsSoccerPlatformContextRowsAsync(
+        ApplicationDbContext dbContext,
+        ApiSportsWorldCupDateRange range,
+        CancellationToken cancellationToken)
+    {
+        var platformPropRawRows = await dbContext.PlatformProps
+            .AsNoTracking()
+            .Include(platformProp => platformProp.Platform)
+            .Include(platformProp => platformProp.Prop)!.ThenInclude(prop => prop!.Player)!.ThenInclude(player => player!.Team)
+            .Include(platformProp => platformProp.Prop)!.ThenInclude(prop => prop!.PropType)
+            .Include(platformProp => platformProp.Prop)!.ThenInclude(prop => prop!.Game)!.ThenInclude(game => game!.HomeTeam)
+            .Include(platformProp => platformProp.Prop)!.ThenInclude(prop => prop!.Game)!.ThenInclude(game => game!.AwayTeam)
+            .Include(platformProp => platformProp.Prop)!.ThenInclude(prop => prop!.League)!.ThenInclude(league => league!.Sport)
+            .Where(platformProp => platformProp.Prop != null
+                && platformProp.Prop.League != null
+                && platformProp.Prop.League.Sport != null
+                && platformProp.Prop.League.Sport.Code == "SOCCER"
+                && DateOnly.FromDateTime(platformProp.Prop.StartsAt.UtcDateTime) >= range.FromDate
+                && DateOnly.FromDateTime(platformProp.Prop.StartsAt.UtcDateTime) <= range.ToDate)
+            .Select(platformProp => new
+            {
+                platformProp.Id,
+                platformProp.PlatformPropId,
+                platformProp.ExternalStableKey,
+                platformProp.Metadata,
+                Provider = platformProp.Platform == null ? null : platformProp.Platform.Name,
+                Bookmaker = platformProp.Platform == null ? null : platformProp.Platform.Slug,
+                CanonicalPlayerId = (Guid?)platformProp.Prop!.PlayerId,
+                PlayerName = platformProp.Prop.Player == null ? string.Empty : platformProp.Prop.Player.DisplayName,
+                TeamName = platformProp.Prop.Player == null || platformProp.Prop.Player.Team == null ? null : platformProp.Prop.Player.Team.Name,
+                PropType = platformProp.Prop.PropType == null ? string.Empty : platformProp.Prop.PropType.Name,
+                StartTime = platformProp.Prop.StartsAt,
+                GameHomeTeam = platformProp.Prop.Game == null || platformProp.Prop.Game.HomeTeam == null ? null : platformProp.Prop.Game.HomeTeam.Name,
+                GameAwayTeam = platformProp.Prop.Game == null || platformProp.Prop.Game.AwayTeam == null ? null : platformProp.Prop.Game.AwayTeam.Name
+            })
+            .ToListAsync(cancellationToken);
+        var rows = platformPropRawRows
+            .Select(row =>
+            {
+                var metadataHome = ExtractApiSportsContextMetadataString(row.Metadata, "eventInfo", "homeTeam");
+                var metadataAway = ExtractApiSportsContextMetadataString(row.Metadata, "eventInfo", "awayTeam");
+                var homeTeam = FirstNonBlank(row.GameHomeTeam, metadataHome);
+                var awayTeam = FirstNonBlank(row.GameAwayTeam, metadataAway);
+                var eventName = BuildApiSportsContextEventName(awayTeam, homeTeam);
+                var opponent = ResolveOpponent(row.TeamName, homeTeam, awayTeam);
+                return new ApiSportsPlatformContextRow(
+                    "platform_props",
+                    "platform_props",
+                    row.CanonicalPlayerId,
+                    row.PlayerName,
+                    row.PropType,
+                    row.TeamName,
+                    opponent,
+                    eventName,
+                    row.StartTime,
+                    ExtractApiSportsContextMetadataString(row.Metadata, "eventInfo", "eventId"),
+                    FirstNonBlank(
+                        ExtractApiSportsContextMetadataString(row.Metadata, "player", "id"),
+                        ExtractApiSportsContextMetadataString(row.Metadata, "participant", "id"),
+                        row.ExternalStableKey,
+                        row.PlatformPropId),
+                    row.Provider,
+                    row.Bookmaker,
+                    homeTeam,
+                    awayTeam,
+                    FirstNonBlank(
+                        ExtractApiSportsContextMetadataRootString(row.Metadata, "competition"),
+                        ExtractApiSportsContextMetadataRootString(row.Metadata, "league"),
+                        ExtractApiSportsContextMetadataString(row.Metadata, "eventInfo", "competition"),
+                        ExtractApiSportsContextMetadataString(row.Metadata, "eventInfo", "league")));
+            })
+            .ToList();
+
+        var topRows = await dbContext.MarketTopPickSnapshots
+            .AsNoTracking()
+            .Where(snapshot => snapshot.Sport == "SOCCER"
+                && snapshot.SlateDate >= range.FromDate
+                && snapshot.SlateDate <= range.ToDate)
+            .Select(snapshot => new ApiSportsPlatformContextRow(
+                "market_top_pick_snapshots",
+                "market_top_pick_snapshots",
+                null,
+                snapshot.Player,
+                snapshot.PropType,
+                null,
+                null,
+                snapshot.EventName,
+                snapshot.EventStartTime,
+                snapshot.EventId,
+                null,
+                snapshot.Provider,
+                snapshot.Bookmaker,
+                null,
+                null,
+                snapshot.BookmakerPreset))
+            .ToListAsync(cancellationToken);
+        var lineRows = await dbContext.MarketLineShoppingSnapshots
+            .AsNoTracking()
+            .Where(snapshot => snapshot.Sport == "SOCCER"
+                && snapshot.SlateDate >= range.FromDate
+                && snapshot.SlateDate <= range.ToDate)
+            .Select(snapshot => new ApiSportsPlatformContextRow(
+                "market_line_shopping_snapshots",
+                "market_line_shopping_snapshots",
+                null,
+                snapshot.Player,
+                snapshot.PropType,
+                null,
+                null,
+                snapshot.EventName,
+                snapshot.EventStartTime,
+                snapshot.EventId,
+                null,
+                snapshot.Provider,
+                snapshot.Bookmaker,
+                null,
+                null,
+                snapshot.BookmakerPreset))
+            .ToListAsync(cancellationToken);
+        var recommendationRows = await dbContext.RecommendationSnapshots
+            .AsNoTracking()
+            .Where(snapshot => snapshot.Sport == "SOCCER"
+                && snapshot.ExpectedResultDate >= range.FromDate
+                && snapshot.ExpectedResultDate <= range.ToDate)
+            .Select(snapshot => new ApiSportsPlatformContextRow(
+                "recommendation_snapshots",
+                "recommendation_snapshots",
+                snapshot.CanonicalPlayerId,
+                snapshot.PlayerName,
+                snapshot.PropType,
+                null,
+                null,
+                null,
+                snapshot.EventStartTimeUtc,
+                snapshot.EventId,
+                null,
+                snapshot.Provider,
+                snapshot.Bookmaker,
+                null,
+                null,
+                null))
+            .ToListAsync(cancellationToken);
+
+        return rows.Concat(topRows).Concat(lineRows).Concat(recommendationRows).ToArray();
+    }
+
+    private static ApiSportsPlatformContextAvailability BuildApiSportsSoccerPlatformContextAvailability(IEnumerable<ApiSportsPlatformContextRow> rows)
+    {
+        var array = rows.ToArray();
+        return new ApiSportsPlatformContextAvailability(
+            array.Count(row => !string.IsNullOrWhiteSpace(row.TeamName)),
+            array.Count(row => !string.IsNullOrWhiteSpace(row.OpponentName)),
+            array.Count(row => !string.IsNullOrWhiteSpace(row.EventName)),
+            array.Count(row => row.StartTime.HasValue),
+            array.Count(row => !string.IsNullOrWhiteSpace(row.ProviderEventId)),
+            array.Count(row => !string.IsNullOrWhiteSpace(row.ProviderPlayerId)),
+            array.Count(row => !string.IsNullOrWhiteSpace(row.Bookmaker)),
+            array.Count(row => !string.IsNullOrWhiteSpace(row.LeagueOrCompetition)));
+    }
+
+    private static IReadOnlyList<string> BuildAvailableContextFields(ApiSportsPlatformContextAvailability availability)
+    {
+        var fields = new List<string>();
+        if (availability.HasTeamNameCount > 0) fields.Add("teamName");
+        if (availability.HasOpponentNameCount > 0) fields.Add("opponentName");
+        if (availability.HasEventNameCount > 0) fields.Add("eventName");
+        if (availability.HasStartTimeCount > 0) fields.Add("startTime");
+        if (availability.HasProviderEventIdCount > 0) fields.Add("providerEventId");
+        if (availability.HasProviderPlayerIdCount > 0) fields.Add("providerPlayerId");
+        if (availability.HasBookmakerKeyCount > 0) fields.Add("bookmakerKey");
+        if (availability.HasLeagueOrCompetitionCount > 0) fields.Add("leagueOrCompetition");
+        return fields;
+    }
+
+    private static IReadOnlyList<string> BuildMissingContextFields(ApiSportsPlatformContextAvailability availability)
+    {
+        var fields = new List<string>();
+        if (availability.HasTeamNameCount == 0) fields.Add("teamName");
+        if (availability.HasOpponentNameCount == 0) fields.Add("opponentName");
+        if (availability.HasEventNameCount == 0) fields.Add("eventName");
+        if (availability.HasStartTimeCount == 0) fields.Add("startTime");
+        if (availability.HasProviderEventIdCount == 0) fields.Add("providerEventId");
+        if (availability.HasProviderPlayerIdCount == 0) fields.Add("providerPlayerId");
+        if (availability.HasBookmakerKeyCount == 0) fields.Add("bookmakerKey");
+        if (availability.HasLeagueOrCompetitionCount == 0) fields.Add("leagueOrCompetition");
+        return fields;
+    }
+
+    private static string BuildApiSportsSoccerPlatformContextConclusion(ApiSportsPlatformContextAvailability availability)
+    {
+        if (availability.HasTeamNameCount > 0)
+        {
+            return "Canonical Soccer player team context exists for some platform rows and can support team-aware candidate review.";
+        }
+
+        if (availability.HasEventNameCount > 0 || availability.HasProviderEventIdCount > 0 || availability.HasStartTimeCount > 0)
+        {
+            return "Event context exists, but player team context is missing; use manual review before creating aliases.";
+        }
+
+        return "No persisted platform team/event context was found for this range; manual alias review remains required.";
+    }
+
+    private static string? FirstNonBlank(params string?[] values)
+    {
+        return values.FirstOrDefault(value => !string.IsNullOrWhiteSpace(value));
+    }
+
+    private static string? ResolveOpponent(string? teamName, string? homeTeam, string? awayTeam)
+    {
+        var normalizedTeam = NormalizeResultPlayerName(teamName);
+        if (string.IsNullOrWhiteSpace(normalizedTeam))
+        {
+            return null;
+        }
+
+        if (NamesMatch(normalizedTeam, NormalizeResultPlayerName(homeTeam)))
+        {
+            return awayTeam;
+        }
+
+        if (NamesMatch(normalizedTeam, NormalizeResultPlayerName(awayTeam)))
+        {
+            return homeTeam;
+        }
+
+        return null;
+    }
+
+    private static string? BuildApiSportsContextEventName(string? awayTeam, string? homeTeam)
+    {
+        return !string.IsNullOrWhiteSpace(awayTeam) && !string.IsNullOrWhiteSpace(homeTeam)
+            ? $"{awayTeam} @ {homeTeam}"
+            : null;
+    }
+
+    private static string? ExtractApiSportsContextMetadataRootString(JsonDocument? metadata, string propertyName)
+    {
+        if (metadata?.RootElement.ValueKind != JsonValueKind.Object
+            || !metadata.RootElement.TryGetProperty(propertyName, out var property))
+        {
+            return null;
+        }
+
+        return property.ValueKind switch
+        {
+            JsonValueKind.String => property.GetString(),
+            JsonValueKind.Number => property.GetRawText(),
+            _ => null
+        };
+    }
+
+    private static string? ExtractApiSportsContextMetadataString(JsonDocument? metadata, string sectionName, string propertyName)
+    {
+        if (metadata?.RootElement.ValueKind != JsonValueKind.Object
+            || !metadata.RootElement.TryGetProperty(sectionName, out var section)
+            || section.ValueKind != JsonValueKind.Object
+            || !section.TryGetProperty(propertyName, out var property))
+        {
+            return null;
+        }
+
+        return property.ValueKind switch
+        {
+            JsonValueKind.String => property.GetString(),
+            JsonValueKind.Number => property.GetRawText(),
+            _ => null
+        };
+    }
+
+    private static bool NamesMatch(string? left, string? right)
+    {
+        return !string.IsNullOrWhiteSpace(left)
+            && !string.IsNullOrWhiteSpace(right)
+            && string.Equals(left, right, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool HasAnyTeamContextMatch(string? normalizedImportedTeamName, ApiSportsIdentityLocalPlayer candidate)
+    {
+        return NamesMatch(normalizedImportedTeamName, candidate.NormalizedTeamName)
+            || candidate.NormalizedEventTeamNames.Contains(normalizedImportedTeamName ?? string.Empty, StringComparer.OrdinalIgnoreCase);
+    }
+
+    private static decimal CalculateApiSportsIdentityConfidence(bool exactName, bool teamMatch, IReadOnlyCollection<string> blockers)
+    {
+        if (blockers.Contains("TeamMismatch", StringComparer.OrdinalIgnoreCase))
+        {
+            return 0.65m;
+        }
+
+        if (blockers.Contains("AmbiguousName", StringComparer.OrdinalIgnoreCase))
+        {
+            return teamMatch ? 0.88m : 0.78m;
+        }
+
+        if (teamMatch)
+        {
+            return exactName ? 0.97m : 0.95m;
+        }
+
+        if (blockers.Contains("MissingTeamContext", StringComparer.OrdinalIgnoreCase))
+        {
+            return exactName ? 0.86m : 0.84m;
+        }
+
+        return exactName ? 0.82m : 0.80m;
+    }
+
+    private static string DetermineApiSportsIdentitySuggestedAction(decimal confidence, IReadOnlyCollection<string> blockers)
+    {
+        if (blockers.Contains("TeamMismatch", StringComparer.OrdinalIgnoreCase))
+        {
+            return "Conflict";
+        }
+
+        if (blockers.Contains("NoPlatformPropEvidence", StringComparer.OrdinalIgnoreCase))
+        {
+            return "NeedsReview";
+        }
+
+        if (confidence >= 0.95m && blockers.Count == 0)
+        {
+            return "SafeAliasLink";
+        }
+
+        return "NeedsReview";
+    }
+
+    private static object BuildIdentitySample(
+        ApiSportsIdentityImportedPlayer imported,
+        IReadOnlyList<ApiSportsIdentityLocalPlayer> candidates,
+        string reason)
+    {
+        return new
+        {
+            imported.ApiSportsPlayerId,
+            apiSportsPlayerName = imported.ApiSportsPlayerName,
+            imported.ApiSportsTeamName,
+            imported.ResultRowCount,
+            reason,
+            candidates = candidates
+                .OrderByDescending(candidate => NamesMatch(imported.NormalizedTeamName, candidate.NormalizedTeamName))
+                .ThenByDescending(candidate => candidate.PlatformPropCount)
+                .ThenBy(candidate => candidate.PlayerName)
+                .Take(5)
+                .Select(candidate => new
+                {
+                    candidate.PlayerId,
+                    playerName = candidate.PlayerName,
+                    teamName = candidate.TeamName,
+                    candidate.PlatformPropCount,
+                    providers = candidate.Providers
+                })
+                .ToArray()
+        };
     }
 
     private static ApiSportsCoverageMatchDiagnostic BuildApiSportsCoverageMatch(
@@ -3020,6 +4049,98 @@ public static class ResultsDebugEndpoints
                 detail);
         }
     }
+
+    private sealed record ApiSportsIdentityImportedPlayer(
+        string ApiSportsPlayerId,
+        Guid LocalResultPlayerId,
+        string ApiSportsPlayerName,
+        string NormalizedPlayerName,
+        string? ApiSportsTeamName,
+        string NormalizedTeamName,
+        int ResultRowCount);
+
+    private sealed record ApiSportsIdentityLocalPlayer(
+        Guid PlayerId,
+        string PlayerName,
+        string NormalizedPlayerName,
+        string? TeamName,
+        string NormalizedTeamName,
+        IReadOnlyList<string> NormalizedEventTeamNames,
+        int PlatformPropCount,
+        IReadOnlyList<string> Providers,
+        string? ProviderPlayerId,
+        IReadOnlyList<string> ExternalRefProviders);
+
+    private sealed record ApiSportsIdentityCandidateRow(
+        string ApiSportsPlayerId,
+        string ApiSportsPlayerName,
+        string? ApiSportsTeamName,
+        int ResultRowCount,
+        Guid CandidateCanonicalPlayerId,
+        string CandidateCanonicalPlayerName,
+        string? CandidateProviderPlayerId,
+        string? CandidateProvider,
+        string? CandidateTeamName,
+        decimal Confidence,
+        IReadOnlyList<string> Reasons,
+        IReadOnlyList<string> Blockers,
+        string SuggestedAction);
+
+    private sealed record ApiSportsSoccerIdentityDiagnostics(
+        IReadOnlyList<ApiSportsIdentityImportedPlayer> ImportedPlayers,
+        int ResultRowCount,
+        int CanonicalSoccerPlayerCount,
+        int SoccerPlatformPlayerCount,
+        int SoccerPlayerExternalRefCount,
+        int SoccerPlatformPropCount,
+        int SoccerSnapshotPlayerCount,
+        IReadOnlyList<object> AlreadyLinked,
+        IReadOnlyList<object> ExactNameCandidates,
+        IReadOnlyList<object> NormalizedNameCandidates,
+        IReadOnlyList<object> TeamAwareCandidates,
+        IReadOnlyList<object> Ambiguous,
+        IReadOnlyList<object> Unmatched,
+        IReadOnlyList<object> Conflicts,
+        IReadOnlyList<ApiSportsIdentityCandidateRow> Candidates);
+
+    private sealed record ApiSportsPlatformContextRow(
+        string SourceName,
+        string TableName,
+        Guid? CanonicalPlayerId,
+        string PlayerName,
+        string PropType,
+        string? TeamName,
+        string? OpponentName,
+        string? EventName,
+        DateTimeOffset? StartTime,
+        string? ProviderEventId,
+        string? ProviderPlayerId,
+        string? Provider,
+        string? Bookmaker,
+        string? HomeTeamName,
+        string? AwayTeamName,
+        string? LeagueOrCompetition)
+    {
+        public bool HasAnyContext =>
+            !string.IsNullOrWhiteSpace(TeamName)
+            || !string.IsNullOrWhiteSpace(OpponentName)
+            || !string.IsNullOrWhiteSpace(EventName)
+            || StartTime.HasValue
+            || !string.IsNullOrWhiteSpace(ProviderEventId)
+            || !string.IsNullOrWhiteSpace(ProviderPlayerId)
+            || !string.IsNullOrWhiteSpace(Bookmaker)
+            || !string.IsNullOrWhiteSpace(LeagueOrCompetition);
+    }
+
+    private sealed record ApiSportsPlatformContextAvailability(
+        int HasTeamNameCount,
+        int HasOpponentNameCount,
+        int HasEventNameCount,
+        int HasStartTimeCount,
+        int HasProviderEventIdCount,
+        int HasProviderPlayerIdCount,
+        int HasBookmakerKeyCount,
+        int HasLeagueOrCompetitionCount);
 
     private sealed record ApiSportsSoccerFixtureImportResult(
         ApiSportsFixtureSummary FixtureSummary,
