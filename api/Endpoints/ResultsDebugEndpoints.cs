@@ -749,13 +749,19 @@ public static class ResultsDebugEndpoints
                     leagueId = options.Value.Football.WorldCupLeagueId,
                     season = options.Value.Football.Season
                 },
-                discoveredFixtureCount = discovered.Count,
+                discoveryAvailable = forceLive == true,
+                discoveredFixtureCount = forceLive == true ? discovered.Count : (int?)null,
+                completedFixtureCount = forceLive == true ? completed.Length : (int?)null,
+                importedFixtureCount = persisted.RowCountsByFixture.Count,
+                missingCompletedFixtureCount = forceLive == true ? missingCompleted.Length : (int?)null,
                 completedFixturesDiscovered = completed,
+                rowsByFixture = persisted.RowCountsByFixture,
                 importedFixtures = persisted.RowCountsByFixture,
                 missingCompletedFixtures = missingCompleted,
                 persisted.TotalRows,
                 persisted.LatestImportedFixtureId,
-                persisted.LatestImportedDate,
+                latestImportedEventDate = persisted.LatestImportedDate,
+                persisted.LatestImportedAtUtc,
                 warnings
             });
         })
@@ -1589,26 +1595,31 @@ public static class ResultsDebugEndpoints
             .Select(result => new
             {
                 result.ExternalSourceIdentifier,
-                result.EventDate
+                result.EventDate,
+                result.CreatedAt,
+                result.UpdatedAt
             })
             .ToListAsync(cancellationToken);
         var grouped = rows
-            .Select(row => new { FixtureId = ExtractApiSportsFixtureId(row.ExternalSourceIdentifier), row.EventDate })
+            .Select(row => new { FixtureId = ExtractApiSportsFixtureId(row.ExternalSourceIdentifier), row.EventDate, row.CreatedAt, row.UpdatedAt })
             .Where(row => !string.IsNullOrWhiteSpace(row.FixtureId))
             .GroupBy(row => row.FixtureId!, StringComparer.OrdinalIgnoreCase)
             .Select(group => new ApiSportsWorldCupFixtureRowCount(
                 group.Key,
                 group.Min(row => row.EventDate),
-                group.Count()))
+                group.Count(),
+                group.Max(row => row.UpdatedAt)))
             .OrderBy(row => row.EventDate)
             .ThenBy(row => row.FixtureId)
             .ToArray();
         var latest = grouped.OrderByDescending(row => row.EventDate).FirstOrDefault();
+        DateTimeOffset? latestImportedAtUtc = rows.Count == 0 ? null : rows.Max(row => row.UpdatedAt);
         return new ApiSportsWorldCupPersistedImportStatus(
             grouped,
             grouped.Sum(row => row.RowCount),
             latest?.FixtureId,
-            latest?.EventDate);
+            latest?.EventDate,
+            latestImportedAtUtc);
     }
 
     private static string? ExtractApiSportsFixtureId(string externalSourceIdentifier)
@@ -2638,13 +2649,15 @@ public static class ResultsDebugEndpoints
     private sealed record ApiSportsWorldCupFixtureRowCount(
         string FixtureId,
         DateOnly EventDate,
-        int RowCount);
+        int RowCount,
+        DateTimeOffset LatestImportedAtUtc);
 
     private sealed record ApiSportsWorldCupPersistedImportStatus(
         IReadOnlyList<ApiSportsWorldCupFixtureRowCount> RowCountsByFixture,
         int TotalRows,
         string? LatestImportedFixtureId,
-        DateOnly? LatestImportedDate);
+        DateOnly? LatestImportedDate,
+        DateTimeOffset? LatestImportedAtUtc);
 
     private sealed record ApiSportsSoccerFixtureImportResult(
         ApiSportsFixtureSummary FixtureSummary,

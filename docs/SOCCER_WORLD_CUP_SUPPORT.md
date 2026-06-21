@@ -150,3 +150,5 @@ Invoke-RestMethod "$base/api/debug/soccer/results/api-sports/world-cup/import-st
   ConvertTo-Json -Depth 60
 ```
 
+World Cup import status is persisted-only by default and does not call API-Sports. It still reports imported fixture counts, rows by fixture, total rows, and latest imported timestamps. Add `forceLive=true` only when live discovery counts and missing completed fixture diagnostics are needed.
+

@@ -976,9 +976,45 @@ public sealed class RefreshSafetyTests
         await EnsureSuccessWithBodyAsync(response);
         var json = await response.Content.ReadFromJsonAsync<JsonElement>();
         Assert.False(json.GetProperty("callsExternalApis").GetBoolean());
-        Assert.Equal(0, json.GetProperty("discoveredFixtureCount").GetInt32());
+        Assert.False(json.GetProperty("discoveryAvailable").GetBoolean());
+        Assert.Equal(JsonValueKind.Null, json.GetProperty("discoveredFixtureCount").ValueKind);
+        Assert.Equal(JsonValueKind.Null, json.GetProperty("completedFixtureCount").ValueKind);
+        Assert.Equal(JsonValueKind.Null, json.GetProperty("missingCompletedFixtureCount").ValueKind);
+        Assert.Equal(1, json.GetProperty("importedFixtureCount").GetInt32());
         Assert.True(json.GetProperty("totalRows").GetInt32() > 0);
+        Assert.NotEmpty(json.GetProperty("rowsByFixture").EnumerateArray());
         Assert.Equal("1489393", json.GetProperty("latestImportedFixtureId").GetString());
+        Assert.Equal("2026-06-11", json.GetProperty("latestImportedEventDate").GetString());
+        Assert.Equal(JsonValueKind.String, json.GetProperty("latestImportedAtUtc").ValueKind);
+    }
+
+    [Fact]
+    public async Task ApiSportsWorldCupImportStatus_WithForceLiveReportsDiscoveryCounts()
+    {
+        await using var factory = new SafetyTestApplicationFactory(ApiSportsLiveConfig());
+        using var client = factory.CreateClient();
+        await factory.EnsureDatabaseAsync();
+        var importResponse = await client.PostAsJsonAsync("/api/debug/soccer/results/api-sports/world-cup/backfill-completed", new
+        {
+            fromDate = "2026-06-11",
+            toDate = "2026-06-11",
+            dryRun = false,
+            forceLive = true
+        });
+        await EnsureSuccessWithBodyAsync(importResponse);
+
+        var response = await client.GetAsync("/api/debug/soccer/results/api-sports/world-cup/import-status?fromDate=2026-06-11&toDate=2026-06-14&forceLive=true");
+
+        await EnsureSuccessWithBodyAsync(response);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.True(json.GetProperty("callsExternalApis").GetBoolean());
+        Assert.True(json.GetProperty("discoveryAvailable").GetBoolean());
+        Assert.Equal(4, json.GetProperty("discoveredFixtureCount").GetInt32());
+        Assert.Equal(2, json.GetProperty("completedFixtureCount").GetInt32());
+        Assert.Equal(1, json.GetProperty("importedFixtureCount").GetInt32());
+        Assert.Equal(1, json.GetProperty("missingCompletedFixtureCount").GetInt32());
+        var missing = Assert.Single(json.GetProperty("missingCompletedFixtures").EnumerateArray());
+        Assert.Equal("99999", missing.GetProperty("fixtureId").GetString());
     }
 
     [Fact]

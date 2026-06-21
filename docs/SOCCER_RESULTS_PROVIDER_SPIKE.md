@@ -235,3 +235,5 @@ Invoke-RestMethod "$base/api/debug/soccer/results/api-sports/world-cup/import-st
   ConvertTo-Json -Depth 60
 ```
 
+`import-status` in persisted-only mode reports local `importedFixtureCount`, `rowsByFixture`, `totalRows`, `latestImportedEventDate`, and `latestImportedAtUtc` without calling API-Sports. Discovery-dependent counts such as discovered, completed, and missing completed fixtures are only populated when `forceLive=true`.
+
