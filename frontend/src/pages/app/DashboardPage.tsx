@@ -1,6 +1,5 @@
 import AccountTreeOutlinedIcon from '@mui/icons-material/AccountTreeOutlined';
 import AddCircleOutlineRoundedIcon from '@mui/icons-material/AddCircleOutlineRounded';
-import AutoGraphOutlinedIcon from '@mui/icons-material/AutoGraphOutlined';
 import InsightsOutlinedIcon from '@mui/icons-material/InsightsOutlined';
 import LockRoundedIcon from '@mui/icons-material/LockRounded';
 import RemoveCircleOutlineRoundedIcon from '@mui/icons-material/RemoveCircleOutlineRounded';
@@ -36,8 +35,9 @@ import { palette } from '../../theme/palette';
 import type { MarketOpportunity } from '../../types/markets';
 import type { SportCode } from '../../types/sports';
 import { formatPercent } from '../../utils/formatters';
+import { marketTagLabel } from '../../utils/marketTags';
 import { buildAvailableSportOptions, getAvailableSportCodes } from '../../utils/sportOptions';
-import { hasRenderableWarning, renderOpportunityCautionText, renderWarningText } from '../../utils/warnings';
+import { renderOpportunityCautionText, renderWarningText } from '../../utils/warnings';
 
 export function DashboardPage() {
   const sports = useSelectedSports();
@@ -59,8 +59,6 @@ export function DashboardPage() {
   const entryLegs = builder.legs;
   const compatibleSports = Array.from(new Set(entryLegs.map((market) => market.sport)));
   const overall = performanceRows.find((item) => item.groupType === 'Overall') ?? performanceRows[0];
-  const bestStrategy = performanceRows.find((item) => item.groupType === 'Strategy');
-  const limitedHistoryCount = performanceRows.filter((item) => hasRenderableWarning(item.warning) || item.gradedPicks < 30).length;
   const latestCompletedDateLabel = formatDateShort(performanceAvailability?.latestCompletedDate ?? performanceAvailability?.latestGradedDate);
   const latestImportedResultsDateLabel = formatDateShort(performanceAvailability?.latestResultsImportDate);
   const returnedTopPicks = topPicks.length;
@@ -86,7 +84,7 @@ export function DashboardPage() {
     <Stack spacing={{ xs: 2.5, md: 3 }}>
       <PageHeader
         title="Dashboard"
-        description="Current DFS opportunities, provider-compatible entry state, reference lines, and recent performance."
+        description="Track today's best props, compare available lines, and review recent model results."
       />
 
       <SportToggleRail
@@ -106,13 +104,13 @@ export function DashboardPage() {
 
       <Grid container spacing={2}>
         <Grid size={{ xs: 6, sm: 6, lg: 2.4 }}>
-          <MetricCard label="Top Picks" value={`${returnedTopPicks}`} helper="Current opportunities" />
+          <MetricCard label="Top Picks" value={`${returnedTopPicks}`} helper="Current props" />
         </Grid>
         <Grid size={{ xs: 6, sm: 6, lg: 2.4 }}>
-          <MetricCard label="Best EV" value={formatPercent(bestEvMarket?.estimatedEv ?? 0, { signed: true })} helper={bestEvMarket?.player ?? 'No active row'} />
+          <MetricCard label="Best EV" value={formatPercent(bestEvMarket?.estimatedEv ?? 0, { signed: true })} helper={bestEvMarket?.player ?? 'No active prop'} />
         </Grid>
         <Grid size={{ xs: 6, sm: 6, lg: 2.4 }}>
-          <MetricCard label="DFS Providers" value={`${new Set(activeDfs.map((market) => market.provider)).size}`} helper="Live providers" />
+          <MetricCard label="Providers" value={`${new Set(activeDfs.map((market) => market.provider)).size}`} helper="Live providers" />
         </Grid>
         <Grid size={{ xs: 6, sm: 6, lg: 2.4 }}>
           <MetricCard label="Entry Builder" value={`${entryLegs.length} legs`} helper={entryProvider} />
@@ -121,18 +119,18 @@ export function DashboardPage() {
           <MetricCard
             label="Graded picks"
             value={hasGradedPerformance && overall ? `${overall.gradedPicks}` : '-'}
-            helper={latestCompletedDateLabel ? `Latest completed slate: ${latestCompletedDateLabel}` : latestImportedResultsDateLabel ? `Latest imported results: ${latestImportedResultsDateLabel}` : 'Awaiting imported results'}
+            helper={latestCompletedDateLabel ? `Last graded date: ${latestCompletedDateLabel}` : latestImportedResultsDateLabel ? `Latest imported results: ${latestImportedResultsDateLabel}` : 'Awaiting imported results'}
           />
         </Grid>
       </Grid>
 
       <Box>
         <SectionHeader
-          title="Top opportunities"
-          description="A quick view of the best current DFS rows without the full research table."
+          title="Top props"
+          description="A quick look at today's strongest props."
           action={
             <Button component={RouterLink} to="/app/top-picks" variant="outlined">
-              View all picks
+              View all props
             </Button>
           }
         />
@@ -140,11 +138,11 @@ export function DashboardPage() {
           <Grid container spacing={2}>
             {topPicksQuery.loading ? (
               <Grid size={12}>
-                <ApiStateCard message="Loading top opportunities..." />
+                <ApiStateCard message="Loading top props..." />
               </Grid>
             ) : topPicksQuery.error ? (
               <Grid size={12}>
-                <ApiStateCard tone="error" message="Top opportunities could not be loaded." />
+                <ApiStateCard tone="error" message="Top props could not be loaded." />
               </Grid>
             ) : filtered.length ? filtered.slice(0, 3).map((market) => (
               <Grid key={market.id} size={{ xs: 12, lg: 4 }}>
@@ -152,7 +150,7 @@ export function DashboardPage() {
               </Grid>
             )) : (
               <Grid size={12}>
-                <ApiStateCard message="No top opportunities are available for the selected sports." />
+                <ApiStateCard message="No top props are available for the selected sports." />
               </Grid>
             )}
           </Grid>
@@ -161,7 +159,7 @@ export function DashboardPage() {
 
       <Grid container spacing={2}>
         <Grid size={{ xs: 12, lg: 7 }}>
-          <SectionHeader title="Provider line preview" description="Best available provider-backed lines from current top opportunities." />
+          <SectionHeader title="Provider line preview" description="The best available lines from today's top props." />
           <Box mt={2}>
             <Stack spacing={1.2}>
               {lineShoppingQuery.loading ? (
@@ -171,14 +169,14 @@ export function DashboardPage() {
               ) : filteredMarkets.length ? (
                 <LineShoppingPreview markets={filteredMarkets.slice(0, 3)} />
               ) : (
-                <ApiStateCard message="No line-shopping rows are available for the selected sports." />
+                <ApiStateCard message="No line-shopping props are available for the selected sports." />
               )}
             </Stack>
           </Box>
         </Grid>
 
         <Grid size={{ xs: 12, lg: 5 }}>
-          <SectionHeader title="Entry builder preview" description="Provider-locked entries with sport-flexible review." />
+          <SectionHeader title="Entry builder preview" description="Build an entry and check whether the legs work together." />
           <Box mt={2}>
             <EntryBuilderPreview provider={entryProvider} legs={entryLegs} sports={compatibleSports} />
           </Box>
@@ -187,8 +185,8 @@ export function DashboardPage() {
 
       <Box>
         <SectionHeader
-          title="Completed slate performance"
-          description="Reviews the latest imported result date and grades captured picks when matches are available."
+          title="Latest Graded Results"
+          description="See how the latest graded picks performed."
           action={!performanceIsSparse ? (
             <Button component={RouterLink} to="/app/performance" variant="outlined">
               View performance
@@ -197,31 +195,19 @@ export function DashboardPage() {
         />
         <Box mt={2}>
           {performanceIsSparse ? (
-        <SparsePerformancePanel availability={performanceAvailability} />
-      ) : (
-      <Grid container spacing={2}>
-        <Grid size={{ xs: 12, md: 4 }}>
-          <PerformancePanel
-            icon={<InsightsOutlinedIcon />}
-            title={latestCompletedDateLabel ? `Latest completed slate: ${latestCompletedDateLabel}` : 'Recent performance'}
-            value={formatPercent(overall?.hitRate ?? 0)}
-            detail={overall ? `${overall.wins}-${overall.losses}-${overall.pushes} across ${overall.gradedPicks} graded picks` : 'No graded picks yet'}
-          />
-        </Grid>
-        <Grid size={{ xs: 12, md: 4 }}>
-          <PerformancePanel icon={<AutoGraphOutlinedIcon />} title="Best strategy" value={bestStrategy ? formatPercent(bestStrategy.roi, { signed: true }) : '-'} detail={bestStrategy ? `${bestStrategy.groupKey} Â· ${bestStrategy.gradedPicks} graded picks` : 'No graded strategy yet'} />
-        </Grid>
-        <Grid size={{ xs: 12, md: 4 }}>
-          <PerformancePanel
-            icon={<AccountTreeOutlinedIcon />}
-            title="Limited history"
-            value={`${limitedHistoryCount} groups`}
-            detail="Review small samples before treating a slice as reliable."
-            tone={limitedHistoryCount > 0 ? 'warning' : 'default'}
-          />
-        </Grid>
-      </Grid>
-      )}
+            <SparsePerformancePanel availability={performanceAvailability} />
+          ) : (
+            <Grid container spacing={2}>
+              <Grid size={{ xs: 12, md: 6 }}>
+                <PerformancePanel
+                  icon={<InsightsOutlinedIcon />}
+                  title={latestCompletedDateLabel ? `Last graded date: ${latestCompletedDateLabel}` : 'Recent performance'}
+                  value={formatPercent(overall?.hitRate ?? 0)}
+                  detail={overall ? `${overall.wins}-${overall.losses}-${overall.pushes} across ${overall.gradedPicks} graded picks` : 'No graded picks yet'}
+                />
+              </Grid>
+            </Grid>
+          )}
         </Box>
       </Box>
     </Stack>
@@ -261,7 +247,7 @@ function DashboardOpportunityCard({ market, builder }: { market: MarketOpportuni
         provider={
           <OpportunityProviderRow provider={market.provider} category={market.providerCategory}>
             <Stack direction="row" gap={0.75} flexWrap="wrap" justifyContent="flex-end">
-              <StatusPill label={market.strategyClassification} />
+              <StatusPill label={marketTagLabel(market.strategyClassification)} />
               <ProjectionModifierBadge modifier={market.projectionModifier} />
             </Stack>
           </OpportunityProviderRow>
@@ -332,11 +318,11 @@ function LineShoppingPreviewCard({ market, showReference }: { market: MarketOppo
       provider={
         <OpportunityProviderRow provider={market.provider} category={market.providerCategory} sx={{ justifyContent: 'flex-start', columnGap: 1.4, rowGap: 0.8 }}>
           <Typography variant="body2" color="text.secondary">
-            Best DFS line
+            Best provider line
           </Typography>
           {showReference && hasReferenceLine(market) ? (
             <Typography variant="body2" color="text.secondary">
-              Reference: <Box component="span" sx={{ color: 'text.primary', fontWeight: 850 }}>{market.sportsbookContext}</Box>
+              Sportsbook: <Box component="span" sx={{ color: 'text.primary', fontWeight: 850 }}>{market.sportsbookContext}</Box>
             </Typography>
           ) : null}
         </OpportunityProviderRow>
@@ -367,7 +353,7 @@ function EntryBuilderPreview({ provider, legs, sports }: { provider: string; leg
           <Box>
             <Typography fontWeight={900}>No legs added yet.</Typography>
             <Typography color="text.secondary" variant="body2">
-              Add a top pick to preview provider compatibility.
+              Add a prop to check if it can be paired with your entry.
             </Typography>
           </Box>
           <Button component={RouterLink} to="/app/entry-builder" variant="outlined" disabled sx={{ alignSelf: 'flex-start' }}>
@@ -437,7 +423,7 @@ function EntryBuilderPreview({ provider, legs, sports }: { provider: string; leg
               </Stack>
             </Box>
           )) : (
-            <Typography color="text.secondary">Add a top pick to preview provider compatibility.</Typography>
+            <Typography color="text.secondary">Add a prop to check if it can be paired with your entry.</Typography>
           )}
         </Stack>
 
@@ -557,31 +543,31 @@ function SparsePerformancePanel({
   const hasImportedResults = importedResults > 0;
   const title = gradedRows > 0
     ? latestCompletedDateLabel
-      ? `Latest completed slate: ${latestCompletedDateLabel}`
-      : 'Latest completed slate'
+      ? `Last graded date: ${latestCompletedDateLabel}`
+      : 'Last graded date'
     : hasCapturedRows && (noResultRows > 0 || unmatchedRows > 0 || pendingRows > 0)
       ? latestCompletedDateLabel
         ? `No graded picks for ${latestCompletedDateLabel} yet.`
         : 'No graded picks yet.'
       : hasImportedResults
         ? latestCompletedDateLabel
-          ? `No captured picks for ${latestCompletedDateLabel}.`
-          : 'No captured picks yet.'
+          ? `No tracked picks for ${latestCompletedDateLabel}.`
+          : 'No tracked picks yet.'
         : latestCompletedDateLabel
-          ? `No captured picks for ${latestCompletedDateLabel}.`
+          ? `No tracked picks for ${latestCompletedDateLabel}.`
           : 'No completed results imported yet.';
   const message = gradedRows > 0
     ? 'Recent performance is based on the latest completed result date.'
     : hasCapturedRows && noResultRows > 0 && unmatchedRows === 0
-      ? 'Captured picks were found for this completed slate, but none had gradeable result rows.'
+      ? 'Tracked picks were found for this date, but none had gradeable results.'
     : hasCapturedRows && unmatchedRows > 0
-      ? 'Captured picks were found for this completed slate, but some could not be matched safely.'
+      ? 'Tracked picks were found for this date, but some could not be matched safely.'
       : hasImportedResults
-        ? 'Results are imported for this completed slate, but no captured picks were available to grade.'
-        : 'Performance appears after completed games are imported and matched to captured picks.';
+        ? 'Results are imported for this date, but no tracked picks were available to grade.'
+        : 'Performance appears after completed games are imported and matched to tracked picks.';
   const countParts = hasImportedResults
     ? [
-        `${capturedRows} captured picks`,
+        `${capturedRows} tracked picks`,
         `${formatInteger(importedResults)} imported results`,
         gradedRows > 0 ? `${gradedRows} graded` : null,
         hasCapturedRows && noResultRows > 0 ? `${noResultRows} no result` : null,
@@ -604,7 +590,7 @@ function SparsePerformancePanel({
             </Typography>
             {latestCompletedDateLabel ? (
               <Typography color="text.secondary" variant="body2" fontWeight={700} mt={0.6}>
-                Latest completed results: {latestCompletedDateLabel}
+                Last graded date: {latestCompletedDateLabel}
               </Typography>
             ) : null}
             {countParts.length ? (
@@ -632,5 +618,3 @@ function formatDateShort(value?: string | null) {
 function formatInteger(value: number) {
   return new Intl.NumberFormat(undefined, { maximumFractionDigits: 0 }).format(value);
 }
-
-
