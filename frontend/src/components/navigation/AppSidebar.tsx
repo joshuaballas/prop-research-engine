@@ -17,7 +17,7 @@ const navItems = [
   { label: 'Top Picks', to: '/app/top-picks', icon: <AutoGraphOutlinedIcon /> },
   { label: 'Line Shopping', to: '/app/line-shopping', icon: <StackedLineChartOutlinedIcon /> },
   { label: 'Player Research', to: '/app/player-research', icon: <PersonSearchOutlinedIcon /> },
-  { label: 'Entry Builder', to: '/app/entry-builder', icon: <ShoppingCartOutlinedIcon /> },
+  { label: 'Entry Tracker', to: '/app/entry-tracker', icon: <ShoppingCartOutlinedIcon /> },
   { label: 'Model Performance', to: '/app/performance', icon: <AnalyticsOutlinedIcon /> },
   { label: 'Account', to: '/app/account', icon: <PersonOutlineOutlinedIcon /> }
 ];

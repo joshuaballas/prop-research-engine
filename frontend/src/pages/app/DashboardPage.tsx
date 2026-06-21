@@ -178,7 +178,7 @@ export function DashboardPage() {
         <Grid size={{ xs: 12, lg: 5 }}>
           <SectionHeader title="Entry builder preview" description="Build an entry and check whether the legs work together." />
           <Box mt={2}>
-            <EntryBuilderPreview provider={entryProvider} legs={entryLegs} sports={compatibleSports} />
+            <EntryBuilderPreview provider={entryProvider} legs={entryLegs} sports={compatibleSports} onReview={builder.openEntryBuilder} />
           </Box>
         </Grid>
       </Grid>
@@ -337,7 +337,7 @@ function hasReferenceLine(market: MarketOpportunity) {
   return Boolean(context && !context.includes('no sportsbook reference') && context !== 'no reference line' && context !== 'none');
 }
 
-function EntryBuilderPreview({ provider, legs, sports }: { provider: string; legs: MarketOpportunity[]; sports: string[] }) {
+function EntryBuilderPreview({ provider, legs, sports, onReview }: { provider: string; legs: MarketOpportunity[]; sports: string[]; onReview: () => void }) {
   const hasProvider = legs.length > 0;
   const projectedEv = legs.length ? legs.reduce((sum, leg) => sum + leg.estimatedEv, 0) / legs.length : 0;
   const payoutMayVary = legs.some((leg) => leg.projectionModifier !== 'Normal');
@@ -356,7 +356,7 @@ function EntryBuilderPreview({ provider, legs, sports }: { provider: string; leg
               Add a prop to check if it can be paired with your entry.
             </Typography>
           </Box>
-          <Button component={RouterLink} to="/app/entry-builder" variant="outlined" disabled sx={{ alignSelf: 'flex-start' }}>
+          <Button variant="outlined" disabled onClick={onReview} sx={{ alignSelf: 'flex-start' }}>
             Review entry
           </Button>
         </Stack>
@@ -427,7 +427,7 @@ function EntryBuilderPreview({ provider, legs, sports }: { provider: string; leg
           )}
         </Stack>
 
-        <Button component={RouterLink} to="/app/entry-builder" variant="contained">
+        <Button variant="contained" onClick={onReview}>
           Review entry
         </Button>
       </Stack>
