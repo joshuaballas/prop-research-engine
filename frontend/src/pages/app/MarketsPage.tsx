@@ -4,6 +4,7 @@ import { MarketCard } from '../../components/markets/MarketCard';
 import { MarketFilters, type MarketFilterOption, type MarketFilterValues } from '../../components/markets/MarketFilters';
 import { MarketTable } from '../../components/markets/MarketTable';
 import { AppTablePagination } from '../../components/ui/AppTablePagination';
+import { MetricCard } from '../../components/ui/MetricCard';
 import { PageHeader } from '../../components/ui/PageHeader';
 import { SectionHeader } from '../../components/ui/SectionHeader';
 import { useMarketScannerData } from '../../hooks/useMarketData';
@@ -67,9 +68,8 @@ export function MarketsPage() {
     return sortedMarkets.slice(start, start + pageSize);
   }, [page, pageSize, sortedMarkets]);
   const dfsMarkets = filteredMarkets.filter((market) => market.providerCategory === 'DFS');
-  const bestEv = dfsMarkets.length ? Math.max(...dfsMarkets.map((market) => market.estimatedEv)) : 0;
+  const bestEdge = dfsMarkets.length ? Math.max(...dfsMarkets.map((market) => market.probabilityEdge)) : 0;
   const dfsProviderCount = new Set(dfsMarkets.map((market) => market.provider)).size;
-  const lowSampleRows = filteredMarkets.filter((market) => market.historicalSampleSize < 35).length;
 
   useEffect(() => {
     setFilters((current) => normalizeFilterSelection(current, {
@@ -93,29 +93,17 @@ export function MarketsPage() {
     <Stack spacing={3} sx={{ px: { xs: 0.75, sm: 0 } }}>
       <PageHeader title="Prop Scanner" description="Browse current provider props with hit chance, edge, trust, and entry status." />
 
-      {isMobile ? (
-        <MobileSummaryStrip
-          marketCount={filteredMarkets.length}
-          dfsProviderCount={dfsProviderCount}
-          bestEv={bestEv}
-          lowSampleRows={lowSampleRows}
-        />
-      ) : (
-        <Grid container spacing={1.5}>
-          <Grid size={{ xs: 12, sm: 6, lg: 3 }}>
-            <SummaryMetric label="Active props" value={String(filteredMarkets.length)} helper="Props matching filters" />
-          </Grid>
-          <Grid size={{ xs: 12, sm: 6, lg: 3 }}>
-            <SummaryMetric label="Providers" value={String(dfsProviderCount)} helper="Entry-supported platforms" />
-          </Grid>
-          <Grid size={{ xs: 12, sm: 6, lg: 3 }}>
-            <SummaryMetric label="Best EV" value={formatPercent(bestEv, { signed: true })} helper="Highest-EV prop" tone="success" />
-          </Grid>
-          <Grid size={{ xs: 12, sm: 6, lg: 3 }}>
-            <SummaryMetric label="Low-sample lines" value={String(lowSampleRows)} helper="Use extra caution" tone="warning" />
-          </Grid>
+      <Grid container spacing={2}>
+        <Grid size={{ xs: 6, sm: 6, lg: 4 }}>
+          <MetricCard label="Props" value={String(filteredMarkets.length)} helper="Available now" />
         </Grid>
-      )}
+        <Grid size={{ xs: 6, sm: 6, lg: 4 }}>
+          <MetricCard label="Providers" value={String(dfsProviderCount)} helper="Live providers" />
+        </Grid>
+        <Grid size={{ xs: 6, sm: 6, lg: 4 }}>
+          <MetricCard label="Best Edge" value={formatPercent(bestEdge, { signed: true })} helper="Top current prop" valueColor="success.main" />
+        </Grid>
+      </Grid>
 
       <MarketFilters
         scannerFields
@@ -266,85 +254,4 @@ function ApiStateCard({ message, tone = 'default' }: { message: string; tone?: '
   );
 }
 
-function MobileSummaryStrip({
-  marketCount,
-  dfsProviderCount,
-  bestEv,
-  lowSampleRows
-}: {
-  marketCount: number;
-  dfsProviderCount: number;
-  bestEv: number;
-  lowSampleRows: number;
-}) {
-  const items = [
-    { value: String(marketCount), label: 'Props' },
-    { value: String(dfsProviderCount), label: 'DFS providers' },
-    { value: formatPercent(bestEv, { signed: true }), label: 'Best EV', tone: 'success' },
-    { value: String(lowSampleRows), label: 'Low sample', tone: 'warning' }
-  ];
-
-  return (
-    <Box
-      sx={{
-        border: '1px solid rgba(148,163,184,.16)',
-        borderRadius: 3,
-        bgcolor: palette.cardSurface,
-        px: 1.2,
-        py: 1
-      }}
-    >
-      <Grid container spacing={0.8}>
-        {items.map((item) => (
-          <Grid key={item.label} size={6}>
-            <Stack spacing={0.15} alignItems="center" textAlign="center">
-              <Typography variant="body1" color={item.tone === 'success' ? 'success.main' : item.tone === 'warning' ? 'warning.main' : 'text.primary'} fontWeight={950}>
-                {item.value}
-              </Typography>
-              <Typography variant="caption" color="text.secondary" fontWeight={800}>
-                {item.label}
-              </Typography>
-            </Stack>
-          </Grid>
-        ))}
-      </Grid>
-    </Box>
-  );
-}
-
-function SummaryMetric({
-  label,
-  value,
-  helper,
-  tone = 'default'
-}: {
-  label: string;
-  value: string;
-  helper: string;
-  tone?: 'default' | 'success' | 'warning';
-}) {
-  return (
-    <Box
-      sx={{
-        height: '100%',
-        border: '1px solid rgba(148,163,184,.16)',
-        borderRadius: 3,
-        bgcolor: palette.cardSurface,
-        p: 1.7
-      }}
-    >
-      <Stack spacing={0.35}>
-        <Typography variant="caption" color="text.secondary" fontWeight={850} textTransform="uppercase">
-          {label}
-        </Typography>
-        <Typography variant="h5" color={tone === 'success' ? 'success.main' : tone === 'warning' ? 'warning.main' : 'text.primary'} fontWeight={950}>
-          {value}
-        </Typography>
-        <Typography variant="body2" color="text.secondary">
-          {helper}
-        </Typography>
-      </Stack>
-    </Box>
-  );
-}
 

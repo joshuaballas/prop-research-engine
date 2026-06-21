@@ -4,6 +4,7 @@ import { groupLineShoppingMarkets, LineShoppingCard, LineShoppingComparisonList,
 import { MarketFilters, type MarketFilterOption, type MarketFilterValues } from '../../components/markets/MarketFilters';
 import { PageHeader } from '../../components/ui/PageHeader';
 import { AppTablePagination } from '../../components/ui/AppTablePagination';
+import { MetricCard } from '../../components/ui/MetricCard';
 import { useEntryBuilder } from '../../hooks/useEntryBuilder';
 import { useLineShoppingData } from '../../hooks/useMarketData';
 import { useResponsiveView } from '../../hooks/useResponsiveView';
@@ -51,10 +52,8 @@ export function LineShoppingPage() {
     const start = (page - 1) * pageSize;
     return groups.slice(start, start + pageSize);
   }, [groups, page, pageSize]);
-  const bestEv = visibleMarkets.length ? Math.max(...visibleMarkets.map((market) => market.estimatedEv)) : 0;
+  const bestEdge = visibleMarkets.length ? Math.max(...visibleMarkets.map((market) => market.probabilityEdge)) : 0;
   const dfsProviderCount = new Set(visibleMarkets.map((market) => market.provider)).size;
-  const activeComparisons = visibleMarkets.filter((market) => market.freshness === 'Fresh').length;
-  const referenceCoverage = visibleMarkets.filter(hasLineShoppingReferenceLine).length;
   const clearFilters = () => {
     setFilters(defaultLineShoppingFilters);
     setCandidateOnly(true);
@@ -75,29 +74,17 @@ export function LineShoppingPage() {
         description="Compare provider projections against reference lines without mixing incompatible entry types."
       />
 
-      {isMobile ? (
-        <MobileSummaryStrip
-          bestEv={bestEv}
-          dfsProviderCount={dfsProviderCount}
-          marketCount={visibleMarkets.length}
-          referenceCoverage={referenceCoverage}
-        />
-      ) : (
-        <Grid container spacing={1.5}>
-          <Grid size={{ xs: 12, sm: 6, lg: 3 }}>
-            <SummaryMetric label="Best EV" value={formatPercent(bestEv, { signed: true })} helper="Top visible market" tone="success" />
-          </Grid>
-          <Grid size={{ xs: 12, sm: 6, lg: 3 }}>
-            <SummaryMetric label="Providers" value={String(dfsProviderCount)} helper="Entry-supported platforms" />
-          </Grid>
-          <Grid size={{ xs: 12, sm: 6, lg: 3 }}>
-            <SummaryMetric label="Active comparisons" value={String(activeComparisons)} helper="Fresh provider lines" />
-          </Grid>
-          <Grid size={{ xs: 12, sm: 6, lg: 3 }}>
-            <SummaryMetric label="Reference-line coverage" value={`${referenceCoverage}/${visibleMarkets.length}`} helper="Markets with references" />
-          </Grid>
+      <Grid container spacing={2}>
+        <Grid size={{ xs: 6, sm: 6, lg: 4 }}>
+          <MetricCard label="Best Edge" value={formatPercent(bestEdge, { signed: true })} helper="Top available line" valueColor="success.main" />
         </Grid>
-      )}
+        <Grid size={{ xs: 6, sm: 6, lg: 4 }}>
+          <MetricCard label="Providers" value={String(dfsProviderCount)} helper="Live providers" />
+        </Grid>
+        <Grid size={{ xs: 6, sm: 6, lg: 4 }}>
+          <MetricCard label="Lines" value={String(visibleMarkets.length)} helper="Available now" />
+        </Grid>
+      </Grid>
 
       <MarketFilters
         classificationLabel="Opportunity"
@@ -187,10 +174,6 @@ function isEntryCompatibleMarket(market: MarketOpportunity, builder: ReturnType<
   return selected || (market.canAddToEntry && market.estimatedEv > 0 && builder.isCompatible(market));
 }
 
-function hasLineShoppingReferenceLine(market: MarketOpportunity) {
-  return market.providerLines?.some((line) => line.providerCategory === 'Sportsbook') ?? false;
-}
-
 function ApiStateCard({ message, tone = 'default' }: { message: string; tone?: 'default' | 'error' }) {
   return (
     <Box
@@ -202,78 +185,6 @@ function ApiStateCard({ message, tone = 'default' }: { message: string; tone?: '
       }}
     >
       <Typography color={tone === 'error' ? 'error.main' : 'text.secondary'}>{message}</Typography>
-    </Box>
-  );
-}
-
-function MobileSummaryStrip({
-  bestEv,
-  dfsProviderCount,
-  marketCount,
-  referenceCoverage
-}: {
-  bestEv: number;
-  dfsProviderCount: number;
-  marketCount: number;
-  referenceCoverage: number;
-}) {
-  const items = [
-    { value: formatPercent(bestEv, { signed: true }), label: 'Best EV', tone: 'success' },
-    { value: String(dfsProviderCount), label: 'Providers' },
-    { value: String(marketCount), label: 'Lines' },
-    { value: `${referenceCoverage}/${marketCount}`, label: 'References' }
-  ];
-
-  return (
-    <Box
-      sx={{
-        border: '1px solid rgba(148,163,184,.16)',
-        borderRadius: 4,
-        bgcolor: palette.cardSurface,
-        px: 1.2,
-        py: 1
-      }}
-    >
-      <Grid container spacing={0.8}>
-        {items.map((item) => (
-          <Grid key={item.label} size={6}>
-            <Stack spacing={0.15} alignItems="center" textAlign="center">
-              <Typography variant="body1" color={item.tone === 'success' ? 'success.main' : 'text.primary'} fontWeight={950}>
-                {item.value}
-              </Typography>
-              <Typography variant="caption" color="text.secondary" fontWeight={800}>
-                {item.label}
-              </Typography>
-            </Stack>
-          </Grid>
-        ))}
-      </Grid>
-    </Box>
-  );
-}
-
-function SummaryMetric({ label, value, helper, tone = 'default' }: { label: string; value: string; helper: string; tone?: 'default' | 'success' }) {
-  return (
-    <Box
-      sx={{
-        height: '100%',
-        border: '1px solid rgba(148,163,184,.16)',
-        borderRadius: 4,
-        bgcolor: palette.cardSurface,
-        p: 1.7
-      }}
-    >
-      <Stack spacing={0.35}>
-        <Typography variant="caption" color="text.secondary" fontWeight={850} textTransform="uppercase">
-          {label}
-        </Typography>
-        <Typography variant="h5" color={tone === 'success' ? 'success.main' : 'text.primary'} fontWeight={950}>
-          {value}
-        </Typography>
-        <Typography variant="body2" color="text.secondary">
-          {helper}
-        </Typography>
-      </Stack>
     </Box>
   );
 }
