@@ -850,6 +850,138 @@ public sealed class RefreshSafetyTests
     }
 
     [Fact]
+    public async Task ApiSportsWorldCupBackfill_BlocksWithoutForceLive()
+    {
+        await using var factory = new SafetyTestApplicationFactory(ApiSportsLiveConfig());
+        using var client = factory.CreateClient();
+
+        var response = await client.PostAsJsonAsync("/api/debug/soccer/results/api-sports/world-cup/backfill-completed", new
+        {
+            fromDate = "2026-06-11",
+            toDate = "2026-06-13",
+            dryRun = true,
+            forceLive = false
+        });
+
+        await AssertStatusWithBodyAsync(response, HttpStatusCode.Conflict);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.False(json.GetProperty("callsExternalApis").GetBoolean());
+        Assert.Equal(0, factory.ApiSportsFootballClient.FixturesCallCount);
+    }
+
+    [Fact]
+    public async Task ApiSportsWorldCupBackfill_DryRunDiscoversCompletedAndSkipsOpenFixturesWithoutWriting()
+    {
+        await using var factory = new SafetyTestApplicationFactory(ApiSportsLiveConfig());
+        using var client = factory.CreateClient();
+        await factory.EnsureDatabaseAsync();
+
+        var response = await client.PostAsJsonAsync("/api/debug/soccer/results/api-sports/world-cup/backfill-completed", new
+        {
+            fromDate = "2026-06-11",
+            toDate = "2026-06-13",
+            dryRun = true,
+            forceLive = true
+        });
+
+        await EnsureSuccessWithBodyAsync(response);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.True(json.GetProperty("readOnly").GetBoolean());
+        Assert.Equal(3, json.GetProperty("discoveredFixtureCount").GetInt32());
+        Assert.Equal(1, json.GetProperty("completedFixtureCount").GetInt32());
+        Assert.Equal(2, json.GetProperty("skippedFixtureCount").GetInt32());
+        Assert.Equal(0, json.GetProperty("resultRowsWritten").GetInt32());
+        Assert.Equal(0, await CountApiSportsSoccerResultsAsync(factory));
+        var skippedReasons = json.GetProperty("skippedFixtures").EnumerateArray().Select(row => row.GetProperty("reason").GetString()).ToArray();
+        Assert.Contains("Scheduled", skippedReasons);
+        Assert.Contains("InProgress", skippedReasons);
+    }
+
+    [Fact]
+    public async Task ApiSportsWorldCupBackfill_WritesCompletedFixturesIdempotently()
+    {
+        await using var factory = new SafetyTestApplicationFactory(ApiSportsLiveConfig());
+        using var client = factory.CreateClient();
+        await factory.EnsureDatabaseAsync();
+
+        var firstResponse = await client.PostAsJsonAsync("/api/debug/soccer/results/api-sports/world-cup/backfill-completed", new
+        {
+            fromDate = "2026-06-11",
+            toDate = "2026-06-11",
+            dryRun = false,
+            forceLive = true
+        });
+        await EnsureSuccessWithBodyAsync(firstResponse);
+        var first = await firstResponse.Content.ReadFromJsonAsync<JsonElement>();
+        var inserted = first.GetProperty("resultRowsInserted").GetInt32();
+
+        var secondResponse = await client.PostAsJsonAsync("/api/debug/soccer/results/api-sports/world-cup/backfill-completed", new
+        {
+            fromDate = "2026-06-11",
+            toDate = "2026-06-11",
+            dryRun = false,
+            forceLive = true
+        });
+
+        await EnsureSuccessWithBodyAsync(secondResponse);
+        var second = await secondResponse.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.True(inserted > 0);
+        Assert.Equal(inserted, await CountApiSportsSoccerResultsAsync(factory));
+        Assert.Equal(0, second.GetProperty("resultRowsInserted").GetInt32());
+        Assert.Equal(0, second.GetProperty("resultRowsUpdated").GetInt32());
+    }
+
+    [Fact]
+    public async Task ApiSportsWorldCupBackfill_ReportsPerFixtureFailureAndContinues()
+    {
+        await using var factory = new SafetyTestApplicationFactory(ApiSportsLiveConfig());
+        using var client = factory.CreateClient();
+        await factory.EnsureDatabaseAsync();
+
+        var response = await client.PostAsJsonAsync("/api/debug/soccer/results/api-sports/world-cup/backfill-completed", new
+        {
+            fromDate = "2026-06-11",
+            toDate = "2026-06-14",
+            dryRun = false,
+            forceLive = true
+        });
+
+        await EnsureSuccessWithBodyAsync(response);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal(2, json.GetProperty("completedFixtureCount").GetInt32());
+        Assert.Equal(1, json.GetProperty("failedFixtureCount").GetInt32());
+        Assert.Equal(1, json.GetProperty("importedFixtureCount").GetInt32());
+        Assert.True(json.GetProperty("resultRowsInserted").GetInt32() > 0);
+        var failure = Assert.Single(json.GetProperty("failures").EnumerateArray());
+        Assert.Equal("99999", failure.GetProperty("fixtureId").GetString());
+    }
+
+    [Fact]
+    public async Task ApiSportsWorldCupImportStatus_ReturnsPersistedOnlyByDefault()
+    {
+        await using var factory = new SafetyTestApplicationFactory(ApiSportsLiveConfig());
+        using var client = factory.CreateClient();
+        await factory.EnsureDatabaseAsync();
+        var importResponse = await client.PostAsJsonAsync("/api/debug/soccer/results/api-sports/world-cup/backfill-completed", new
+        {
+            fromDate = "2026-06-11",
+            toDate = "2026-06-11",
+            dryRun = false,
+            forceLive = true
+        });
+        await EnsureSuccessWithBodyAsync(importResponse);
+
+        var response = await client.GetAsync("/api/debug/soccer/results/api-sports/world-cup/import-status?fromDate=2026-06-11&toDate=2026-06-11");
+
+        await EnsureSuccessWithBodyAsync(response);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.False(json.GetProperty("callsExternalApis").GetBoolean());
+        Assert.Equal(0, json.GetProperty("discoveredFixtureCount").GetInt32());
+        Assert.True(json.GetProperty("totalRows").GetInt32() > 0);
+        Assert.Equal("1489393", json.GetProperty("latestImportedFixtureId").GetString());
+    }
+
+    [Fact]
     public async Task RefreshPlanHistory_ReadOnly_DoesNotCallProviders()
     {
         await using var factory = new SafetyTestApplicationFactory();
@@ -1482,28 +1614,20 @@ public sealed class StubApiSportsFootballClient : IApiSportsFootballClient
     {
         FixturesCallCount++;
         var sanitizedUrl = BuildFixturesUrl(request);
+        var fixtures = BuildFixtureResponseItems(request);
         var payload = JsonDocument.Parse(
-            """
+            $$"""
             {
               "get": "fixtures",
               "parameters": {},
               "errors": [],
-              "results": 1,
+              "results": {{fixtures.Count}},
               "paging": { "current": 1, "total": 1 },
-              "response": [
-                {
-                  "fixture": { "id": 12345, "date": "2026-06-20T19:00:00+00:00", "status": { "short": "NS", "long": "Not Started" } },
-                  "league": { "id": 1, "name": "World Cup", "season": 2026, "round": "Group Stage" },
-                  "teams": {
-                    "home": { "id": 10, "name": "Home FC" },
-                    "away": { "id": 20, "name": "Away FC" }
-                  }
-                }
-              ]
+              "response": [{{string.Join(",", fixtures)}}]
             }
             """);
 
-        return Task.FromResult(new ApiSportsFootballDiagnosticResponse(payload, 1, 1, 1, sanitizedUrl));
+        return Task.FromResult(new ApiSportsFootballDiagnosticResponse(payload, fixtures.Count, 1, 1, sanitizedUrl));
     }
 
     public Task<ApiSportsFootballDiagnosticResponse> GetFixturePlayerStatsAsync(
@@ -1511,6 +1635,11 @@ public sealed class StubApiSportsFootballClient : IApiSportsFootballClient
         CancellationToken cancellationToken)
     {
         FixturePlayerStatsCallCount++;
+        if (fixtureId == "99999")
+        {
+            throw new InvalidOperationException("Synthetic API-Sports player-stat failure.");
+        }
+
         var payload = JsonDocument.Parse(
             """
             {
@@ -1579,6 +1708,42 @@ public sealed class StubApiSportsFootballClient : IApiSportsFootballClient
             1,
             1,
             $"https://v3.football.api-sports.io/fixtures/players?fixture={Uri.EscapeDataString(fixtureId)}"));
+    }
+
+    private static List<string> BuildFixtureResponseItems(ApiSportsFootballFixturesRequest request)
+    {
+        if (!string.IsNullOrWhiteSpace(request.FixtureId))
+        {
+            return request.FixtureId switch
+            {
+                "1489393" => [BuildFixtureJson("1489393", "2026-06-11T19:00:00+00:00", "FT", "Match Finished")],
+                "99999" => [BuildFixtureJson("99999", "2026-06-14T19:00:00+00:00", "FT", "Match Finished")],
+                _ => [BuildFixtureJson(request.FixtureId, "2026-06-20T19:00:00+00:00", "FT", "Match Finished")]
+            };
+        }
+
+        return request.Date?.ToString("yyyy-MM-dd") switch
+        {
+            "2026-06-11" => [BuildFixtureJson("1489393", "2026-06-11T19:00:00+00:00", "FT", "Match Finished")],
+            "2026-06-12" => [BuildFixtureJson("22222", "2026-06-12T19:00:00+00:00", "NS", "Not Started")],
+            "2026-06-13" => [BuildFixtureJson("33333", "2026-06-13T19:00:00+00:00", "1H", "First Half")],
+            "2026-06-14" => [BuildFixtureJson("99999", "2026-06-14T19:00:00+00:00", "FT", "Match Finished")],
+            _ => []
+        };
+    }
+
+    private static string BuildFixtureJson(string fixtureId, string kickoffUtc, string statusShort, string statusLong)
+    {
+        return $$"""
+        {
+          "fixture": { "id": {{fixtureId}}, "date": "{{kickoffUtc}}", "status": { "short": "{{statusShort}}", "long": "{{statusLong}}" } },
+          "league": { "id": 1, "name": "World Cup", "season": 2026, "round": "Group Stage" },
+          "teams": {
+            "home": { "id": 10, "name": "Home FC" },
+            "away": { "id": 20, "name": "Away FC" }
+          }
+        }
+        """;
     }
 
     private static string BuildFixturesUrl(ApiSportsFootballFixturesRequest request)

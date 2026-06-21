@@ -46,6 +46,8 @@ All API-Sports endpoints are debug-only and force-live gated.
 - `GET /api/debug/soccer/api-sports/fixture-prop-coverage?fixtureId=...&forceLive=false`
 - `POST /api/debug/soccer/results/api-sports/import-fixture`
 - `GET /api/debug/soccer/results/api-sports/import-fixture/status?fixtureId=...`
+- `GET /api/debug/soccer/results/api-sports/world-cup/import-status`
+- `POST /api/debug/soccer/results/api-sports/world-cup/backfill-completed`
 
 Rules:
 
@@ -54,10 +56,13 @@ Rules:
 - Config endpoint never calls external APIs.
 - Fixture/player-stat endpoints do not persist data.
 - Import-fixture is debug-only, imports only one requested fixture, and requires `forceLive=true`.
+- World Cup backfill is debug-only, API-Sports Football only, league `1`, season `2026`, and completed fixtures only.
 - `dryRun=true` previews rows and never writes.
 - `dryRun=false` writes idempotent `prop_results` rows for supported mappings only.
 - Soccer public grading remains disabled globally.
 - Soccer prop type display names are not unique. API-Sports imports resolve and create `prop_types` by Sport + canonical `statKey`; display name is presentation metadata only.
+- Completed fixtures are importable when API-Sports returns `FT` or `Match Finished`; scheduled, live, postponed, and canceled fixtures are skipped with reasons.
+- No past-season Soccer backfill is supported by this spike.
 
 Fixture diagnostics support flexible API-Sports query shapes so access can be tested safely before upgrading a plan:
 
@@ -206,5 +211,27 @@ Invoke-RestMethod -Method Post "$base/api/debug/soccer/results/api-sports/import
 # Verify local rows:
 Invoke-RestMethod "$base/api/debug/soccer/results/api-sports/import-fixture/status?fixtureId=1489393" |
   ConvertTo-Json -Depth 40
+
+# World Cup 2026 completed-fixture backfill safety block:
+Invoke-RestMethod -Method Post "$base/api/debug/soccer/results/api-sports/world-cup/backfill-completed" `
+  -ContentType "application/json" `
+  -Body '{"fromDate":"2026-06-11","toDate":"2026-06-21","dryRun":true,"forceLive":false}' |
+  ConvertTo-Json -Depth 60
+
+# Dry-run live discovery:
+Invoke-RestMethod -Method Post "$base/api/debug/soccer/results/api-sports/world-cup/backfill-completed" `
+  -ContentType "application/json" `
+  -Body '{"fromDate":"2026-06-11","toDate":"2026-06-21","dryRun":true,"forceLive":true}' |
+  ConvertTo-Json -Depth 80
+
+# Write completed fixtures after reviewing dry-run:
+Invoke-RestMethod -Method Post "$base/api/debug/soccer/results/api-sports/world-cup/backfill-completed" `
+  -ContentType "application/json" `
+  -Body '{"fromDate":"2026-06-11","toDate":"2026-06-21","dryRun":false,"forceLive":true}' |
+  ConvertTo-Json -Depth 80
+
+# Status; forceLive omitted means persisted-only and no external API calls:
+Invoke-RestMethod "$base/api/debug/soccer/results/api-sports/world-cup/import-status?fromDate=2026-06-11&toDate=2026-06-21" |
+  ConvertTo-Json -Depth 60
 ```
 

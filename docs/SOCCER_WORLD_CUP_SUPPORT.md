@@ -92,8 +92,12 @@ API-Sports Football has a debug-only single-fixture result import spike for Worl
 
 - `POST /api/debug/soccer/results/api-sports/import-fixture`
 - `GET /api/debug/soccer/results/api-sports/import-fixture/status?fixtureId=...`
+- `POST /api/debug/soccer/results/api-sports/world-cup/backfill-completed`
+- `GET /api/debug/soccer/results/api-sports/world-cup/import-status`
 
 The import endpoint is force-live gated, supports `dryRun=true`, and writes only supported mappings for the requested fixture when `dryRun=false`. It reuses `prop_results` with `ExternalSource=api-sports-football`; no Soccer grading is enabled globally.
+
+The World Cup backfill endpoint is intentionally narrow: API-Sports Football only, World Cup only, league `1`, season `2026`, completed fixtures only, and no past seasons. It discovers fixtures by date range and imports only fixtures with API-Sports status `FT` / `Match Finished`; scheduled, live, postponed, and canceled fixtures are skipped with reasons.
 
 Supported mappings include goals, assists, shots, shots on target, passes attempted, tackles, fouls, fouls drawn, offsides, goalie saves for goalkeepers, and attempted dribbles. Conservative mappings such as Goal + Assist, Cards, Goals Allowed, and Shots Assisted are flagged as `NeedsConfirmation` in import diagnostics.
 
@@ -136,5 +140,13 @@ Invoke-RestMethod -Method Post "$base/api/debug/soccer/results/api-sports/import
   -ContentType "application/json" `
   -Body '{"fixtureId":"1489393","dryRun":true,"forceLive":false}' |
   ConvertTo-Json -Depth 40
+
+Invoke-RestMethod -Method Post "$base/api/debug/soccer/results/api-sports/world-cup/backfill-completed" `
+  -ContentType "application/json" `
+  -Body '{"fromDate":"2026-06-11","toDate":"2026-06-21","dryRun":true,"forceLive":false}' |
+  ConvertTo-Json -Depth 60
+
+Invoke-RestMethod "$base/api/debug/soccer/results/api-sports/world-cup/import-status?fromDate=2026-06-11&toDate=2026-06-21" |
+  ConvertTo-Json -Depth 60
 ```
 
