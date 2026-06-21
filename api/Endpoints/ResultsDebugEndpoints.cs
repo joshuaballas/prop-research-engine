@@ -7,6 +7,7 @@ using SportsBetting.Api.Utilities;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace SportsBetting.Api.Endpoints;
 
@@ -309,6 +310,131 @@ public static class ResultsDebugEndpoints
         })
         .WithName("ProviderStatMappingsDebug")
         .WithSummary("Read-only provider stat mapping diagnostics.");
+
+        endpoints.MapGet("/api/debug/mlb/regression-smoke", async (
+            ApplicationDbContext dbContext,
+            CancellationToken cancellationToken) =>
+        {
+            var now = DateTimeOffset.UtcNow;
+            var windowToDate = DateOnly.FromDateTime(DateTime.UtcNow);
+            var windowFromDate = windowToDate.AddDays(-14);
+            var sportRows = await dbContext.Sports
+                .AsNoTracking()
+                .Select(sport => new { sport.Id, sport.Code, sport.Name })
+                .ToListAsync(cancellationToken);
+            var leagueRows = await dbContext.Leagues
+                .AsNoTracking()
+                .Include(league => league.Sport)
+                .Select(league => new
+                {
+                    league.Id,
+                    league.Code,
+                    league.Name,
+                    league.SeasonType,
+                    SportId = (Guid?)league.SportId,
+                    SportCode = league.Sport == null ? null : league.Sport.Code,
+                    SportName = league.Sport == null ? null : league.Sport.Name
+                })
+                .ToListAsync(cancellationToken);
+            var resolvedMlbSport = sportRows.FirstOrDefault(sport => IsMlbLabel(sport.Code) || IsMlbLabel(sport.Name))
+                ?? sportRows.FirstOrDefault(sport => leagueRows.Any(league => league.SportId == sport.Id && (IsMlbLabel(league.Code) || IsMlbLabel(league.Name))));
+            var resolvedMlbLeagues = leagueRows
+                .Where(league => IsMlbLabel(league.Code)
+                    || IsMlbLabel(league.Name)
+                    || IsMlbLabel(league.SportCode)
+                    || IsMlbLabel(league.SportName)
+                    || (resolvedMlbSport is not null && league.SportId == resolvedMlbSport.Id))
+                .ToArray();
+            var resolvedMlbLeagueIds = resolvedMlbLeagues.Select(league => league.Id).Distinct().ToArray();
+            var mlbLookupMethod = resolvedMlbSport is not null && IsMlbLabel(resolvedMlbSport.Code)
+                ? "SportCode"
+                : resolvedMlbSport is not null && IsMlbLabel(resolvedMlbSport.Name)
+                    ? "SportName"
+                    : resolvedMlbLeagues.Length > 0
+                        ? "LeagueCodeOrName"
+                        : "NotResolved";
+            var latestMlbResultImportDate = await dbContext.MlbResultImportDateStates
+                .AsNoTracking()
+                .Where(state => state.LastSuccessfulAt.HasValue
+                    || state.RecordsFound > 0
+                    || state.RecordsMapped > 0
+                    || state.RecordsInserted > 0
+                    || state.RecordsUpdated > 0)
+                .OrderByDescending(state => state.EventDate)
+                .Select(state => (DateOnly?)state.EventDate)
+                .FirstOrDefaultAsync(cancellationToken);
+            var mlbPropResultsQuery = dbContext.PropResults
+                .AsNoTracking()
+                .Where(result => resolvedMlbLeagueIds.Contains(result.LeagueId));
+            var recentMlbPropResults = await dbContext.PropResults
+                .AsNoTracking()
+                .Where(result => resolvedMlbLeagueIds.Contains(result.LeagueId)
+                    && result.EventDate >= windowFromDate
+                    && result.EventDate <= windowToDate)
+                .CountAsync(cancellationToken);
+            var allTimeMlbPropResults = await mlbPropResultsQuery.CountAsync(cancellationToken);
+            var latestMlbPropResultDate = await mlbPropResultsQuery
+                .OrderByDescending(result => result.EventDate)
+                .Select(result => (DateOnly?)result.EventDate)
+                .FirstOrDefaultAsync(cancellationToken);
+            var response = new
+            {
+                generatedAtUtc = now,
+                callsExternalApis = false,
+                readOnly = true,
+                resolvedMlb = new
+                {
+                    sportId = resolvedMlbSport?.Id,
+                    sportCode = resolvedMlbSport?.Code,
+                    sportName = resolvedMlbSport?.Name,
+                    lookupMethod = mlbLookupMethod,
+                    leagues = resolvedMlbLeagues.Select(league => new
+                    {
+                        leagueId = league.Id,
+                        leagueCode = league.Code,
+                        leagueName = league.Name,
+                        league.SeasonType,
+                        league.SportId,
+                        league.SportCode,
+                        league.SportName
+                    }).ToArray()
+                },
+                players = await dbContext.Players.AsNoTracking().CountAsync(cancellationToken),
+                mlbPlayerExternalRefs = await dbContext.PlayerExternalRefs.AsNoTracking().CountAsync(reference => reference.Provider == "mlb", cancellationToken),
+                mlbPropResults = new
+                {
+                    recentWindow = new { fromDate = windowFromDate, toDate = windowToDate },
+                    recentCount = recentMlbPropResults,
+                    allTimeCount = allTimeMlbPropResults,
+                    latestResultDate = latestMlbPropResultDate
+                },
+                recentMlbPropResults,
+                allTimeMlbPropResults,
+                latestMlbPropResultDate,
+                recentMlbMarketSnapshots = await dbContext.MarketTopPickSnapshots.AsNoTracking().CountAsync(snapshot => snapshot.Sport == "MLB", cancellationToken)
+                    + await dbContext.MarketLineShoppingSnapshots.AsNoTracking().CountAsync(snapshot => snapshot.Sport == "MLB", cancellationToken),
+                latestMlbResultImportDate,
+                predictionRuns = await dbContext.PredictionRuns.AsNoTracking().CountAsync(cancellationToken),
+                recommendationSnapshots = await dbContext.RecommendationSnapshots.AsNoTracking().CountAsync(snapshot => snapshot.Sport == "MLB", cancellationToken),
+                mlbProviderEntityLinks = resolvedMlbSport is not null
+                    ? await dbContext.ProviderEntityLinks.AsNoTracking().CountAsync(link => link.SportId == resolvedMlbSport.Id, cancellationToken)
+                    : 0,
+                warnings = new[]
+                    {
+                        latestMlbResultImportDate.HasValue ? null : "No imported MLB result date was found.",
+                        recentMlbPropResults > 0 ? null : allTimeMlbPropResults > 0
+                            ? "No MLB prop_results were found in the smoke-check window, but older MLB prop_results exist."
+                            : "No MLB prop_results were found.",
+                        resolvedMlbSport is not null || resolvedMlbLeagues.Length > 0 ? null : "No MLB Sport or League identity was found."
+                    }
+                    .Where(value => !string.IsNullOrWhiteSpace(value))
+                    .ToArray()
+            };
+
+            return Results.Ok(response);
+        })
+        .WithName("MlbRegressionSmokeDebug")
+        .WithSummary("Read-only MLB regression smoke diagnostics.");
 
         endpoints.MapGet("/api/debug/mlb-results", async (
             DateOnly date,
@@ -1058,6 +1184,7 @@ public static class ResultsDebugEndpoints
                     result.Id,
                     result.EventDate,
                     ExtractApiSportsFixtureId(result.ExternalSourceIdentifier),
+                    ExtractApiSportsPlayerId(result.ExternalSourceIdentifier),
                     result.PlayerId,
                     result.Player == null ? string.Empty : result.Player.DisplayName,
                     NormalizeResultPlayerName(result.Player == null ? null : result.Player.DisplayName),
@@ -1066,7 +1193,9 @@ public static class ResultsDebugEndpoints
                     result.PropType == null ? string.Empty : result.PropType.StatKey,
                     NormalizeResultPropTypeName(result.PropType == null ? null : result.PropType.Name),
                     result.ActualResultValue,
-                    result.ExternalSourceIdentifier))
+                    result.ExternalSourceIdentifier,
+                    null,
+                    null))
                 .ToListAsync(cancellationToken);
 
             if (!string.IsNullOrWhiteSpace(normalizedFixtureId))
@@ -1075,6 +1204,37 @@ public static class ResultsDebugEndpoints
                     .Where(row => string.Equals(row.FixtureId, normalizedFixtureId, StringComparison.OrdinalIgnoreCase))
                     .ToList();
             }
+
+            var soccerSportId = await GetSportIdAsync(dbContext, "SOCCER", cancellationToken);
+            var resultApiSportsPlayerIds = resultRows
+                .Select(row => row.ApiSportsPlayerId)
+                .Where(id => !string.IsNullOrWhiteSpace(id))
+                .Select(id => id!)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+            var approvedPlayerLinks = soccerSportId.HasValue && resultApiSportsPlayerIds.Length > 0
+                ? await dbContext.ProviderEntityLinks
+                    .AsNoTracking()
+                    .Where(link => link.SportId == soccerSportId.Value
+                        && link.EntityType == "Player"
+                        && link.ProviderKey == ApiSportsFootballPlayerRefProvider
+                        && link.LinkStatus == "Approved"
+                        && link.CanonicalEntityId.HasValue
+                        && resultApiSportsPlayerIds.Contains(link.ProviderEntityId))
+                    .ToListAsync(cancellationToken)
+                : [];
+            var approvedPlayerLinksByProviderId = approvedPlayerLinks
+                .GroupBy(link => link.ProviderEntityId, StringComparer.OrdinalIgnoreCase)
+                .ToDictionary(group => group.Key, group => group.OrderByDescending(link => link.UpdatedAtUtc).First(), StringComparer.OrdinalIgnoreCase);
+            resultRows = resultRows
+                .Select(row => row.ApiSportsPlayerId is not null && approvedPlayerLinksByProviderId.TryGetValue(row.ApiSportsPlayerId, out var link)
+                    ? row with
+                    {
+                        ApprovedCanonicalPlayerId = link.CanonicalEntityId,
+                        ApprovedCanonicalPlayerName = link.CanonicalEntityName
+                    }
+                    : row)
+                .ToList();
 
             var soccerPlatformProps = await dbContext.PlatformProps
                 .AsNoTracking()
@@ -1159,6 +1319,7 @@ public static class ResultsDebugEndpoints
             var matchedSnapshotCount = resultDiagnostics.Count(row => row.MatchedToSnapshots);
             var matchedAnyCount = resultDiagnostics.Count(row => row.MatchedToPlatformProps || row.MatchedToSnapshots);
             var unmatched = resultDiagnostics.Where(row => !row.MatchedToPlatformProps && !row.MatchedToSnapshots).ToArray();
+            var resultRowsWithApprovedPlayerLink = resultRows.Count(row => row.ApprovedCanonicalPlayerId.HasValue);
             var mappingSet = await LoadApiSportsSoccerResultMappingsAsync(dbContext, cancellationToken);
             var mappingByStatKey = mappingSet.Mappings
                 .GroupBy(mapping => mapping.StatKey, StringComparer.OrdinalIgnoreCase)
@@ -1259,6 +1420,19 @@ public static class ResultsDebugEndpoints
                         "snapshot matching uses normalized player name, prop type display name, and event/result date."
                     }
                 },
+                playerLinkCoverage = new
+                {
+                    approvedProviderLinksUsed = resultRows
+                        .Where(row => row.ApprovedCanonicalPlayerId.HasValue)
+                        .Select(row => row.ApiSportsPlayerId)
+                        .Where(id => !string.IsNullOrWhiteSpace(id))
+                        .Distinct(StringComparer.OrdinalIgnoreCase)
+                        .Count(),
+                    resultRowsWithApprovedPlayerLink,
+                    resultRowsWithoutApprovedPlayerLink = resultRows.Count - resultRowsWithApprovedPlayerLink,
+                    playerLinkCoverageRate = resultRows.Count == 0 ? 0 : decimal.Round((decimal)resultRowsWithApprovedPlayerLink / resultRows.Count, 4),
+                    note = "Approved provider identity links are used only by this debug coverage diagnostic. Public Soccer grading remains disabled."
+                },
                 mismatchBreakdown = new
                 {
                     playerMissing = unmatched.Count(row => row.Reason == "PlayerMissing"),
@@ -1332,6 +1506,8 @@ public static class ResultsDebugEndpoints
                     approvedProviderPlayerLinks = identity.ApprovedProviderPlayerLinkCount,
                     candidateProviderPlayerLinks = identity.CandidateProviderPlayerLinkCount,
                     needsReviewProviderPlayerLinks = identity.NeedsReviewProviderPlayerLinkCount,
+                    rejectedProviderPlayerLinks = identity.RejectedProviderPlayerLinkCount,
+                    conflictProviderPlayerLinks = identity.ConflictProviderPlayerLinkCount,
                     providerLinksWithTeamContext = identity.ProviderLinksWithTeamContextCount,
                     soccerPlatformProps = identity.SoccerPlatformPropCount,
                     soccerSnapshotPlayers = identity.SoccerSnapshotPlayerCount,
@@ -1412,7 +1588,9 @@ public static class ResultsDebugEndpoints
                     apiSportsProviderPlayerLinks = identity.ApiSportsProviderPlayerLinkCount,
                     approvedProviderPlayerLinks = identity.ApprovedProviderPlayerLinkCount,
                     candidateProviderPlayerLinks = identity.CandidateProviderPlayerLinkCount,
-                    needsReviewProviderPlayerLinks = identity.NeedsReviewProviderPlayerLinkCount
+                    needsReviewProviderPlayerLinks = identity.NeedsReviewProviderPlayerLinkCount,
+                    rejectedProviderPlayerLinks = identity.RejectedProviderPlayerLinkCount,
+                    conflictProviderPlayerLinks = identity.ConflictProviderPlayerLinkCount
                 },
                 candidateCount = candidates.Length,
                 candidates,
@@ -1421,6 +1599,145 @@ public static class ResultsDebugEndpoints
         })
         .WithName("ApiSportsSoccerWorldCupPlayerIdentityCandidatesDebug")
         .WithSummary("Read-only API-Sports World Cup Soccer player identity link candidates.");
+
+        endpoints.MapGet("/api/debug/soccer/player-identity/api-sports/world-cup/review-queue", async (
+            DateOnly? fromDate,
+            DateOnly? toDate,
+            decimal? minConfidence,
+            bool? includeAmbiguous,
+            string? suggestedAction,
+            bool? hasCandidate,
+            string? sort,
+            bool? includeNoCandidate,
+            string? linkStatus,
+            int? maxResults,
+            ApplicationDbContext dbContext,
+            CancellationToken cancellationToken) =>
+        {
+            var range = NormalizeApiSportsWorldCupDateRange(fromDate, toDate);
+            var minimumConfidence = Math.Clamp(minConfidence ?? 0.80m, 0m, 1m);
+            var includeAmbiguousRows = includeAmbiguous != false;
+            var includeNoCandidateRows = includeNoCandidate == true || (!minConfidence.HasValue && hasCandidate != true);
+            var normalizedSuggestedAction = string.IsNullOrWhiteSpace(suggestedAction) ? null : suggestedAction.Trim();
+            var normalizedSort = string.IsNullOrWhiteSpace(sort) ? "confidenceDesc" : sort.Trim();
+            var normalizedLinkStatus = string.IsNullOrWhiteSpace(linkStatus) ? "Candidate" : linkStatus.Trim();
+            var take = Math.Clamp(maxResults ?? 100, 1, 500);
+            var identity = await BuildApiSportsSoccerIdentityDiagnosticsAsync(dbContext, range, fixtureId: null, cancellationToken);
+            var soccerSportId = await GetSportIdAsync(dbContext, "SOCCER", cancellationToken);
+            var links = soccerSportId.HasValue
+                ? await dbContext.ProviderEntityLinks
+                    .AsNoTracking()
+                    .Where(link => link.SportId == soccerSportId.Value
+                        && link.EntityType == "Player"
+                        && link.ProviderKey == ApiSportsFootballPlayerRefProvider
+                        && link.LinkStatus == normalizedLinkStatus)
+                    .OrderBy(link => link.ProviderEntityName)
+                    .ToListAsync(cancellationToken)
+                : [];
+            var importedByApiSportsId = identity.ImportedPlayers.ToDictionary(player => player.ApiSportsPlayerId, StringComparer.OrdinalIgnoreCase);
+            var candidatesByApiSportsId = identity.Candidates
+                .Where(candidate => candidate.Confidence >= minimumConfidence)
+                .Where(candidate => includeAmbiguousRows || !candidate.Blockers.Contains("AmbiguousName", StringComparer.OrdinalIgnoreCase))
+                .GroupBy(candidate => candidate.ApiSportsPlayerId, StringComparer.OrdinalIgnoreCase)
+                .ToDictionary(group => group.Key, group => group.OrderByDescending(candidate => candidate.Confidence).ThenBy(candidate => candidate.CandidateCanonicalPlayerName).ToArray(), StringComparer.OrdinalIgnoreCase);
+
+            var rows = new List<ApiSportsReviewQueueRow>();
+            foreach (var link in links)
+            {
+                importedByApiSportsId.TryGetValue(link.ProviderEntityId, out var imported);
+                if (!candidatesByApiSportsId.TryGetValue(link.ProviderEntityId, out var candidates) || candidates.Length == 0)
+                {
+                    if (includeNoCandidateRows)
+                    {
+                        rows.Add(BuildApiSportsReviewQueueRow(link, imported, candidate: null));
+                    }
+
+                    continue;
+                }
+
+                foreach (var candidate in candidates)
+                {
+                    rows.Add(BuildApiSportsReviewQueueRow(link, imported, candidate));
+                }
+            }
+
+            var filteredRows = rows
+                .Where(row => !hasCandidate.HasValue || row.HasCandidate == hasCandidate.Value)
+                .Where(row => normalizedSuggestedAction is null || row.SuggestedAction.Equals(normalizedSuggestedAction, StringComparison.OrdinalIgnoreCase))
+                .ToArray();
+            var sortedRows = SortApiSportsReviewQueueRows(filteredRows, normalizedSort)
+                .Take(take)
+                .ToArray();
+
+            return Results.Ok(new
+            {
+                generatedAtUtc = DateTimeOffset.UtcNow,
+                callsExternalApis = false,
+                readOnly = true,
+                scope = BuildApiSportsSoccerIdentityScope(range, fixtureId: null),
+                filters = new
+                {
+                    minConfidence = minimumConfidence,
+                    includeAmbiguous = includeAmbiguousRows,
+                    includeNoCandidate = includeNoCandidateRows,
+                    hasCandidate,
+                    suggestedAction = normalizedSuggestedAction,
+                    sort = normalizedSort,
+                    linkStatus = normalizedLinkStatus,
+                    maxResults = take
+                },
+                providerLinksInStatus = links.Count,
+                reviewRowCount = filteredRows.Length,
+                rows = sortedRows,
+                publicSoccerGradingEnabled = false
+            });
+        })
+        .WithName("ApiSportsSoccerWorldCupPlayerIdentityReviewQueueDebug")
+        .WithSummary("Read-only manual review queue for API-Sports Soccer player identity links.");
+
+        endpoints.MapPost("/api/debug/soccer/player-identity/api-sports/world-cup/approve-link", async (
+            ApiSportsProviderLinkApprovalRequest request,
+            ApplicationDbContext dbContext,
+            CancellationToken cancellationToken) =>
+        {
+            var result = await BuildApiSportsProviderLinkApprovalResultAsync(dbContext, request, cancellationToken);
+            if (result.Blockers.Count > 0)
+            {
+                return Results.Conflict(result);
+            }
+
+            if (result.DryRun || !result.Changed)
+            {
+                return Results.Ok(result);
+            }
+
+            await dbContext.SaveChangesAsync(cancellationToken);
+            return Results.Ok(result with { After = BuildProviderEntityLinkState(result.Link!) });
+        })
+        .WithName("ApiSportsSoccerWorldCupApproveProviderLinkDebug")
+        .WithSummary("Debug-only dry-run-default manual approval for one API-Sports Soccer provider player link.");
+
+        endpoints.MapPost("/api/debug/soccer/player-identity/api-sports/world-cup/reject-link", async (
+            ApiSportsProviderLinkRejectionRequest request,
+            ApplicationDbContext dbContext,
+            CancellationToken cancellationToken) =>
+        {
+            var result = await BuildApiSportsProviderLinkRejectionResultAsync(dbContext, request, cancellationToken);
+            if (result.Blockers.Count > 0)
+            {
+                return Results.Conflict(result);
+            }
+
+            if (result.DryRun || !result.Changed)
+            {
+                return Results.Ok(result);
+            }
+
+            await dbContext.SaveChangesAsync(cancellationToken);
+            return Results.Ok(result with { After = BuildProviderEntityLinkState(result.Link!) });
+        })
+        .WithName("ApiSportsSoccerWorldCupRejectProviderLinkDebug")
+        .WithSummary("Debug-only dry-run-default manual rejection for one API-Sports Soccer provider player link.");
 
         endpoints.MapGet("/api/debug/soccer/player-identity/api-sports/world-cup/link-preview", async (
             DateOnly? fromDate,
@@ -2809,6 +3126,8 @@ public static class ResultsDebugEndpoints
             providerLinks.Count(link => string.Equals(link.LinkStatus, "Approved", StringComparison.OrdinalIgnoreCase) && link.CanonicalEntityId.HasValue),
             providerLinks.Count(link => string.Equals(link.LinkStatus, "Candidate", StringComparison.OrdinalIgnoreCase)),
             providerLinks.Count(link => string.Equals(link.LinkStatus, "NeedsReview", StringComparison.OrdinalIgnoreCase)),
+            providerLinks.Count(link => string.Equals(link.LinkStatus, "Rejected", StringComparison.OrdinalIgnoreCase)),
+            providerLinks.Count(link => string.Equals(link.LinkStatus, "Conflict", StringComparison.OrdinalIgnoreCase)),
             providerLinks.Count(link => !string.IsNullOrWhiteSpace(link.ProviderTeamId) || !string.IsNullOrWhiteSpace(link.ProviderTeamName)),
             platformPropsCount,
             snapshotNames.Length,
@@ -3213,6 +3532,339 @@ public static class ResultsDebugEndpoints
         return "NeedsReview";
     }
 
+    private static async Task<Guid?> GetSportIdAsync(ApplicationDbContext dbContext, string sportCode, CancellationToken cancellationToken)
+    {
+        return await dbContext.Sports
+            .AsNoTracking()
+            .Where(sport => sport.Code == sportCode)
+            .Select(sport => (Guid?)sport.Id)
+            .SingleOrDefaultAsync(cancellationToken);
+    }
+
+    private static bool IsMlbLabel(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return false;
+        }
+
+        var normalized = value.Trim();
+        return normalized.Equals("MLB", StringComparison.OrdinalIgnoreCase)
+            || normalized.Equals("Major League Baseball", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static ApiSportsReviewQueueRow BuildApiSportsReviewQueueRow(
+        ProviderEntityLink link,
+        ApiSportsIdentityImportedPlayer? imported,
+        ApiSportsIdentityCandidateRow? candidate)
+    {
+        var blockers = candidate?.Blockers ?? [];
+        var suggestedAction = link.LinkStatus.Equals("Conflict", StringComparison.OrdinalIgnoreCase)
+            ? "Conflict"
+            : candidate is null
+                ? "NoCandidate"
+                : candidate.SuggestedAction.Equals("Conflict", StringComparison.OrdinalIgnoreCase)
+                    ? "Conflict"
+                    : candidate.SuggestedAction.Equals("SafeAliasLink", StringComparison.OrdinalIgnoreCase)
+                        ? "ApproveCandidate"
+                        : "NeedsReview";
+
+        return new ApiSportsReviewQueueRow(
+            link.Id,
+            link.ProviderEntityId,
+            imported?.ApiSportsPlayerName ?? link.ProviderEntityName,
+            imported?.ApiSportsTeamName ?? link.ProviderTeamName,
+            imported?.ResultRowCount ?? 0,
+            link.LinkStatus,
+            candidate is not null,
+            candidate?.CandidateCanonicalPlayerId,
+            candidate?.CandidateCanonicalPlayerName,
+            candidate?.CandidateProviderPlayerId,
+            candidate?.CandidateProvider,
+            candidate?.CandidateTeamName,
+            candidate?.Confidence,
+            candidate?.Reasons ?? [],
+            blockers,
+            suggestedAction);
+    }
+
+    private static IOrderedEnumerable<ApiSportsReviewQueueRow> SortApiSportsReviewQueueRows(
+        IReadOnlyList<ApiSportsReviewQueueRow> rows,
+        string sort)
+    {
+        return sort.Equals("playerName", StringComparison.OrdinalIgnoreCase)
+            ? rows
+                .OrderBy(row => row.ApiSportsPlayerName)
+                .ThenBy(row => GetApiSportsReviewQueueActionRank(row.SuggestedAction))
+                .ThenByDescending(row => row.Confidence ?? -1m)
+            : rows
+                .OrderBy(row => GetApiSportsReviewQueueActionRank(row.SuggestedAction))
+                .ThenByDescending(row => row.Confidence ?? -1m)
+                .ThenBy(row => row.ApiSportsPlayerName);
+    }
+
+    private static int GetApiSportsReviewQueueActionRank(string suggestedAction)
+    {
+        return suggestedAction switch
+        {
+            "ApproveCandidate" => 0,
+            "NeedsReview" => 1,
+            "Conflict" => 2,
+            "NoCandidate" => 3,
+            _ => 4
+        };
+    }
+
+    private static async Task<ApiSportsProviderLinkMutationResult> BuildApiSportsProviderLinkApprovalResultAsync(
+        ApplicationDbContext dbContext,
+        ApiSportsProviderLinkApprovalRequest request,
+        CancellationToken cancellationToken)
+    {
+        var dryRun = request.DryRun != false;
+        var now = DateTimeOffset.UtcNow;
+        var warnings = new List<string>();
+        var blockers = new List<string>();
+        var link = await dbContext.ProviderEntityLinks
+            .Include(row => row.Sport)
+            .SingleOrDefaultAsync(row => row.Id == request.ProviderEntityLinkId, cancellationToken);
+        var before = link is null ? null : BuildProviderEntityLinkState(link);
+
+        if (link is null)
+        {
+            blockers.Add("ProviderEntityLinkNotFound");
+            return new ApiSportsProviderLinkMutationResult(dryRun, dryRun, false, before, null, warnings, blockers, null);
+        }
+
+        ValidateApiSportsSoccerProviderLink(link, blockers);
+
+        var canonicalPlayer = await dbContext.Players
+            .AsNoTracking()
+            .Include(player => player.League)!.ThenInclude(league => league!.Sport)
+            .SingleOrDefaultAsync(player => player.Id == request.CanonicalPlayerId, cancellationToken);
+        if (canonicalPlayer is null)
+        {
+            blockers.Add("CanonicalPlayerNotFound");
+        }
+        else if (!string.Equals(canonicalPlayer.League?.Sport?.Code, "SOCCER", StringComparison.OrdinalIgnoreCase))
+        {
+            blockers.Add("CanonicalPlayerSportMismatch");
+        }
+
+        if (link.LinkStatus.Equals("Rejected", StringComparison.OrdinalIgnoreCase))
+        {
+            blockers.Add("ProviderEntityLinkRejected");
+        }
+        else if (link.LinkStatus.Equals("Conflict", StringComparison.OrdinalIgnoreCase))
+        {
+            blockers.Add("ProviderEntityLinkConflict");
+        }
+
+        if (link.LinkStatus.Equals("Approved", StringComparison.OrdinalIgnoreCase)
+            && link.CanonicalEntityId.HasValue
+            && link.CanonicalEntityId.Value != request.CanonicalPlayerId)
+        {
+            blockers.Add("AlreadyApprovedToDifferentCanonicalPlayer");
+        }
+
+        if (blockers.Count > 0 || canonicalPlayer is null)
+        {
+            return new ApiSportsProviderLinkMutationResult(dryRun, dryRun, false, before, before, warnings, blockers.Distinct(StringComparer.OrdinalIgnoreCase).ToArray(), link);
+        }
+
+        if (link.LinkStatus.Equals("Approved", StringComparison.OrdinalIgnoreCase)
+            && link.CanonicalEntityId == request.CanonicalPlayerId)
+        {
+            warnings.Add("AlreadyApproved");
+            return new ApiSportsProviderLinkMutationResult(dryRun, dryRun, false, before, before, warnings, blockers, link);
+        }
+
+        var after = BuildApprovedProviderEntityLinkState(link, canonicalPlayer, now, request.Reason);
+        if (dryRun)
+        {
+            return new ApiSportsProviderLinkMutationResult(true, true, true, before, after, warnings, blockers, link);
+        }
+
+        ApplyApprovedProviderEntityLink(link, canonicalPlayer, now, request.Reason);
+        return new ApiSportsProviderLinkMutationResult(false, false, true, before, BuildProviderEntityLinkState(link), warnings, blockers, link);
+    }
+
+    private static async Task<ApiSportsProviderLinkMutationResult> BuildApiSportsProviderLinkRejectionResultAsync(
+        ApplicationDbContext dbContext,
+        ApiSportsProviderLinkRejectionRequest request,
+        CancellationToken cancellationToken)
+    {
+        var dryRun = request.DryRun != false;
+        var now = DateTimeOffset.UtcNow;
+        var warnings = new List<string>();
+        var blockers = new List<string>();
+        var link = await dbContext.ProviderEntityLinks
+            .Include(row => row.Sport)
+            .SingleOrDefaultAsync(row => row.Id == request.ProviderEntityLinkId, cancellationToken);
+        var before = link is null ? null : BuildProviderEntityLinkState(link);
+
+        if (link is null)
+        {
+            blockers.Add("ProviderEntityLinkNotFound");
+            return new ApiSportsProviderLinkMutationResult(dryRun, dryRun, false, before, null, warnings, blockers, null);
+        }
+
+        ValidateApiSportsSoccerProviderLink(link, blockers);
+        if (link.LinkStatus.Equals("Conflict", StringComparison.OrdinalIgnoreCase))
+        {
+            blockers.Add("ProviderEntityLinkConflict");
+        }
+
+        if (blockers.Count > 0)
+        {
+            return new ApiSportsProviderLinkMutationResult(dryRun, dryRun, false, before, before, warnings, blockers.Distinct(StringComparer.OrdinalIgnoreCase).ToArray(), link);
+        }
+
+        if (link.LinkStatus.Equals("Rejected", StringComparison.OrdinalIgnoreCase))
+        {
+            warnings.Add("AlreadyRejected");
+            return new ApiSportsProviderLinkMutationResult(dryRun, dryRun, false, before, before, warnings, blockers, link);
+        }
+
+        var after = BuildRejectedProviderEntityLinkState(link, now, request.Reason);
+        if (dryRun)
+        {
+            return new ApiSportsProviderLinkMutationResult(true, true, true, before, after, warnings, blockers, link);
+        }
+
+        ApplyRejectedProviderEntityLink(link, now, request.Reason);
+        return new ApiSportsProviderLinkMutationResult(false, false, true, before, BuildProviderEntityLinkState(link), warnings, blockers, link);
+    }
+
+    private static void ValidateApiSportsSoccerProviderLink(ProviderEntityLink link, ICollection<string> blockers)
+    {
+        if (!string.Equals(link.ProviderKey, ApiSportsFootballPlayerRefProvider, StringComparison.OrdinalIgnoreCase))
+        {
+            blockers.Add("ProviderKeyMismatch");
+        }
+
+        if (!string.Equals(link.EntityType, "Player", StringComparison.OrdinalIgnoreCase))
+        {
+            blockers.Add("EntityTypeMismatch");
+        }
+
+        if (!string.Equals(link.Sport?.Code, "SOCCER", StringComparison.OrdinalIgnoreCase))
+        {
+            blockers.Add("ProviderEntityLinkSportMismatch");
+        }
+    }
+
+    private static void ApplyApprovedProviderEntityLink(ProviderEntityLink link, Player canonicalPlayer, DateTimeOffset now, string? reason)
+    {
+        link.CanonicalEntityId = canonicalPlayer.Id;
+        link.CanonicalEntityKind = "Player";
+        link.CanonicalEntityName = canonicalPlayer.DisplayName;
+        link.LinkStatus = "Approved";
+        link.LinkSource = "Manual";
+        link.ApprovedAtUtc = now;
+        link.ApprovedBy = "debug/manual";
+        link.RejectedAtUtc = null;
+        link.RejectedReason = null;
+        link.UpdatedAtUtc = now;
+        link.MetadataJson = BuildManualReviewMetadata("Approved", reason, now);
+    }
+
+    private static void ApplyRejectedProviderEntityLink(ProviderEntityLink link, DateTimeOffset now, string? reason)
+    {
+        link.CanonicalEntityId = null;
+        link.CanonicalEntityKind = null;
+        link.CanonicalEntityName = null;
+        link.LinkStatus = "Rejected";
+        link.LinkSource = "Manual";
+        link.ApprovedAtUtc = null;
+        link.ApprovedBy = null;
+        link.RejectedAtUtc = now;
+        link.RejectedReason = string.IsNullOrWhiteSpace(reason) ? "manual review" : reason.Trim();
+        link.UpdatedAtUtc = now;
+        link.MetadataJson = BuildManualReviewMetadata("Rejected", reason, now);
+    }
+
+    private static JsonDocument BuildManualReviewMetadata(string action, string? reason, DateTimeOffset reviewedAtUtc)
+    {
+        return JsonSerializer.SerializeToDocument(new
+        {
+            action,
+            reason = string.IsNullOrWhiteSpace(reason) ? null : reason.Trim(),
+            reviewedAtUtc,
+            reviewedBy = "debug/manual"
+        });
+    }
+
+    private static ProviderEntityLinkState BuildApprovedProviderEntityLinkState(ProviderEntityLink link, Player canonicalPlayer, DateTimeOffset now, string? reason)
+    {
+        return BuildProviderEntityLinkState(
+            link,
+            canonicalEntityId: canonicalPlayer.Id,
+            canonicalEntityKind: "Player",
+            canonicalEntityName: canonicalPlayer.DisplayName,
+            linkStatus: "Approved",
+            linkSource: "Manual",
+            approvedAtUtc: now,
+            approvedBy: "debug/manual",
+            rejectedAtUtc: null,
+            rejectedReason: null);
+    }
+
+    private static ProviderEntityLinkState BuildRejectedProviderEntityLinkState(ProviderEntityLink link, DateTimeOffset now, string? reason)
+    {
+        return new ProviderEntityLinkState(
+            link.Id,
+            link.SportId,
+            link.Sport?.Code,
+            link.EntityType,
+            null,
+            null,
+            null,
+            link.ProviderKey,
+            link.ProviderEntityId,
+            link.ProviderEntityName,
+            link.ProviderTeamId,
+            link.ProviderTeamName,
+            "Rejected",
+            "Manual",
+            null,
+            null,
+            now,
+            string.IsNullOrWhiteSpace(reason) ? "manual review" : reason.Trim());
+    }
+
+    private static ProviderEntityLinkState BuildProviderEntityLinkState(
+        ProviderEntityLink link,
+        Guid? canonicalEntityId = null,
+        string? canonicalEntityKind = null,
+        string? canonicalEntityName = null,
+        string? linkStatus = null,
+        string? linkSource = null,
+        DateTimeOffset? approvedAtUtc = null,
+        string? approvedBy = null,
+        DateTimeOffset? rejectedAtUtc = null,
+        string? rejectedReason = null)
+    {
+        return new ProviderEntityLinkState(
+            link.Id,
+            link.SportId,
+            link.Sport?.Code,
+            link.EntityType,
+            canonicalEntityId ?? link.CanonicalEntityId,
+            canonicalEntityKind ?? link.CanonicalEntityKind,
+            canonicalEntityName ?? link.CanonicalEntityName,
+            link.ProviderKey,
+            link.ProviderEntityId,
+            link.ProviderEntityName,
+            link.ProviderTeamId,
+            link.ProviderTeamName,
+            linkStatus ?? link.LinkStatus,
+            linkSource ?? link.LinkSource,
+            approvedAtUtc ?? link.ApprovedAtUtc,
+            approvedBy ?? link.ApprovedBy,
+            rejectedAtUtc ?? link.RejectedAtUtc,
+            rejectedReason ?? link.RejectedReason);
+    }
+
     private static object BuildIdentitySample(
         ApiSportsIdentityImportedPlayer imported,
         IReadOnlyList<ApiSportsIdentityLocalPlayer> candidates,
@@ -3253,7 +3905,8 @@ public static class ResultsDebugEndpoints
             return ApiSportsCoverageMatchDiagnostic.FromResult(result, false, false, "MarketMissing", "No Soccer platform props, recommendations, or market snapshots exist in this date range.");
         }
 
-        var platformPlayerMatches = platformRows.Where(row => row.PlayerId == result.PlayerId).ToArray();
+        var effectivePlayerId = result.ApprovedCanonicalPlayerId ?? result.PlayerId;
+        var platformPlayerMatches = platformRows.Where(row => row.PlayerId == effectivePlayerId).ToArray();
         var platformPropMatches = platformPlayerMatches.Where(row => row.PropTypeId == result.PropTypeId || string.Equals(row.StatKey, result.StatKey, StringComparison.OrdinalIgnoreCase)).ToArray();
         var platformDateMatches = platformPropMatches.Where(row => row.EventDate == result.EventDate).ToArray();
         var snapshotPlayerMatches = snapshotRows.Where(row => row.NormalizedPlayerName == result.NormalizedPlayerName).ToArray();
@@ -3273,7 +3926,9 @@ public static class ResultsDebugEndpoints
                 matchedSnapshot,
                 "Matched",
                 matchedPlatform
-                    ? "Matched by canonical player id, prop type/statKey, and event date."
+                    ? result.ApprovedCanonicalPlayerId.HasValue
+                        ? "Matched by approved provider entity link, prop type/statKey, and event date."
+                        : "Matched by canonical player id, prop type/statKey, and event date."
                     : "Matched by normalized player name, prop type, and event date.");
         }
 
@@ -4585,6 +5240,7 @@ public static class ResultsDebugEndpoints
         Guid ResultId,
         DateOnly EventDate,
         string? FixtureId,
+        string? ApiSportsPlayerId,
         Guid PlayerId,
         string PlayerName,
         string NormalizedPlayerName,
@@ -4593,7 +5249,9 @@ public static class ResultsDebugEndpoints
         string StatKey,
         string NormalizedPropTypeName,
         decimal ActualResultValue,
-        string ExternalSourceIdentifier);
+        string ExternalSourceIdentifier,
+        Guid? ApprovedCanonicalPlayerId,
+        string? ApprovedCanonicalPlayerName);
 
     private sealed record ApiSportsCoverageMarketRow(
         string Source,
@@ -4690,6 +5348,68 @@ public static class ResultsDebugEndpoints
         IReadOnlyList<string> Blockers,
         string SuggestedAction);
 
+    private sealed record ApiSportsReviewQueueRow(
+        Guid ProviderEntityLinkId,
+        string ApiSportsPlayerId,
+        string? ApiSportsPlayerName,
+        string? ApiSportsTeamName,
+        int ResultRowCount,
+        string CurrentLinkStatus,
+        bool HasCandidate,
+        Guid? CandidateCanonicalPlayerId,
+        string? CandidateCanonicalPlayerName,
+        string? CandidateProviderPlayerId,
+        string? CandidateProvider,
+        string? CandidateTeamName,
+        decimal? Confidence,
+        IReadOnlyList<string> Reasons,
+        IReadOnlyList<string> Blockers,
+        string SuggestedAction);
+
+    private sealed record ApiSportsProviderLinkApprovalRequest(
+        Guid ProviderEntityLinkId,
+        Guid CanonicalPlayerId,
+        bool? DryRun,
+        string? Reason);
+
+    private sealed record ApiSportsProviderLinkRejectionRequest(
+        Guid ProviderEntityLinkId,
+        bool? DryRun,
+        string? Reason);
+
+    private sealed record ProviderEntityLinkState(
+        Guid Id,
+        Guid? SportId,
+        string? Sport,
+        string EntityType,
+        Guid? CanonicalEntityId,
+        string? CanonicalEntityKind,
+        string? CanonicalEntityName,
+        string ProviderKey,
+        string ProviderEntityId,
+        string? ProviderEntityName,
+        string? ProviderTeamId,
+        string? ProviderTeamName,
+        string LinkStatus,
+        string LinkSource,
+        DateTimeOffset? ApprovedAtUtc,
+        string? ApprovedBy,
+        DateTimeOffset? RejectedAtUtc,
+        string? RejectedReason);
+
+    private sealed record ApiSportsProviderLinkMutationResult(
+        bool DryRun,
+        bool ReadOnly,
+        bool Changed,
+        ProviderEntityLinkState? Before,
+        ProviderEntityLinkState? After,
+        IReadOnlyList<string> Warnings,
+        IReadOnlyList<string> Blockers,
+        [property: JsonIgnore] ProviderEntityLink? Link)
+    {
+        public bool CallsExternalApis => false;
+    }
+
     private sealed record ApiSportsSoccerIdentityDiagnostics(
         IReadOnlyList<ApiSportsIdentityImportedPlayer> ImportedPlayers,
         int ResultRowCount,
@@ -4701,6 +5421,8 @@ public static class ResultsDebugEndpoints
         int ApprovedProviderPlayerLinkCount,
         int CandidateProviderPlayerLinkCount,
         int NeedsReviewProviderPlayerLinkCount,
+        int RejectedProviderPlayerLinkCount,
+        int ConflictProviderPlayerLinkCount,
         int ProviderLinksWithTeamContextCount,
         int SoccerPlatformPropCount,
         int SoccerSnapshotPlayerCount,

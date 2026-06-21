@@ -53,6 +53,9 @@ All API-Sports endpoints are debug-only and force-live gated.
 - `GET /api/debug/soccer/player-identity/api-sports/world-cup/candidates`
 - `GET /api/debug/soccer/player-identity/api-sports/world-cup/link-preview`
 - `GET /api/debug/soccer/player-identity/api-sports/world-cup/platform-context`
+- `GET /api/debug/soccer/player-identity/api-sports/world-cup/review-queue`
+- `POST /api/debug/soccer/player-identity/api-sports/world-cup/approve-link`
+- `POST /api/debug/soccer/player-identity/api-sports/world-cup/reject-link`
 - `GET /api/debug/identity/provider-links`
 
 Rules:
@@ -70,7 +73,8 @@ Rules:
 - Completed fixtures are importable when API-Sports returns `FT` or `Match Finished`; scheduled, live, postponed, and canceled fixtures are skipped with reasons.
 - No past-season Soccer backfill is supported by this spike.
 - Imported Soccer results do not currently join safely to provider markets because API-Sports player identities are not bridged to The Odds/platform identities.
-- Player identity endpoints are read-only diagnostics only; they do not create aliases, merge players, or enable public Soccer grading.
+- Player identity coverage, candidates, link-preview, platform-context, and review-queue endpoints are read-only diagnostics only.
+- Manual approve/reject endpoints are debug-only, dry-run by default, write only `provider_entity_links`, and do not merge players or enable public Soccer grading.
 - API-Sports imports now create durable `provider_entity_links` Candidate rows for imported Soccer player identities. These are identity inventory rows, not approved grading links.
 
 Fixture diagnostics support flexible API-Sports query shapes so access can be tested safely before upgrading a plan:
@@ -147,10 +151,14 @@ Read-only diagnostics:
 - `/api/debug/soccer/player-identity/api-sports/world-cup/candidates` returns candidate link rows with confidence, reasons, blockers, and suggested action.
 - `/api/debug/soccer/player-identity/api-sports/world-cup/link-preview` returns only high-confidence `SafeAliasLink` candidates, but still writes nothing.
 - `/api/debug/soccer/player-identity/api-sports/world-cup/platform-context` reports which persisted Soccer platform/snapshot fields are available for identity matching, including team, opponent, event name, start time, provider event id, provider player id, bookmaker, and competition fields.
+- `/api/debug/soccer/player-identity/api-sports/world-cup/review-queue` joins durable Candidate links to candidate evidence and suggests `ApproveCandidate`, `NeedsReview`, `NoCandidate`, or `Conflict`. It supports `suggestedAction`, `hasCandidate`, `includeNoCandidate`, and `sort=confidenceDesc` filters so manual review can focus on actionable rows first.
+- `/api/debug/soccer/player-identity/api-sports/world-cup/approve-link` and `/reject-link` default to `dryRun=true`. When `dryRun=false`, they update one `provider_entity_links` row after validating the provider key, entity type, Soccer sport, canonical Soccer player, and existing link status.
 
 The matcher normalizes names case-insensitively, strips punctuation through the app compact player-name normalizer, handles diacritics, and uses team names when both sides have team context. Name-only candidates are review items, not automatic links. Ambiguous names or team mismatches remain blockers.
 
-Current local diagnostics show persisted Soccer platform props have start time, provider/bookmaker, and a provider line/projection identifier, but do not currently have player team, opponent, event name, provider event id, or competition context. That means safe auto-linking is not available from existing persisted data alone; manual alias review or richer persisted provider event/team context is required first.
+Current local diagnostics show persisted Soccer platform props have start time, provider/bookmaker, and a provider line/projection identifier, but do not currently have player team, opponent, event name, provider event id, or competition context. That means safe auto-linking is not available from existing persisted data alone; manual provider-link review or richer persisted provider event/team context is required first.
+
+Approved provider links are used by `/api/debug/soccer/results/api-sports/world-cup/coverage` to report player-link coverage and debug market joins. The coverage response keeps player-link coverage separate from market join coverage. Public Soccer grading remains disabled.
 
 See `docs/PROVIDER_IDENTITY_LINKING.md` for the durable provider identity model. `player_external_refs` remains supported for existing player-only compatibility, while `provider_entity_links` is the reusable identity inventory and review layer going forward.
 
@@ -256,6 +264,19 @@ Invoke-RestMethod "$base/api/debug/soccer/player-identity/api-sports/world-cup/p
 Invoke-RestMethod "$base/api/debug/soccer/player-identity/api-sports/world-cup/platform-context?fromDate=2026-06-11&toDate=2026-06-21&includeSamples=true&maxSamples=20" |
   ConvertTo-Json -Depth 80
 
+Invoke-RestMethod "$base/api/debug/soccer/player-identity/api-sports/world-cup/review-queue?fromDate=2026-06-11&toDate=2026-06-21&minConfidence=0.80&hasCandidate=true&suggestedAction=NeedsReview&maxResults=25" |
+  ConvertTo-Json -Depth 80
+
+Invoke-RestMethod -Method Post "$base/api/debug/soccer/player-identity/api-sports/world-cup/approve-link" `
+  -ContentType "application/json" `
+  -Body '{"providerEntityLinkId":"<providerEntityLinkId>","canonicalPlayerId":"<canonicalPlayerId>","dryRun":true,"reason":"manual review"}' |
+  ConvertTo-Json -Depth 40
+
+Invoke-RestMethod -Method Post "$base/api/debug/soccer/player-identity/api-sports/world-cup/reject-link" `
+  -ContentType "application/json" `
+  -Body '{"providerEntityLinkId":"<providerEntityLinkId>","dryRun":true,"reason":"wrong player"}' |
+  ConvertTo-Json -Depth 40
+
 Invoke-RestMethod "$base/api/debug/identity/provider-links?sport=SOCCER&entityType=Player&providerKey=api-sports-football&includeSamples=true&maxSamples=20" |
   ConvertTo-Json -Depth 80
 
@@ -288,6 +309,8 @@ Invoke-RestMethod "$base/api/debug/soccer/results/api-sports/world-cup/import-st
 `import-status` in persisted-only mode reports local `importedFixtureCount`, `rowsByFixture`, `totalRows`, `latestImportedEventDate`, and `latestImportedAtUtc` without calling API-Sports. Discovery-dependent counts such as discovered, completed, and missing completed fixtures are only populated when `forceLive=true`.
 
 `coverage` is read-only and never calls API-Sports. It inventories imported World Cup `prop_results` by fixture, player, prop type, and rule confidence, then checks whether imported rows have local join candidates in platform props, recommendation snapshots, or market snapshots. The diagnostic is conservative: `prop_results` do not store provider/bookmaker/market keys, and market snapshots do not store API-Sports fixture ids, so unmatched rows are reported by mismatch category instead of being silently ignored.
+
+When reviewed provider identity links are approved, `coverage` also reports `playerLinkCoverage` with approved links used, result rows with/without approved links, and link coverage rate. This does not enable public Soccer grading.
 
 API-Sports Soccer stat mappings are DB-backed in `provider_stat_mappings`; see `docs/PROVIDER_STAT_MAPPING.md`. Import and coverage diagnostics report whether DB mappings or temporary fallback mappings were used. Soccer `public_grading_enabled` remains false.
 

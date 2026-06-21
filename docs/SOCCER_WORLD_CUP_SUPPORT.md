@@ -99,6 +99,9 @@ API-Sports Football has a debug-only single-fixture result import spike for Worl
 - `GET /api/debug/soccer/player-identity/api-sports/world-cup/candidates`
 - `GET /api/debug/soccer/player-identity/api-sports/world-cup/link-preview`
 - `GET /api/debug/soccer/player-identity/api-sports/world-cup/platform-context`
+- `GET /api/debug/soccer/player-identity/api-sports/world-cup/review-queue`
+- `POST /api/debug/soccer/player-identity/api-sports/world-cup/approve-link`
+- `POST /api/debug/soccer/player-identity/api-sports/world-cup/reject-link`
 - `GET /api/debug/identity/provider-links`
 
 The import endpoint is force-live gated, supports `dryRun=true`, and writes only supported mappings for the requested fixture when `dryRun=false`. It reuses `prop_results` with `ExternalSource=api-sports-football`; no Soccer grading is enabled globally.
@@ -113,9 +116,11 @@ Unsupported mappings are skipped for now: crosses, clearances, fantasy score pro
 
 Imported API-Sports result players are not automatically linked to The Odds/platform player identities. The player identity diagnostics are read-only and compare persisted API-Sports World Cup result players against local Soccer players, platform props, recommendation snapshots, and player external refs. They report already linked identities, high-confidence candidates, ambiguous names, conflicts, unmatched players, and blockers. They do not write aliases, merge players, or enable public Soccer grading.
 
-The platform-context diagnostic reports whether existing persisted Soccer platform/snapshot rows contain team, opponent, event, provider event id, provider player id, bookmaker, and competition context that could support identity matching. Current local diagnostics show start time, provider/bookmaker, and provider line/projection identifiers exist, but player team/opponent/event name/provider event id context is missing. Treat name-only Soccer candidates as manual review items until richer team/event identity context is persisted or a reviewed alias approval workflow exists.
+The platform-context diagnostic reports whether existing persisted Soccer platform/snapshot rows contain team, opponent, event, provider event id, provider player id, bookmaker, and competition context that could support identity matching. Current local diagnostics show start time, provider/bookmaker, and provider line/projection identifiers exist, but player team/opponent/event name/provider event id context is missing. Treat name-only Soccer candidates as manual review items until richer team/event identity context is persisted.
 
 API-Sports result imports now create durable `provider_entity_links` Candidate rows for imported Soccer player identities. Existing `player_external_refs` remains supported for player-only compatibility; `provider_entity_links` is the reusable provider identity inventory and review layer going forward. See `docs/PROVIDER_IDENTITY_LINKING.md`.
+
+Debug-only manual review endpoints can approve or reject one API-Sports Soccer provider player link at a time. They default to `dryRun=true`, validate Soccer/provider/canonical player constraints, and never merge player rows. Approved links are used only by debug coverage diagnostics for now; public Soccer grading remains disabled.
 
 ## Public History Still Disabled
 
@@ -176,6 +181,19 @@ Invoke-RestMethod "$base/api/debug/soccer/player-identity/api-sports/world-cup/p
 Invoke-RestMethod "$base/api/debug/soccer/player-identity/api-sports/world-cup/platform-context?fromDate=2026-06-11&toDate=2026-06-21&includeSamples=true&maxSamples=20" |
   ConvertTo-Json -Depth 80
 
+Invoke-RestMethod "$base/api/debug/soccer/player-identity/api-sports/world-cup/review-queue?fromDate=2026-06-11&toDate=2026-06-21&minConfidence=0.80&hasCandidate=true&suggestedAction=NeedsReview&maxResults=25" |
+  ConvertTo-Json -Depth 80
+
+Invoke-RestMethod -Method Post "$base/api/debug/soccer/player-identity/api-sports/world-cup/approve-link" `
+  -ContentType "application/json" `
+  -Body '{"providerEntityLinkId":"<providerEntityLinkId>","canonicalPlayerId":"<canonicalPlayerId>","dryRun":true,"reason":"manual review"}' |
+  ConvertTo-Json -Depth 40
+
+Invoke-RestMethod -Method Post "$base/api/debug/soccer/player-identity/api-sports/world-cup/reject-link" `
+  -ContentType "application/json" `
+  -Body '{"providerEntityLinkId":"<providerEntityLinkId>","dryRun":true,"reason":"wrong player"}' |
+  ConvertTo-Json -Depth 40
+
 Invoke-RestMethod "$base/api/debug/identity/provider-links?sport=SOCCER&entityType=Player&providerKey=api-sports-football&includeSamples=true&maxSamples=20" |
   ConvertTo-Json -Depth 80
 
@@ -185,7 +203,7 @@ Invoke-RestMethod "$base/api/debug/provider-stat-mappings?sport=SOCCER&providerK
 
 World Cup import status is persisted-only by default and does not call API-Sports. It still reports imported fixture counts, rows by fixture, total rows, and latest imported timestamps. Add `forceLive=true` only when live discovery counts and missing completed fixture diagnostics are needed.
 
-The World Cup coverage endpoint is read-only and checks whether imported API-Sports `prop_results` can connect to local Soccer platform props, recommendation snapshots, or market snapshots. It reports inventory counts, prop type coverage, join coverage, mismatch reasons, and optional samples. Public Soccer grading remains disabled until those diagnostics prove a safe join path.
+The World Cup coverage endpoint is read-only and checks whether imported API-Sports `prop_results` can connect to local Soccer platform props, recommendation snapshots, or market snapshots. It reports inventory counts, prop type coverage, join coverage, mismatch reasons, optional samples, and player-link coverage from approved `provider_entity_links`. Public Soccer grading remains disabled until those diagnostics prove a safe join path and the feature is explicitly promoted.
 
 The player identity diagnostics are also read-only and never call external APIs. Use them before any future alias approval workflow so API-Sports result players can be reviewed against provider/platform player identities without changing data.
 
