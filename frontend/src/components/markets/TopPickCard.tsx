@@ -116,7 +116,7 @@ function TopPickProviderRow({ market, confidence, showTrust = true }: { market: 
           <Typography component="span" color="text.secondary" aria-hidden sx={{ lineHeight: 1.1 }}>
             ·
           </Typography>
-          <TrustValue level={confidence} showSuffix size="small" />
+          <TrustValue level={confidence} size="small" />
         </Stack>
       ) : null}
     </OpportunityProviderRow>
