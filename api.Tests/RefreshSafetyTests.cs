@@ -682,6 +682,7 @@ public sealed class RefreshSafetyTests
     {
         await using var factory = new SafetyTestApplicationFactory(ApiSportsLiveConfig());
         using var client = factory.CreateClient();
+        await factory.EnsureDatabaseAsync();
 
         var response = await client.PostAsJsonAsync("/api/debug/soccer/results/api-sports/import-fixture", new
         {
@@ -719,6 +720,84 @@ public sealed class RefreshSafetyTests
         Assert.True(json.GetProperty("resultRowsPreviewed").GetInt32() > 0);
         Assert.Equal(0, await CountApiSportsSoccerResultsAsync(factory));
         Assert.Equal(0, await CountApiSportsSoccerProviderPlayerLinksAsync(factory));
+    }
+
+    [Fact]
+    public async Task ProviderStatMappingsDebug_ReturnsSeededApiSportsSoccerMappings()
+    {
+        await using var factory = new SafetyTestApplicationFactory(ApiSportsLiveConfig());
+        using var client = factory.CreateClient();
+        await factory.EnsureDatabaseAsync();
+        await factory.SeedApiSportsSoccerProviderStatMappingsAsync();
+
+        var response = await client.GetAsync("/api/debug/provider-stat-mappings?sport=SOCCER&providerKey=api-sports-football&competitionScope=World%20Cup&season=2026&includeSamples=true&maxSamples=100");
+
+        await EnsureSuccessWithBodyAsync(response);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.False(json.GetProperty("callsExternalApis").GetBoolean());
+        Assert.True(json.GetProperty("readOnly").GetBoolean());
+        Assert.Equal(20, json.GetProperty("totalMappings").GetInt32());
+        Assert.Equal(20, json.GetProperty("activeMappings").GetInt32());
+        var publicGradingGroup = Assert.Single(json.GetProperty("counts").GetProperty("byPublicGradingEnabled").EnumerateArray());
+        Assert.False(publicGradingGroup.GetProperty("publicGradingEnabled").GetBoolean());
+        Assert.Equal(20, publicGradingGroup.GetProperty("count").GetInt32());
+        Assert.Contains(json.GetProperty("samples").EnumerateArray(), row =>
+            row.GetProperty("displayName").GetString() == "Shots On Target"
+            && row.GetProperty("providerStatFields").EnumerateArray().Single().GetString() == "shots.on");
+    }
+
+    [Fact]
+    public async Task ApiSportsSoccerImportFixture_UsesDbProviderStatMappings_WhenConfigured()
+    {
+        await using var factory = new SafetyTestApplicationFactory(ApiSportsLiveConfig());
+        using var client = factory.CreateClient();
+        await factory.EnsureDatabaseAsync();
+        await factory.SeedApiSportsSoccerProviderStatMappingsAsync();
+
+        var response = await client.PostAsJsonAsync("/api/debug/soccer/results/api-sports/import-fixture", new
+        {
+            fixtureId = "1489393",
+            dryRun = true,
+            forceLive = true
+        });
+
+        await EnsureSuccessWithBodyAsync(response);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        var mappingDiagnostics = json.GetProperty("mappingDiagnostics");
+        Assert.Equal("Database", mappingDiagnostics.GetProperty("mappingSource").GetString());
+        Assert.Equal(20, mappingDiagnostics.GetProperty("providerMappingsConfigured").GetInt32());
+        Assert.Equal(20, mappingDiagnostics.GetProperty("dbMappingsUsed").GetInt32());
+        Assert.Equal(0, mappingDiagnostics.GetProperty("fallbackMappingsUsed").GetInt32());
+        Assert.True(json.GetProperty("resultRowsPreviewed").GetInt32() > 0);
+        Assert.Contains(json.GetProperty("previewRowsByPlayer").EnumerateArray()
+                .SelectMany(group => group.GetProperty("rows").EnumerateArray()),
+            row => row.GetProperty("mappingSource").GetString() == "Database"
+                && row.GetProperty("publicGradingEnabled").GetBoolean() == false);
+    }
+
+    [Fact]
+    public async Task ApiSportsSoccerImportFixture_ReportsMissingMapping_WhenDbMappingIsAbsent()
+    {
+        await using var factory = new SafetyTestApplicationFactory(ApiSportsLiveConfig());
+        using var client = factory.CreateClient();
+        await factory.EnsureDatabaseAsync();
+        await factory.SeedApiSportsSoccerProviderStatMappingsAsync(excludeCanonicalStatKey: "SHOTS");
+
+        var response = await client.PostAsJsonAsync("/api/debug/soccer/results/api-sports/import-fixture", new
+        {
+            fixtureId = "1489393",
+            dryRun = true,
+            forceLive = true
+        });
+
+        await EnsureSuccessWithBodyAsync(response);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.True(json.GetProperty("mappingDiagnostics").GetProperty("missingMappingCount").GetInt32() > 0);
+        var missingMapping = Assert.Single(json.GetProperty("unsupportedSkippedSummary").EnumerateArray(), row => row.GetProperty("reason").GetString() == "MissingMapping");
+        Assert.Contains(missingMapping.GetProperty("props").EnumerateArray(), prop => prop.GetString() == "shots.total");
+        Assert.DoesNotContain(json.GetProperty("previewRowsByPlayer").EnumerateArray()
+                .SelectMany(group => group.GetProperty("rows").EnumerateArray()),
+            row => row.GetProperty("propType").GetString() == "Shots");
     }
 
     [Fact]
@@ -808,6 +887,7 @@ public sealed class RefreshSafetyTests
     {
         await using var factory = new SafetyTestApplicationFactory(ApiSportsLiveConfig());
         using var client = factory.CreateClient();
+        await factory.EnsureDatabaseAsync();
 
         var response = await client.PostAsJsonAsync("/api/debug/soccer/results/api-sports/import-fixture", new
         {
@@ -1515,6 +1595,70 @@ public sealed class SafetyTestApplicationFactory : WebApplicationFactory<Program
         var dbContext = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
         await dbContext.Database.EnsureDeletedAsync();
         await dbContext.Database.EnsureCreatedAsync();
+    }
+
+    public async Task SeedApiSportsSoccerProviderStatMappingsAsync(string? excludeCanonicalStatKey = null)
+    {
+        using var scope = Services.CreateScope();
+        var dbContext = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+        var sport = await GetOrCreateSoccerSportAsync(dbContext);
+        var rows = new[]
+        {
+            ("Goals", "GOALS", new[] { "goals.total" }, "Direct", "Known", true, "goals.total"),
+            ("Assists", "ASSISTS", new[] { "goals.assists" }, "Direct", "Known", true, "goals.assists"),
+            ("Shots", "SHOTS", new[] { "shots.total" }, "Direct", "Known", true, "shots.total"),
+            ("Shots On Target", "SHOTS_ON_TARGET", new[] { "shots.on" }, "Direct", "Known", true, "shots.on"),
+            ("Passes Attempted", "PASSES_ATTEMPTED", new[] { "passes.total" }, "Direct", "Known", true, "passes.total"),
+            ("Tackles", "TACKLES", new[] { "tackles.total" }, "Direct", "Known", true, "tackles.total"),
+            ("Fouls", "FOULS", new[] { "fouls.committed" }, "Direct", "Known", true, "fouls.committed"),
+            ("Fouls Drawn", "FOULS_DRAWN", new[] { "fouls.drawn" }, "Direct", "Known", true, "fouls.drawn"),
+            ("Offsides", "OFFSIDES", new[] { "offsides" }, "Direct", "Known", true, "offsides"),
+            ("Goalie Saves", "GOALIE_SAVES", new[] { "goals.saves" }, "GoalkeeperOnlyDirect", "Known", true, "goals.saves"),
+            ("Attempted Dribbles", "ATTEMPTED_DRIBBLES", new[] { "dribbles.attempts" }, "Direct", "Known", true, "dribbles.attempts"),
+            ("Goal + Assist", "GOAL_ASSIST", new[] { "goals.total", "goals.assists" }, "Sum", "NeedsConfirmation", false, null),
+            ("Cards", "CARDS", new[] { "cards.yellow", "cards.red" }, "Sum", "NeedsConfirmation", false, null),
+            ("Goals Allowed", "GOALS_ALLOWED", new[] { "goals.conceded" }, "GoalkeeperOnlyDirect", "NeedsConfirmation", false, "goals.conceded"),
+            ("Shots Assisted", "SHOTS_ASSISTED", new[] { "passes.key" }, "Direct", "NeedsConfirmation", false, "passes.key"),
+            ("Crosses", "CROSSES", Array.Empty<string>(), "Unsupported", "Unsupported", false, null),
+            ("Clearances", "CLEARANCES", Array.Empty<string>(), "Unsupported", "Unsupported", false, null),
+            ("Outfield Fantasy Score", "OUTFIELD_FANTASY_SCORE", Array.Empty<string>(), "Unsupported", "Unsupported", false, null),
+            ("Goalie Fantasy Score", "GOALIE_FANTASY_SCORE", Array.Empty<string>(), "Unsupported", "Unsupported", false, null),
+            ("Combo props", "COMBO_PROPS", Array.Empty<string>(), "Unsupported", "Unsupported", false, null)
+        };
+
+        foreach (var (displayName, statKey, fields, transform, confidence, isGradeable, providerStatKey) in rows)
+        {
+            if (string.Equals(statKey, excludeCanonicalStatKey, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            dbContext.ProviderStatMappings.Add(new ProviderStatMapping
+            {
+                Id = Guid.NewGuid(),
+                SportId = sport.Id,
+                ProviderKey = "api-sports-football",
+                ProviderProduct = "API-Sports Football",
+                CompetitionScope = "World Cup",
+                Season = 2026,
+                ProviderMappingKey = $"api-sports-football:SOCCER:World Cup:2026:{statKey}",
+                ProviderPropName = displayName,
+                ProviderStatKey = providerStatKey,
+                ProviderStatFieldsJson = JsonSerializer.SerializeToDocument(fields),
+                CanonicalStatKey = statKey,
+                DisplayName = displayName,
+                ValueTransform = transform,
+                RuleConfidence = confidence,
+                IsGradeable = isGradeable,
+                PublicGradingEnabled = false,
+                IsActive = true,
+                Notes = "Seeded by test fixture.",
+                CreatedAtUtc = DateTimeOffset.UtcNow,
+                UpdatedAtUtc = DateTimeOffset.UtcNow
+            });
+        }
+
+        await dbContext.SaveChangesAsync();
     }
 
     public async Task SeedSoccerPropTypesWithDuplicateNamesAndDifferentStatKeysAsync()

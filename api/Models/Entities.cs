@@ -128,6 +128,35 @@ public sealed class ProviderEntityLink
     public Sport? Sport { get; set; }
 }
 
+public sealed class ProviderStatMapping
+{
+    public Guid Id { get; set; }
+    public Guid SportId { get; set; }
+    public string ProviderKey { get; set; } = string.Empty;
+    public string ProviderProduct { get; set; } = string.Empty;
+    public string? CompetitionScope { get; set; }
+    public int? Season { get; set; }
+    public string ProviderMappingKey { get; set; } = string.Empty;
+    public string? ProviderPropName { get; set; }
+    public string? ProviderStatKey { get; set; }
+    public JsonDocument? ProviderStatFieldsJson { get; set; } = JsonDocument.Parse("[]");
+    public Guid? CanonicalPropTypeId { get; set; }
+    public string CanonicalStatKey { get; set; } = string.Empty;
+    public string DisplayName { get; set; } = string.Empty;
+    public string ValueTransform { get; set; } = string.Empty;
+    public string RuleConfidence { get; set; } = string.Empty;
+    public bool IsGradeable { get; set; }
+    public bool PublicGradingEnabled { get; set; }
+    public bool IsActive { get; set; } = true;
+    public string? Notes { get; set; }
+    public JsonDocument? MetadataJson { get; set; }
+    public DateTimeOffset CreatedAtUtc { get; set; } = DateTimeOffset.UtcNow;
+    public DateTimeOffset UpdatedAtUtc { get; set; } = DateTimeOffset.UtcNow;
+
+    public Sport? Sport { get; set; }
+    public PropType? CanonicalPropType { get; set; }
+}
+
 public sealed class PlayerMergeAudit
 {
     public Guid MergeId { get; set; }

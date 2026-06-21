@@ -259,6 +259,9 @@ Invoke-RestMethod "$base/api/debug/soccer/player-identity/api-sports/world-cup/p
 Invoke-RestMethod "$base/api/debug/identity/provider-links?sport=SOCCER&entityType=Player&providerKey=api-sports-football&includeSamples=true&maxSamples=20" |
   ConvertTo-Json -Depth 80
 
+Invoke-RestMethod "$base/api/debug/provider-stat-mappings?sport=SOCCER&providerKey=api-sports-football&competitionScope=World%20Cup&season=2026&includeSamples=true&maxSamples=100" |
+  ConvertTo-Json -Depth 80
+
 # World Cup 2026 completed-fixture backfill safety block:
 Invoke-RestMethod -Method Post "$base/api/debug/soccer/results/api-sports/world-cup/backfill-completed" `
   -ContentType "application/json" `
@@ -285,6 +288,8 @@ Invoke-RestMethod "$base/api/debug/soccer/results/api-sports/world-cup/import-st
 `import-status` in persisted-only mode reports local `importedFixtureCount`, `rowsByFixture`, `totalRows`, `latestImportedEventDate`, and `latestImportedAtUtc` without calling API-Sports. Discovery-dependent counts such as discovered, completed, and missing completed fixtures are only populated when `forceLive=true`.
 
 `coverage` is read-only and never calls API-Sports. It inventories imported World Cup `prop_results` by fixture, player, prop type, and rule confidence, then checks whether imported rows have local join candidates in platform props, recommendation snapshots, or market snapshots. The diagnostic is conservative: `prop_results` do not store provider/bookmaker/market keys, and market snapshots do not store API-Sports fixture ids, so unmatched rows are reported by mismatch category instead of being silently ignored.
+
+API-Sports Soccer stat mappings are DB-backed in `provider_stat_mappings`; see `docs/PROVIDER_STAT_MAPPING.md`. Import and coverage diagnostics report whether DB mappings or temporary fallback mappings were used. Soccer `public_grading_enabled` remains false.
 
 ```powershell
 Invoke-RestMethod "$base/api/debug/soccer/results/api-sports/world-cup/coverage?fromDate=2026-06-11&toDate=2026-06-21" |

@@ -178,6 +178,9 @@ Invoke-RestMethod "$base/api/debug/soccer/player-identity/api-sports/world-cup/p
 
 Invoke-RestMethod "$base/api/debug/identity/provider-links?sport=SOCCER&entityType=Player&providerKey=api-sports-football&includeSamples=true&maxSamples=20" |
   ConvertTo-Json -Depth 80
+
+Invoke-RestMethod "$base/api/debug/provider-stat-mappings?sport=SOCCER&providerKey=api-sports-football&competitionScope=World%20Cup&season=2026&includeSamples=true&maxSamples=100" |
+  ConvertTo-Json -Depth 80
 ```
 
 World Cup import status is persisted-only by default and does not call API-Sports. It still reports imported fixture counts, rows by fixture, total rows, and latest imported timestamps. Add `forceLive=true` only when live discovery counts and missing completed fixture diagnostics are needed.
@@ -185,4 +188,6 @@ World Cup import status is persisted-only by default and does not call API-Sport
 The World Cup coverage endpoint is read-only and checks whether imported API-Sports `prop_results` can connect to local Soccer platform props, recommendation snapshots, or market snapshots. It reports inventory counts, prop type coverage, join coverage, mismatch reasons, and optional samples. Public Soccer grading remains disabled until those diagnostics prove a safe join path.
 
 The player identity diagnostics are also read-only and never call external APIs. Use them before any future alias approval workflow so API-Sports result players can be reviewed against provider/platform player identities without changing data.
+
+Provider stat mappings for API-Sports Football / World Cup live in `provider_stat_mappings`; see `docs/PROVIDER_STAT_MAPPING.md`. These mappings drive Soccer result import mechanics while keeping public Soccer grading disabled.
 

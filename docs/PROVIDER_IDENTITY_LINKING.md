@@ -105,3 +105,7 @@ Next recommended path:
 - Add a narrow approval workflow later.
 - Persist richer provider event/team context during Soccer market ingestion if available.
 - Keep Soccer public grading disabled until approved identity links and stat mappings are proven.
+
+## Related Stat Mapping Configuration
+
+Provider identity links answer which provider player/team/event maps to a local canonical entity. Provider stat mappings answer which provider stat field maps to a canonical prop/stat type. API-Sports Soccer stat mappings now live in `provider_stat_mappings`; see `docs/PROVIDER_STAT_MAPPING.md`.

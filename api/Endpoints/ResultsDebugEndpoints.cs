@@ -183,6 +183,133 @@ public static class ResultsDebugEndpoints
         .WithName("ProviderEntityLinksDebug")
         .WithSummary("Read-only provider identity link diagnostics.");
 
+        endpoints.MapGet("/api/debug/provider-stat-mappings", async (
+            string? sport,
+            string? providerKey,
+            string? competitionScope,
+            int? season,
+            bool? includeInactive,
+            bool? includeSamples,
+            int? maxSamples,
+            ApplicationDbContext dbContext,
+            CancellationToken cancellationToken) =>
+        {
+            var sampleLimit = Math.Clamp(maxSamples ?? 100, 1, 250);
+            var query = dbContext.ProviderStatMappings
+                .AsNoTracking()
+                .Include(mapping => mapping.Sport)
+                .Include(mapping => mapping.CanonicalPropType)
+                .AsQueryable();
+
+            if (includeInactive != true)
+            {
+                query = query.Where(mapping => mapping.IsActive);
+            }
+
+            if (!string.IsNullOrWhiteSpace(sport))
+            {
+                var normalizedSport = sport.Trim();
+                query = query.Where(mapping => mapping.Sport != null && mapping.Sport.Code == normalizedSport);
+            }
+
+            if (!string.IsNullOrWhiteSpace(providerKey))
+            {
+                var normalizedProviderKey = providerKey.Trim();
+                query = query.Where(mapping => mapping.ProviderKey == normalizedProviderKey);
+            }
+
+            if (!string.IsNullOrWhiteSpace(competitionScope))
+            {
+                var normalizedCompetitionScope = competitionScope.Trim();
+                query = query.Where(mapping => mapping.CompetitionScope == normalizedCompetitionScope);
+            }
+
+            if (season.HasValue)
+            {
+                query = query.Where(mapping => mapping.Season == season.Value);
+            }
+
+            var mappingRows = await query.ToListAsync(cancellationToken);
+            var rows = mappingRows
+                .Select(mapping => new
+                {
+                    mapping.Id,
+                    Sport = mapping.Sport?.Code,
+                    mapping.ProviderKey,
+                    mapping.ProviderProduct,
+                    mapping.CompetitionScope,
+                    mapping.Season,
+                    mapping.ProviderMappingKey,
+                    mapping.ProviderPropName,
+                    mapping.ProviderStatKey,
+                    ProviderStatFields = ExtractJsonStringArray(mapping.ProviderStatFieldsJson),
+                    mapping.CanonicalPropTypeId,
+                    CanonicalPropTypeName = mapping.CanonicalPropType?.Name,
+                    mapping.CanonicalStatKey,
+                    mapping.DisplayName,
+                    mapping.ValueTransform,
+                    mapping.RuleConfidence,
+                    mapping.IsGradeable,
+                    mapping.PublicGradingEnabled,
+                    mapping.IsActive,
+                    mapping.Notes,
+                    mapping.CreatedAtUtc,
+                    mapping.UpdatedAtUtc
+                })
+                .ToList();
+
+            return Results.Ok(new
+            {
+                generatedAtUtc = DateTimeOffset.UtcNow,
+                callsExternalApis = false,
+                readOnly = true,
+                filters = new { sport, providerKey, competitionScope, season, includeInactive = includeInactive == true },
+                totalMappings = rows.Count,
+                activeMappings = rows.Count(row => row.IsActive),
+                missingCanonicalPropTypeCount = rows.Count(row => !row.CanonicalPropTypeId.HasValue),
+                counts = new
+                {
+                    bySport = rows
+                        .GroupBy(row => row.Sport ?? "Unscoped")
+                        .OrderBy(group => group.Key)
+                        .Select(group => new { sport = group.Key, count = group.Count() })
+                        .ToArray(),
+                    byProvider = rows
+                        .GroupBy(row => row.ProviderKey)
+                        .OrderBy(group => group.Key)
+                        .Select(group => new { providerKey = group.Key, count = group.Count() })
+                        .ToArray(),
+                    byRuleConfidence = rows
+                        .GroupBy(row => row.RuleConfidence)
+                        .OrderBy(group => group.Key)
+                        .Select(group => new { ruleConfidence = group.Key, count = group.Count() })
+                        .ToArray(),
+                    byGradeable = rows
+                        .GroupBy(row => row.IsGradeable)
+                        .OrderByDescending(group => group.Key)
+                        .Select(group => new { isGradeable = group.Key, count = group.Count() })
+                        .ToArray(),
+                    byPublicGradingEnabled = rows
+                        .GroupBy(row => row.PublicGradingEnabled)
+                        .OrderByDescending(group => group.Key)
+                        .Select(group => new { publicGradingEnabled = group.Key, count = group.Count() })
+                        .ToArray()
+                },
+                samples = includeSamples == true
+                    ? rows
+                        .OrderBy(row => row.Sport)
+                        .ThenBy(row => row.ProviderKey)
+                        .ThenBy(row => row.CompetitionScope)
+                        .ThenBy(row => row.Season)
+                        .ThenBy(row => row.DisplayName)
+                        .Take(sampleLimit)
+                        .ToArray()
+                    : null
+            });
+        })
+        .WithName("ProviderStatMappingsDebug")
+        .WithSummary("Read-only provider stat mapping diagnostics.");
+
         endpoints.MapGet("/api/debug/mlb-results", async (
             DateOnly date,
             string? playerName,
@@ -666,7 +793,8 @@ public static class ResultsDebugEndpoints
 
             var statsResponse = await client.GetFixturePlayerStatsAsync(fixtureId, cancellationToken);
             var playerStats = ExtractApiSportsPlayerStats(statsResponse.Payload.RootElement);
-            var preview = BuildApiSportsSoccerResultPreview(fixtureId, fixtureSummary.EventDate.Value, playerStats);
+            var mappings = await LoadApiSportsSoccerResultMappingsAsync(dbContext, cancellationToken);
+            var preview = BuildApiSportsSoccerResultPreview(fixtureId, fixtureSummary.EventDate.Value, playerStats, mappings);
             ApiSportsSoccerImportWriteSummary writeSummary;
             try
             {
@@ -732,6 +860,7 @@ public static class ResultsDebugEndpoints
                     .OrderBy(group => group.Key)
                     .Select(group => new { reason = group.Key, count = group.Count(), props = group.Select(row => row.PropType).Distinct().Order().ToArray() })
                     .ToArray(),
+                mappingDiagnostics = BuildApiSportsSoccerMappingDiagnostics(preview),
                 ruleConfidenceCounts,
                 rawFieldCoverage = playerStats.SelectMany(row => row.StatKeys).Distinct(StringComparer.OrdinalIgnoreCase).Order().ToArray(),
                 previewRowsByPlayer = preview.Rows
@@ -753,6 +882,9 @@ public static class ResultsDebugEndpoints
                             row.RawStatValue,
                             row.Value,
                             row.RuleConfidence,
+                            row.IsGradeable,
+                            row.PublicGradingEnabled,
+                            row.MappingSource,
                             row.Notes,
                             row.ExternalSourceIdentifier
                         }).ToArray()
@@ -1027,10 +1159,10 @@ public static class ResultsDebugEndpoints
             var matchedSnapshotCount = resultDiagnostics.Count(row => row.MatchedToSnapshots);
             var matchedAnyCount = resultDiagnostics.Count(row => row.MatchedToPlatformProps || row.MatchedToSnapshots);
             var unmatched = resultDiagnostics.Where(row => !row.MatchedToPlatformProps && !row.MatchedToSnapshots).ToArray();
-            var confidenceByStatKey = ApiSportsSoccerResultMappings
-                .Where(mapping => mapping.ImportSupported)
+            var mappingSet = await LoadApiSportsSoccerResultMappingsAsync(dbContext, cancellationToken);
+            var mappingByStatKey = mappingSet.Mappings
                 .GroupBy(mapping => mapping.StatKey, StringComparer.OrdinalIgnoreCase)
-                .ToDictionary(group => group.Key, group => group.First().RuleConfidence, StringComparer.OrdinalIgnoreCase);
+                .ToDictionary(group => group.Key, group => group.First(), StringComparer.OrdinalIgnoreCase);
             var rowsByPropType = resultRows
                 .GroupBy(row => new { row.PropTypeId, row.PropTypeName, row.StatKey })
                 .OrderBy(group => group.Key.PropTypeName)
@@ -1040,7 +1172,8 @@ public static class ResultsDebugEndpoints
                     displayName = group.Key.PropTypeName,
                     statKey = group.Key.StatKey,
                     rowCount = group.Count(),
-                    ruleConfidence = confidenceByStatKey.GetValueOrDefault(group.Key.StatKey, "Unknown")
+                    ruleConfidence = mappingByStatKey.TryGetValue(group.Key.StatKey, out var mapping) ? mapping.RuleConfidence : "Unknown",
+                    isGradeable = mappingByStatKey.TryGetValue(group.Key.StatKey, out var gradeableMapping) && gradeableMapping.IsGradeable
                 })
                 .ToArray();
 
@@ -1078,6 +1211,23 @@ public static class ResultsDebugEndpoints
                         .Select(group => new { ruleConfidence = group.Key, rowCount = group.Sum(row => row.rowCount) })
                         .ToArray()
                 },
+                mappingDiagnostics = new
+                {
+                    providerMappingsConfigured = mappingSet.DbMappingsConfigured,
+                    dbMappingsUsed = mappingSet.DbMappingsUsed,
+                    fallbackMappingsUsed = mappingSet.FallbackMappingsUsed,
+                    missingMappingCount = 0,
+                    mappingsByConfidence = mappingSet.Mappings
+                        .GroupBy(mapping => mapping.RuleConfidence)
+                        .OrderBy(group => group.Key)
+                        .Select(group => new { ruleConfidence = group.Key, mappingCount = group.Count() })
+                        .ToArray(),
+                    mappingsByGradeable = mappingSet.Mappings
+                        .GroupBy(mapping => mapping.IsGradeable)
+                        .OrderByDescending(group => group.Key)
+                        .Select(group => new { isGradeable = group.Key, mappingCount = group.Count() })
+                        .ToArray()
+                },
                 propTypeCoverage = rowsByPropType.Select(row => new
                 {
                     row.propTypeId,
@@ -1085,7 +1235,7 @@ public static class ResultsDebugEndpoints
                     row.displayName,
                     row.rowCount,
                     row.ruleConfidence,
-                    gradeableNow = string.Equals(row.ruleConfidence, "Known", StringComparison.OrdinalIgnoreCase),
+                    gradeableNow = row.isGradeable,
                     publicSoccerGradingEnabled = false
                 }).ToArray(),
                 marketJoinCoverage = new
@@ -1463,6 +1613,7 @@ public static class ResultsDebugEndpoints
                         import.ResultRowsInserted,
                         import.ResultRowsUpdated,
                         import.UnsupportedSkipped,
+                        import.MappingDiagnostics,
                         import.RuleConfidenceCounts
                     });
                 }
@@ -2076,7 +2227,8 @@ public static class ResultsDebugEndpoints
 
         var statsResponse = await client.GetFixturePlayerStatsAsync(fixtureId, cancellationToken);
         var playerStats = ExtractApiSportsPlayerStats(statsResponse.Payload.RootElement);
-        var preview = BuildApiSportsSoccerResultPreview(fixtureId, fixtureSummary.EventDate.Value, playerStats);
+        var mappings = await LoadApiSportsSoccerResultMappingsAsync(dbContext, cancellationToken);
+        var preview = BuildApiSportsSoccerResultPreview(fixtureId, fixtureSummary.EventDate.Value, playerStats, mappings);
         var writeSummary = dryRun
             ? new ApiSportsSoccerImportWriteSummary(0, 0)
             : await UpsertApiSportsSoccerResultsAsync(dbContext, fixtureSummary, preview.Rows, cancellationToken);
@@ -2092,6 +2244,7 @@ public static class ResultsDebugEndpoints
             playerStats,
             preview,
             writeSummary,
+            BuildApiSportsSoccerMappingDiagnostics(preview),
             ruleConfidenceCounts);
     }
 
@@ -3142,13 +3295,114 @@ public static class ResultsDebugEndpoints
         return ApiSportsCoverageMatchDiagnostic.FromResult(result, false, false, "Unknown", "No safe local join path was identified.");
     }
 
+    private static async Task<ApiSportsSoccerResultMappingSet> LoadApiSportsSoccerResultMappingsAsync(
+        ApplicationDbContext dbContext,
+        CancellationToken cancellationToken)
+    {
+        var mappings = await dbContext.ProviderStatMappings
+            .AsNoTracking()
+            .Include(mapping => mapping.Sport)
+            .Where(mapping => mapping.IsActive
+                && mapping.ProviderKey == ApiSportsFootballResultSource
+                && mapping.Sport != null
+                && mapping.Sport.Code == "SOCCER"
+                && mapping.CompetitionScope == "World Cup"
+                && mapping.Season == ApiSportsWorldCupSeason)
+            .OrderBy(mapping => mapping.DisplayName)
+            .ToListAsync(cancellationToken);
+
+        if (mappings.Count == 0)
+        {
+            return new ApiSportsSoccerResultMappingSet(
+                ApiSportsSoccerResultMappings,
+                "Fallback",
+                0,
+                0,
+                ApiSportsSoccerResultMappings.Length);
+        }
+
+        var importedMappings = mappings.Select(ToApiSportsSoccerResultMapping).ToArray();
+        return new ApiSportsSoccerResultMappingSet(
+            importedMappings,
+            "Database",
+            mappings.Count,
+            importedMappings.Length,
+            0);
+    }
+
+    private static ApiSportsSoccerResultMapping ToApiSportsSoccerResultMapping(ProviderStatMapping mapping)
+    {
+        var sourceFields = ExtractJsonStringArray(mapping.ProviderStatFieldsJson);
+        var transform = mapping.ValueTransform.Trim();
+        var importSupported = !string.Equals(transform, "Unsupported", StringComparison.OrdinalIgnoreCase)
+            && !string.Equals(transform, "ManualOnly", StringComparison.OrdinalIgnoreCase)
+            && sourceFields.Length > 0;
+        var goalieOnly = transform.StartsWith("GoalkeeperOnly", StringComparison.OrdinalIgnoreCase);
+
+        return new ApiSportsSoccerResultMapping(
+            mapping.DisplayName,
+            mapping.CanonicalStatKey,
+            sourceFields,
+            importSupported,
+            goalieOnly,
+            mapping.RuleConfidence,
+            mapping.IsGradeable,
+            mapping.PublicGradingEnabled,
+            "Database",
+            mapping.Notes ?? string.Empty);
+    }
+
+    private static object BuildApiSportsSoccerMappingDiagnostics(ApiSportsSoccerResultPreview preview)
+    {
+        var missingMappingCount = preview.UnsupportedSkipped.Count(row => string.Equals(row.Reason, "MissingMapping", StringComparison.OrdinalIgnoreCase));
+        return new
+        {
+            mappingSource = preview.MappingSource,
+            providerMappingsConfigured = preview.DbMappingsConfigured,
+            dbMappingsUsed = preview.DbMappingsUsed,
+            fallbackMappingsUsed = preview.FallbackMappingsUsed,
+            missingMappingCount,
+            mappingsByConfidence = preview.Rows
+                .GroupBy(row => row.RuleConfidence)
+                .OrderBy(group => group.Key)
+                .Select(group => new { ruleConfidence = group.Key, rowCount = group.Count() })
+                .ToArray(),
+            mappingsByGradeable = preview.Rows
+                .GroupBy(row => row.IsGradeable)
+                .OrderByDescending(group => group.Key)
+                .Select(group => new { isGradeable = group.Key, rowCount = group.Count() })
+                .ToArray()
+        };
+    }
+
+    private static string[] ExtractJsonStringArray(JsonDocument? document)
+    {
+        if (document is null || document.RootElement.ValueKind != JsonValueKind.Array)
+        {
+            return [];
+        }
+
+        return document.RootElement
+            .EnumerateArray()
+            .Where(element => element.ValueKind == JsonValueKind.String)
+            .Select(element => element.GetString())
+            .Where(value => !string.IsNullOrWhiteSpace(value))
+            .Select(value => value!)
+            .ToArray();
+    }
+
     private static ApiSportsSoccerResultPreview BuildApiSportsSoccerResultPreview(
         string fixtureId,
         DateOnly eventDate,
-        IReadOnlyList<ApiSportsPlayerStatsRow> playerStats)
+        IReadOnlyList<ApiSportsPlayerStatsRow> playerStats,
+        ApiSportsSoccerResultMappingSet mappingSet)
     {
         var rows = new List<ApiSportsSoccerResultPreviewRow>();
         var skipped = new List<ApiSportsSoccerUnsupportedSkippedRow>();
+        var mappedStatFields = mappingSet.Mappings
+            .SelectMany(mapping => mapping.SourceFields)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
         foreach (var player in playerStats)
         {
@@ -3163,7 +3417,17 @@ public static class ResultsDebugEndpoints
                 continue;
             }
 
-            foreach (var mapping in ApiSportsSoccerResultMappings)
+            foreach (var statKey in player.StatKeys.Where(key => !mappedStatFields.Contains(key)).Order(StringComparer.OrdinalIgnoreCase))
+            {
+                skipped.Add(new ApiSportsSoccerUnsupportedSkippedRow(
+                    player.PlayerId,
+                    player.PlayerName,
+                    statKey,
+                    "MissingMapping",
+                    "No active provider_stat_mappings row maps this API-Sports Football stat field."));
+            }
+
+            foreach (var mapping in mappingSet.Mappings)
             {
                 if (!mapping.ImportSupported)
                 {
@@ -3213,12 +3477,15 @@ public static class ResultsDebugEndpoints
                     rawValue,
                     value,
                     mapping.RuleConfidence,
+                    mapping.IsGradeable,
+                    mapping.PublicGradingEnabled,
+                    mapping.MappingSource,
                     mapping.Notes,
                     $"{ApiSportsFootballResultSource}:{fixtureId}:{player.PlayerId}:{mapping.StatKey}"));
             }
         }
 
-        return new ApiSportsSoccerResultPreview(rows, skipped);
+        return new ApiSportsSoccerResultPreview(rows, skipped, mappingSet.MappingSource, mappingSet.DbMappingsConfigured, mappingSet.DbMappingsUsed, mappingSet.FallbackMappingsUsed);
     }
 
     private static async Task<ApiSportsSoccerImportWriteSummary> UpsertApiSportsSoccerResultsAsync(
@@ -3241,6 +3508,7 @@ public static class ResultsDebugEndpoints
         var playerByProviderId = await UpsertApiSportsPlayersAsync(dbContext, league, teamByProviderId, rows, observedAt, cancellationToken);
         await UpsertApiSportsProviderPlayerLinksAsync(dbContext, sport, fixtureSummary, rows, observedAt, cancellationToken);
         var propTypeByStatKey = await GetOrCreatePropTypesAsync(dbContext, sport, rows.Select(row => (row.PropType, row.StatKey)).Distinct().ToArray(), cancellationToken);
+        await AttachApiSportsMappingsToCanonicalPropTypesAsync(dbContext, sport, propTypeByStatKey, observedAt, cancellationToken);
         var identifiers = rows.Select(row => row.ExternalSourceIdentifier).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
         var existingResults = await dbContext.PropResults
             .Where(result => result.ExternalSource == ApiSportsFootballResultSource
@@ -3320,6 +3588,41 @@ public static class ResultsDebugEndpoints
         await dbContext.SaveChangesAsync(cancellationToken);
         await transaction.CommitAsync(cancellationToken);
         return new ApiSportsSoccerImportWriteSummary(inserted, updated);
+    }
+
+    private static async Task AttachApiSportsMappingsToCanonicalPropTypesAsync(
+        ApplicationDbContext dbContext,
+        Sport sport,
+        IReadOnlyDictionary<string, PropType> propTypeByStatKey,
+        DateTimeOffset observedAt,
+        CancellationToken cancellationToken)
+    {
+        if (propTypeByStatKey.Count == 0)
+        {
+            return;
+        }
+
+        var statKeys = propTypeByStatKey.Keys.ToArray();
+        var mappings = await dbContext.ProviderStatMappings
+            .Where(mapping => mapping.IsActive
+                && mapping.SportId == sport.Id
+                && mapping.ProviderKey == ApiSportsFootballResultSource
+                && statKeys.Contains(mapping.CanonicalStatKey))
+            .ToListAsync(cancellationToken);
+
+        foreach (var mapping in mappings)
+        {
+            if (!propTypeByStatKey.TryGetValue(mapping.CanonicalStatKey, out var propType))
+            {
+                continue;
+            }
+
+            if (mapping.CanonicalPropTypeId != propType.Id)
+            {
+                mapping.CanonicalPropTypeId = propType.Id;
+                mapping.UpdatedAtUtc = observedAt;
+            }
+        }
     }
 
     private static async Task<Sport> GetOrCreateSportAsync(
@@ -4456,6 +4759,7 @@ public static class ResultsDebugEndpoints
         IReadOnlyList<ApiSportsPlayerStatsRow> PlayerStats,
         ApiSportsSoccerResultPreview Preview,
         ApiSportsSoccerImportWriteSummary WriteSummary,
+        object MappingDiagnostics,
         IReadOnlyDictionary<string, int> RuleConfidenceCounts)
     {
         public int ResultRowsPreviewed => Preview.Rows.Count;
@@ -4467,7 +4771,11 @@ public static class ResultsDebugEndpoints
 
     private sealed record ApiSportsSoccerResultPreview(
         IReadOnlyList<ApiSportsSoccerResultPreviewRow> Rows,
-        IReadOnlyList<ApiSportsSoccerUnsupportedSkippedRow> UnsupportedSkipped);
+        IReadOnlyList<ApiSportsSoccerUnsupportedSkippedRow> UnsupportedSkipped,
+        string MappingSource,
+        int DbMappingsConfigured,
+        int DbMappingsUsed,
+        int FallbackMappingsUsed);
 
     private sealed record ApiSportsSoccerResultPreviewRow(
         string FixtureId,
@@ -4484,6 +4792,9 @@ public static class ResultsDebugEndpoints
         object RawStatValue,
         decimal Value,
         string RuleConfidence,
+        bool IsGradeable,
+        bool PublicGradingEnabled,
+        string MappingSource,
         string Notes,
         string ExternalSourceIdentifier);
 
@@ -4503,7 +4814,17 @@ public static class ResultsDebugEndpoints
         bool ImportSupported,
         bool GoalieOnly,
         string RuleConfidence,
+        bool IsGradeable,
+        bool PublicGradingEnabled,
+        string MappingSource,
         string Notes);
+
+    private sealed record ApiSportsSoccerResultMappingSet(
+        IReadOnlyList<ApiSportsSoccerResultMapping> Mappings,
+        string MappingSource,
+        int DbMappingsConfigured,
+        int DbMappingsUsed,
+        int FallbackMappingsUsed);
 
     private sealed record ApiSportsPropTypeDescriptor(
         string Name,
@@ -4559,26 +4880,26 @@ public static class ResultsDebugEndpoints
 
     private static readonly ApiSportsSoccerResultMapping[] ApiSportsSoccerResultMappings =
     [
-        new("Goals", "GOALS", ["goals.total"], true, false, "Known", "Maps to API-Sports Football goals.total."),
-        new("Assists", "ASSISTS", ["goals.assists"], true, false, "Known", "Maps to API-Sports Football goals.assists."),
-        new("Shots", "SHOTS", ["shots.total"], true, false, "Known", "Maps to API-Sports Football shots.total."),
-        new("Shots On Target", "SHOTS_ON_TARGET", ["shots.on"], true, false, "Known", "Maps to API-Sports Football shots.on."),
-        new("Passes Attempted", "PASSES_ATTEMPTED", ["passes.total"], true, false, "Known", "Maps to API-Sports Football passes.total."),
-        new("Tackles", "TACKLES", ["tackles.total"], true, false, "Known", "Maps to API-Sports Football tackles.total."),
-        new("Fouls", "FOULS", ["fouls.committed"], true, false, "Known", "Maps to API-Sports Football fouls.committed."),
-        new("Fouls Drawn", "FOULS_DRAWN", ["fouls.drawn"], true, false, "Known", "Maps to API-Sports Football fouls.drawn."),
-        new("Offsides", "OFFSIDES", ["offsides"], true, false, "Known", "Maps to API-Sports Football offsides."),
-        new("Goalie Saves", "GOALIE_SAVES", ["goals.saves"], true, true, "Known", "Goalkeeper-only mapping from API-Sports Football goals.saves."),
-        new("Attempted Dribbles", "ATTEMPTED_DRIBBLES", ["dribbles.attempts"], true, false, "Known", "Maps to API-Sports Football dribbles.attempts."),
-        new("Goal + Assist", "GOAL_ASSIST", ["goals.total", "goals.assists"], true, false, "NeedsConfirmation", "Conservative mapping: sum goals.total + goals.assists."),
-        new("Cards", "CARDS", ["cards.yellow", "cards.red"], true, false, "NeedsConfirmation", "Conservative mapping: sum cards.yellow + cards.red."),
-        new("Goals Allowed", "GOALS_ALLOWED", ["goals.conceded"], true, true, "NeedsConfirmation", "Conservative goalkeeper-only mapping from goals.conceded."),
-        new("Shots Assisted", "SHOTS_ASSISTED", ["passes.key"], true, false, "NeedsConfirmation", "Conservative mapping: passes.key may correspond to shots assisted/key passes."),
-        new("Crosses", "CROSSES", [], false, false, "Unsupported", "Unsupported until API-Sports Football provides a confirmed player crosses field."),
-        new("Clearances", "CLEARANCES", [], false, false, "Unsupported", "Unsupported until API-Sports Football provides a confirmed player clearances field."),
-        new("Outfield Fantasy Score", "OUTFIELD_FANTASY_SCORE", [], false, false, "Unsupported", "Unsupported provider-scored prop."),
-        new("Goalie Fantasy Score", "GOALIE_FANTASY_SCORE", [], false, true, "Unsupported", "Unsupported provider-scored prop."),
-        new("Combo props", "COMBO_PROPS", [], false, false, "Unsupported", "Unsupported combo prop family.")
+        new("Goals", "GOALS", ["goals.total"], true, false, "Known", true, false, "Fallback", "Maps to API-Sports Football goals.total."),
+        new("Assists", "ASSISTS", ["goals.assists"], true, false, "Known", true, false, "Fallback", "Maps to API-Sports Football goals.assists."),
+        new("Shots", "SHOTS", ["shots.total"], true, false, "Known", true, false, "Fallback", "Maps to API-Sports Football shots.total."),
+        new("Shots On Target", "SHOTS_ON_TARGET", ["shots.on"], true, false, "Known", true, false, "Fallback", "Maps to API-Sports Football shots.on."),
+        new("Passes Attempted", "PASSES_ATTEMPTED", ["passes.total"], true, false, "Known", true, false, "Fallback", "Maps to API-Sports Football passes.total."),
+        new("Tackles", "TACKLES", ["tackles.total"], true, false, "Known", true, false, "Fallback", "Maps to API-Sports Football tackles.total."),
+        new("Fouls", "FOULS", ["fouls.committed"], true, false, "Known", true, false, "Fallback", "Maps to API-Sports Football fouls.committed."),
+        new("Fouls Drawn", "FOULS_DRAWN", ["fouls.drawn"], true, false, "Known", true, false, "Fallback", "Maps to API-Sports Football fouls.drawn."),
+        new("Offsides", "OFFSIDES", ["offsides"], true, false, "Known", true, false, "Fallback", "Maps to API-Sports Football offsides."),
+        new("Goalie Saves", "GOALIE_SAVES", ["goals.saves"], true, true, "Known", true, false, "Fallback", "Goalkeeper-only mapping from API-Sports Football goals.saves."),
+        new("Attempted Dribbles", "ATTEMPTED_DRIBBLES", ["dribbles.attempts"], true, false, "Known", true, false, "Fallback", "Maps to API-Sports Football dribbles.attempts."),
+        new("Goal + Assist", "GOAL_ASSIST", ["goals.total", "goals.assists"], true, false, "NeedsConfirmation", false, false, "Fallback", "Conservative mapping: sum goals.total + goals.assists."),
+        new("Cards", "CARDS", ["cards.yellow", "cards.red"], true, false, "NeedsConfirmation", false, false, "Fallback", "Conservative mapping: sum cards.yellow + cards.red."),
+        new("Goals Allowed", "GOALS_ALLOWED", ["goals.conceded"], true, true, "NeedsConfirmation", false, false, "Fallback", "Conservative goalkeeper-only mapping from goals.conceded."),
+        new("Shots Assisted", "SHOTS_ASSISTED", ["passes.key"], true, false, "NeedsConfirmation", false, false, "Fallback", "Conservative mapping: passes.key may correspond to shots assisted/key passes."),
+        new("Crosses", "CROSSES", [], false, false, "Unsupported", false, false, "Fallback", "Unsupported until API-Sports Football provides a confirmed player crosses field."),
+        new("Clearances", "CLEARANCES", [], false, false, "Unsupported", false, false, "Fallback", "Unsupported until API-Sports Football provides a confirmed player clearances field."),
+        new("Outfield Fantasy Score", "OUTFIELD_FANTASY_SCORE", [], false, false, "Unsupported", false, false, "Fallback", "Unsupported provider-scored prop."),
+        new("Goalie Fantasy Score", "GOALIE_FANTASY_SCORE", [], false, true, "Unsupported", false, false, "Fallback", "Unsupported provider-scored prop."),
+        new("Combo props", "COMBO_PROPS", [], false, false, "Unsupported", false, false, "Fallback", "Unsupported combo prop family.")
     ];
 
     private sealed record MlbPitcherStrikeoutDateRange(DateOnly StartDate, DateOnly EndDate);
