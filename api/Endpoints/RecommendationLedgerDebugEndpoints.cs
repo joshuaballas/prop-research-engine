@@ -1144,7 +1144,7 @@ public static class RecommendationLedgerDebugEndpoints
             var effectiveIncludeResearch = includeResearch ?? false;
             var effectiveIncludeStale = includeStale ?? false;
             var effectiveIncludeExcluded = includeExcluded ?? false;
-            var selection = await PublicMlbDfsEndpoints.BuildPerformanceResetSelectionAsync(
+            var selection = await PublicMarketsEndpoints.BuildPerformanceResetSelectionAsync(
                 requestedSport: sport,
                 effectiveSport,
                 provider,

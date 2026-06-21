@@ -7,6 +7,8 @@ public sealed class TheOddsApiOptions
     public string ApiKey { get; set; } = string.Empty;
     public string BaseUrl { get; set; } = "https://api.the-odds-api.com";
     public string SportKey { get; set; } = "baseball_mlb";
+    public string SoccerWorldCupSportKey { get; set; } = string.Empty;
+    public string SoccerWorldCupMarkets { get; set; } = string.Empty;
     public string Regions { get; set; } = "us";
     public string OddsFormat { get; set; } = "american";
     public int MaxConcurrentRequests { get; set; } = 3;

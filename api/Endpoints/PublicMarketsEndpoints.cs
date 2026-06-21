@@ -6,12 +6,15 @@ using Microsoft.EntityFrameworkCore;
 using System.Globalization;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 
 namespace SportsBetting.Api.Endpoints;
 
-public static class PublicMlbDfsEndpoints
+public static class PublicMarketsEndpoints
 {
-    private static readonly string[] SupportedMarketSports = ["MLB"];
+    private static readonly string[] SupportedMarketSports = ["MLB", "SOCCER"];
+    private static readonly string[] SupportedMarketCompetitions = ["MLB", "World Cup"];
+    private const string SoccerCompetitionName = "World Cup";
     private static readonly string[] SupportedMlbPerformancePropTypeKeys =
     [
         "HITS",
@@ -39,9 +42,10 @@ public static class PublicMlbDfsEndpoints
         "PITCHEREARNEDRUNS",
         "EARNEDRUNSALLOWED"
     ];
-    private const string MlbOnlyMarketReadLimitation = "Only MLB persisted market read models are currently implemented. Additional sports should be added behind these /api/markets routes instead of duplicating route families.";
+    private const string MarketReadLimitation = "MLB result grading is supported. Soccer / World Cup provider-line reads are supported from persisted snapshots when available; soccer history and performance grading are not available yet.";
+    private const string SoccerHistoryUnavailableMessage = "Soccer history is not available yet.";
 
-    public static IEndpointRouteBuilder MapPublicMlbDfsEndpoints(this IEndpointRouteBuilder endpoints)
+    public static IEndpointRouteBuilder MapPublicMarketsEndpoints(this IEndpointRouteBuilder endpoints)
     {
         endpoints.MapGet("/api/markets/freshness", async (
             string? sport,
@@ -456,6 +460,18 @@ public static class PublicMlbDfsEndpoints
         ApplicationDbContext dbContext,
         CancellationToken cancellationToken)
     {
+        if (IsSoccerSport(effectiveSport))
+        {
+            return await BuildGenericMarketFreshnessResponseAsync(
+                requestedSport,
+                effectiveSport,
+                slateDate,
+                bookmakerPreset,
+                freshnessMinutes,
+                dbContext,
+                cancellationToken);
+        }
+
         var response = await TheOddsApiDebugEndpoints.BuildMlbRefreshFreshnessResponseAsync(
             slateDate,
             bookmakerPreset,
@@ -475,7 +491,7 @@ public static class PublicMlbDfsEndpoints
             supportedSports = SupportedMarketSports,
             requestedSport,
             effectiveSport,
-            limitation = MlbOnlyMarketReadLimitation,
+            limitation = MarketReadLimitation,
             latestSuccessfulRefresh = response.LatestSuccessfulRun,
             response.MinutesSinceLatestSuccessfulRefresh,
             response.IsFresh,
@@ -504,6 +520,117 @@ public static class PublicMlbDfsEndpoints
                 providerStatus.recommendedAction
             },
             freshnessMinutesThreshold = response.FreshnessThresholdMinutes
+        };
+    }
+
+    private static async Task<object> BuildGenericMarketFreshnessResponseAsync(
+        string? requestedSport,
+        string effectiveSport,
+        DateOnly? slateDate,
+        string? bookmakerPreset,
+        int? freshnessMinutes,
+        ApplicationDbContext dbContext,
+        CancellationToken cancellationToken)
+    {
+        var thresholdMinutes = Math.Clamp(freshnessMinutes ?? 30, 1, 1440);
+        var generatedAtUtc = DateTimeOffset.UtcNow;
+        var refreshQuery = dbContext.TheOddsRefreshRuns
+            .AsNoTracking()
+            .Where(row => row.Sport == effectiveSport);
+
+        if (slateDate.HasValue)
+        {
+            refreshQuery = refreshQuery.Where(row => row.SlateDate == slateDate.Value);
+        }
+
+        if (!string.IsNullOrWhiteSpace(bookmakerPreset))
+        {
+            refreshQuery = refreshQuery.Where(row => row.BookmakerPreset == bookmakerPreset);
+        }
+
+        var latestSuccessfulRun = await refreshQuery
+            .Where(row => row.Succeeded && !row.DryRun)
+            .OrderByDescending(row => row.CompletedAtUtc ?? row.StartedAtUtc)
+            .FirstOrDefaultAsync(cancellationToken);
+
+        var snapshotRunId = latestSuccessfulRun?.Id;
+        var lineShoppingQuery = dbContext.MarketLineShoppingSnapshots
+            .AsNoTracking()
+            .Where(row => row.Sport == effectiveSport);
+        var topPickQuery = dbContext.MarketTopPickSnapshots
+            .AsNoTracking()
+            .Where(row => row.Sport == effectiveSport);
+
+        if (snapshotRunId.HasValue)
+        {
+            lineShoppingQuery = lineShoppingQuery.Where(row => row.TheOddsRefreshRunId == snapshotRunId.Value);
+            topPickQuery = topPickQuery.Where(row => row.TheOddsRefreshRunId == snapshotRunId.Value);
+        }
+
+        var lineShoppingSnapshotCount = await lineShoppingQuery.CountAsync(cancellationToken);
+        var topPickSnapshotCount = await topPickQuery.CountAsync(cancellationToken);
+        var activeGroupCount = await lineShoppingQuery.CountAsync(
+            row => row.LifecycleStatus == "Active" && !row.IsStale && !row.IsExpired,
+            cancellationToken);
+        var staleOrExpiredGroupCount = await lineShoppingQuery.CountAsync(
+            row => row.IsStale || row.IsExpired || row.LifecycleStatus != "Active",
+            cancellationToken);
+        var latestCompletedOrStarted = latestSuccessfulRun?.CompletedAtUtc ?? latestSuccessfulRun?.StartedAtUtc;
+        var minutesSinceLatest = latestCompletedOrStarted.HasValue
+            ? Math.Round((generatedAtUtc - latestCompletedOrStarted.Value).TotalMinutes, 1)
+            : (double?)null;
+        var hasUsableMarketData = topPickSnapshotCount > 0 || activeGroupCount > 0;
+        var isFresh = minutesSinceLatest.HasValue && minutesSinceLatest.Value <= thresholdMinutes;
+
+        return new
+        {
+            generatedAtUtc,
+            callsExternalApis = false,
+            readOnly = true,
+            supportedSports = SupportedMarketSports,
+            supportedCompetitions = BuildSupportedCompetitionDiagnostics(),
+            requestedSport,
+            effectiveSport,
+            competition = ResolveCompetitionName(effectiveSport),
+            resultGradingSupported = false,
+            limitation = MarketReadLimitation,
+            latestSuccessfulRefresh = latestSuccessfulRun is null
+                ? null
+                : new
+                {
+                    latestSuccessfulRun.Id,
+                    latestSuccessfulRun.StartedAtUtc,
+                    latestSuccessfulRun.CompletedAtUtc,
+                    latestSuccessfulRun.Succeeded,
+                    latestSuccessfulRun.Failed,
+                    latestSuccessfulRun.Blocked,
+                    latestSuccessfulRun.DryRun,
+                    latestSuccessfulRun.ForceLive,
+                    latestSuccessfulRun.BookmakerPreset
+                },
+            minutesSinceLatestSuccessfulRefresh = minutesSinceLatest,
+            isFresh,
+            isStale = !isFresh,
+            staleReason = isFresh ? null : latestSuccessfulRun is null ? $"No persisted {ResolveSportDisplayName(effectiveSport)} refresh snapshots exist yet." : $"Latest persisted {ResolveSportDisplayName(effectiveSport)} refresh is older than {thresholdMinutes} minutes.",
+            hasUsableMarketData,
+            lineShoppingSnapshotCount,
+            topPickSnapshotCount,
+            activeGroupCount,
+            staleOrExpiredGroupCount,
+            providerIngestionFailureCount = 0,
+            providerIngestionSuccessCount = hasUsableMarketData ? 1 : 0,
+            providerRejectedKeyDetected = false,
+            usabilityWarning = IsSoccerSport(effectiveSport) ? SoccerHistoryUnavailableMessage : null,
+            diagnostics = new
+            {
+                supportedSports = SupportedMarketSports,
+                supportedCompetitions = SupportedMarketCompetitions,
+                soccerMarketsDiscovered = IsSoccerSport(effectiveSport) ? lineShoppingSnapshotCount + topPickSnapshotCount : 0,
+                soccerMarketsMapped = IsSoccerSport(effectiveSport) ? activeGroupCount + topPickSnapshotCount : 0,
+                soccerCurrentLineCounts = IsSoccerSport(effectiveSport) ? activeGroupCount : 0,
+                soccerResultGradingSupported = false
+            },
+            freshnessMinutesThreshold = thresholdMinutes
         };
     }
 
@@ -779,6 +906,18 @@ public static class PublicMlbDfsEndpoints
         IPredictionProbabilityService probabilityService,
         CancellationToken cancellationToken)
     {
+        if (IsSoccerSport(effectiveSport))
+        {
+            return await BuildGenericMarketTopPicksResponseAsync(
+                requestedSport,
+                effectiveSport,
+                runId,
+                take,
+                providerCategory,
+                dbContext,
+                cancellationToken);
+        }
+
         var freshness = await TheOddsApiDebugEndpoints.BuildMlbRefreshFreshnessResponseAsync(
             slateDate: null,
             bookmakerPreset,
@@ -802,7 +941,7 @@ public static class PublicMlbDfsEndpoints
             supportedSports = SupportedMarketSports,
             requestedSport,
             effectiveSport,
-            limitation = MlbOnlyMarketReadLimitation,
+            limitation = MarketReadLimitation,
             freshness = ToPublicFreshnessSummary(freshness),
             topPicks.SnapshotBacked,
             refreshRunId = topPicks.RefreshRunId,
@@ -811,6 +950,80 @@ public static class PublicMlbDfsEndpoints
             topPicks.Summary,
             topPicks.StrategyClassificationSummary,
             topPicks.TopPicks
+        };
+    }
+
+    private static async Task<object> BuildGenericMarketTopPicksResponseAsync(
+        string? requestedSport,
+        string effectiveSport,
+        Guid? runId,
+        int? take,
+        string? providerCategory,
+        ApplicationDbContext dbContext,
+        CancellationToken cancellationToken)
+    {
+        var requestedTake = Math.Clamp(take ?? 25, 1, 250);
+        var latestRunId = runId ?? await ResolveLatestTopPickSnapshotRunIdAsync(
+            dbContext,
+            effectiveSport,
+            cancellationToken);
+        var query = dbContext.MarketTopPickSnapshots
+            .AsNoTracking()
+            .Where(row => row.Sport == effectiveSport);
+
+        if (latestRunId.HasValue)
+        {
+            query = query.Where(row => row.TheOddsRefreshRunId == latestRunId.Value);
+        }
+
+        if (!string.IsNullOrWhiteSpace(providerCategory))
+        {
+            query = query.Where(row => row.ProviderCategory == providerCategory);
+        }
+
+        var rows = await query
+            .Where(row => row.LifecycleStatus == "Active" && !row.IsStale && !row.IsExpired)
+            .OrderByDescending(row => row.BestEstimatedEv)
+            .ThenByDescending(row => row.BestProbabilityEdge)
+            .ThenBy(row => row.Player)
+            .Take(requestedTake)
+            .ToArrayAsync(cancellationToken);
+
+        return new
+        {
+            generatedAtUtc = DateTimeOffset.UtcNow,
+            callsExternalApis = false,
+            readOnly = true,
+            supportedSports = SupportedMarketSports,
+            supportedCompetitions = BuildSupportedCompetitionDiagnostics(),
+            requestedSport,
+            effectiveSport,
+            competition = ResolveCompetitionName(effectiveSport),
+            resultGradingSupported = false,
+            limitation = MarketReadLimitation,
+            freshness = await BuildGenericMarketFreshnessResponseAsync(requestedSport, effectiveSport, null, null, null, dbContext, cancellationToken),
+            snapshotBacked = rows.Length > 0,
+            refreshRunId = latestRunId,
+            fallbackReason = rows.Length == 0 ? $"No persisted {ResolveSportDisplayName(effectiveSport)} top-pick snapshots are available yet." : null,
+            run = new
+            {
+                runId = latestRunId,
+                predictionCount = rows.Length
+            },
+            summary = new
+            {
+                activeCandidateCount = rows.Length,
+                actionableCandidateCount = rows.Count(row => row.EntryActionableForUser),
+                returnedTopPicks = rows.Length,
+                totalActiveComparisonGroups = rows.Length
+            },
+            strategyClassificationSummary = rows
+                .GroupBy(row => string.IsNullOrWhiteSpace(row.StrategyClassification) ? "Unclassified" : row.StrategyClassification)
+                .Select(group => new { strategyClassification = group.Key, count = group.Count() })
+                .ToArray(),
+            topPicks = rows
+                .Select(row => BuildSnapshotDetails(row.DetailsJson, row.Sport, row.EventName, row.EventStartTime))
+                .ToArray()
         };
     }
 
@@ -828,6 +1041,19 @@ public static class PublicMlbDfsEndpoints
         IPredictionProbabilityService probabilityService,
         CancellationToken cancellationToken)
     {
+        if (IsSoccerSport(effectiveSport))
+        {
+            return await BuildGenericMarketLineShoppingResponseAsync(
+                requestedSport,
+                effectiveSport,
+                runId,
+                take,
+                topOnly,
+                providerCategory,
+                dbContext,
+                cancellationToken);
+        }
+
         var freshness = await TheOddsApiDebugEndpoints.BuildMlbRefreshFreshnessResponseAsync(
             slateDate: null,
             bookmakerPreset,
@@ -854,7 +1080,7 @@ public static class PublicMlbDfsEndpoints
             supportedSports = SupportedMarketSports,
             requestedSport,
             effectiveSport,
-            limitation = MlbOnlyMarketReadLimitation,
+            limitation = MarketReadLimitation,
             freshness = ToPublicFreshnessSummary(freshness),
             lineShopping.SnapshotBacked,
             refreshRunId = lineShopping.RefreshRunId,
@@ -866,14 +1092,92 @@ public static class PublicMlbDfsEndpoints
         };
     }
 
+    private static async Task<object> BuildGenericMarketLineShoppingResponseAsync(
+        string? requestedSport,
+        string effectiveSport,
+        Guid? runId,
+        int? take,
+        bool? topOnly,
+        string? providerCategory,
+        ApplicationDbContext dbContext,
+        CancellationToken cancellationToken)
+    {
+        var requestedTake = Math.Clamp(take ?? 50, 1, 500);
+        var latestRunId = runId ?? await ResolveLatestLineShoppingSnapshotRunIdAsync(
+            dbContext,
+            effectiveSport,
+            cancellationToken);
+        var query = dbContext.MarketLineShoppingSnapshots
+            .AsNoTracking()
+            .Where(row => row.Sport == effectiveSport);
+
+        if (latestRunId.HasValue)
+        {
+            query = query.Where(row => row.TheOddsRefreshRunId == latestRunId.Value);
+        }
+
+        if (!string.IsNullOrWhiteSpace(providerCategory))
+        {
+            query = query.Where(row => row.ProviderCategory == providerCategory);
+        }
+
+        if (topOnly ?? true)
+        {
+            query = query.Where(row => row.IsCandidate || row.EntryActionableForUser);
+        }
+
+        var rows = await query
+            .Where(row => row.LifecycleStatus == "Active" && !row.IsStale && !row.IsExpired)
+            .OrderByDescending(row => row.BestEstimatedEv)
+            .ThenByDescending(row => row.BestProbabilityEdge)
+            .ThenBy(row => row.Player)
+            .Take(requestedTake)
+            .ToArrayAsync(cancellationToken);
+
+        return new
+        {
+            generatedAtUtc = DateTimeOffset.UtcNow,
+            callsExternalApis = false,
+            readOnly = true,
+            supportedSports = SupportedMarketSports,
+            supportedCompetitions = BuildSupportedCompetitionDiagnostics(),
+            requestedSport,
+            effectiveSport,
+            competition = ResolveCompetitionName(effectiveSport),
+            resultGradingSupported = false,
+            limitation = MarketReadLimitation,
+            freshness = await BuildGenericMarketFreshnessResponseAsync(requestedSport, effectiveSport, null, null, null, dbContext, cancellationToken),
+            snapshotBacked = rows.Length > 0,
+            refreshRunId = latestRunId,
+            fallbackReason = rows.Length == 0 ? $"No persisted {ResolveSportDisplayName(effectiveSport)} line-shopping snapshots are available yet." : null,
+            run = new
+            {
+                runId = latestRunId,
+                comparisonGroupCount = rows.Length
+            },
+            summary = new
+            {
+                totalComparisonGroups = rows.Length,
+                totalActiveComparisonGroups = rows.Length
+            },
+            strategyClassificationSummary = rows
+                .GroupBy(row => string.IsNullOrWhiteSpace(row.StrategyClassification) ? "Unclassified" : row.StrategyClassification)
+                .Select(group => new { strategyClassification = group.Key, count = group.Count() })
+                .ToArray(),
+            comparisonGroups = rows
+                .Select(row => BuildSnapshotDetails(row.DetailsJson, row.Sport, row.EventName, row.EventStartTime))
+                .ToArray()
+        };
+    }
+
     private static MarketSportResolution ResolveMarketSport(string? sport)
     {
         var requestedSport = string.IsNullOrWhiteSpace(sport)
             ? null
-            : sport.Trim().ToUpperInvariant();
+            : NormalizeMarketSportCode(sport);
         var effectiveSport = requestedSport ?? "MLB";
 
-        if (!string.Equals(effectiveSport, "MLB", StringComparison.OrdinalIgnoreCase))
+        if (!SupportedMarketSports.Contains(effectiveSport, StringComparer.OrdinalIgnoreCase))
         {
             return new MarketSportResolution(
                 requestedSport,
@@ -886,12 +1190,110 @@ public static class PublicMlbDfsEndpoints
                     supportedSports = SupportedMarketSports,
                     requestedSport,
                     effectiveSport = (string?)null,
-                    limitation = MlbOnlyMarketReadLimitation,
+                    supportedCompetitions = BuildSupportedCompetitionDiagnostics(),
+                    limitation = MarketReadLimitation,
                     error = $"Sport '{requestedSport}' is not implemented for production market reads yet."
                 }));
         }
 
-        return new MarketSportResolution(requestedSport, "MLB", UnsupportedResponse: null);
+        return new MarketSportResolution(requestedSport, effectiveSport, UnsupportedResponse: null);
+    }
+
+    private static string NormalizeMarketSportCode(string? sport)
+    {
+        var normalized = sport?.Trim().ToUpperInvariant().Replace("-", "_").Replace(" ", "_");
+        return normalized switch
+        {
+            null or "" => "MLB",
+            "MLB" => "MLB",
+            "SOCCER" or "FOOTBALL" or "FUTBOL" or "WORLD_CUP" or "WORLDCUP" or "FIFA_WORLD_CUP" => "SOCCER",
+            _ => normalized
+        };
+    }
+
+    private static bool IsSoccerSport(string? sport)
+    {
+        return string.Equals(sport, "SOCCER", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string ResolveSportDisplayName(string? sport)
+    {
+        return IsSoccerSport(sport) ? "Soccer / World Cup" : "MLB";
+    }
+
+    private static string? ResolveCompetitionName(string? sport)
+    {
+        return IsSoccerSport(sport) ? SoccerCompetitionName : string.Equals(sport, "MLB", StringComparison.OrdinalIgnoreCase) ? "MLB" : null;
+    }
+
+    private static object[] BuildSupportedCompetitionDiagnostics()
+    {
+        return
+        [
+            new { sport = "MLB", competition = "MLB", resultGradingSupported = true },
+            new { sport = "SOCCER", competition = SoccerCompetitionName, resultGradingSupported = false }
+        ];
+    }
+
+    private static JsonElement BuildSnapshotDetails(JsonDocument detailsJson, string sport, string? eventName, DateTimeOffset? eventStartTime)
+    {
+        JsonObject details;
+        try
+        {
+            details = JsonNode.Parse(detailsJson.RootElement.GetRawText()) as JsonObject ?? [];
+        }
+        catch (JsonException)
+        {
+            details = [];
+        }
+
+        details["sport"] = sport;
+        details["Sport"] = sport;
+        var competition = ResolveCompetitionName(sport);
+        if (!string.IsNullOrWhiteSpace(competition))
+        {
+            details["competition"] = competition;
+            details["Competition"] = competition;
+        }
+
+        if (!string.IsNullOrWhiteSpace(eventName) && details["eventName"] is null)
+        {
+            details["eventName"] = eventName;
+        }
+
+        if (eventStartTime.HasValue && details["eventStartTimeUtc"] is null)
+        {
+            details["eventStartTimeUtc"] = eventStartTime.Value;
+        }
+
+        using var document = JsonSerializer.SerializeToDocument(details);
+        return document.RootElement.Clone();
+    }
+
+    private static async Task<Guid?> ResolveLatestTopPickSnapshotRunIdAsync(
+        ApplicationDbContext dbContext,
+        string effectiveSport,
+        CancellationToken cancellationToken)
+    {
+        return await dbContext.MarketTopPickSnapshots
+            .AsNoTracking()
+            .Where(row => row.Sport == effectiveSport)
+            .OrderByDescending(row => row.GeneratedAtUtc)
+            .Select(row => (Guid?)row.TheOddsRefreshRunId)
+            .FirstOrDefaultAsync(cancellationToken);
+    }
+
+    private static async Task<Guid?> ResolveLatestLineShoppingSnapshotRunIdAsync(
+        ApplicationDbContext dbContext,
+        string effectiveSport,
+        CancellationToken cancellationToken)
+    {
+        return await dbContext.MarketLineShoppingSnapshots
+            .AsNoTracking()
+            .Where(row => row.Sport == effectiveSport)
+            .OrderByDescending(row => row.GeneratedAtUtc)
+            .Select(row => (Guid?)row.TheOddsRefreshRunId)
+            .FirstOrDefaultAsync(cancellationToken);
     }
 
     private static bool ResolveEffectiveCandidateOnly(bool? candidateOnly, bool? includeWatchlist, bool? includeResearch)
@@ -929,6 +1331,15 @@ public static class PublicMlbDfsEndpoints
     {
         var generatedAtUtc = DateTimeOffset.UtcNow;
         var normalizedGradingMode = NormalizePerformanceGradingMode(gradingMode);
+        if (IsSoccerSport(effectiveSport))
+        {
+            return BuildUnsupportedPerformanceSummaryResponse(
+                generatedAtUtc,
+                requestedSport,
+                effectiveSport,
+                normalizedGradingMode);
+        }
+
         var latestRefresh = await TheOddsApiDebugEndpoints.BuildMlbRefreshFreshnessResponseAsync(
             slateDate: null,
             bookmakerPreset: null,
@@ -1327,6 +1738,52 @@ public static class PublicMlbDfsEndpoints
         };
     }
 
+    private static object BuildUnsupportedPerformanceSummaryResponse(
+        DateTimeOffset generatedAtUtc,
+        string? requestedSport,
+        string effectiveSport,
+        string gradingMode)
+    {
+        return new
+        {
+            generatedAtUtc,
+            callsExternalApis = false,
+            readOnly = true,
+            supportedSports = SupportedMarketSports,
+            supportedCompetitions = BuildSupportedCompetitionDiagnostics(),
+            requestedSport,
+            effectiveSport,
+            sport = effectiveSport,
+            competition = ResolveCompetitionName(effectiveSport),
+            resultGradingSupported = false,
+            unavailableReason = SoccerHistoryUnavailableMessage,
+            summary = new
+            {
+                gradedPicks = 0,
+                won = 0,
+                lost = 0,
+                pushed = 0,
+                noResultPicks = 0,
+                hitRate = null as decimal?,
+                simulatedRoi = null as decimal?,
+                avgEvAtRecommendationTime = null as decimal?
+            },
+            breakdowns = new
+            {
+                overview = Array.Empty<object>(),
+                providers = Array.Empty<object>(),
+                propTypes = Array.Empty<object>()
+            },
+            diagnostics = new
+            {
+                matchingStrategy = SoccerHistoryUnavailableMessage,
+                gradingMode,
+                resultGradingSupported = false,
+                soccerResultGradingSupported = false
+            }
+        };
+    }
+
     private static async Task<object> BuildMarketPerformanceResultsResponseAsync(
         string? requestedSport,
         string effectiveSport,
@@ -1336,6 +1793,45 @@ public static class PublicMlbDfsEndpoints
         CancellationToken cancellationToken)
     {
         var generatedAtUtc = DateTimeOffset.UtcNow;
+        if (IsSoccerSport(effectiveSport))
+        {
+            return new
+            {
+                generatedAtUtc,
+                callsExternalApis = false,
+                readOnly = true,
+                supportedSports = SupportedMarketSports,
+                supportedCompetitions = BuildSupportedCompetitionDiagnostics(),
+                requestedSport,
+                sport = effectiveSport,
+                competition = ResolveCompetitionName(effectiveSport),
+                resultGradingSupported = false,
+                unavailableReason = SoccerHistoryUnavailableMessage,
+                date = requestedDate,
+                summary = new
+                {
+                    gradedPicks = 0,
+                    won = 0,
+                    lost = 0,
+                    pushed = 0,
+                    noResultExcluded = 0,
+                    hitRate = null as decimal?,
+                    simulatedRoi = null as decimal?,
+                    avgEvAtRecommendationTime = null as decimal?
+                },
+                rows = Array.Empty<object>(),
+                diagnostics = includeDiagnostics
+                    ? new
+                    {
+                        reasonCounts = new Dictionary<string, int>(),
+                        examples = Array.Empty<object>(),
+                        resultGradingSupported = false,
+                        message = SoccerHistoryUnavailableMessage
+                    }
+                    : null
+            };
+        }
+
         var selectedDate = requestedDate ??
             await dbContext.PropResults
                 .AsNoTracking()
@@ -3525,7 +4021,7 @@ public static class PublicMlbDfsEndpoints
         IPlayerIdentityAliasService playerIdentityAliasService,
         CancellationToken cancellationToken)
     {
-        var requestedSport = string.IsNullOrWhiteSpace(sport) ? "MLB" : sport.Trim().ToUpperInvariant();
+        var requestedSport = string.IsNullOrWhiteSpace(sport) ? "MLB" : NormalizeMarketSportCode(sport);
         var displayPropType = ResolveDisplayPropType(propType);
         var normalizedPropType = ResolveResultPropTypeKey(propType);
         var normalizedSide = NormalizeResultSide(side);
@@ -3533,7 +4029,10 @@ public static class PublicMlbDfsEndpoints
 
         if (!string.Equals(requestedSport, "MLB", StringComparison.OrdinalIgnoreCase))
         {
-            return EmptyPropHistory(requestedSport, playerId, playerName, propType, displayPropType, normalizedSide, line, provider, season, $"Prop history currently supports MLB only. Requested sport: {requestedSport}.");
+            var reason = IsSoccerSport(requestedSport)
+                ? SoccerHistoryUnavailableMessage
+                : $"Prop history currently supports MLB only. Requested sport: {requestedSport}.";
+            return EmptyPropHistory(requestedSport, playerId, playerName, normalizedPropType ?? propType, displayPropType, normalizedSide, line, provider, season, reason);
         }
 
         if (string.IsNullOrWhiteSpace(normalizedPropType))
@@ -3832,6 +4331,25 @@ public static class PublicMlbDfsEndpoints
             "PITCHER_HITS_ALLOWED" => "Pitcher Hits Allowed",
             "PITCHER_EARNED_RUNS" => "Pitcher Earned Runs",
             "PITCHER_OUTS" => "Pitcher Outs",
+            "GOALS" => "Goals",
+            "ASSISTS" => "Assists",
+            "GOAL_ASSIST" => "Goal + Assist",
+            "SHOTS" => "Shots",
+            "SHOTS_ON_TARGET" => "Shots On Target",
+            "PASSES_ATTEMPTED" => "Passes Attempted",
+            "TACKLES" => "Tackles",
+            "CROSSES" => "Crosses",
+            "CLEARANCES" => "Clearances",
+            "FOULS" => "Fouls",
+            "FOULS_DRAWN" => "Fouls Drawn",
+            "CARDS" => "Cards",
+            "OFFSIDES" => "Offsides",
+            "GOALIE_SAVES" => "Goalie Saves",
+            "GOALS_ALLOWED" => "Goals Allowed",
+            "ATTEMPTED_DRIBBLES" => "Attempted Dribbles",
+            "SHOTS_ASSISTED" => "Shots Assisted",
+            "OUTFIELD_FANTASY_SCORE" => "Outfield Fantasy Score",
+            "GOALIE_FANTASY_SCORE" => "Goalie Fantasy Score",
             _ => string.IsNullOrWhiteSpace(propType) ? "Prop" : HumanizePropType(propType)
         };
     }
@@ -3857,6 +4375,32 @@ public static class PublicMlbDfsEndpoints
             "PITCHER_HITS_ALLOWED" or "PITCHER_HIT_ALLOWED" => "PITCHER_HITS_ALLOWED",
             "PITCHER_EARNED_RUN" or "PITCHER_EARNED_RUNS" => "PITCHER_EARNED_RUNS",
             "PITCHER_OUT" or "PITCHER_OUTS" => "PITCHER_OUTS",
+            "GOAL" or "GOALS" => "GOALS",
+            "ASSIST" or "ASSISTS" => "ASSISTS",
+            "GOAL_ASSIST" or "GOAL_ASSISTS" or "GOAL_AND_ASSIST" or "GOAL_PLUS_ASSIST" or "GOALS_ASSISTS" or "GOALS_ASSISTS_COMBO" => "GOAL_ASSIST",
+            "SHOT" or "SHOTS" => "SHOTS",
+            "SHOT_COMBO" or "SHOTS_COMBO" => "SHOTS_COMBO",
+            "SHOT_ON_TARGET" or "SHOTS_ON_TARGET" => "SHOTS_ON_TARGET",
+            "SHOT_ON_TARGET_COMBO" or "SHOTS_ON_TARGET_COMBO" => "SHOTS_ON_TARGET_COMBO",
+            "PASS_ATTEMPTED" or "PASSES_ATTEMPTED" => "PASSES_ATTEMPTED",
+            "PASS_ATTEMPTED_COMBO" or "PASSES_ATTEMPTED_COMBO" => "PASSES_ATTEMPTED_COMBO",
+            "TACKLE" or "TACKLES" => "TACKLES",
+            "CROSS" or "CROSSES" => "CROSSES",
+            "CLEARANCE" or "CLEARANCES" => "CLEARANCES",
+            "CLEARANCE_COMBO" or "CLEARANCES_COMBO" => "CLEARANCES_COMBO",
+            "FOUL" or "FOULS" => "FOULS",
+            "FOUL_DRAWN" or "FOULS_DRAWN" => "FOULS_DRAWN",
+            "CARD" or "CARDS" => "CARDS",
+            "OFFSIDE" or "OFFSIDES" => "OFFSIDES",
+            "GOALIE_SAVE" or "GOALIE_SAVES" or "SAVES" => "GOALIE_SAVES",
+            "GOALIE_SAVE_COMBO" or "GOALIE_SAVES_COMBO" => "GOALIE_SAVES_COMBO",
+            "GOAL_ALLOWED" or "GOALS_ALLOWED" => "GOALS_ALLOWED",
+            "GOAL_ALLOWED_COMBO" or "GOALS_ALLOWED_COMBO" => "GOALS_ALLOWED_COMBO",
+            "GOAL_COMBO" or "GOALS_COMBO" => "GOALS_COMBO",
+            "ATTEMPTED_DRIBBLE" or "ATTEMPTED_DRIBBLES" => "ATTEMPTED_DRIBBLES",
+            "SHOT_ASSISTED" or "SHOTS_ASSISTED" => "SHOTS_ASSISTED",
+            "OUTFIELD_FANTASY_SCORE" or "FANTASY_SCORE_OUTFIELD" => "OUTFIELD_FANTASY_SCORE",
+            "GOALIE_FANTASY_SCORE" or "FANTASY_SCORE_GOALIE" => "GOALIE_FANTASY_SCORE",
             _ => null
         };
     }

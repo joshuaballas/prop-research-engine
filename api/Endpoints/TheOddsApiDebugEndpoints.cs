@@ -2973,6 +2973,69 @@ public static partial class TheOddsApiDebugEndpoints
         .WithName("TheOddsApiMlbRefreshCurrentRecommendationsDebug")
         .WithSummary("Debug-only current MLB The Odds API odds refresh, prediction generation, and line-shopping strategy summary.");
 
+        endpoints.MapPost("/api/debug/the-odds/markets/refresh-current", async (
+            TheOddsMarketRefreshRequest request,
+            IOptions<TheOddsApiOptions> theOddsApiOptions,
+            ITheOddsMlbRefreshService mlbRefreshService,
+            HttpContext httpContext,
+            CancellationToken cancellationToken) =>
+        {
+            var sport = NormalizeDebugMarketSport(request.Sport);
+            var competition = string.IsNullOrWhiteSpace(request.Competition)
+                ? ResolveDefaultDebugCompetition(sport)
+                : request.Competition.Trim();
+
+            if (string.Equals(sport, "MLB", StringComparison.OrdinalIgnoreCase))
+            {
+                return await mlbRefreshService.RefreshCurrentAsync(
+                    new TheOddsMlbRefreshRequest(
+                        request.Date,
+                        request.DryRun,
+                        request.ForceLive,
+                        request.BookmakerPreset,
+                        request.IncludeDfs,
+                        request.IncludeCandidates,
+                        request.IncludeLineShopping,
+                        request.IncludeFullDiagnostics,
+                        request.FreshnessMinutes),
+                    httpContext,
+                    cancellationToken);
+            }
+
+            if (!string.Equals(sport, "SOCCER", StringComparison.OrdinalIgnoreCase))
+            {
+                return Results.BadRequest(new
+                {
+                    success = false,
+                    callsExternalApis = false,
+                    readOnly = true,
+                    supportedSports = new[] { "MLB", "SOCCER" },
+                    requestedSport = request.Sport,
+                    effectiveSport = (string?)null,
+                    error = $"Sport '{request.Sport}' is not supported by this manual refresh endpoint."
+                });
+            }
+
+            if (!string.Equals(competition, "World Cup", StringComparison.OrdinalIgnoreCase))
+            {
+                return Results.BadRequest(new
+                {
+                    success = false,
+                    callsExternalApis = false,
+                    readOnly = true,
+                    requestedSport = request.Sport,
+                    effectiveSport = "SOCCER",
+                    requestedCompetition = request.Competition,
+                    supportedCompetitions = new[] { "World Cup" },
+                    error = "Phase-one Soccer refresh supports World Cup only."
+                });
+            }
+
+            return BuildSoccerWorldCupRefreshPlanningResponse(request, theOddsApiOptions.Value);
+        })
+        .WithName("TheOddsApiMarketsRefreshCurrentDebug")
+        .WithSummary("Debug-only manual market refresh entry point for supported sports. Soccer / World Cup is blocked until provider key config is explicit.");
+
         endpoints.MapPost("/api/debug/the-odds/mlb/ingest-event", async (
             TheOddsApiMlbIngestEventRequest request,
             bool? dryRun,
@@ -10564,7 +10627,156 @@ public static partial class TheOddsApiDebugEndpoints
         string? SportsbookBookmakers,
         string DfsBookmakers,
         bool IncludeDfs);
+
+    private static string NormalizeDebugMarketSport(string? sport)
+    {
+        var normalized = sport?.Trim().ToUpperInvariant().Replace("-", "_").Replace(" ", "_");
+        return normalized switch
+        {
+            null or "" => "MLB",
+            "MLB" => "MLB",
+            "SOCCER" or "FOOTBALL" or "FUTBOL" or "WORLD_CUP" or "WORLDCUP" or "FIFA_WORLD_CUP" => "SOCCER",
+            _ => normalized
+        };
+    }
+
+    private static string ResolveDefaultDebugCompetition(string sport)
+    {
+        return string.Equals(sport, "SOCCER", StringComparison.OrdinalIgnoreCase)
+            ? "World Cup"
+            : "MLB";
+    }
+
+    private static IResult BuildSoccerWorldCupRefreshPlanningResponse(
+        TheOddsMarketRefreshRequest request,
+        TheOddsApiOptions options)
+    {
+        var dryRun = request.DryRun ?? true;
+        var forceLive = request.ForceLive == true;
+        var sportKey = NullIfWhiteSpace(options.SoccerWorldCupSportKey);
+        var markets = NullIfWhiteSpace(request.Markets) ?? NullIfWhiteSpace(options.SoccerWorldCupMarkets);
+        var configured = !string.IsNullOrWhiteSpace(sportKey);
+        var providerConfig = new
+        {
+            provider = "The Odds API",
+            sport = "SOCCER",
+            competition = "World Cup",
+            configuredSportKey = sportKey,
+            configuredMarkets = markets,
+            requiredConfig = new[]
+            {
+                "TheOddsApi:SoccerWorldCupSportKey",
+                "TheOddsApi:SoccerWorldCupMarkets"
+            }
+        };
+
+        if (dryRun)
+        {
+            return Results.Ok(new
+            {
+                success = true,
+                dryRun = true,
+                forceLive,
+                callsExternalApis = false,
+                wouldCallExternalApis = configured,
+                wouldWriteRows = configured,
+                sport = "SOCCER",
+                competition = "World Cup",
+                resultGradingSupported = false,
+                providerConfig,
+                soccerMarketsDiscovered = 0,
+                soccerMarketsMapped = 0,
+                soccerMarketsUnsupported = Array.Empty<object>(),
+                diagnostics = new
+                {
+                    message = configured
+                        ? "Soccer / World Cup provider config is present, but dryRun=true prevented external calls and writes."
+                        : "Soccer / World Cup provider config is missing, so this dry run cannot resolve The Odds API request parameters.",
+                    callsExternalApis = false,
+                    missingConfig = configured ? Array.Empty<string>() : providerConfig.requiredConfig
+                }
+            });
+        }
+
+        if (!forceLive)
+        {
+            return Results.Conflict(new
+            {
+                success = false,
+                blocked = true,
+                blockReason = "Live The Odds API Soccer / World Cup refresh requires forceLive=true because it may spend provider credits and write market snapshots.",
+                requiresForceLive = true,
+                dryRun = false,
+                forceLive,
+                callsExternalApis = false,
+                wouldCallExternalApis = configured,
+                wouldWriteRows = configured,
+                sport = "SOCCER",
+                competition = "World Cup",
+                providerConfig,
+                diagnostics = new
+                {
+                    message = "Request was blocked before any The Odds API calls. Re-run with dryRun=true for planning or forceLive=true after provider config is explicit."
+                }
+            });
+        }
+
+        if (!configured)
+        {
+            return Results.BadRequest(new
+            {
+                success = false,
+                blocked = true,
+                blockReason = "MissingSoccerWorldCupProviderConfig",
+                callsExternalApis = false,
+                wouldCallExternalApis = false,
+                wouldWriteRows = false,
+                sport = "SOCCER",
+                competition = "World Cup",
+                providerConfig,
+                diagnostics = new
+                {
+                    message = "The app does not have a configured The Odds API sport key for Soccer / World Cup. Configure TheOddsApi:SoccerWorldCupSportKey before running live.",
+                    missingConfig = providerConfig.requiredConfig,
+                    noGuessedProviderKeyUsed = true
+                }
+            });
+        }
+
+        return Results.Json(new
+        {
+            success = false,
+            blocked = true,
+            blockReason = "SoccerWorldCupLiveIngestionNotImplemented",
+            callsExternalApis = false,
+            wouldCallExternalApis = true,
+            wouldWriteRows = true,
+            sport = "SOCCER",
+            competition = "World Cup",
+            providerConfig,
+            diagnostics = new
+            {
+                message = "Soccer / World Cup provider config is present, but live Soccer ingestion has not been enabled because the provider sport key has not been validated against persisted snapshot mapping.",
+                noExternalApiCallMade = true,
+                noSnapshotsWritten = true
+            }
+        }, statusCode: StatusCodes.Status501NotImplemented);
+    }
 }
+
+public sealed record TheOddsMarketRefreshRequest(
+    string? Sport,
+    string? Competition,
+    DateOnly? Date,
+    bool? DryRun,
+    bool? ForceLive,
+    string? BookmakerPreset,
+    bool? IncludeDfs,
+    bool? IncludeCandidates,
+    bool? IncludeLineShopping,
+    bool? IncludeFullDiagnostics,
+    int? FreshnessMinutes,
+    string? Markets);
 
 public sealed record TheOddsApiMlbIngestEventRequest(
     string EventId,

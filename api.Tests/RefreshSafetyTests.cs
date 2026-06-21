@@ -11,6 +11,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
+using SportsBetting.Api.Integrations.Results.Soccer;
 using SportsBetting.Api.Data;
 using SportsBetting.Api.Integrations.TheOddsApi;
 using SportsBetting.Api.Integrations.Underdog;
@@ -218,6 +219,91 @@ public sealed class RefreshSafetyTests
     }
 
     [Fact]
+    public async Task SportNeutralSoccerRefresh_DryRun_DoesNotCallProvider_AndReportsMissingConfig()
+    {
+        await using var factory = new SafetyTestApplicationFactory();
+        using var client = factory.CreateClient();
+        await factory.SeedRejectedKeyRefreshAsync();
+        var before = await factory.CountArtifactsAsync();
+
+        var response = await client.PostAsJsonAsync("/api/debug/the-odds/markets/refresh-current", new
+        {
+            sport = "SOCCER",
+            competition = "World Cup",
+            dryRun = true,
+            forceLive = false
+        });
+
+        await EnsureSuccessWithBodyAsync(response);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.True(json.GetProperty("dryRun").GetBoolean());
+        Assert.False(json.GetProperty("callsExternalApis").GetBoolean());
+        Assert.False(json.GetProperty("wouldCallExternalApis").GetBoolean());
+        Assert.Equal("SOCCER", json.GetProperty("sport").GetString());
+        Assert.Equal("World Cup", json.GetProperty("competition").GetString());
+        Assert.False(json.GetProperty("resultGradingSupported").GetBoolean());
+        Assert.Contains(json.GetProperty("diagnostics").GetProperty("missingConfig").EnumerateArray(), row => row.GetString() == "TheOddsApi:SoccerWorldCupSportKey");
+        Assert.Equal(0, factory.TheOddsAdapter.CallCount);
+        Assert.Equal(before, await factory.CountArtifactsAsync());
+    }
+
+    [Fact]
+    public async Task SportNeutralSoccerRefresh_WithoutForceLive_DoesNotCallProvider()
+    {
+        await using var factory = new SafetyTestApplicationFactory(new Dictionary<string, string?>
+        {
+            ["TheOddsApi:SoccerWorldCupSportKey"] = "soccer_fifa_world_cup",
+            ["TheOddsApi:SoccerWorldCupMarkets"] = "player_shots"
+        });
+        using var client = factory.CreateClient();
+        await factory.SeedRejectedKeyRefreshAsync();
+        var before = await factory.CountArtifactsAsync();
+
+        var response = await client.PostAsJsonAsync("/api/debug/the-odds/markets/refresh-current", new
+        {
+            sport = "SOCCER",
+            competition = "World Cup",
+            dryRun = false,
+            forceLive = false
+        });
+
+        await AssertStatusWithBodyAsync(response, HttpStatusCode.Conflict);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.True(json.GetProperty("blocked").GetBoolean());
+        Assert.True(json.GetProperty("requiresForceLive").GetBoolean());
+        Assert.False(json.GetProperty("callsExternalApis").GetBoolean());
+        Assert.True(json.GetProperty("wouldCallExternalApis").GetBoolean());
+        Assert.Equal(0, factory.TheOddsAdapter.CallCount);
+        Assert.Equal(before, await factory.CountArtifactsAsync());
+    }
+
+    [Fact]
+    public async Task SportNeutralSoccerRefresh_ForceLiveWithMissingConfig_DoesNotCallProvider()
+    {
+        await using var factory = new SafetyTestApplicationFactory();
+        using var client = factory.CreateClient();
+        await factory.SeedRejectedKeyRefreshAsync();
+        var before = await factory.CountArtifactsAsync();
+
+        var response = await client.PostAsJsonAsync("/api/debug/the-odds/markets/refresh-current", new
+        {
+            sport = "SOCCER",
+            competition = "World Cup",
+            dryRun = false,
+            forceLive = true
+        });
+
+        await AssertStatusWithBodyAsync(response, HttpStatusCode.BadRequest);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal("MissingSoccerWorldCupProviderConfig", json.GetProperty("blockReason").GetString());
+        Assert.False(json.GetProperty("callsExternalApis").GetBoolean());
+        Assert.False(json.GetProperty("wouldWriteRows").GetBoolean());
+        Assert.Contains(json.GetProperty("diagnostics").GetProperty("missingConfig").EnumerateArray(), row => row.GetString() == "TheOddsApi:SoccerWorldCupSportKey");
+        Assert.Equal(0, factory.TheOddsAdapter.CallCount);
+        Assert.Equal(before, await factory.CountArtifactsAsync());
+    }
+
+    [Fact]
     public async Task LiveShapedRefreshCurrent_WithoutForceLive_Returns409_AndDoesNotCallProviderOrWrite()
     {
         await using var factory = new SafetyTestApplicationFactory();
@@ -414,6 +500,356 @@ public sealed class RefreshSafetyTests
     }
 
     [Fact]
+    public async Task SoccerWorldCupMarketReads_ReturnPersistedSnapshots_WithoutCallingProviders()
+    {
+        await using var factory = new SafetyTestApplicationFactory();
+        using var client = factory.CreateClient();
+        await factory.SeedSoccerWorldCupSnapshotsAsync();
+        var before = await factory.CountArtifactsAsync();
+
+        var freshnessResponse = await client.GetAsync("/api/markets/freshness?sport=SOCCER");
+        var topPicksResponse = await client.GetAsync("/api/markets/top-picks?sport=SOCCER&take=10");
+        var lineShoppingResponse = await client.GetAsync("/api/markets/line-shopping?sport=SOCCER&take=10&includeBookmakerPrices=false");
+
+        await EnsureSuccessWithBodyAsync(freshnessResponse);
+        await EnsureSuccessWithBodyAsync(topPicksResponse);
+        await EnsureSuccessWithBodyAsync(lineShoppingResponse);
+        var freshness = await freshnessResponse.Content.ReadFromJsonAsync<JsonElement>();
+        var topPicks = await topPicksResponse.Content.ReadFromJsonAsync<JsonElement>();
+        var lineShopping = await lineShoppingResponse.Content.ReadFromJsonAsync<JsonElement>();
+
+        Assert.Equal("SOCCER", freshness.GetProperty("effectiveSport").GetString());
+        Assert.Equal("World Cup", freshness.GetProperty("competition").GetString());
+        Assert.False(freshness.GetProperty("resultGradingSupported").GetBoolean());
+        Assert.True(topPicks.GetProperty("snapshotBacked").GetBoolean());
+        Assert.Equal("SOCCER", topPicks.GetProperty("topPicks")[0].GetProperty("sport").GetString());
+        Assert.Equal("World Cup", topPicks.GetProperty("topPicks")[0].GetProperty("competition").GetString());
+        Assert.True(lineShopping.GetProperty("snapshotBacked").GetBoolean());
+        Assert.Equal("SOCCER", lineShopping.GetProperty("comparisonGroups")[0].GetProperty("sport").GetString());
+        Assert.Equal(0, factory.TheOddsAdapter.CallCount);
+        Assert.Equal(before, await factory.CountArtifactsAsync());
+    }
+
+    [Fact]
+    public async Task SoccerPropHistory_ReturnsUnavailableState()
+    {
+        await using var factory = new SafetyTestApplicationFactory();
+        using var client = factory.CreateClient();
+        await factory.SeedSoccerWorldCupSnapshotsAsync();
+
+        var response = await client.GetAsync("/api/markets/prop-history?sport=SOCCER&playerName=Test%20Forward&propType=Shots&side=Over&line=1.5");
+
+        await EnsureSuccessWithBodyAsync(response);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal("SOCCER", json.GetProperty("sport").GetString());
+        Assert.Equal("Soccer history is not available yet.", json.GetProperty("emptyReason").GetString());
+        Assert.Empty(json.GetProperty("games").EnumerateArray());
+        Assert.Equal(0, factory.TheOddsAdapter.CallCount);
+    }
+
+    [Fact]
+    public async Task ApiSportsConfigDiagnostics_ReportMissingConfig_WithoutCallingExternalApis()
+    {
+        await using var factory = new SafetyTestApplicationFactory();
+        using var client = factory.CreateClient();
+
+        var response = await client.GetAsync("/api/debug/soccer/api-sports/config");
+
+        await EnsureSuccessWithBodyAsync(response);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.False(json.GetProperty("callsExternalApis").GetBoolean());
+        Assert.True(json.GetProperty("readOnly").GetBoolean());
+        Assert.Equal("API-Sports", json.GetProperty("provider").GetString());
+        Assert.False(json.GetProperty("configured").GetBoolean());
+        Assert.Contains(json.GetProperty("missingConfig").EnumerateArray(), row => row.GetString() == "ApiSports:ApiKey");
+        Assert.Contains(json.GetProperty("missingConfig").EnumerateArray(), row => row.GetString() == "ApiSports:Football:WorldCupLeagueId");
+    }
+
+    [Theory]
+    [InlineData("/api/debug/soccer/api-sports/fixtures?date=2026-06-21&forceLive=false")]
+    [InlineData("/api/debug/soccer/api-sports/fixture-player-stats?fixtureId=123&forceLive=false")]
+    [InlineData("/api/debug/soccer/api-sports/fixture-prop-coverage?fixtureId=123&forceLive=false")]
+    public async Task ApiSportsForceLiveEndpoints_BlockWithoutForceLive(string path)
+    {
+        await using var factory = new SafetyTestApplicationFactory();
+        using var client = factory.CreateClient();
+
+        var response = await client.GetAsync(path);
+
+        await AssertStatusWithBodyAsync(response, HttpStatusCode.Conflict);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.False(json.GetProperty("callsExternalApis").GetBoolean());
+        Assert.True(json.GetProperty("readOnly").GetBoolean());
+        Assert.True(json.GetProperty("blocked").GetBoolean());
+        Assert.True(json.GetProperty("requiresForceLive").GetBoolean());
+    }
+
+    [Fact]
+    public async Task ApiSportsForceLiveFixtures_ReturnsMissingConfig_WhenKeyIsAbsent()
+    {
+        await using var factory = new SafetyTestApplicationFactory();
+        using var client = factory.CreateClient();
+
+        var response = await client.GetAsync("/api/debug/soccer/api-sports/fixtures?date=2026-06-21&forceLive=true");
+
+        await AssertStatusWithBodyAsync(response, HttpStatusCode.BadRequest);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.False(json.GetProperty("callsExternalApis").GetBoolean());
+        Assert.True(json.GetProperty("blocked").GetBoolean());
+        Assert.Equal("MissingApiSportsConfig", json.GetProperty("blockReason").GetString());
+        Assert.Contains(json.GetProperty("missingConfig").EnumerateArray(), row => row.GetString() == "ApiSports:ApiKey");
+        Assert.Contains(json.GetProperty("missingConfig").EnumerateArray(), row => row.GetString() == "ApiSports:Football:WorldCupLeagueId");
+    }
+
+    [Fact]
+    public async Task ApiSportsFixtures_FixtureId_BuildsIdOnlyRequest()
+    {
+        await using var factory = new SafetyTestApplicationFactory(ApiSportsLiveConfig());
+        using var client = factory.CreateClient();
+
+        var response = await client.GetAsync("/api/debug/soccer/api-sports/fixtures?fixtureId=12345&forceLive=true");
+
+        await EnsureSuccessWithBodyAsync(response);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.True(json.GetProperty("callsExternalApis").GetBoolean());
+        Assert.Equal(1, factory.ApiSportsFootballClient.FixturesCallCount);
+        Assert.Equal("12345", json.GetProperty("request").GetProperty("used").GetProperty("fixtureId").GetString());
+        Assert.Equal(JsonValueKind.Null, json.GetProperty("request").GetProperty("used").GetProperty("date").ValueKind);
+        Assert.Equal(JsonValueKind.Null, json.GetProperty("request").GetProperty("used").GetProperty("league").ValueKind);
+        Assert.Equal(JsonValueKind.Null, json.GetProperty("request").GetProperty("used").GetProperty("season").ValueKind);
+        Assert.EndsWith("/fixtures?id=12345", json.GetProperty("sanitizedUrl").GetString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task ApiSportsFixtures_DateOnly_CanOmitConfiguredLeagueAndSeason()
+    {
+        await using var factory = new SafetyTestApplicationFactory(ApiSportsLiveConfig(includeWorldCupDefaults: false));
+        using var client = factory.CreateClient();
+
+        var response = await client.GetAsync("/api/debug/soccer/api-sports/fixtures?date=2026-06-20&useConfiguredLeague=false&useConfiguredSeason=false&forceLive=true");
+
+        await EnsureSuccessWithBodyAsync(response);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal("2026-06-20", json.GetProperty("request").GetProperty("used").GetProperty("date").GetString());
+        Assert.Equal(JsonValueKind.Null, json.GetProperty("request").GetProperty("used").GetProperty("league").ValueKind);
+        Assert.Equal(JsonValueKind.Null, json.GetProperty("request").GetProperty("used").GetProperty("season").ValueKind);
+        Assert.EndsWith("/fixtures?date=2026-06-20", json.GetProperty("sanitizedUrl").GetString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task ApiSportsFixtures_ExplicitLeagueAndSeason_OverrideConfig()
+    {
+        await using var factory = new SafetyTestApplicationFactory(ApiSportsLiveConfig());
+        using var client = factory.CreateClient();
+
+        var response = await client.GetAsync("/api/debug/soccer/api-sports/fixtures?date=2026-06-20&league=39&season=2024&forceLive=true");
+
+        await EnsureSuccessWithBodyAsync(response);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal(39, json.GetProperty("request").GetProperty("used").GetProperty("league").GetInt32());
+        Assert.Equal(2024, json.GetProperty("request").GetProperty("used").GetProperty("season").GetInt32());
+        Assert.EndsWith("/fixtures?date=2026-06-20&league=39&season=2024", json.GetProperty("sanitizedUrl").GetString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task ApiSportsFixtures_ConfiguredDefaults_PreserveCurrentBehavior()
+    {
+        await using var factory = new SafetyTestApplicationFactory(ApiSportsLiveConfig());
+        using var client = factory.CreateClient();
+
+        var response = await client.GetAsync("/api/debug/soccer/api-sports/fixtures?date=2026-06-20&forceLive=true");
+
+        await EnsureSuccessWithBodyAsync(response);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal(1, json.GetProperty("request").GetProperty("used").GetProperty("league").GetInt32());
+        Assert.Equal(2026, json.GetProperty("request").GetProperty("used").GetProperty("season").GetInt32());
+        Assert.EndsWith("/fixtures?date=2026-06-20&league=1&season=2026", json.GetProperty("sanitizedUrl").GetString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task ApiSportsFixtures_OldApiFootballRoute_IsNotPromoted()
+    {
+        await using var factory = new SafetyTestApplicationFactory();
+        using var client = factory.CreateClient();
+
+        var response = await client.GetAsync("/api/debug/soccer/api-football/fixtures?date=2026-06-20&forceLive=false");
+
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task ApiSportsSoccerImportFixture_BlocksWithoutForceLive()
+    {
+        await using var factory = new SafetyTestApplicationFactory(ApiSportsLiveConfig());
+        using var client = factory.CreateClient();
+
+        var response = await client.PostAsJsonAsync("/api/debug/soccer/results/api-sports/import-fixture", new
+        {
+            fixtureId = "1489393",
+            dryRun = true,
+            forceLive = false
+        });
+
+        await AssertStatusWithBodyAsync(response, HttpStatusCode.Conflict);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.False(json.GetProperty("callsExternalApis").GetBoolean());
+        Assert.Equal(0, factory.ApiSportsFootballClient.FixturesCallCount);
+        Assert.Equal(0, factory.ApiSportsFootballClient.FixturePlayerStatsCallCount);
+    }
+
+    [Fact]
+    public async Task ApiSportsSoccerImportFixture_DryRun_WritesNothing()
+    {
+        await using var factory = new SafetyTestApplicationFactory(ApiSportsLiveConfig());
+        using var client = factory.CreateClient();
+        await factory.EnsureDatabaseAsync();
+
+        var response = await client.PostAsJsonAsync("/api/debug/soccer/results/api-sports/import-fixture", new
+        {
+            fixtureId = "1489393",
+            dryRun = true,
+            forceLive = true
+        });
+
+        await EnsureSuccessWithBodyAsync(response);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.True(json.GetProperty("callsExternalApis").GetBoolean());
+        Assert.True(json.GetProperty("readOnly").GetBoolean());
+        Assert.Equal(0, json.GetProperty("resultRowsWritten").GetInt32());
+        Assert.True(json.GetProperty("resultRowsPreviewed").GetInt32() > 0);
+        Assert.Equal(0, await CountApiSportsSoccerResultsAsync(factory));
+    }
+
+    [Fact]
+    public async Task ApiSportsSoccerImportFixture_WritesIdempotently()
+    {
+        await using var factory = new SafetyTestApplicationFactory(ApiSportsLiveConfig());
+        using var client = factory.CreateClient();
+        await factory.EnsureDatabaseAsync();
+
+        var firstResponse = await client.PostAsJsonAsync("/api/debug/soccer/results/api-sports/import-fixture", new
+        {
+            fixtureId = "1489393",
+            dryRun = false,
+            forceLive = true
+        });
+        await EnsureSuccessWithBodyAsync(firstResponse);
+        var first = await firstResponse.Content.ReadFromJsonAsync<JsonElement>();
+        var inserted = first.GetProperty("resultRowsInserted").GetInt32();
+
+        var secondResponse = await client.PostAsJsonAsync("/api/debug/soccer/results/api-sports/import-fixture", new
+        {
+            fixtureId = "1489393",
+            dryRun = false,
+            forceLive = true
+        });
+
+        await EnsureSuccessWithBodyAsync(secondResponse);
+        var second = await secondResponse.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.True(inserted > 0);
+        Assert.Equal(inserted, await CountApiSportsSoccerResultsAsync(factory));
+        Assert.Equal(0, second.GetProperty("resultRowsInserted").GetInt32());
+        Assert.Equal(0, second.GetProperty("resultRowsUpdated").GetInt32());
+    }
+
+    [Fact]
+    public async Task ApiSportsSoccerImportFixture_AllowsDuplicateDisplayNamesWithDifferentStatKeys()
+    {
+        await using var factory = new SafetyTestApplicationFactory(ApiSportsLiveConfig());
+        using var client = factory.CreateClient();
+        await factory.EnsureDatabaseAsync();
+        await factory.SeedSoccerPropTypesWithDuplicateNamesAndDifferentStatKeysAsync();
+
+        var response = await client.PostAsJsonAsync("/api/debug/soccer/results/api-sports/import-fixture", new
+        {
+            fixtureId = "1489393",
+            dryRun = false,
+            forceLive = true
+        });
+
+        await EnsureSuccessWithBodyAsync(response);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.True(json.GetProperty("resultRowsInserted").GetInt32() > 0);
+        Assert.True(await factory.HasSoccerPropTypeAsync("GOALIE_SAVES_COMBO"));
+        Assert.True(await factory.HasSoccerPropTypeAsync("GOALIE_SAVES"));
+    }
+
+    [Fact]
+    public async Task ApiSportsSoccerImportFixture_ReturnsStructuredPropTypeConflict_ForDuplicateStatKey()
+    {
+        await using var factory = new SafetyTestApplicationFactory(ApiSportsLiveConfig());
+        using var client = factory.CreateClient();
+        await factory.EnsureDatabaseAsync();
+        await factory.SeedConflictingSoccerPropTypesWithSameStatKeyAsync();
+
+        var response = await client.PostAsJsonAsync("/api/debug/soccer/results/api-sports/import-fixture", new
+        {
+            fixtureId = "1489393",
+            dryRun = false,
+            forceLive = true
+        });
+
+        await AssertStatusWithBodyAsync(response, HttpStatusCode.Conflict);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal("PropTypeResolutionFailed", json.GetProperty("blockReason").GetString());
+        Assert.Equal("PropTypeResolution", json.GetProperty("stage").GetString());
+        var conflict = Assert.Single(json.GetProperty("conflicts").EnumerateArray());
+        Assert.Equal("GOALIE_SAVES", conflict.GetProperty("statKey").GetString());
+        Assert.Equal("ExistingPropTypes", conflict.GetProperty("stage").GetString());
+        Assert.Equal(2, conflict.GetProperty("conflictingMetadata").EnumerateArray().Count());
+    }
+
+    [Fact]
+    public async Task ApiSportsSoccerImportFixture_FlagsConservativeAndSkipsUnsupportedRows()
+    {
+        await using var factory = new SafetyTestApplicationFactory(ApiSportsLiveConfig());
+        using var client = factory.CreateClient();
+
+        var response = await client.PostAsJsonAsync("/api/debug/soccer/results/api-sports/import-fixture", new
+        {
+            fixtureId = "1489393",
+            dryRun = true,
+            forceLive = true
+        });
+
+        await EnsureSuccessWithBodyAsync(response);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.True(json.GetProperty("unsupportedSkipped").GetInt32() > 0);
+        Assert.True(json.GetProperty("ruleConfidenceCounts").TryGetProperty("NeedsConfirmation", out var needsConfirmation));
+        Assert.True(needsConfirmation.GetInt32() > 0);
+
+        var playerGroups = json.GetProperty("previewRowsByPlayer").EnumerateArray().ToArray();
+        var forward = Assert.Single(playerGroups, group => group.GetProperty("playerName").GetString() == "Test Forward");
+        Assert.DoesNotContain(forward.GetProperty("rows").EnumerateArray(), row => row.GetProperty("propType").GetString() == "Goalie Saves");
+        Assert.DoesNotContain(playerGroups, group => group.GetProperty("playerName").GetString() == "Unused Substitute");
+        var keeper = Assert.Single(playerGroups, group => group.GetProperty("playerName").GetString() == "Test Keeper");
+        Assert.Contains(keeper.GetProperty("rows").EnumerateArray(), row => row.GetProperty("propType").GetString() == "Goalie Saves");
+    }
+
+    [Fact]
+    public async Task ApiSportsSoccerImportFixtureStatus_ReturnsLocalCounts()
+    {
+        await using var factory = new SafetyTestApplicationFactory(ApiSportsLiveConfig());
+        using var client = factory.CreateClient();
+        await factory.EnsureDatabaseAsync();
+        var importResponse = await client.PostAsJsonAsync("/api/debug/soccer/results/api-sports/import-fixture", new
+        {
+            fixtureId = "1489393",
+            dryRun = false,
+            forceLive = true
+        });
+        await EnsureSuccessWithBodyAsync(importResponse);
+
+        var statusResponse = await client.GetAsync("/api/debug/soccer/results/api-sports/import-fixture/status?fixtureId=1489393");
+
+        await EnsureSuccessWithBodyAsync(statusResponse);
+        var status = await statusResponse.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.False(status.GetProperty("callsExternalApis").GetBoolean());
+        Assert.True(status.GetProperty("rowCount").GetInt32() > 0);
+        Assert.Contains(status.GetProperty("countsByPropType").EnumerateArray(), row => row.GetProperty("propType").GetString() == "Goals");
+    }
+
+    [Fact]
     public async Task RefreshPlanHistory_ReadOnly_DoesNotCallProviders()
     {
         await using var factory = new SafetyTestApplicationFactory();
@@ -461,6 +897,31 @@ public sealed class RefreshSafetyTests
         Assert.Equal(JsonValueKind.String, row.GetProperty("lastVerifiedAtUtc").ValueKind);
         Assert.NotEmpty(row.GetProperty("notes").EnumerateArray());
     }
+
+    private static Dictionary<string, string?> ApiSportsLiveConfig(bool includeWorldCupDefaults = true)
+    {
+        var config = new Dictionary<string, string?>
+        {
+            ["ApiSports:Enabled"] = "true",
+            ["ApiSports:ApiKey"] = "TEST_API_SPORTS_KEY",
+            ["ApiSports:Football:BaseUrl"] = "https://v3.football.api-sports.io"
+        };
+
+        if (includeWorldCupDefaults)
+        {
+            config["ApiSports:Football:WorldCupLeagueId"] = "1";
+            config["ApiSports:Football:Season"] = "2026";
+        }
+
+        return config;
+    }
+
+    private static async Task<int> CountApiSportsSoccerResultsAsync(SafetyTestApplicationFactory factory)
+    {
+        using var scope = factory.Services.CreateScope();
+        var dbContext = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+        return await dbContext.PropResults.CountAsync(result => result.ExternalSource == "api-sports-football");
+    }
 }
 
 public sealed class SafetyTestApplicationFactory : WebApplicationFactory<Program>
@@ -470,6 +931,7 @@ public sealed class SafetyTestApplicationFactory : WebApplicationFactory<Program
 
     public CountingTheOddsAdapter TheOddsAdapter { get; } = new();
     public CountingUnderdogAdapter UnderdogAdapter { get; } = new();
+    public StubApiSportsFootballClient ApiSportsFootballClient { get; } = new();
 
     public SafetyTestApplicationFactory(IReadOnlyDictionary<string, string?>? configOverrides = null)
     {
@@ -494,7 +956,12 @@ public sealed class SafetyTestApplicationFactory : WebApplicationFactory<Program
                 ["TheOddsScheduledRefresh:Enabled"] = "false",
                 ["TheOddsScheduledRefresh:AllowScheduledLiveRefresh"] = "false",
                 ["UnderdogIngestion:Enabled"] = "false",
-                ["MlbResultImportWorker:Enabled"] = "false"
+                ["MlbResultImportWorker:Enabled"] = "false",
+                ["ApiSports:Enabled"] = "false",
+                ["ApiSports:ApiKey"] = "API_SPORTS_KEY",
+                ["ApiSports:Football:BaseUrl"] = "https://v3.football.api-sports.io",
+                ["ApiSports:Football:WorldCupLeagueId"] = "",
+                ["ApiSports:Football:Season"] = ""
             };
 
             foreach (var (key, value) in configOverrides)
@@ -512,9 +979,11 @@ public sealed class SafetyTestApplicationFactory : WebApplicationFactory<Program
             RemoveProviderSpecificServices(services, "Npgsql");
             services.RemoveAll<ITheOddsApiMlbPlayerPropsAdapter>();
             services.RemoveAll<IUnderdogAdapter>();
+            services.RemoveAll<IApiSportsFootballClient>();
             services.AddDbContext<ApplicationDbContext>(options => options.UseSqlite(databaseConnection));
             services.AddSingleton<ITheOddsApiMlbPlayerPropsAdapter>(TheOddsAdapter);
             services.AddSingleton<IUnderdogAdapter>(UnderdogAdapter);
+            services.AddSingleton<IApiSportsFootballClient>(ApiSportsFootballClient);
         });
     }
 
@@ -648,6 +1117,88 @@ public sealed class SafetyTestApplicationFactory : WebApplicationFactory<Program
         await dbContext.SaveChangesAsync();
     }
 
+    public async Task EnsureDatabaseAsync()
+    {
+        using var scope = Services.CreateScope();
+        var dbContext = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+        await dbContext.Database.EnsureDeletedAsync();
+        await dbContext.Database.EnsureCreatedAsync();
+    }
+
+    public async Task SeedSoccerPropTypesWithDuplicateNamesAndDifferentStatKeysAsync()
+    {
+        using var scope = Services.CreateScope();
+        var dbContext = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+        var sport = await GetOrCreateSoccerSportAsync(dbContext);
+        dbContext.PropTypes.AddRange(
+            new PropType
+            {
+                Id = Guid.NewGuid(),
+                SportId = sport.Id,
+                Name = "Goalie Saves",
+                StatKey = "GOALIE_SAVES_COMBO",
+                ValueType = "numeric"
+            },
+            new PropType
+            {
+                Id = Guid.NewGuid(),
+                SportId = sport.Id,
+                Name = "Goalie Saves",
+                StatKey = "GOALIE_SAVES",
+                ValueType = "numeric"
+            });
+        await dbContext.SaveChangesAsync();
+    }
+
+    public async Task SeedConflictingSoccerPropTypesWithSameStatKeyAsync()
+    {
+        using var scope = Services.CreateScope();
+        var dbContext = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+        var sport = await GetOrCreateSoccerSportAsync(dbContext);
+        dbContext.PropTypes.AddRange(
+            new PropType
+            {
+                Id = Guid.NewGuid(),
+                SportId = sport.Id,
+                Name = "Goalie Saves",
+                StatKey = "GOALIE_SAVES",
+                ValueType = "numeric"
+            },
+            new PropType
+            {
+                Id = Guid.NewGuid(),
+                SportId = sport.Id,
+                Name = "Goalkeeper Saves",
+                StatKey = "goalie_saves",
+                ValueType = "numeric"
+            });
+        await dbContext.SaveChangesAsync();
+    }
+
+    public async Task<bool> HasSoccerPropTypeAsync(string statKey)
+    {
+        using var scope = Services.CreateScope();
+        var dbContext = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+        return await dbContext.PropTypes.AnyAsync(propType =>
+            propType.Sport != null
+            && propType.Sport.Code == "SOCCER"
+            && propType.StatKey == statKey);
+    }
+
+    private static async Task<Sport> GetOrCreateSoccerSportAsync(ApplicationDbContext dbContext)
+    {
+        var sport = await dbContext.Sports.SingleOrDefaultAsync(row => row.Code == "SOCCER");
+        if (sport is not null)
+        {
+            return sport;
+        }
+
+        sport = new Sport { Id = Guid.NewGuid(), Code = "SOCCER", Name = "Soccer" };
+        dbContext.Sports.Add(sport);
+        await dbContext.SaveChangesAsync();
+        return sport;
+    }
+
     public async Task SeedCreditTelemetryRefreshAsync(int requestsUsed, int requestsRemaining, int observedMinutesAgo)
     {
         using var scope = Services.CreateScope();
@@ -695,6 +1246,132 @@ public sealed class SafetyTestApplicationFactory : WebApplicationFactory<Program
         };
 
         dbContext.TheOddsRefreshRuns.Add(refreshRun);
+        await dbContext.SaveChangesAsync();
+    }
+
+    public async Task SeedSoccerWorldCupSnapshotsAsync()
+    {
+        using var scope = Services.CreateScope();
+        var dbContext = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+        await dbContext.Database.EnsureDeletedAsync();
+        await dbContext.Database.EnsureCreatedAsync();
+
+        var refreshRun = new TheOddsRefreshRun
+        {
+            Id = Guid.NewGuid(),
+            Provider = "The Odds API",
+            Sport = "SOCCER",
+            SlateDate = DateOnly.FromDateTime(DateTime.UtcNow),
+            StartedAtUtc = DateTimeOffset.UtcNow.AddMinutes(-8),
+            CompletedAtUtc = DateTimeOffset.UtcNow.AddMinutes(-7),
+            Succeeded = true,
+            Failed = false,
+            Blocked = false,
+            DryRun = false,
+            ForceLive = true,
+            BookmakerPreset = "dfsOnly",
+            ProviderCategoriesIncluded = "DFS",
+            SportsbookBookmakersRequested = string.Empty,
+            DfsBookmakersRequested = "prizepicks",
+            MarketsRequested = "soccer_world_cup_shots",
+            EstimatedApiCalls = 1,
+            ActualApiCalls = 1,
+            PredictionCount = 1,
+            LineShoppingGroupCount = 1,
+            DiagnosticsJson = JsonSerializer.SerializeToDocument(new
+            {
+                sport = "SOCCER",
+                competition = "World Cup",
+                soccerResultGradingSupported = false
+            })
+        };
+
+        var details = JsonDocument.Parse("""
+        {
+          "player": "Test Forward",
+          "propType": "Shots",
+          "side": "Over",
+          "line": 1.5,
+          "provider": "PrizePicks",
+          "providerCategory": "DFS",
+          "entryProvider": "PrizePicks",
+          "entryActionableForUser": true,
+          "estimatedEv": 0.12,
+          "bestEstimatedEv": 0.12,
+          "eventName": "Country A @ Country B"
+        }
+        """);
+
+        dbContext.TheOddsRefreshRuns.Add(refreshRun);
+        dbContext.MarketTopPickSnapshots.Add(new MarketTopPickSnapshot
+        {
+            Id = Guid.NewGuid(),
+            TheOddsRefreshRunId = refreshRun.Id,
+            Sport = "SOCCER",
+            SlateDate = refreshRun.SlateDate,
+            GeneratedAtUtc = DateTimeOffset.UtcNow,
+            BookmakerPreset = "dfsOnly",
+            ProviderCategory = "DFS",
+            Provider = "The Odds API",
+            Bookmaker = "PrizePicks",
+            Player = "Test Forward",
+            EventId = "world-cup-event-1",
+            EventName = "Country A @ Country B",
+            EventStartTime = DateTimeOffset.UtcNow.AddHours(3),
+            LifecycleStatus = "Active",
+            IsStale = false,
+            IsExpired = false,
+            PropType = "Shots",
+            Line = 1.5m,
+            BestSide = "Over",
+            BestBookmaker = "PrizePicks",
+            BestProbability = 0.62m,
+            BestEstimatedEv = 0.12m,
+            BestProbabilityEdge = 0.08m,
+            StrategyClassification = "Candidate",
+            StrategyTier = "ConservativeCandidate",
+            IsCandidate = true,
+            EntryProvider = "PrizePicks",
+            EntryCompatibilityGroup = "PrizePicks",
+            EntryProviderCategory = "DFS",
+            EntryActionableForUser = true,
+            DetailsJson = details
+        });
+        dbContext.MarketLineShoppingSnapshots.Add(new MarketLineShoppingSnapshot
+        {
+            Id = Guid.NewGuid(),
+            TheOddsRefreshRunId = refreshRun.Id,
+            Sport = "SOCCER",
+            SlateDate = refreshRun.SlateDate,
+            GeneratedAtUtc = DateTimeOffset.UtcNow,
+            BookmakerPreset = "dfsOnly",
+            ProviderCategory = "DFS",
+            Provider = "The Odds API",
+            Bookmaker = "PrizePicks",
+            Player = "Test Forward",
+            EventId = "world-cup-event-1",
+            EventName = "Country A @ Country B",
+            EventStartTime = DateTimeOffset.UtcNow.AddHours(3),
+            LifecycleStatus = "Active",
+            IsStale = false,
+            IsExpired = false,
+            PropType = "Shots",
+            Line = 1.5m,
+            BestSide = "Over",
+            BestBookmaker = "PrizePicks",
+            BestProbability = 0.62m,
+            BestEstimatedEv = 0.12m,
+            BestProbabilityEdge = 0.08m,
+            StrategyClassification = "Candidate",
+            StrategyTier = "ConservativeCandidate",
+            IsCandidate = true,
+            EntryProvider = "PrizePicks",
+            EntryCompatibilityGroup = "PrizePicks",
+            EntryProviderCategory = "DFS",
+            EntryActionableForUser = true,
+            DetailsJson = details
+        });
+
         await dbContext.SaveChangesAsync();
     }
 
@@ -794,8 +1471,148 @@ public sealed class CountingUnderdogAdapter : IUnderdogAdapter
     }
 }
 
+public sealed class StubApiSportsFootballClient : IApiSportsFootballClient
+{
+    public int FixturesCallCount { get; private set; }
+    public int FixturePlayerStatsCallCount { get; private set; }
+
+    public Task<ApiSportsFootballDiagnosticResponse> GetFixturesAsync(
+        ApiSportsFootballFixturesRequest request,
+        CancellationToken cancellationToken)
+    {
+        FixturesCallCount++;
+        var sanitizedUrl = BuildFixturesUrl(request);
+        var payload = JsonDocument.Parse(
+            """
+            {
+              "get": "fixtures",
+              "parameters": {},
+              "errors": [],
+              "results": 1,
+              "paging": { "current": 1, "total": 1 },
+              "response": [
+                {
+                  "fixture": { "id": 12345, "date": "2026-06-20T19:00:00+00:00", "status": { "short": "NS", "long": "Not Started" } },
+                  "league": { "id": 1, "name": "World Cup", "season": 2026, "round": "Group Stage" },
+                  "teams": {
+                    "home": { "id": 10, "name": "Home FC" },
+                    "away": { "id": 20, "name": "Away FC" }
+                  }
+                }
+              ]
+            }
+            """);
+
+        return Task.FromResult(new ApiSportsFootballDiagnosticResponse(payload, 1, 1, 1, sanitizedUrl));
+    }
+
+    public Task<ApiSportsFootballDiagnosticResponse> GetFixturePlayerStatsAsync(
+        string fixtureId,
+        CancellationToken cancellationToken)
+    {
+        FixturePlayerStatsCallCount++;
+        var payload = JsonDocument.Parse(
+            """
+            {
+              "get": "fixtures/players",
+              "errors": [],
+              "results": 2,
+              "paging": { "current": 1, "total": 1 },
+              "response": [
+                {
+                  "team": { "id": 10, "name": "Home FC" },
+                  "players": [
+                    {
+                      "player": { "id": 1001, "name": "Test Forward" },
+                      "statistics": [
+                        {
+                          "games": { "position": "F", "minutes": 90, "substitute": false },
+                          "goals": { "total": 1, "assists": 1, "saves": 2, "conceded": 0 },
+                          "shots": { "total": 4, "on": 2 },
+                          "passes": { "total": 35, "key": 3 },
+                          "tackles": { "total": 1 },
+                          "fouls": { "committed": 2, "drawn": 1 },
+                          "offsides": 1,
+                          "dribbles": { "attempts": 5 },
+                          "cards": { "yellow": 1, "red": 0 }
+                        }
+                      ]
+                    },
+                    {
+                      "player": { "id": 1002, "name": "Unused Substitute" },
+                      "statistics": [
+                        {
+                          "games": { "position": "M", "minutes": null, "substitute": true },
+                          "goals": { "total": null }
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "team": { "id": 20, "name": "Away FC" },
+                  "players": [
+                    {
+                      "player": { "id": 2001, "name": "Test Keeper" },
+                      "statistics": [
+                        {
+                          "games": { "position": "G", "minutes": 90, "substitute": false },
+                          "goals": { "total": 0, "assists": 0, "saves": 6, "conceded": 1 },
+                          "shots": { "total": 0, "on": 0 },
+                          "passes": { "total": 22, "key": 0 },
+                          "tackles": { "total": 0 },
+                          "fouls": { "committed": 0, "drawn": 0 },
+                          "offsides": 0,
+                          "dribbles": { "attempts": 0 },
+                          "cards": { "yellow": 0, "red": 0 }
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+            """);
+        return Task.FromResult(new ApiSportsFootballDiagnosticResponse(
+            payload,
+            2,
+            1,
+            1,
+            $"https://v3.football.api-sports.io/fixtures/players?fixture={Uri.EscapeDataString(fixtureId)}"));
+    }
+
+    private static string BuildFixturesUrl(ApiSportsFootballFixturesRequest request)
+    {
+        var query = new List<string>();
+        if (!string.IsNullOrWhiteSpace(request.FixtureId))
+        {
+            query.Add($"id={Uri.EscapeDataString(request.FixtureId)}");
+        }
+        else
+        {
+            if (request.Date.HasValue)
+            {
+                query.Add($"date={request.Date.Value:yyyy-MM-dd}");
+            }
+
+            if (request.League.HasValue)
+            {
+                query.Add($"league={request.League.Value}");
+            }
+
+            if (request.Season.HasValue)
+            {
+                query.Add($"season={request.Season.Value}");
+            }
+        }
+
+        return $"https://v3.football.api-sports.io/fixtures?{string.Join("&", query)}";
+    }
+}
+
 public sealed record ArtifactCounts(
     int RefreshRuns,
     int TopPickSnapshots,
     int LineShoppingSnapshots,
     int PlannerDecisions);
+

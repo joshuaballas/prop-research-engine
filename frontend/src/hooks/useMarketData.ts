@@ -17,6 +17,8 @@ import {
 import type { MarketOpportunity } from '../types/markets';
 import { useMarketDataRefreshVersion } from './useMarketDataRefresh';
 
+const MARKET_READ_SPORTS = ['MLB', 'SOCCER'] as const;
+
 export function useMarketFreshnessData(deps: readonly unknown[] = []) {
   const refreshVersion = useMarketDataRefreshVersion();
   return useApiQuery((signal) => (isDemoDataMode ? Promise.resolve(demoMarketFreshness) : getMarketFreshness(signal)), [...deps, refreshVersion]);
@@ -40,8 +42,8 @@ export function useTopPicksData(take = 30, sourcePrefix = 'top-pick') {
         return mapDemoMarketsToOpportunities(demoTopPicks.slice(0, take), sourcePrefix);
       }
 
-      const response = await getTopPicks(signal, take);
-      return mapMarketGroupsToOpportunities(response.topPicks, sourcePrefix);
+      const responses = await Promise.all(MARKET_READ_SPORTS.map((sport) => getTopPicks(signal, take, sport)));
+      return responses.flatMap((response, sportIndex) => mapMarketGroupsToOpportunities(response.topPicks, `${sourcePrefix}-${MARKET_READ_SPORTS[sportIndex].toLowerCase()}`));
     },
     [take, sourcePrefix, refreshVersion]
   );
@@ -58,8 +60,8 @@ export function useLineShoppingData(take = 50, topOnly = false, sourcePrefix = '
         return mapDemoMarketsToOpportunities(demoLineShopping.slice(0, take), sourcePrefix);
       }
 
-      const response = await getLineShopping(signal, take, topOnly);
-      return mapMarketGroupsToOpportunities(response.comparisonGroups, sourcePrefix);
+      const responses = await Promise.all(MARKET_READ_SPORTS.map((sport) => getLineShopping(signal, take, topOnly, sport)));
+      return responses.flatMap((response, sportIndex) => mapMarketGroupsToOpportunities(response.comparisonGroups, `${sourcePrefix}-${MARKET_READ_SPORTS[sportIndex].toLowerCase()}`));
     },
     [take, topOnly, sourcePrefix, refreshVersion]
   );
@@ -76,8 +78,8 @@ export function useMarketScannerData(take = 75, sourcePrefix = 'market') {
         return mapDemoMarketsToOpportunities(demoMarketScanner.slice(0, take), sourcePrefix);
       }
 
-      const response = await getLineShopping(signal, take, false);
-      return mapMarketGroupsToOpportunities(response.comparisonGroups, sourcePrefix);
+      const responses = await Promise.all(MARKET_READ_SPORTS.map((sport) => getLineShopping(signal, take, false, sport)));
+      return responses.flatMap((response, sportIndex) => mapMarketGroupsToOpportunities(response.comparisonGroups, `${sourcePrefix}-${MARKET_READ_SPORTS[sportIndex].toLowerCase()}`));
     },
     [take, sourcePrefix, refreshVersion]
   );
@@ -94,8 +96,10 @@ export function useEntryCandidateData(take = 40) {
         return mapDemoMarketsToOpportunities(demoEntryCandidates.slice(0, take), 'entry-candidate');
       }
 
-      const response = await getTopPicks(signal, take);
-      return mapMarketGroupsToOpportunities(response.topPicks, 'entry-candidate').filter((market) => market.providerCategory === 'DFS' && market.canAddToEntry);
+      const responses = await Promise.all(MARKET_READ_SPORTS.map((sport) => getTopPicks(signal, take, sport)));
+      return responses
+        .flatMap((response, sportIndex) => mapMarketGroupsToOpportunities(response.topPicks, `entry-candidate-${MARKET_READ_SPORTS[sportIndex].toLowerCase()}`))
+        .filter((market) => market.providerCategory === 'DFS' && market.canAddToEntry);
     },
     [take, refreshVersion]
   );

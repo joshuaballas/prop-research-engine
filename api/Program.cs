@@ -5,6 +5,7 @@ using SportsBetting.Api.Endpoints;
 using SportsBetting.Api.Ingestion;
 using SportsBetting.Api.Ingestion.Players;
 using SportsBetting.Api.Integrations.Results.Mlb;
+using SportsBetting.Api.Integrations.Results.Soccer;
 using SportsBetting.Api.Integrations.TheOddsApi;
 using SportsBetting.Api.Integrations.Underdog;
 using SportsBetting.Api.Predictions;
@@ -37,6 +38,7 @@ builder.Services.Configure<DebugAdminOptions>(builder.Configuration.GetSection(D
 builder.Services.Configure<UnderdogIngestionOptions>(builder.Configuration.GetSection(UnderdogIngestionOptions.SectionName));
 builder.Services.Configure<UnderdogOptions>(builder.Configuration.GetSection(UnderdogOptions.SectionName));
 builder.Services.Configure<MlbResultsOptions>(builder.Configuration.GetSection(MlbResultsOptions.SectionName));
+builder.Services.Configure<ApiSportsOptions>(builder.Configuration.GetSection(ApiSportsOptions.SectionName));
 builder.Services.Configure<TheOddsApiOptions>(builder.Configuration.GetSection(TheOddsApiOptions.SectionName));
 builder.Services.Configure<TheOddsIngestionWorkerOptions>(builder.Configuration.GetSection(TheOddsIngestionWorkerOptions.SectionName));
 builder.Services.Configure<TheOddsScheduledRefreshOptions>(builder.Configuration.GetSection(TheOddsScheduledRefreshOptions.SectionName));
@@ -55,6 +57,13 @@ builder.Services.AddHttpClient<IMlbResultsProvider, MlbResultsProvider>((service
     client.BaseAddress = new Uri(options.BaseUrl);
     client.Timeout = TimeSpan.FromSeconds(60);
     client.DefaultRequestHeaders.UserAgent.ParseAdd("SportsBettingAnalyzer/0.1 mlb-results-provider");
+});
+builder.Services.AddHttpClient<IApiSportsFootballClient, ApiSportsFootballClient>((services, client) =>
+{
+    var options = services.GetRequiredService<Microsoft.Extensions.Options.IOptions<ApiSportsOptions>>().Value;
+    client.BaseAddress = new Uri(options.Football.BaseUrl);
+    client.Timeout = TimeSpan.FromSeconds(Math.Clamp(options.TimeoutSeconds, 5, 180));
+    client.DefaultRequestHeaders.UserAgent.ParseAdd("SportsBettingAnalyzer/0.1 api-sports-football-spike");
 });
 builder.Services.AddHttpClient<ITheOddsApiMlbPlayerPropsAdapter, TheOddsApiMlbPlayerPropsAdapter>((services, client) =>
 {
@@ -158,7 +167,7 @@ app.MapDfsDebugEndpoints();
 app.MapTheOddsApiDebugEndpoints();
 app.MapProviderLineLifecycleDebugEndpoints();
 app.MapRecommendationLedgerDebugEndpoints();
-app.MapPublicMlbDfsEndpoints();
+app.MapPublicMarketsEndpoints();
 app.MapPlayersEndpoints();
 
 app.Run();

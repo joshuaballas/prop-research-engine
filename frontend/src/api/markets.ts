@@ -12,8 +12,8 @@ import type {
 
 export type PerformanceGradingMode = 'allHistory' | 'latestGraded' | 'latestCompleted' | 'currentSlate' | 'rollingWindow';
 
-export function getMarketFreshness(signal?: AbortSignal) {
-  return apiGet<MarketFreshnessDto>('/api/markets/freshness', signal);
+export function getMarketFreshness(signal?: AbortSignal, sport = 'MLB') {
+  return apiGet<MarketFreshnessDto>(`/api/markets/freshness${buildQuery({ sport })}`, signal);
 }
 
 export function getProviderStatus(signal?: AbortSignal) {
@@ -24,17 +24,17 @@ export function getScheduledRefreshStatus(signal?: AbortSignal) {
   return apiGet<ScheduledRefreshStatusDto>('/api/debug/the-odds/mlb/scheduled-refresh/status', signal);
 }
 
-export function getTopPicks(signal?: AbortSignal, take = 25) {
+export function getTopPicks(signal?: AbortSignal, take = 25, sport = 'MLB') {
   return apiGet<PublicTopPicksResponseDto>(
-    `/api/markets/top-picks${buildQuery({ sport: 'MLB', take, providerCategory: 'DFS', freshnessMinutes: 30 })}`,
+    `/api/markets/top-picks${buildQuery({ sport, take, providerCategory: 'DFS', freshnessMinutes: 30 })}`,
     signal
   ).then(normalizeTopPicksResponse);
 }
 
-export function getLineShopping(signal?: AbortSignal, take = 50, topOnly = true) {
+export function getLineShopping(signal?: AbortSignal, take = 50, topOnly = true, sport = 'MLB') {
   return apiGet<PublicLineShoppingResponseDto>(
     `/api/markets/line-shopping${buildQuery({
-      sport: 'MLB',
+      sport,
       take,
       topOnly,
       freshnessMinutes: 30,

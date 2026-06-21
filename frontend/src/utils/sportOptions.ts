@@ -10,11 +10,15 @@ export function getAvailableSportCodes(markets: MarketOpportunity[]) {
 
 export function buildAvailableSportOptions(availableSportCodes: Set<Exclude<SportCode, 'ALL'>>): SportOption[] {
   if (!availableSportCodes.size) {
-    return [];
+    availableSportCodes = new Set(['MLB', 'SOCCER']);
   }
 
+  const displaySportCodes = new Set(availableSportCodes);
+  displaySportCodes.add('MLB');
+  displaySportCodes.add('SOCCER');
+
   const options = mockSports
-    .filter((sport) => sport.code !== 'ALL' && availableSportCodes.has(sport.code))
+    .filter((sport) => sport.code !== 'ALL' && displaySportCodes.has(sport.code))
     .map(toStatuslessSportOption);
 
   const allOption = toStatuslessSportOption(sportMetadataByCode.get('ALL') ?? mockSports[0]);
