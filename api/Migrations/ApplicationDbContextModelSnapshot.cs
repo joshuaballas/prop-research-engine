@@ -1642,6 +1642,149 @@ namespace SportsBetting.Api.Migrations
                     b.ToTable("player_external_refs", (string)null);
                 });
 
+            modelBuilder.Entity("SportsBetting.Api.Models.ProviderEntityLink", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<DateTimeOffset?>("ApprovedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("approved_at_utc");
+
+                    b.Property<string>("ApprovedBy")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("approved_by");
+
+                    b.Property<Guid?>("CanonicalEntityId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("canonical_entity_id");
+
+                    b.Property<string>("CanonicalEntityKind")
+                        .HasMaxLength(50)
+                        .HasColumnType("character varying(50)")
+                        .HasColumnName("canonical_entity_kind");
+
+                    b.Property<string>("CanonicalEntityName")
+                        .HasMaxLength(250)
+                        .HasColumnType("character varying(250)")
+                        .HasColumnName("canonical_entity_name");
+
+                    b.Property<decimal?>("Confidence")
+                        .HasPrecision(6, 4)
+                        .HasColumnType("numeric(6,4)")
+                        .HasColumnName("confidence");
+
+                    b.Property<DateTimeOffset>("CreatedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at_utc");
+
+                    b.Property<string>("EntityType")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("character varying(50)")
+                        .HasColumnName("entity_type");
+
+                    b.Property<DateTimeOffset?>("EventStartUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("event_start_utc");
+
+                    b.Property<string>("LinkSource")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("character varying(50)")
+                        .HasColumnName("link_source");
+
+                    b.Property<string>("LinkStatus")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("character varying(50)")
+                        .HasColumnName("link_status");
+
+                    b.Property<JsonDocument>("MetadataJson")
+                        .HasColumnType("jsonb")
+                        .HasColumnName("metadata_json");
+
+                    b.Property<string>("ProviderCompetitionId")
+                        .HasMaxLength(250)
+                        .HasColumnType("character varying(250)")
+                        .HasColumnName("provider_competition_id");
+
+                    b.Property<string>("ProviderCompetitionName")
+                        .HasMaxLength(250)
+                        .HasColumnType("character varying(250)")
+                        .HasColumnName("provider_competition_name");
+
+                    b.Property<string>("ProviderEntityId")
+                        .IsRequired()
+                        .HasMaxLength(250)
+                        .HasColumnType("character varying(250)")
+                        .HasColumnName("provider_entity_id");
+
+                    b.Property<string>("ProviderEntityName")
+                        .HasMaxLength(250)
+                        .HasColumnType("character varying(250)")
+                        .HasColumnName("provider_entity_name");
+
+                    b.Property<string>("ProviderEventId")
+                        .HasMaxLength(250)
+                        .HasColumnType("character varying(250)")
+                        .HasColumnName("provider_event_id");
+
+                    b.Property<string>("ProviderKey")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)")
+                        .HasColumnName("provider_key");
+
+                    b.Property<string>("ProviderTeamId")
+                        .HasMaxLength(250)
+                        .HasColumnType("character varying(250)")
+                        .HasColumnName("provider_team_id");
+
+                    b.Property<string>("ProviderTeamName")
+                        .HasMaxLength(250)
+                        .HasColumnType("character varying(250)")
+                        .HasColumnName("provider_team_name");
+
+                    b.Property<DateTimeOffset?>("RejectedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("rejected_at_utc");
+
+                    b.Property<string>("RejectedReason")
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)")
+                        .HasColumnName("rejected_reason");
+
+                    b.Property<Guid?>("SportId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("sport_id");
+
+                    b.Property<DateTimeOffset>("UpdatedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at_utc");
+
+                    b.HasKey("Id")
+                        .HasName("pk_provider_entity_links");
+
+                    b.HasIndex("CanonicalEntityId")
+                        .HasDatabaseName("ix_provider_entity_links_canonical_entity_id");
+
+                    b.HasIndex("ProviderKey", "EntityType", "ProviderEntityId")
+                        .HasDatabaseName("ix_provider_entity_links_provider_identity");
+
+                    b.HasIndex("ProviderKey", "EntityType", "ProviderEntityId", "SportId", "LinkStatus")
+                        .IsUnique()
+                        .HasDatabaseName("ix_provider_entity_links_provider_identity_status");
+
+                    b.HasIndex("SportId", "EntityType", "LinkStatus")
+                        .HasDatabaseName("ix_provider_entity_links_sport_entity_status");
+
+                    b.ToTable("provider_entity_links", (string)null);
+                });
+
             modelBuilder.Entity("SportsBetting.Api.Models.PlayerMergeAudit", b =>
                 {
                     b.Property<Guid>("MergeId")
@@ -3376,6 +3519,17 @@ namespace SportsBetting.Api.Migrations
                         .HasConstraintName("fk_player_external_refs_players_player_id");
 
                     b.Navigation("Player");
+                });
+
+            modelBuilder.Entity("SportsBetting.Api.Models.ProviderEntityLink", b =>
+                {
+                    b.HasOne("SportsBetting.Api.Models.Sport", "Sport")
+                        .WithMany()
+                        .HasForeignKey("SportId")
+                        .OnDelete(DeleteBehavior.SetNull)
+                        .HasConstraintName("fk_provider_entity_links_sports_sport_id");
+
+                    b.Navigation("Sport");
                 });
 
             modelBuilder.Entity("SportsBetting.Api.Models.Prediction", b =>

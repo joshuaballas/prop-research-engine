@@ -15,6 +15,7 @@ public sealed class ApplicationDbContext(DbContextOptions<ApplicationDbContext> 
     public DbSet<Team> Teams => Set<Team>();
     public DbSet<Player> Players => Set<Player>();
     public DbSet<PlayerExternalRef> PlayerExternalRefs => Set<PlayerExternalRef>();
+    public DbSet<ProviderEntityLink> ProviderEntityLinks => Set<ProviderEntityLink>();
     public DbSet<PlayerMergeAudit> PlayerMergeAudits => Set<PlayerMergeAudit>();
     public DbSet<Game> Games => Set<Game>();
     public DbSet<PropType> PropTypes => Set<PropType>();
@@ -219,6 +220,36 @@ public sealed class ApplicationDbContext(DbContextOptions<ApplicationDbContext> 
             entity.HasIndex(x => new { x.Provider, x.ProviderPlayerId }).IsUnique();
             entity.HasIndex(x => x.PlayerId);
             entity.HasIndex(x => new { x.Provider, x.ProviderDisplayName });
+        });
+
+        modelBuilder.Entity<ProviderEntityLink>(entity =>
+        {
+            entity.ToTable("provider_entity_links");
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.EntityType).HasMaxLength(50).IsRequired();
+            entity.Property(x => x.CanonicalEntityKind).HasMaxLength(50);
+            entity.Property(x => x.CanonicalEntityName).HasMaxLength(250);
+            entity.Property(x => x.ProviderKey).HasMaxLength(100).IsRequired();
+            entity.Property(x => x.ProviderEntityId).HasMaxLength(250).IsRequired();
+            entity.Property(x => x.ProviderEntityName).HasMaxLength(250);
+            entity.Property(x => x.ProviderTeamId).HasMaxLength(250);
+            entity.Property(x => x.ProviderTeamName).HasMaxLength(250);
+            entity.Property(x => x.ProviderCompetitionId).HasMaxLength(250);
+            entity.Property(x => x.ProviderCompetitionName).HasMaxLength(250);
+            entity.Property(x => x.ProviderEventId).HasMaxLength(250);
+            entity.Property(x => x.Confidence).HasPrecision(6, 4);
+            entity.Property(x => x.LinkStatus).HasMaxLength(50).IsRequired();
+            entity.Property(x => x.LinkSource).HasMaxLength(50).IsRequired();
+            entity.Property(x => x.ApprovedBy).HasMaxLength(200);
+            entity.Property(x => x.RejectedReason).HasMaxLength(500);
+            ConfigureJsonDocumentProperty(entity.Property(x => x.MetadataJson), jsonColumnType);
+            entity.HasOne(x => x.Sport).WithMany().HasForeignKey(x => x.SportId).OnDelete(DeleteBehavior.SetNull);
+            entity.HasIndex(x => x.CanonicalEntityId).HasDatabaseName("ix_provider_entity_links_canonical_entity_id");
+            entity.HasIndex(x => new { x.ProviderKey, x.EntityType, x.ProviderEntityId }).HasDatabaseName("ix_provider_entity_links_provider_identity");
+            entity.HasIndex(x => new { x.SportId, x.EntityType, x.LinkStatus }).HasDatabaseName("ix_provider_entity_links_sport_entity_status");
+            entity.HasIndex(x => new { x.ProviderKey, x.EntityType, x.ProviderEntityId, x.SportId, x.LinkStatus })
+                .IsUnique()
+                .HasDatabaseName("ix_provider_entity_links_provider_identity_status");
         });
 
         modelBuilder.Entity<PlayerMergeAudit>(entity =>

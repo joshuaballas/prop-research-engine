@@ -97,6 +97,37 @@ public sealed class PlayerExternalRef
     public Player? Player { get; set; }
 }
 
+public sealed class ProviderEntityLink
+{
+    public Guid Id { get; set; }
+    public Guid? SportId { get; set; }
+    public string EntityType { get; set; } = string.Empty;
+    public Guid? CanonicalEntityId { get; set; }
+    public string? CanonicalEntityKind { get; set; }
+    public string? CanonicalEntityName { get; set; }
+    public string ProviderKey { get; set; } = string.Empty;
+    public string ProviderEntityId { get; set; } = string.Empty;
+    public string? ProviderEntityName { get; set; }
+    public string? ProviderTeamId { get; set; }
+    public string? ProviderTeamName { get; set; }
+    public string? ProviderCompetitionId { get; set; }
+    public string? ProviderCompetitionName { get; set; }
+    public string? ProviderEventId { get; set; }
+    public DateTimeOffset? EventStartUtc { get; set; }
+    public decimal? Confidence { get; set; }
+    public string LinkStatus { get; set; } = "Candidate";
+    public string LinkSource { get; set; } = "Import";
+    public JsonDocument? MetadataJson { get; set; }
+    public DateTimeOffset CreatedAtUtc { get; set; } = DateTimeOffset.UtcNow;
+    public DateTimeOffset UpdatedAtUtc { get; set; } = DateTimeOffset.UtcNow;
+    public DateTimeOffset? ApprovedAtUtc { get; set; }
+    public string? ApprovedBy { get; set; }
+    public DateTimeOffset? RejectedAtUtc { get; set; }
+    public string? RejectedReason { get; set; }
+
+    public Sport? Sport { get; set; }
+}
+
 public sealed class PlayerMergeAudit
 {
     public Guid MergeId { get; set; }

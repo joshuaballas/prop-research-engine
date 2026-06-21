@@ -99,6 +99,7 @@ API-Sports Football has a debug-only single-fixture result import spike for Worl
 - `GET /api/debug/soccer/player-identity/api-sports/world-cup/candidates`
 - `GET /api/debug/soccer/player-identity/api-sports/world-cup/link-preview`
 - `GET /api/debug/soccer/player-identity/api-sports/world-cup/platform-context`
+- `GET /api/debug/identity/provider-links`
 
 The import endpoint is force-live gated, supports `dryRun=true`, and writes only supported mappings for the requested fixture when `dryRun=false`. It reuses `prop_results` with `ExternalSource=api-sports-football`; no Soccer grading is enabled globally.
 
@@ -113,6 +114,8 @@ Unsupported mappings are skipped for now: crosses, clearances, fantasy score pro
 Imported API-Sports result players are not automatically linked to The Odds/platform player identities. The player identity diagnostics are read-only and compare persisted API-Sports World Cup result players against local Soccer players, platform props, recommendation snapshots, and player external refs. They report already linked identities, high-confidence candidates, ambiguous names, conflicts, unmatched players, and blockers. They do not write aliases, merge players, or enable public Soccer grading.
 
 The platform-context diagnostic reports whether existing persisted Soccer platform/snapshot rows contain team, opponent, event, provider event id, provider player id, bookmaker, and competition context that could support identity matching. Current local diagnostics show start time, provider/bookmaker, and provider line/projection identifiers exist, but player team/opponent/event name/provider event id context is missing. Treat name-only Soccer candidates as manual review items until richer team/event identity context is persisted or a reviewed alias approval workflow exists.
+
+API-Sports result imports now create durable `provider_entity_links` Candidate rows for imported Soccer player identities. Existing `player_external_refs` remains supported for player-only compatibility; `provider_entity_links` is the reusable provider identity inventory and review layer going forward. See `docs/PROVIDER_IDENTITY_LINKING.md`.
 
 ## Public History Still Disabled
 
@@ -171,6 +174,9 @@ Invoke-RestMethod "$base/api/debug/soccer/player-identity/api-sports/world-cup/p
   ConvertTo-Json -Depth 60
 
 Invoke-RestMethod "$base/api/debug/soccer/player-identity/api-sports/world-cup/platform-context?fromDate=2026-06-11&toDate=2026-06-21&includeSamples=true&maxSamples=20" |
+  ConvertTo-Json -Depth 80
+
+Invoke-RestMethod "$base/api/debug/identity/provider-links?sport=SOCCER&entityType=Player&providerKey=api-sports-football&includeSamples=true&maxSamples=20" |
   ConvertTo-Json -Depth 80
 ```
 

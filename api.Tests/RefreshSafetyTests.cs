@@ -718,6 +718,7 @@ public sealed class RefreshSafetyTests
         Assert.Equal(0, json.GetProperty("resultRowsWritten").GetInt32());
         Assert.True(json.GetProperty("resultRowsPreviewed").GetInt32() > 0);
         Assert.Equal(0, await CountApiSportsSoccerResultsAsync(factory));
+        Assert.Equal(0, await CountApiSportsSoccerProviderPlayerLinksAsync(factory));
     }
 
     [Fact]
@@ -736,6 +737,7 @@ public sealed class RefreshSafetyTests
         await EnsureSuccessWithBodyAsync(firstResponse);
         var first = await firstResponse.Content.ReadFromJsonAsync<JsonElement>();
         var inserted = first.GetProperty("resultRowsInserted").GetInt32();
+        var providerLinksAfterFirst = await CountApiSportsSoccerProviderPlayerLinksAsync(factory);
 
         var secondResponse = await client.PostAsJsonAsync("/api/debug/soccer/results/api-sports/import-fixture", new
         {
@@ -747,6 +749,8 @@ public sealed class RefreshSafetyTests
         await EnsureSuccessWithBodyAsync(secondResponse);
         var second = await secondResponse.Content.ReadFromJsonAsync<JsonElement>();
         Assert.True(inserted > 0);
+        Assert.Equal(2, providerLinksAfterFirst);
+        Assert.Equal(providerLinksAfterFirst, await CountApiSportsSoccerProviderPlayerLinksAsync(factory));
         Assert.Equal(inserted, await CountApiSportsSoccerResultsAsync(factory));
         Assert.Equal(0, second.GetProperty("resultRowsInserted").GetInt32());
         Assert.Equal(0, second.GetProperty("resultRowsUpdated").GetInt32());
@@ -1200,6 +1204,35 @@ public sealed class RefreshSafetyTests
     }
 
     [Fact]
+    public async Task ProviderEntityLinksDiagnostic_IsReadOnly()
+    {
+        await using var factory = new SafetyTestApplicationFactory(ApiSportsLiveConfig());
+        using var client = factory.CreateClient();
+        await factory.EnsureDatabaseAsync();
+        var importResponse = await client.PostAsJsonAsync("/api/debug/soccer/results/api-sports/import-fixture", new
+        {
+            fixtureId = "1489393",
+            dryRun = false,
+            forceLive = true
+        });
+        await EnsureSuccessWithBodyAsync(importResponse);
+        var before = await CountApiSportsSoccerProviderPlayerLinksAsync(factory);
+        var callsBefore = factory.ApiSportsFootballClient.FixturePlayerStatsCallCount;
+
+        var response = await client.GetAsync("/api/debug/identity/provider-links?sport=SOCCER&entityType=Player&providerKey=api-sports-football&includeSamples=true&maxSamples=5");
+
+        await EnsureSuccessWithBodyAsync(response);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.False(json.GetProperty("callsExternalApis").GetBoolean());
+        Assert.True(json.GetProperty("readOnly").GetBoolean());
+        Assert.Equal(before, json.GetProperty("totalLinks").GetInt32());
+        Assert.Equal(before, json.GetProperty("candidateCount").GetInt32());
+        Assert.NotEmpty(json.GetProperty("samples").EnumerateArray());
+        Assert.Equal(before, await CountApiSportsSoccerProviderPlayerLinksAsync(factory));
+        Assert.Equal(callsBefore, factory.ApiSportsFootballClient.FixturePlayerStatsCallCount);
+    }
+
+    [Fact]
     public async Task RefreshPlanHistory_ReadOnly_DoesNotCallProviders()
     {
         await using var factory = new SafetyTestApplicationFactory();
@@ -1271,6 +1304,15 @@ public sealed class RefreshSafetyTests
         using var scope = factory.Services.CreateScope();
         var dbContext = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
         return await dbContext.PropResults.CountAsync(result => result.ExternalSource == "api-sports-football");
+    }
+
+    private static async Task<int> CountApiSportsSoccerProviderPlayerLinksAsync(SafetyTestApplicationFactory factory)
+    {
+        using var scope = factory.Services.CreateScope();
+        var dbContext = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+        return await dbContext.ProviderEntityLinks.CountAsync(link =>
+            link.ProviderKey == "api-sports-football"
+            && link.EntityType == "Player");
     }
 }
 
@@ -1842,7 +1884,7 @@ public sealed class SafetyTestApplicationFactory : WebApplicationFactory<Program
                 Id = Guid.NewGuid(),
                 PlayerId = player.Id,
                 Provider = "api-sports-football",
-                ProviderPlayerId = "1001",
+                ProviderPlayerId = player.Id.ToString("N"),
                 ProviderDisplayName = "Test Forward"
             });
         }

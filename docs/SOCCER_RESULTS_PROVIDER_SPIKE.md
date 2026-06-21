@@ -53,6 +53,7 @@ All API-Sports endpoints are debug-only and force-live gated.
 - `GET /api/debug/soccer/player-identity/api-sports/world-cup/candidates`
 - `GET /api/debug/soccer/player-identity/api-sports/world-cup/link-preview`
 - `GET /api/debug/soccer/player-identity/api-sports/world-cup/platform-context`
+- `GET /api/debug/identity/provider-links`
 
 Rules:
 
@@ -70,6 +71,7 @@ Rules:
 - No past-season Soccer backfill is supported by this spike.
 - Imported Soccer results do not currently join safely to provider markets because API-Sports player identities are not bridged to The Odds/platform identities.
 - Player identity endpoints are read-only diagnostics only; they do not create aliases, merge players, or enable public Soccer grading.
+- API-Sports imports now create durable `provider_entity_links` Candidate rows for imported Soccer player identities. These are identity inventory rows, not approved grading links.
 
 Fixture diagnostics support flexible API-Sports query shapes so access can be tested safely before upgrading a plan:
 
@@ -149,6 +151,8 @@ Read-only diagnostics:
 The matcher normalizes names case-insensitively, strips punctuation through the app compact player-name normalizer, handles diacritics, and uses team names when both sides have team context. Name-only candidates are review items, not automatic links. Ambiguous names or team mismatches remain blockers.
 
 Current local diagnostics show persisted Soccer platform props have start time, provider/bookmaker, and a provider line/projection identifier, but do not currently have player team, opponent, event name, provider event id, or competition context. That means safe auto-linking is not available from existing persisted data alone; manual alias review or richer persisted provider event/team context is required first.
+
+See `docs/PROVIDER_IDENTITY_LINKING.md` for the durable provider identity model. `player_external_refs` remains supported for existing player-only compatibility, while `provider_entity_links` is the reusable identity inventory and review layer going forward.
 
 Public Soccer grading remains disabled while these diagnostics are reviewed.
 
@@ -250,6 +254,9 @@ Invoke-RestMethod "$base/api/debug/soccer/player-identity/api-sports/world-cup/p
   ConvertTo-Json -Depth 60
 
 Invoke-RestMethod "$base/api/debug/soccer/player-identity/api-sports/world-cup/platform-context?fromDate=2026-06-11&toDate=2026-06-21&includeSamples=true&maxSamples=20" |
+  ConvertTo-Json -Depth 80
+
+Invoke-RestMethod "$base/api/debug/identity/provider-links?sport=SOCCER&entityType=Player&providerKey=api-sports-football&includeSamples=true&maxSamples=20" |
   ConvertTo-Json -Depth 80
 
 # World Cup 2026 completed-fixture backfill safety block:
