@@ -42,7 +42,7 @@ export function PerformancePage() {
   const { isMobile } = useResponsiveView();
   const [selectedTab, setSelectedTab] = useState(breakdownTabs[0].label);
   const [historyPage, setHistoryPage] = useState(1);
-  const performanceQuery = usePerformanceData('latestCompleted');
+  const performanceQuery = usePerformanceData('allHistory');
   const resultsQuery = usePerformanceResults();
   const performanceRows = performanceQuery.rows;
   const hasGradedSample = (performanceQuery.summary?.dataAvailability?.gradedPicks ?? performanceRows.find((row) => row.groupType === 'Overall')?.gradedPicks ?? 0) > 0;

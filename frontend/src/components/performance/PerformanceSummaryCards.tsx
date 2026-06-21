@@ -1,4 +1,4 @@
-import { Grid, Stack, Typography } from '@mui/material';
+import { Box, Stack, Typography } from '@mui/material';
 import type { PerformanceGroup } from '../../types/performance';
 import { formatPercent } from '../../utils/formatters';
 import { AppCard } from '../ui/AppCard';
@@ -14,6 +14,7 @@ interface SummaryMetric {
 function SummaryCard({ metric }: { metric: SummaryMetric }) {
   const valueColor =
     metric.tone === 'good' ? palette.success : metric.tone === 'neutral' ? palette.info : palette.text;
+  const isLongValue = metric.value.length > 18;
 
   return (
     <AppCard
@@ -23,40 +24,42 @@ function SummaryCard({ metric }: { metric: SummaryMetric }) {
       }}
       contentSx={{
         height: '100%',
-        minHeight: { xs: 96, md: 126 },
+        minHeight: { xs: 96, md: 108 },
         display: 'flex',
         flexDirection: 'column',
         justifyContent: 'space-between',
-        gap: { xs: 0.85, md: 1.2 },
-        p: { xs: 1.25, md: 2.25 },
-        '&:last-child': { pb: { xs: 1.25, md: 2.25 } }
+        gap: { xs: 0.45, md: 0.6 },
+        p: { xs: 1.1, md: 1.6 },
+        '&:last-child': { pb: { xs: 1.1, md: 1.6 } }
       }}
     >
-      <Stack spacing={{ xs: 0.35, md: 0.55 }}>
+      <Typography
+        variant="caption"
+        color="text.secondary"
+        fontWeight={850}
+        textTransform="uppercase"
+        sx={{ lineHeight: 1.15 }}
+      >
+        {metric.label}
+      </Typography>
+      <Stack justifyContent="center" sx={{ flex: 1, minHeight: 0 }}>
         <Typography
-          variant="caption"
-          color="text.secondary"
-          fontWeight={850}
-          textTransform="uppercase"
-          sx={{ fontSize: { xs: 10.5, md: 12 }, lineHeight: 1.2 }}
-        >
-          {metric.label}
-        </Typography>
-        <Typography
-          variant="h4"
           fontWeight={950}
           sx={{
             color: valueColor,
-            fontSize: { xs: 22, md: 28 },
-            lineHeight: 1.05,
-            overflowWrap: 'normal',
-            wordBreak: 'normal'
+            fontSize: isLongValue ? { xs: 17, md: 20 } : { xs: 20, md: 24 },
+            lineHeight: isLongValue ? 1.12 : 1.08,
+            display: '-webkit-box',
+            overflow: 'hidden',
+            WebkitBoxOrient: 'vertical',
+            WebkitLineClamp: 2,
+            overflowWrap: 'anywhere'
           }}
         >
           {metric.value}
         </Typography>
       </Stack>
-      <Typography variant="body2" color="text.secondary" sx={{ lineHeight: 1.3, fontSize: { xs: 12, md: 14 } }}>
+      <Typography variant="caption" color="text.secondary" sx={{ lineHeight: 1.2 }}>
         {metric.helper}
       </Typography>
     </AppCard>
@@ -81,9 +84,9 @@ export function PerformanceSummaryCards({ rows }: { rows: PerformanceGroup[] }) 
   const hasDecisions = overall.wins + overall.losses > 0;
   const metrics: SummaryMetric[] = [
     {
-      label: 'Graded Results',
-      value: `${overall.gradedPicks}`,
-      helper: 'Provider lines graded'
+      label: 'Overall W-L-P',
+      value: `${overall.wins}-${overall.losses}-${overall.pushes}`,
+      helper: `${overall.wins} wins · ${overall.losses} losses · ${overall.pushes} pushes`
     },
     {
       label: 'Hit Rate',
@@ -110,12 +113,12 @@ export function PerformanceSummaryCards({ rows }: { rows: PerformanceGroup[] }) 
   ];
 
   return (
-    <Grid container spacing={2}>
+    <Box sx={{ display: 'grid', gridTemplateColumns: { xs: 'repeat(2, minmax(0, 1fr))', md: 'repeat(5, minmax(0, 1fr))' }, gap: { xs: 1, md: 1.5 } }}>
       {metrics.map((metric) => (
-        <Grid key={metric.label} size={{ xs: 6, md: 4, xl: 2.4 }}>
+        <Box key={metric.label}>
           <SummaryCard metric={metric} />
-        </Grid>
+        </Box>
       ))}
-    </Grid>
+    </Box>
   );
 }

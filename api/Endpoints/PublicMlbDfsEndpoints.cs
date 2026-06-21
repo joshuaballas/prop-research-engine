@@ -1147,9 +1147,10 @@ public static class PublicMlbDfsEndpoints
             "latestCompleted" => latestCompletedDate,
             _ => null
         };
+        var useAllFilteredRows = normalizedGradingMode is "rollingWindow" or "allHistory";
         var selectedRows = selectedDate.HasValue
             ? gradedRows.Where(row => row.Snapshot.SlateDate == selectedDate.Value).ToArray()
-            : normalizedGradingMode == "rollingWindow"
+            : useAllFilteredRows
                 ? gradedRows
                 : [];
         var totalGraded = selectedRows.Count(row => IsGradedOutcome(row.Outcome));
@@ -1255,7 +1256,7 @@ public static class PublicMlbDfsEndpoints
                         ? "Current slate has imported prop_results, but selected snapshot rows did not match player/prop results. Check diagnostics.matchFailureCounts."
                         : "Current slate has not been fully graded because results are not imported yet."
                     : null,
-                usedDateRange = normalizedGradingMode == "rollingWindow"
+                usedDateRange = useAllFilteredRows
                     ? new { fromDate, toDate }
                     : selectedDate.HasValue
                         ? new { fromDate = selectedDate, toDate = selectedDate }
@@ -1321,6 +1322,7 @@ public static class PublicMlbDfsEndpoints
             "currentslate" or "current-slate" or "current_slate" => "currentSlate",
             "latestcompleted" or "latest-completed" or "latest_completed" or "previouscompleted" or "previous-completed" or "previous_completed" => "latestCompleted",
             "rollingwindow" or "rolling-window" or "rolling_window" => "rollingWindow",
+            "allhistory" or "all-history" or "all_history" or "history" or "cumulative" => "allHistory",
             _ => "latestGraded"
         };
     }
@@ -1601,29 +1603,32 @@ public static class PublicMlbDfsEndpoints
             "latestCompleted" => latestCompletedDate,
             _ => null
         };
+        var useAllFilteredRows = normalizedGradingMode is "rollingWindow" or "allHistory";
         var baseSelectedQuery = selectedDate.HasValue
             ? ledgerQuery.Where(row => row.ExpectedResultDate == selectedDate.Value)
             : ledgerQuery;
-        var selectedPreEligibilityRows = selectedDate.HasValue
-            ? await ledgerPreEligibilityQuery
-                .Where(row => row.ExpectedResultDate == selectedDate.Value)
-                .Select(row => new
-                {
-                    row.IsCandidate,
-                    row.IsTopPick,
-                    row.IsWatchlist,
-                    row.IsActionableForUser,
-                    row.LifecycleStatus,
-                    row.Warning,
-                    row.CanonicalPlayerId,
-                    row.PropTypeId,
-                    row.NormalizedPropType,
-                    row.EventId,
-                    row.EventStartTimeUtc,
-                    row.ExpectedResultDate
-                })
-                .ToArrayAsync(cancellationToken)
-            : [];
+        var selectedPreEligibilityQuery = selectedDate.HasValue
+            ? ledgerPreEligibilityQuery.Where(row => row.ExpectedResultDate == selectedDate.Value)
+            : useAllFilteredRows
+                ? ledgerPreEligibilityQuery
+                : ledgerPreEligibilityQuery.Where(row => false);
+        var selectedPreEligibilityRows = await selectedPreEligibilityQuery
+            .Select(row => new
+            {
+                row.IsCandidate,
+                row.IsTopPick,
+                row.IsWatchlist,
+                row.IsActionableForUser,
+                row.LifecycleStatus,
+                row.Warning,
+                row.CanonicalPlayerId,
+                row.PropTypeId,
+                row.NormalizedPropType,
+                row.EventId,
+                row.EventStartTimeUtc,
+                row.ExpectedResultDate
+            })
+            .ToArrayAsync(cancellationToken);
         var selectedRowsBeforeGradeability = await baseSelectedQuery
             .OrderByDescending(row => row.RankingScore)
             .ThenByDescending(row => row.EstimatedEv)
@@ -1674,12 +1679,6 @@ public static class PublicMlbDfsEndpoints
         var gradedRows = selectedRows
             .Select(row => GradeLedgerPerformanceRow(row, resultRows, diagnosticResultRows))
             .ToArray();
-        var totalGraded = gradedRows.Count(row => IsGradedOutcome(row.Outcome));
-        var wonRows = gradedRows.Count(row => row.Outcome == "Win");
-        var lostRows = gradedRows.Count(row => row.Outcome == "Loss");
-        var pushedRows = gradedRows.Count(row => row.Outcome == "Push");
-        var noResultRows = gradedRows.Count(row => IsNoResultFailure(row.MatchFailureReason));
-        var pendingRows = gradedRows.Count(row => IsPendingFailure(row.MatchFailureReason));
         var latestGradedDate = ledgerTotalAfterFilters == 0
             ? null
             : gradedRows
@@ -1687,14 +1686,29 @@ public static class PublicMlbDfsEndpoints
                 .Select(row => (DateOnly?)row.Snapshot.ExpectedResultDate)
                 .DefaultIfEmpty()
                 .Max();
-        var unmatchedRows = gradedRows.Count(row =>
+        var summaryRows = normalizedGradingMode == "latestGraded" && latestGradedDate.HasValue
+            ? gradedRows.Where(row => row.Snapshot.ExpectedResultDate == latestGradedDate.Value).ToArray()
+            : gradedRows;
+        var summarySelectedRows = normalizedGradingMode == "latestGraded" && latestGradedDate.HasValue
+            ? selectedRows.Where(row => row.ExpectedResultDate == latestGradedDate.Value).ToArray()
+            : selectedRows;
+        var summarySelectedRowsBeforeGradeability = normalizedGradingMode == "latestGraded" && latestGradedDate.HasValue
+            ? selectedRowsBeforeGradeability.Where(row => row.ExpectedResultDate == latestGradedDate.Value).ToArray()
+            : selectedRowsBeforeGradeability;
+        var totalGraded = summaryRows.Count(row => IsGradedOutcome(row.Outcome));
+        var wonRows = summaryRows.Count(row => row.Outcome == "Win");
+        var lostRows = summaryRows.Count(row => row.Outcome == "Loss");
+        var pushedRows = summaryRows.Count(row => row.Outcome == "Push");
+        var noResultRows = summaryRows.Count(row => IsNoResultFailure(row.MatchFailureReason));
+        var pendingRows = summaryRows.Count(row => IsPendingFailure(row.MatchFailureReason));
+        var unmatchedRows = summaryRows.Count(row =>
             row.Outcome is null &&
             !IsNoResultFailure(row.MatchFailureReason) &&
             !IsPendingFailure(row.MatchFailureReason));
         var warning = totalGraded == 0
-            ? selectedRows.Length == 0 && latestCompletedDate.HasValue
+            ? summarySelectedRows.Length == 0 && latestCompletedDate.HasValue
                 ? $"No captured recommendations exist for the latest completed result date ({latestCompletedDate.Value:MMM d})."
-                : selectedRows.Length > 0
+                : summarySelectedRows.Length > 0
                     ? noResultRows > 0 && unmatchedRows == 0
                         ? $"Captured recommendations exist for {selectedDate:MMM d}, but none had gradeable result rows."
                         : $"Captured recommendations exist for {selectedDate:MMM d}, but none safely matched imported results."
@@ -1704,8 +1718,8 @@ public static class PublicMlbDfsEndpoints
                 : null;
 
         var groupRows = includeNoResultDiagnostics
-            ? gradedRows
-            : gradedRows.Where(row => IsGradedOutcome(row.Outcome)).ToArray();
+            ? summaryRows
+            : summaryRows.Where(row => IsGradedOutcome(row.Outcome)).ToArray();
 
         return new
         {
@@ -1748,12 +1762,12 @@ public static class PublicMlbDfsEndpoints
                 pushed = pushedRows,
                 noResultExcluded = noResultRows,
                 hitRate = wonRows + lostRows == 0 ? (decimal?)null : Math.Round(wonRows / (decimal)(wonRows + lostRows), 4),
-                simulatedRoi = totalGraded == 0 ? (decimal?)null : Math.Round(gradedRows.Sum(row => row.Profit ?? 0m) / totalGraded, 4),
-                avgEvAtRecommendationTime = AverageNullable(gradedRows.Where(row => IsGradedOutcome(row.Outcome)).Select(row => row.Snapshot.EstimatedEv))
+                simulatedRoi = totalGraded == 0 ? (decimal?)null : Math.Round(summaryRows.Sum(row => row.Profit ?? 0m) / totalGraded, 4),
+                avgEvAtRecommendationTime = AverageNullable(summaryRows.Where(row => IsGradedOutcome(row.Outcome)).Select(row => row.Snapshot.EstimatedEv))
             },
             dataAvailability = new
             {
-                ledgerRowsLoaded = selectedRows.Length,
+                ledgerRowsLoaded = summarySelectedRows.Length,
                 gradedLedgerRows = totalGraded,
                 pendingLedgerRows = pendingRows,
                 noResultLedgerRows = noResultRows,
@@ -1762,8 +1776,8 @@ public static class PublicMlbDfsEndpoints
                 excludedFromPerformanceRows = selectedDate.HasValue
                     ? await ledgerPreExclusionQuery.CountAsync(row => row.ExpectedResultDate == selectedDate.Value && row.IsExcludedFromPerformance, cancellationToken)
                     : await ledgerPreExclusionQuery.CountAsync(row => row.IsExcludedFromPerformance, cancellationToken),
-                includedExcludedRows = includeExcluded ? selectedRows.Count(row => row.IsExcludedFromPerformance) : 0,
-                rowsAfterPerformanceEligibility = selectedRows.Length,
+                includedExcludedRows = includeExcluded ? summarySelectedRows.Count(row => row.IsExcludedFromPerformance) : 0,
+                rowsAfterPerformanceEligibility = summarySelectedRows.Length,
                 rowsExcludedWatchlist = selectedPreEligibilityRows.Count(row => row.IsWatchlist && !includeWatchlist),
                 rowsExcludedResearch = selectedPreEligibilityRows.Count(row => !row.IsCandidate && !row.IsTopPick && !row.IsWatchlist && !includeResearch),
                 rowsExcludedStale = selectedPreEligibilityRows.Count(row =>
@@ -1779,33 +1793,33 @@ public static class PublicMlbDfsEndpoints
                         : candidateOnly
                             ? !row.IsCandidate
                             : !includeResearch && !row.IsCandidate && !row.IsTopPick && !(includeWatchlist && row.IsWatchlist)),
-                rowsExcludedMissingPlayer = selectedRowsBeforeGradeability.Count(row => !row.CanonicalPlayerId.HasValue),
-                rowsExcludedMissingProp = selectedRowsBeforeGradeability.Count(row => !row.PropTypeId.HasValue || string.IsNullOrWhiteSpace(row.NormalizedPropType)),
-                rowsExcludedUnsupportedProp = selectedRowsBeforeGradeability.Count(row =>
+                rowsExcludedMissingPlayer = summarySelectedRowsBeforeGradeability.Count(row => !row.CanonicalPlayerId.HasValue),
+                rowsExcludedMissingProp = summarySelectedRowsBeforeGradeability.Count(row => !row.PropTypeId.HasValue || string.IsNullOrWhiteSpace(row.NormalizedPropType)),
+                rowsExcludedUnsupportedProp = summarySelectedRowsBeforeGradeability.Count(row =>
                     row.PropTypeId.HasValue &&
                     !string.IsNullOrWhiteSpace(row.NormalizedPropType) &&
                     !IsSupportedMlbPerformancePropType(row.NormalizedPropType)),
-                rowsExcludedMissingEventMapping = selectedRowsBeforeGradeability.Count(row =>
+                rowsExcludedMissingEventMapping = summarySelectedRowsBeforeGradeability.Count(row =>
                     string.IsNullOrWhiteSpace(row.EventId) ||
                     !row.EventStartTimeUtc.HasValue ||
                     row.ExpectedResultDate == default),
-                rowsExcludedEventDateMappingMismatch = selectedRowsBeforeGradeability.Count(row =>
+                rowsExcludedEventDateMappingMismatch = summarySelectedRowsBeforeGradeability.Count(row =>
                     row.EventStartTimeUtc.HasValue &&
                     row.ExpectedResultDate != default &&
                     ResolveEasternDate(row.EventStartTimeUtc.Value) != row.ExpectedResultDate),
-                candidateRows = selectedRows.Count(row => row.IsCandidate),
-                topPickRows = selectedRows.Count(row => row.IsTopPick),
-                watchlistRows = selectedRows.Count(row => row.IsWatchlist),
-                researchRows = selectedRows.Count(row => !row.IsCandidate && !row.IsTopPick && !row.IsWatchlist),
+                candidateRows = summarySelectedRows.Count(row => row.IsCandidate),
+                topPickRows = summarySelectedRows.Count(row => row.IsTopPick),
+                watchlistRows = summarySelectedRows.Count(row => row.IsWatchlist),
+                researchRows = summarySelectedRows.Count(row => !row.IsCandidate && !row.IsTopPick && !row.IsWatchlist),
                 preFilterCandidateRows = selectedPreEligibilityRows.Count(row => row.IsCandidate),
                 preFilterTopPickRows = selectedPreEligibilityRows.Count(row => row.IsTopPick),
                 preFilterWatchlistRows = selectedPreEligibilityRows.Count(row => row.IsWatchlist),
                 preFilterResearchRows = selectedPreEligibilityRows.Count(row => !row.IsCandidate && !row.IsTopPick && !row.IsWatchlist),
-                staleLockedExpiredRows = selectedRows.Count(row =>
+                staleLockedExpiredRows = summarySelectedRows.Count(row =>
                     !row.IsActionableForUser ||
                     row.LifecycleStatus != "Active" ||
                     (!string.IsNullOrWhiteSpace(row.Warning) && row.Warning.Contains("stale", StringComparison.OrdinalIgnoreCase))),
-                staleOrNonPlayableRows = selectedRows.Count(row =>
+                staleOrNonPlayableRows = summarySelectedRows.Count(row =>
                     !row.IsActionableForUser ||
                     row.LifecycleStatus != "Active" ||
                     (!string.IsNullOrWhiteSpace(row.Warning) && row.Warning.Contains("stale", StringComparison.OrdinalIgnoreCase))),
@@ -1813,28 +1827,28 @@ public static class PublicMlbDfsEndpoints
                     !row.IsActionableForUser ||
                     row.LifecycleStatus != "Active" ||
                     (!string.IsNullOrWhiteSpace(row.Warning) && row.Warning.Contains("stale", StringComparison.OrdinalIgnoreCase))),
-                noResultProviderInactiveRows = gradedRows.Count(row => row.MatchFailureReason == "ProviderLineForInactivePlayer"),
-                matchedViaExactPlayerIdDateStatRows = gradedRows.Count(row => row.MatchMethod == "ExactPlayerIdDateStat"),
-                matchedViaNormalizedPlayerNameDateStatRows = gradedRows.Count(row => row.MatchMethod == "NormalizedPlayerNameDateStatFallback"),
-                ambiguousFallbackRows = gradedRows.Count(row => row.MatchFailureReason == "AmbiguousNormalizedPlayerNameDateStatFallback"),
-                noResultEventDateMismatchRows = gradedRows.Count(row => row.MatchFailureReason == "EventDateMismatch"),
-                noResultUnknownRowsForCompletedDate = gradedRows.Count(row => row.MatchFailureReason == "Unknown"),
-                noResultMissingPlayerRowsForCompletedDate = gradedRows.Count(row => row.MatchFailureReason == "MissingLedgerPlayerId"),
-                noResultMissingPropRowsForCompletedDate = gradedRows.Count(row => row.MatchFailureReason == "MissingLedgerPropType"),
-                noResultUnsupportedPropRowsForCompletedDate = gradedRows.Count(row => row.MatchFailureReason == "UnsupportedPropType"),
-                noResultResultsNotImportedRowsForCompletedDate = gradedRows.Count(row => row.MatchFailureReason == "NoPropResultsForDate"),
-                noResultReasonCodeCounts = gradedRows
+                noResultProviderInactiveRows = summaryRows.Count(row => row.MatchFailureReason == "ProviderLineForInactivePlayer"),
+                matchedViaExactPlayerIdDateStatRows = summaryRows.Count(row => row.MatchMethod == "ExactPlayerIdDateStat"),
+                matchedViaNormalizedPlayerNameDateStatRows = summaryRows.Count(row => row.MatchMethod == "NormalizedPlayerNameDateStatFallback"),
+                ambiguousFallbackRows = summaryRows.Count(row => row.MatchFailureReason == "AmbiguousNormalizedPlayerNameDateStatFallback"),
+                noResultEventDateMismatchRows = summaryRows.Count(row => row.MatchFailureReason == "EventDateMismatch"),
+                noResultUnknownRowsForCompletedDate = summaryRows.Count(row => row.MatchFailureReason == "Unknown"),
+                noResultMissingPlayerRowsForCompletedDate = summaryRows.Count(row => row.MatchFailureReason == "MissingLedgerPlayerId"),
+                noResultMissingPropRowsForCompletedDate = summaryRows.Count(row => row.MatchFailureReason == "MissingLedgerPropType"),
+                noResultUnsupportedPropRowsForCompletedDate = summaryRows.Count(row => row.MatchFailureReason == "UnsupportedPropType"),
+                noResultResultsNotImportedRowsForCompletedDate = summaryRows.Count(row => row.MatchFailureReason == "NoPropResultsForDate"),
+                noResultReasonCodeCounts = summaryRows
                     .Where(row => row.Outcome is null)
                     .GroupBy(row => row.MatchFailureReason ?? "Unknown")
                     .ToDictionary(group => group.Key, group => group.Count()),
                 snapshotRowsLoaded = 0,
-                picksAfterFilters = selectedRows.Length,
+                picksAfterFilters = summarySelectedRows.Length,
                 totalPicksAfterFilters = ledgerTotalAfterFilters,
                 gradedPicks = totalGraded,
                 noResultPicks = noResultRows,
                 hasGradeableSample = totalGraded > 0,
                 gradeableGroupCount = CountGradeableGroups(groupRows),
-                noResultOnlyGroupCount = includeNoResultDiagnostics ? CountNoResultOnlyGroups(gradedRows) : 0,
+                noResultOnlyGroupCount = includeNoResultDiagnostics ? CountNoResultOnlyGroups(summaryRows) : 0,
                 hasEnoughData = totalGraded >= 30,
                 warning,
                 latestCompletedDate,
@@ -1842,9 +1856,9 @@ public static class PublicMlbDfsEndpoints
                 latestLedgerDate,
                 latestGradedDate,
                 currentSlateDate = normalizedGradingMode == "currentSlate" ? latestLedgerDate : null,
-                currentSlateTotalPicks = normalizedGradingMode == "currentSlate" ? selectedRows.Length : (int?)null,
+                currentSlateTotalPicks = normalizedGradingMode == "currentSlate" ? summarySelectedRows.Length : (int?)null,
                 currentSlateGradedPicks = normalizedGradingMode == "currentSlate" ? totalGraded : (int?)null,
-                currentSlatePendingPicks = normalizedGradingMode == "currentSlate" ? Math.Max(0, selectedRows.Length - totalGraded) : (int?)null,
+                currentSlatePendingPicks = normalizedGradingMode == "currentSlate" ? Math.Max(0, summarySelectedRows.Length - totalGraded) : (int?)null,
                 snapshotRowsForCompletedDate = filteredLedgerRowsForLatestCompleted,
                 ledgerRowsForCompletedDate = ledgerRowsForLatestCompleted,
                 candidateLedgerRowsForCompletedDate = candidateLedgerRowsForLatestCompleted,
@@ -1854,11 +1868,11 @@ public static class PublicMlbDfsEndpoints
                 unmatchedRowsForCompletedDate = unmatchedRows,
                 pendingRowsForCompletedDate = pendingRows,
                 matchedAndGradedRowsForCompletedDate = totalGraded,
-                matchedViaExactPlayerIdDateStatRowsForCompletedDate = gradedRows.Count(row => row.MatchMethod == "ExactPlayerIdDateStat"),
-                matchedViaNormalizedPlayerNameDateStatRowsForCompletedDate = gradedRows.Count(row => row.MatchMethod == "NormalizedPlayerNameDateStatFallback"),
-                ambiguousFallbackRowsForCompletedDate = gradedRows.Count(row => row.MatchFailureReason == "AmbiguousNormalizedPlayerNameDateStatFallback"),
-                providerInactiveRowsForCompletedDate = gradedRows.Count(row => row.MatchFailureReason == "ProviderLineForInactivePlayer"),
-                eventDateMismatchRowsForCompletedDate = gradedRows.Count(row => row.MatchFailureReason == "EventDateMismatch"),
+                matchedViaExactPlayerIdDateStatRowsForCompletedDate = summaryRows.Count(row => row.MatchMethod == "ExactPlayerIdDateStat"),
+                matchedViaNormalizedPlayerNameDateStatRowsForCompletedDate = summaryRows.Count(row => row.MatchMethod == "NormalizedPlayerNameDateStatFallback"),
+                ambiguousFallbackRowsForCompletedDate = summaryRows.Count(row => row.MatchFailureReason == "AmbiguousNormalizedPlayerNameDateStatFallback"),
+                providerInactiveRowsForCompletedDate = summaryRows.Count(row => row.MatchFailureReason == "ProviderLineForInactivePlayer"),
+                eventDateMismatchRowsForCompletedDate = summaryRows.Count(row => row.MatchFailureReason == "EventDateMismatch"),
                 wonRowsForCompletedDate = wonRows,
                 lostRowsForCompletedDate = lostRows,
                 pushedRowsForCompletedDate = pushedRows,
@@ -1868,10 +1882,12 @@ public static class PublicMlbDfsEndpoints
                 hasLedgerRowsForCompletedDate = ledgerRowsForLatestCompleted > 0,
                 hasFilteredRowsForCompletedDate = filteredLedgerRowsForLatestCompleted > 0,
                 hasGradedData = totalGraded > 0,
-                hasPendingCurrentSlate = normalizedGradingMode == "currentSlate" ? selectedRows.Length > totalGraded : (bool?)null,
+                hasPendingCurrentSlate = normalizedGradingMode == "currentSlate" ? summarySelectedRows.Length > totalGraded : (bool?)null,
                 pendingReason = null as string,
-                usedDateRange = normalizedGradingMode == "rollingWindow"
+                usedDateRange = useAllFilteredRows
                     ? new { fromDate, toDate }
+                    : normalizedGradingMode == "latestGraded" && latestGradedDate.HasValue
+                        ? new { fromDate = latestGradedDate, toDate = latestGradedDate }
                     : selectedDate.HasValue
                         ? new { fromDate = selectedDate, toDate = selectedDate }
                         : null,

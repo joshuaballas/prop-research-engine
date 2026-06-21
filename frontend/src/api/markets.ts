@@ -10,7 +10,7 @@ import type {
   ScheduledRefreshStatusDto
 } from './types';
 
-export type PerformanceGradingMode = 'latestGraded' | 'latestCompleted' | 'currentSlate' | 'rollingWindow';
+export type PerformanceGradingMode = 'allHistory' | 'latestGraded' | 'latestCompleted' | 'currentSlate' | 'rollingWindow';
 
 export function getMarketFreshness(signal?: AbortSignal) {
   return apiGet<MarketFreshnessDto>('/api/markets/freshness', signal);

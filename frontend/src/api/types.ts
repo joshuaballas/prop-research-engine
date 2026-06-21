@@ -347,7 +347,7 @@ export interface BookmakerPriceDto {
 
 export interface MarketPerformanceSummaryDto {
   generatedAtUtc: string;
-  gradingMode?: 'latestGraded' | 'latestCompleted' | 'currentSlate' | 'rollingWindow' | string;
+  gradingMode?: 'allHistory' | 'latestGraded' | 'latestCompleted' | 'currentSlate' | 'rollingWindow' | string;
   dataAvailability?: {
     snapshotRowsLoaded?: number;
     picksAfterFilters?: number;

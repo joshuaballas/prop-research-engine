@@ -967,6 +967,69 @@ public sealed class PerformanceGradingTests
     }
 
     [Fact]
+    public async Task PerformanceSummary_AllHistory_RemainsCumulativeWhenNewerSmallSlateExists()
+    {
+        await using var factory = new SafetyTestApplicationFactory();
+        using var client = factory.CreateClient();
+        var olderDate = new DateOnly(2026, 6, 19);
+        var newerDate = new DateOnly(2026, 6, 20);
+        await SeedPerformanceScenarioAsync(
+            factory,
+            olderDate,
+            "Pitcher Strikeouts",
+            "Under",
+            6.5m,
+            4m,
+            provider: "PrizePicks",
+            estimatedEv: 0.1m);
+        await SeedPerformanceScenarioAsync(
+            factory,
+            olderDate,
+            "Pitcher Strikeouts",
+            "Under",
+            6.5m,
+            8m,
+            provider: "Underdog",
+            resetDatabase: false,
+            estimatedEv: 0.2m);
+        await SeedPerformanceScenarioAsync(
+            factory,
+            newerDate,
+            "Pitcher Strikeouts",
+            "Over",
+            6.5m,
+            7m,
+            provider: "Betr Picks",
+            resetDatabase: false,
+            estimatedEv: 0.3m);
+
+        var latestResponse = await client.GetAsync("/api/markets/performance-summary?sport=MLB&gradingMode=latestGraded");
+        var allHistoryResponse = await client.GetAsync("/api/markets/performance-summary?sport=MLB&gradingMode=allHistory");
+        var olderDateResponse = await client.GetAsync($"/api/markets/performance-summary?sport=MLB&startDate={olderDate:yyyy-MM-dd}&endDate={olderDate:yyyy-MM-dd}");
+
+        await EnsureSuccessWithBodyAsync(latestResponse);
+        await EnsureSuccessWithBodyAsync(allHistoryResponse);
+        await EnsureSuccessWithBodyAsync(olderDateResponse);
+        var latestJson = await latestResponse.Content.ReadFromJsonAsync<JsonElement>();
+        var allHistoryJson = await allHistoryResponse.Content.ReadFromJsonAsync<JsonElement>();
+        var olderDateJson = await olderDateResponse.Content.ReadFromJsonAsync<JsonElement>();
+
+        Assert.Equal("latestGraded", latestJson.GetProperty("gradingMode").GetString());
+        Assert.Equal(1, latestJson.GetProperty("summary").GetProperty("gradedPicks").GetInt32());
+        Assert.Equal(1, latestJson.GetProperty("summary").GetProperty("won").GetInt32());
+        Assert.Equal(newerDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture), latestJson.GetProperty("dataAvailability").GetProperty("latestGradedDate").GetString());
+
+        Assert.Equal("allHistory", allHistoryJson.GetProperty("gradingMode").GetString());
+        Assert.Equal(3, allHistoryJson.GetProperty("summary").GetProperty("gradedPicks").GetInt32());
+        Assert.Equal(2, allHistoryJson.GetProperty("summary").GetProperty("won").GetInt32());
+        Assert.Equal(1, allHistoryJson.GetProperty("summary").GetProperty("lost").GetInt32());
+
+        Assert.Equal(2, olderDateJson.GetProperty("summary").GetProperty("gradedPicks").GetInt32());
+        Assert.Equal(1, olderDateJson.GetProperty("summary").GetProperty("won").GetInt32());
+        Assert.Equal(1, olderDateJson.GetProperty("summary").GetProperty("lost").GetInt32());
+    }
+
+    [Fact]
     public async Task PerformanceResultMatchAudit_ReportsNormalizedNameFallbackEvidence()
     {
         await using var factory = new SafetyTestApplicationFactory();
