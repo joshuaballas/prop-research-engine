@@ -100,7 +100,9 @@ API-Sports Football has a debug-only single-fixture result import spike for Worl
 - `GET /api/debug/soccer/player-identity/api-sports/world-cup/link-preview`
 - `GET /api/debug/soccer/player-identity/api-sports/world-cup/platform-context`
 - `GET /api/debug/soccer/player-identity/api-sports/world-cup/review-queue`
+- `GET /api/debug/soccer/player-identity/api-sports/world-cup/review-queue/export`
 - `POST /api/debug/soccer/player-identity/api-sports/world-cup/approve-link`
+- `POST /api/debug/soccer/player-identity/api-sports/world-cup/bulk-approve-links`
 - `POST /api/debug/soccer/player-identity/api-sports/world-cup/reject-link`
 - `GET /api/debug/identity/provider-links`
 
@@ -116,11 +118,13 @@ Unsupported mappings are skipped for now: crosses, clearances, fantasy score pro
 
 Imported API-Sports result players are not automatically linked to The Odds/platform player identities. The player identity diagnostics are read-only and compare persisted API-Sports World Cup result players against local Soccer players, platform props, recommendation snapshots, and player external refs. They report already linked identities, high-confidence candidates, ambiguous names, conflicts, unmatched players, and blockers. They do not write aliases, merge players, or enable public Soccer grading.
 
-The platform-context diagnostic reports whether existing persisted Soccer platform/snapshot rows contain team, opponent, event, provider event id, provider player id, bookmaker, and competition context that could support identity matching. Current local diagnostics show start time, provider/bookmaker, and provider line/projection identifiers exist, but player team/opponent/event name/provider event id context is missing. Treat name-only Soccer candidates as manual review items until richer team/event identity context is persisted.
+The platform-context diagnostic reports whether existing persisted Soccer platform/snapshot rows contain team, opponent, event, provider event id, provider player id, bookmaker, and competition context that could support identity matching. Current local diagnostics show start time, provider/bookmaker, and provider line/projection identifiers exist, but player team/opponent/event name/provider event id context is not complete enough for bulk-safe linking. Treat name-only Soccer candidates and rows with `MissingTeamContext` as manual review items until richer team/event identity context is persisted.
 
 API-Sports result imports now create durable `provider_entity_links` Candidate rows for imported Soccer player identities. Existing `player_external_refs` remains supported for player-only compatibility; `provider_entity_links` is the reusable provider identity inventory and review layer going forward. See `docs/PROVIDER_IDENTITY_LINKING.md`.
 
-Debug-only manual review endpoints can approve or reject one API-Sports Soccer provider player link at a time. They default to `dryRun=true`, validate Soccer/provider/canonical player constraints, and never merge player rows. Approved links are used only by debug coverage diagnostics for now; public Soccer grading remains disabled.
+Debug-only manual review endpoints can approve or reject API-Sports Soccer provider player links. They default to `dryRun=true`, validate Soccer/provider/canonical player constraints, and never merge player rows. Bulk approval accepts only explicit reviewed `providerEntityLinkId` + `canonicalPlayerId` pairs and supports all-or-nothing or partial-write behavior. By default, bulk approval blocks rows with review blockers such as `MissingTeamContext`; `allowNeedsReview=true` is required for an explicit reviewed exception. Approved links are used only by debug coverage diagnostics for now; public Soccer grading remains disabled.
+
+Future Soccer market ingestion should persist provider event/team context when available: provider event id, event name, home/away team, player team, provider player id, competition, and event start time. Raw source context can remain in `platform_props.metadata` or snapshot `details_json`, with reliable fields promoted into normalized `games`, `teams`, and `provider_entity_links` later.
 
 ## Public History Still Disabled
 
@@ -184,10 +188,32 @@ Invoke-RestMethod "$base/api/debug/soccer/player-identity/api-sports/world-cup/p
 Invoke-RestMethod "$base/api/debug/soccer/player-identity/api-sports/world-cup/review-queue?fromDate=2026-06-11&toDate=2026-06-21&minConfidence=0.80&hasCandidate=true&suggestedAction=NeedsReview&maxResults=25" |
   ConvertTo-Json -Depth 80
 
+Invoke-RestMethod "$base/api/debug/soccer/player-identity/api-sports/world-cup/review-queue?fromDate=2026-06-11&toDate=2026-06-21&minConfidence=0.80&hasCandidate=true&safeOnly=true&maxResults=25" |
+  ConvertTo-Json -Depth 80
+
+Invoke-RestMethod "$base/api/debug/soccer/player-identity/api-sports/world-cup/review-queue/export?fromDate=2026-06-11&toDate=2026-06-21&minConfidence=0.80&safeOnly=true&maxResults=25" |
+  ConvertTo-Json -Depth 80
+
 Invoke-RestMethod -Method Post "$base/api/debug/soccer/player-identity/api-sports/world-cup/approve-link" `
   -ContentType "application/json" `
   -Body '{"providerEntityLinkId":"<providerEntityLinkId>","canonicalPlayerId":"<canonicalPlayerId>","dryRun":true,"reason":"manual review"}' |
   ConvertTo-Json -Depth 40
+
+Invoke-RestMethod -Method Post "$base/api/debug/soccer/player-identity/api-sports/world-cup/bulk-approve-links" `
+  -ContentType "application/json" `
+  -Body '{
+    "dryRun": true,
+    "allowPartial": false,
+    "allowNeedsReview": false,
+    "approvals": [
+      {
+        "providerEntityLinkId": "<providerEntityLinkId>",
+        "canonicalPlayerId": "<canonicalPlayerId>",
+        "reason": "manual exact-name review"
+      }
+    ]
+  }' |
+  ConvertTo-Json -Depth 80
 
 Invoke-RestMethod -Method Post "$base/api/debug/soccer/player-identity/api-sports/world-cup/reject-link" `
   -ContentType "application/json" `

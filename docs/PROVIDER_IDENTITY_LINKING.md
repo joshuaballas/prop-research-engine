@@ -94,8 +94,11 @@ Useful filters:
 
 - `suggestedAction=ApproveCandidate|NeedsReview|Conflict|NoCandidate`
 - `hasCandidate=true|false`
+- `safeOnly=true` to return only candidate rows with no blockers
 - `includeNoCandidate=true` to include null-confidence rows when `minConfidence` is set
 - `sort=confidenceDesc` by default, which orders `ApproveCandidate`, `NeedsReview`, `Conflict`, then `NoCandidate`, with confidence descending inside each group
+
+`MissingTeamContext` is a blocker. A name match with that blocker is not approval-ready for bulk approval, even when confidence is high. Use `safeOnly=true` or the export `safeCandidates` bucket for bulk-review candidates.
 
 Approve one reviewed link:
 
@@ -115,6 +118,32 @@ Invoke-RestMethod -Method Post "$base/api/debug/soccer/player-identity/api-sport
   ConvertTo-Json -Depth 40
 ```
 
+Bulk approval is also available for explicit reviewed pairs only. It does not infer or auto-approve names:
+
+```powershell
+Invoke-RestMethod "$base/api/debug/soccer/player-identity/api-sports/world-cup/review-queue/export?fromDate=2026-06-11&toDate=2026-06-21&minConfidence=0.80&safeOnly=true&maxResults=25" |
+  ConvertTo-Json -Depth 80
+
+Invoke-RestMethod -Method Post "$base/api/debug/soccer/player-identity/api-sports/world-cup/bulk-approve-links" `
+  -ContentType "application/json" `
+  -Body '{
+    "dryRun": true,
+    "allowPartial": false,
+    "approvals": [
+      {
+        "providerEntityLinkId": "<providerEntityLinkId>",
+        "canonicalPlayerId": "<canonicalPlayerId>",
+        "reason": "manual exact-name review"
+      }
+    ]
+  }' |
+  ConvertTo-Json -Depth 80
+```
+
+The export response separates rows into `safeCandidates`, `needsReviewCandidates`, `noCandidate`, and `ambiguousConflict`. Bulk approval should use `safeCandidates` unless a human has completed additional review.
+
+`bulk-approve-links` uses the same validation as single approval. If `allowPartial=false` and any row is blocked, a real write writes nothing. If `allowPartial=true`, valid rows are approved and blocked rows are reported. By default, bulk approval rejects rows with review blockers such as `MissingTeamContext`; set `allowNeedsReview=true` only for an explicit reviewed exception.
+
 Approval validation is narrow by design:
 
 - provider key must be `api-sports-football`
@@ -125,6 +154,8 @@ Approval validation is narrow by design:
 - a link already approved to a different canonical player is blocked
 
 When `dryRun=false`, approval sets `link_status=Approved`, `link_source=Manual`, `approved_by=debug/manual`, and stores the review reason in metadata. Rejection sets `link_status=Rejected`, clears canonical player fields, and stores the review reason.
+
+Single-link approval remains available for explicit human review. If the selected pair currently has blockers, the response includes warning values such as `ManualApprovalNeedsReviewCandidate:MissingTeamContext` so the risk is visible before a real write.
 
 ## Diagnostics
 
@@ -161,7 +192,8 @@ Next recommended path:
 
 - Keep Candidate rows as durable review inventory.
 - Use the debug-only manual approval workflow for reviewed API-Sports Soccer links.
-- Persist richer provider event/team context during Soccer market ingestion if available.
+- Persist richer provider event/team context during Soccer market ingestion if available, especially provider event id, event name, home/away team, player team, provider player id, competition, and event start time.
+- Store raw provider context in `platform_props.metadata`/snapshot `details_json` and promote stable fields into `games`, `teams`, and `provider_entity_links` when the source fields are reliable.
 - Keep Soccer public grading disabled until approved identity links and stat mappings are proven.
 
 ## Related Stat Mapping Configuration

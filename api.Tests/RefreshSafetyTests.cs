@@ -1436,6 +1436,412 @@ public sealed class RefreshSafetyTests
     }
 
     [Fact]
+    public async Task ApiSportsSoccerReviewQueueExport_ReturnsCompactApprovalRows()
+    {
+        await using var factory = new SafetyTestApplicationFactory(ApiSportsLiveConfig());
+        using var client = factory.CreateClient();
+        await factory.EnsureDatabaseAsync();
+        var importResponse = await client.PostAsJsonAsync("/api/debug/soccer/results/api-sports/world-cup/backfill-completed", new
+        {
+            fromDate = "2026-06-11",
+            toDate = "2026-06-11",
+            dryRun = false,
+            forceLive = true
+        });
+        await EnsureSuccessWithBodyAsync(importResponse);
+        await factory.AddSoccerPlatformIdentityCandidateAsync("Test Forward", "Home FC", addApiSportsRef: true);
+
+        var response = await client.GetAsync("/api/debug/soccer/player-identity/api-sports/world-cup/review-queue/export?fromDate=2026-06-11&toDate=2026-06-11&minConfidence=0.80&suggestedAction=ApproveCandidate&maxResults=10");
+
+        await EnsureSuccessWithBodyAsync(response);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.False(json.GetProperty("callsExternalApis").GetBoolean());
+        Assert.True(json.GetProperty("readOnly").GetBoolean());
+        var row = Assert.Single(json.GetProperty("safeCandidates").EnumerateArray());
+        Assert.Equal("Test Forward", row.GetProperty("apiSportsPlayerName").GetString());
+        Assert.Equal("Test Forward", row.GetProperty("candidateCanonicalPlayerName").GetString());
+        Assert.True(row.GetProperty("suggestedApprovalJson").TryGetProperty("providerEntityLinkId", out _));
+        Assert.True(row.GetProperty("suggestedApprovalJson").TryGetProperty("canonicalPlayerId", out _));
+    }
+
+    [Fact]
+    public async Task ApiSportsSoccerReviewQueueSafeOnly_ExcludesMissingTeamContextCandidates()
+    {
+        await using var factory = new SafetyTestApplicationFactory(ApiSportsLiveConfig());
+        using var client = factory.CreateClient();
+        await factory.EnsureDatabaseAsync();
+        var importResponse = await client.PostAsJsonAsync("/api/debug/soccer/results/api-sports/world-cup/backfill-completed", new
+        {
+            fromDate = "2026-06-11",
+            toDate = "2026-06-11",
+            dryRun = false,
+            forceLive = true
+        });
+        await EnsureSuccessWithBodyAsync(importResponse);
+        await AddSoccerCanonicalPlayerWithoutPlatformAsync(factory, "Test Forward");
+
+        var needsReviewResponse = await client.GetAsync("/api/debug/soccer/player-identity/api-sports/world-cup/review-queue?fromDate=2026-06-11&toDate=2026-06-11&minConfidence=0.80&hasCandidate=true&suggestedAction=NeedsReview&maxResults=10");
+        await EnsureSuccessWithBodyAsync(needsReviewResponse);
+        var needsReviewJson = await needsReviewResponse.Content.ReadFromJsonAsync<JsonElement>();
+        var needsReviewRow = Assert.Single(needsReviewJson.GetProperty("rows").EnumerateArray());
+        Assert.Contains(needsReviewRow.GetProperty("blockers").EnumerateArray(), blocker => blocker.GetString() == "MissingTeamContext");
+
+        var safeOnlyResponse = await client.GetAsync("/api/debug/soccer/player-identity/api-sports/world-cup/review-queue?fromDate=2026-06-11&toDate=2026-06-11&minConfidence=0.80&hasCandidate=true&safeOnly=true&maxResults=10");
+        await EnsureSuccessWithBodyAsync(safeOnlyResponse);
+        var safeOnlyJson = await safeOnlyResponse.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Empty(safeOnlyJson.GetProperty("rows").EnumerateArray());
+    }
+
+    [Fact]
+    public async Task ApiSportsSoccerReviewQueueExport_SeparatesNeedsReviewFromSafeCandidates()
+    {
+        await using var factory = new SafetyTestApplicationFactory(ApiSportsLiveConfig());
+        using var client = factory.CreateClient();
+        await factory.EnsureDatabaseAsync();
+        var importResponse = await client.PostAsJsonAsync("/api/debug/soccer/results/api-sports/world-cup/backfill-completed", new
+        {
+            fromDate = "2026-06-11",
+            toDate = "2026-06-11",
+            dryRun = false,
+            forceLive = true
+        });
+        await EnsureSuccessWithBodyAsync(importResponse);
+        await factory.AddSoccerPlatformIdentityCandidateAsync("Test Forward", "Home FC", addApiSportsRef: true);
+        await AddSoccerCanonicalPlayerWithoutPlatformAsync(factory, "Test Keeper");
+
+        var response = await client.GetAsync("/api/debug/soccer/player-identity/api-sports/world-cup/review-queue/export?fromDate=2026-06-11&toDate=2026-06-11&minConfidence=0.80&maxResults=10");
+
+        await EnsureSuccessWithBodyAsync(response);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.NotEmpty(json.GetProperty("safeCandidates").EnumerateArray());
+        var needsReviewRow = Assert.Single(json.GetProperty("needsReviewCandidates").EnumerateArray());
+        Assert.Equal("Test Keeper", needsReviewRow.GetProperty("apiSportsPlayerName").GetString());
+        Assert.Contains(needsReviewRow.GetProperty("blockers").EnumerateArray(), blocker => blocker.GetString() == "MissingTeamContext");
+        Assert.True(json.TryGetProperty("noCandidate", out _));
+        Assert.True(json.TryGetProperty("ambiguousConflict", out _));
+    }
+
+    [Fact]
+    public async Task ApiSportsSoccerLinkPreview_ReturnsOnlyNoBlockerSafeAliasRows()
+    {
+        await using var factory = new SafetyTestApplicationFactory(ApiSportsLiveConfig());
+        using var client = factory.CreateClient();
+        await factory.EnsureDatabaseAsync();
+        var importResponse = await client.PostAsJsonAsync("/api/debug/soccer/results/api-sports/world-cup/backfill-completed", new
+        {
+            fromDate = "2026-06-11",
+            toDate = "2026-06-11",
+            dryRun = false,
+            forceLive = true
+        });
+        await EnsureSuccessWithBodyAsync(importResponse);
+        await AddSoccerCanonicalPlayerWithoutPlatformAsync(factory, "Test Forward");
+
+        var response = await client.GetAsync("/api/debug/soccer/player-identity/api-sports/world-cup/link-preview?fromDate=2026-06-11&toDate=2026-06-11&minConfidence=0.80&maxResults=10");
+
+        await EnsureSuccessWithBodyAsync(response);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal(0, json.GetProperty("candidateCount").GetInt32());
+        Assert.Empty(json.GetProperty("candidates").EnumerateArray());
+    }
+
+    [Fact]
+    public async Task ApiSportsSoccerBulkApprove_DryRunWritesNothing_AndIsIdempotent()
+    {
+        await using var factory = new SafetyTestApplicationFactory(ApiSportsLiveConfig());
+        using var client = factory.CreateClient();
+        await factory.EnsureDatabaseAsync();
+        var importResponse = await client.PostAsJsonAsync("/api/debug/soccer/results/api-sports/world-cup/backfill-completed", new
+        {
+            fromDate = "2026-06-11",
+            toDate = "2026-06-11",
+            dryRun = false,
+            forceLive = true
+        });
+        await EnsureSuccessWithBodyAsync(importResponse);
+        var canonicalPlayerId = await factory.AddSoccerPlatformIdentityCandidateAsync("Test Forward", "Home FC", addApiSportsRef: true);
+        var link = await GetApiSportsProviderLinkStateAsync(factory, "1001");
+
+        var dryRunResponse = await client.PostAsJsonAsync("/api/debug/soccer/player-identity/api-sports/world-cup/bulk-approve-links", new
+        {
+            dryRun = true,
+            allowPartial = false,
+            approvals = new[]
+            {
+                new { providerEntityLinkId = link.Id, canonicalPlayerId, reason = "manual exact-name review" }
+            }
+        });
+
+        await EnsureSuccessWithBodyAsync(dryRunResponse);
+        var dryRunJson = await dryRunResponse.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.True(dryRunJson.GetProperty("dryRun").GetBoolean());
+        Assert.True(dryRunJson.GetProperty("readOnly").GetBoolean());
+        Assert.Equal(1, dryRunJson.GetProperty("validCount").GetInt32());
+        Assert.Equal(0, dryRunJson.GetProperty("changedCount").GetInt32());
+        var afterDryRun = await GetApiSportsProviderLinkStateAsync(factory, "1001");
+        Assert.Equal("Candidate", afterDryRun.LinkStatus);
+        Assert.Null(afterDryRun.CanonicalEntityId);
+
+        var writeResponse = await client.PostAsJsonAsync("/api/debug/soccer/player-identity/api-sports/world-cup/bulk-approve-links", new
+        {
+            dryRun = false,
+            allowPartial = false,
+            approvals = new[]
+            {
+                new { providerEntityLinkId = link.Id, canonicalPlayerId, reason = "manual exact-name review" }
+            }
+        });
+        await EnsureSuccessWithBodyAsync(writeResponse);
+        var writeJson = await writeResponse.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal(1, writeJson.GetProperty("changedCount").GetInt32());
+        var approved = await GetApiSportsProviderLinkStateAsync(factory, "1001");
+        Assert.Equal("Approved", approved.LinkStatus);
+        Assert.Equal(canonicalPlayerId, approved.CanonicalEntityId);
+
+        var idempotentResponse = await client.PostAsJsonAsync("/api/debug/soccer/player-identity/api-sports/world-cup/bulk-approve-links", new
+        {
+            dryRun = false,
+            allowPartial = false,
+            approvals = new[]
+            {
+                new { providerEntityLinkId = link.Id, canonicalPlayerId, reason = "manual exact-name review" }
+            }
+        });
+        await EnsureSuccessWithBodyAsync(idempotentResponse);
+        var idempotentJson = await idempotentResponse.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal(1, idempotentJson.GetProperty("validCount").GetInt32());
+        Assert.Equal(0, idempotentJson.GetProperty("changedCount").GetInt32());
+    }
+
+    [Fact]
+    public async Task ApiSportsSoccerBulkApprove_AllOrNothingBlocksWrites_WhenPartialNotAllowed()
+    {
+        await using var factory = new SafetyTestApplicationFactory(ApiSportsLiveConfig());
+        using var client = factory.CreateClient();
+        await factory.EnsureDatabaseAsync();
+        var importResponse = await client.PostAsJsonAsync("/api/debug/soccer/results/api-sports/world-cup/backfill-completed", new
+        {
+            fromDate = "2026-06-11",
+            toDate = "2026-06-11",
+            dryRun = false,
+            forceLive = true
+        });
+        await EnsureSuccessWithBodyAsync(importResponse);
+        var canonicalPlayerId = await factory.AddSoccerPlatformIdentityCandidateAsync("Test Forward", "Home FC", addApiSportsRef: true);
+        var badCanonicalPlayerId = await AddMlbCanonicalPlayerAsync(factory);
+        var link = await GetApiSportsProviderLinkStateAsync(factory, "1001");
+        var keeperLink = await GetApiSportsProviderLinkStateAsync(factory, "2001");
+
+        var response = await client.PostAsJsonAsync("/api/debug/soccer/player-identity/api-sports/world-cup/bulk-approve-links", new
+        {
+            dryRun = false,
+            allowPartial = false,
+            approvals = new object[]
+            {
+                new { providerEntityLinkId = link.Id, canonicalPlayerId, reason = "manual exact-name review" },
+                new { providerEntityLinkId = keeperLink.Id, canonicalPlayerId = badCanonicalPlayerId, reason = "bad sport" }
+            }
+        });
+
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal(1, json.GetProperty("validCount").GetInt32());
+        Assert.Equal(1, json.GetProperty("blockedCount").GetInt32());
+        Assert.Contains(json.GetProperty("blockers").EnumerateArray(), blocker => blocker.GetString() == "CanonicalPlayerSportMismatch");
+        Assert.Equal("Candidate", (await GetApiSportsProviderLinkStateAsync(factory, "1001")).LinkStatus);
+        Assert.Null((await GetApiSportsProviderLinkStateAsync(factory, "1001")).CanonicalEntityId);
+        Assert.Equal("Candidate", (await GetApiSportsProviderLinkStateAsync(factory, "2001")).LinkStatus);
+    }
+
+    [Fact]
+    public async Task ApiSportsSoccerBulkApprove_AllowsPartialWritesValidRows()
+    {
+        await using var factory = new SafetyTestApplicationFactory(ApiSportsLiveConfig());
+        using var client = factory.CreateClient();
+        await factory.EnsureDatabaseAsync();
+        var importResponse = await client.PostAsJsonAsync("/api/debug/soccer/results/api-sports/world-cup/backfill-completed", new
+        {
+            fromDate = "2026-06-11",
+            toDate = "2026-06-11",
+            dryRun = false,
+            forceLive = true
+        });
+        await EnsureSuccessWithBodyAsync(importResponse);
+        var canonicalPlayerId = await factory.AddSoccerPlatformIdentityCandidateAsync("Test Forward", "Home FC", addApiSportsRef: true);
+        var badCanonicalPlayerId = await AddMlbCanonicalPlayerAsync(factory);
+        var link = await GetApiSportsProviderLinkStateAsync(factory, "1001");
+        var keeperLink = await GetApiSportsProviderLinkStateAsync(factory, "2001");
+
+        var response = await client.PostAsJsonAsync("/api/debug/soccer/player-identity/api-sports/world-cup/bulk-approve-links", new
+        {
+            dryRun = false,
+            allowPartial = true,
+            approvals = new object[]
+            {
+                new { providerEntityLinkId = link.Id, canonicalPlayerId, reason = "manual exact-name review" },
+                new { providerEntityLinkId = keeperLink.Id, canonicalPlayerId = badCanonicalPlayerId, reason = "bad sport" }
+            }
+        });
+
+        await EnsureSuccessWithBodyAsync(response);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.True(json.GetProperty("allowPartial").GetBoolean());
+        Assert.Equal(1, json.GetProperty("validCount").GetInt32());
+        Assert.Equal(1, json.GetProperty("blockedCount").GetInt32());
+        Assert.Equal(1, json.GetProperty("changedCount").GetInt32());
+        Assert.Equal("Approved", (await GetApiSportsProviderLinkStateAsync(factory, "1001")).LinkStatus);
+        Assert.Equal("Candidate", (await GetApiSportsProviderLinkStateAsync(factory, "2001")).LinkStatus);
+    }
+
+    [Fact]
+    public async Task ApiSportsSoccerBulkApprove_BlocksNeedsReviewCandidatesByDefault()
+    {
+        await using var factory = new SafetyTestApplicationFactory(ApiSportsLiveConfig());
+        using var client = factory.CreateClient();
+        await factory.EnsureDatabaseAsync();
+        var importResponse = await client.PostAsJsonAsync("/api/debug/soccer/results/api-sports/world-cup/backfill-completed", new
+        {
+            fromDate = "2026-06-11",
+            toDate = "2026-06-11",
+            dryRun = false,
+            forceLive = true
+        });
+        await EnsureSuccessWithBodyAsync(importResponse);
+        var canonicalPlayerId = await AddSoccerCanonicalPlayerWithoutPlatformAsync(factory, "Test Forward");
+        var link = await GetApiSportsProviderLinkStateAsync(factory, "1001");
+
+        var response = await client.PostAsJsonAsync("/api/debug/soccer/player-identity/api-sports/world-cup/bulk-approve-links", new
+        {
+            dryRun = false,
+            allowPartial = false,
+            approvals = new[]
+            {
+                new { providerEntityLinkId = link.Id, canonicalPlayerId, reason = "manual exact-name review" }
+            }
+        });
+
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal(1, json.GetProperty("blockedCount").GetInt32());
+        Assert.Contains(json.GetProperty("blockers").EnumerateArray(), blocker => blocker.GetString() == "CandidateReviewBlocker:MissingTeamContext");
+        Assert.Equal("Candidate", (await GetApiSportsProviderLinkStateAsync(factory, "1001")).LinkStatus);
+    }
+
+    [Fact]
+    public async Task ApiSportsSoccerBulkApprove_AllowsNeedsReviewOnlyWhenExplicit()
+    {
+        await using var factory = new SafetyTestApplicationFactory(ApiSportsLiveConfig());
+        using var client = factory.CreateClient();
+        await factory.EnsureDatabaseAsync();
+        var importResponse = await client.PostAsJsonAsync("/api/debug/soccer/results/api-sports/world-cup/backfill-completed", new
+        {
+            fromDate = "2026-06-11",
+            toDate = "2026-06-11",
+            dryRun = false,
+            forceLive = true
+        });
+        await EnsureSuccessWithBodyAsync(importResponse);
+        var canonicalPlayerId = await AddSoccerCanonicalPlayerWithoutPlatformAsync(factory, "Test Forward");
+        var link = await GetApiSportsProviderLinkStateAsync(factory, "1001");
+
+        var response = await client.PostAsJsonAsync("/api/debug/soccer/player-identity/api-sports/world-cup/bulk-approve-links", new
+        {
+            dryRun = false,
+            allowPartial = false,
+            allowNeedsReview = true,
+            approvals = new[]
+            {
+                new { providerEntityLinkId = link.Id, canonicalPlayerId, reason = "manual exact-name review" }
+            }
+        });
+
+        await EnsureSuccessWithBodyAsync(response);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.True(json.GetProperty("allowNeedsReview").GetBoolean());
+        Assert.Equal(1, json.GetProperty("changedCount").GetInt32());
+        var result = Assert.Single(json.GetProperty("results").EnumerateArray());
+        Assert.Contains(result.GetProperty("warnings").EnumerateArray(), warning => warning.GetString() == "ApprovingNeedsReviewCandidate:MissingTeamContext");
+        Assert.Equal("Approved", (await GetApiSportsProviderLinkStateAsync(factory, "1001")).LinkStatus);
+    }
+
+    [Fact]
+    public async Task ApiSportsSoccerBulkApprove_BlocksAlreadyApprovedDifferentCanonical()
+    {
+        await using var factory = new SafetyTestApplicationFactory(ApiSportsLiveConfig());
+        using var client = factory.CreateClient();
+        await factory.EnsureDatabaseAsync();
+        var importResponse = await client.PostAsJsonAsync("/api/debug/soccer/results/api-sports/world-cup/backfill-completed", new
+        {
+            fromDate = "2026-06-11",
+            toDate = "2026-06-11",
+            dryRun = false,
+            forceLive = true
+        });
+        await EnsureSuccessWithBodyAsync(importResponse);
+        var canonicalPlayerId = await factory.AddSoccerPlatformIdentityCandidateAsync("Test Forward", "Home FC", addApiSportsRef: true);
+        var otherCanonicalPlayerId = await factory.AddSoccerPlatformIdentityCandidateAsync("Other Forward", "Home FC");
+        var link = await GetApiSportsProviderLinkStateAsync(factory, "1001");
+        var approveResponse = await client.PostAsJsonAsync("/api/debug/soccer/player-identity/api-sports/world-cup/bulk-approve-links", new
+        {
+            dryRun = false,
+            allowPartial = false,
+            approvals = new[]
+            {
+                new { providerEntityLinkId = link.Id, canonicalPlayerId, reason = "manual exact-name review" }
+            }
+        });
+        await EnsureSuccessWithBodyAsync(approveResponse);
+
+        var differentResponse = await client.PostAsJsonAsync("/api/debug/soccer/player-identity/api-sports/world-cup/bulk-approve-links", new
+        {
+            dryRun = false,
+            allowPartial = false,
+            approvals = new[]
+            {
+                new { providerEntityLinkId = link.Id, canonicalPlayerId = otherCanonicalPlayerId, reason = "different player" }
+            }
+        });
+
+        Assert.Equal(HttpStatusCode.Conflict, differentResponse.StatusCode);
+        var json = await differentResponse.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal(1, json.GetProperty("blockedCount").GetInt32());
+        Assert.Contains(json.GetProperty("blockers").EnumerateArray(), blocker => blocker.GetString() == "AlreadyApprovedToDifferentCanonicalPlayer");
+        var approved = await GetApiSportsProviderLinkStateAsync(factory, "1001");
+        Assert.Equal(canonicalPlayerId, approved.CanonicalEntityId);
+    }
+
+    [Fact]
+    public async Task ApiSportsSoccerApproveLink_WarnsWhenExplicitManualApprovalHasReviewBlockers()
+    {
+        await using var factory = new SafetyTestApplicationFactory(ApiSportsLiveConfig());
+        using var client = factory.CreateClient();
+        await factory.EnsureDatabaseAsync();
+        var importResponse = await client.PostAsJsonAsync("/api/debug/soccer/results/api-sports/world-cup/backfill-completed", new
+        {
+            fromDate = "2026-06-11",
+            toDate = "2026-06-11",
+            dryRun = false,
+            forceLive = true
+        });
+        await EnsureSuccessWithBodyAsync(importResponse);
+        var canonicalPlayerId = await AddSoccerCanonicalPlayerWithoutPlatformAsync(factory, "Test Forward");
+        var link = await GetApiSportsProviderLinkStateAsync(factory, "1001");
+
+        var response = await client.PostAsJsonAsync("/api/debug/soccer/player-identity/api-sports/world-cup/approve-link", new
+        {
+            providerEntityLinkId = link.Id,
+            canonicalPlayerId,
+            dryRun = true,
+            reason = "manual explicit review"
+        });
+
+        await EnsureSuccessWithBodyAsync(response);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Contains(json.GetProperty("warnings").EnumerateArray(), warning => warning.GetString() == "ManualApprovalNeedsReviewCandidate:MissingTeamContext");
+        Assert.Equal("Candidate", (await GetApiSportsProviderLinkStateAsync(factory, "1001")).LinkStatus);
+    }
+
+    [Fact]
     public async Task ApiSportsSoccerApproveLink_ValidatesCanonicalSport_AndBlocksDifferentApproval()
     {
         await using var factory = new SafetyTestApplicationFactory(ApiSportsLiveConfig());
@@ -1729,6 +2135,46 @@ public sealed class RefreshSafetyTests
         {
             Id = Guid.NewGuid(),
             DisplayName = "Wrong Sport Player",
+            LeagueId = league.Id
+        };
+        dbContext.Players.Add(player);
+        await dbContext.SaveChangesAsync();
+        return player.Id;
+    }
+
+    private static async Task<Guid> AddSoccerCanonicalPlayerWithoutPlatformAsync(
+        SafetyTestApplicationFactory factory,
+        string playerName)
+    {
+        using var scope = factory.Services.CreateScope();
+        var dbContext = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+        var sport = await dbContext.Sports.SingleOrDefaultAsync(row => row.Code == "SOCCER");
+        if (sport is null)
+        {
+            sport = new Sport { Id = Guid.NewGuid(), Code = "SOCCER", Name = "Soccer" };
+            dbContext.Sports.Add(sport);
+            await dbContext.SaveChangesAsync();
+        }
+
+        var league = await dbContext.Leagues.SingleOrDefaultAsync(row => row.SportId == sport.Id && row.Code == "WC2026");
+        if (league is null)
+        {
+            league = new League
+            {
+                Id = Guid.NewGuid(),
+                SportId = sport.Id,
+                Name = "World Cup",
+                Code = "WC2026",
+                SeasonType = "2026"
+            };
+            dbContext.Leagues.Add(league);
+            await dbContext.SaveChangesAsync();
+        }
+
+        var player = new Player
+        {
+            Id = Guid.NewGuid(),
+            DisplayName = playerName,
             LeagueId = league.Id
         };
         dbContext.Players.Add(player);

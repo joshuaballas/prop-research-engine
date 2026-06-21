@@ -260,6 +260,16 @@ Invoke-RestMethod -Uri "http://localhost:5299/api/debug/provider-lines/refresh-c
   ConvertTo-Json -Depth 20
 ```
 
+## Soccer Results And Identity Diagnostics
+
+| Method | Path | Purpose | Writes | External API | Credits |
+| --- | --- | --- | --- | --- | --- |
+| GET | `/api/debug/soccer/player-identity/api-sports/world-cup/review-queue` | Read-only API-Sports World Cup player identity review queue with confidence/action filters. Supports `safeOnly=true` to return only candidate rows with no blockers; `MissingTeamContext` remains review-only. | No | No | No |
+| GET | `/api/debug/soccer/player-identity/api-sports/world-cup/review-queue/export` | Compact read-only export of explicit provider/canonical player pairs for manual review, separated into `safeCandidates`, `needsReviewCandidates`, `noCandidate`, and `ambiguousConflict`. | No | No | No |
+| POST | `/api/debug/soccer/player-identity/api-sports/world-cup/approve-link` | Debug-only dry-run-default approval for one explicit API-Sports Soccer provider player link. Single approval remains possible for reviewed rows with blockers, but the response warns about review blockers. | Yes unless dry-run | No | No |
+| POST | `/api/debug/soccer/player-identity/api-sports/world-cup/bulk-approve-links` | Debug-only dry-run-default bulk approval for explicit reviewed provider/canonical player pairs. Supports all-or-nothing and partial writes. Blocks rows with review blockers by default; `allowNeedsReview=true` is required for an explicit exception. | Yes unless dry-run | No | No |
+| POST | `/api/debug/soccer/player-identity/api-sports/world-cup/reject-link` | Debug-only dry-run-default rejection for one API-Sports Soccer provider player link. | Yes unless dry-run | No | No |
+
 ## MLB Results
 
 | Method | Path | Purpose | Writes | External API | Credits |

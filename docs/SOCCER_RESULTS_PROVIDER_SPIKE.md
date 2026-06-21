@@ -54,7 +54,9 @@ All API-Sports endpoints are debug-only and force-live gated.
 - `GET /api/debug/soccer/player-identity/api-sports/world-cup/link-preview`
 - `GET /api/debug/soccer/player-identity/api-sports/world-cup/platform-context`
 - `GET /api/debug/soccer/player-identity/api-sports/world-cup/review-queue`
+- `GET /api/debug/soccer/player-identity/api-sports/world-cup/review-queue/export`
 - `POST /api/debug/soccer/player-identity/api-sports/world-cup/approve-link`
+- `POST /api/debug/soccer/player-identity/api-sports/world-cup/bulk-approve-links`
 - `POST /api/debug/soccer/player-identity/api-sports/world-cup/reject-link`
 - `GET /api/debug/identity/provider-links`
 
@@ -149,14 +151,18 @@ Read-only diagnostics:
 
 - `/api/debug/soccer/player-identity/api-sports/world-cup/coverage` reports imported API-Sports player inventory, existing Soccer player/platform/ref counts, already-linked market identities, normalized-name candidates, team-aware candidates, ambiguous names, conflicts, and unmatched players.
 - `/api/debug/soccer/player-identity/api-sports/world-cup/candidates` returns candidate link rows with confidence, reasons, blockers, and suggested action.
-- `/api/debug/soccer/player-identity/api-sports/world-cup/link-preview` returns only high-confidence `SafeAliasLink` candidates, but still writes nothing.
+- `/api/debug/soccer/player-identity/api-sports/world-cup/link-preview` returns only high-confidence `SafeAliasLink` candidates with no blockers, but still writes nothing.
 - `/api/debug/soccer/player-identity/api-sports/world-cup/platform-context` reports which persisted Soccer platform/snapshot fields are available for identity matching, including team, opponent, event name, start time, provider event id, provider player id, bookmaker, and competition fields.
-- `/api/debug/soccer/player-identity/api-sports/world-cup/review-queue` joins durable Candidate links to candidate evidence and suggests `ApproveCandidate`, `NeedsReview`, `NoCandidate`, or `Conflict`. It supports `suggestedAction`, `hasCandidate`, `includeNoCandidate`, and `sort=confidenceDesc` filters so manual review can focus on actionable rows first.
-- `/api/debug/soccer/player-identity/api-sports/world-cup/approve-link` and `/reject-link` default to `dryRun=true`. When `dryRun=false`, they update one `provider_entity_links` row after validating the provider key, entity type, Soccer sport, canonical Soccer player, and existing link status.
+- `/api/debug/soccer/player-identity/api-sports/world-cup/review-queue` joins durable Candidate links to candidate evidence and suggests `ApproveCandidate`, `NeedsReview`, `NoCandidate`, or `Conflict`. It supports `suggestedAction`, `hasCandidate`, `safeOnly`, `includeNoCandidate`, and `sort=confidenceDesc` filters so manual review can focus on actionable rows first.
+- `/api/debug/soccer/player-identity/api-sports/world-cup/review-queue/export` separates compact rows into `safeCandidates`, `needsReviewCandidates`, `noCandidate`, and `ambiguousConflict` buckets that can be reviewed before explicit approval payloads are built.
+- `/api/debug/soccer/player-identity/api-sports/world-cup/approve-link`, `/bulk-approve-links`, and `/reject-link` default to `dryRun=true`. When `dryRun=false`, they update only explicit `provider_entity_links` rows after validating the provider key, entity type, Soccer sport, canonical Soccer player, and existing link status.
+- `/bulk-approve-links` never infers approvals by name. It approves only supplied `providerEntityLinkId` + `canonicalPlayerId` pairs. With `allowPartial=false`, any blocked row prevents all writes; with `allowPartial=true`, valid rows are written and invalid rows are reported. By default it rejects rows with blockers such as `MissingTeamContext`; `allowNeedsReview=true` is required for an explicit reviewed exception.
 
-The matcher normalizes names case-insensitively, strips punctuation through the app compact player-name normalizer, handles diacritics, and uses team names when both sides have team context. Name-only candidates are review items, not automatic links. Ambiguous names or team mismatches remain blockers.
+The matcher normalizes names case-insensitively, strips punctuation through the app compact player-name normalizer, handles diacritics, and uses team names when both sides have team context. Name-only candidates are review items, not automatic links. `MissingTeamContext` is not safe for bulk approval. Ambiguous names or team mismatches remain blockers.
 
-Current local diagnostics show persisted Soccer platform props have start time, provider/bookmaker, and a provider line/projection identifier, but do not currently have player team, opponent, event name, provider event id, or competition context. That means safe auto-linking is not available from existing persisted data alone; manual provider-link review or richer persisted provider event/team context is required first.
+Current local diagnostics show persisted Soccer platform props have start time, provider/bookmaker, and a provider line/projection identifier, but do not currently have enough player team, opponent, event name, provider event id, or competition context. That means safe auto-linking is not available from existing persisted data alone; manual provider-link review or richer persisted provider event/team context is required first.
+
+Future Soccer market ingestion should persist provider event/team context when the provider feed exposes it: provider event id, event name, home/away team, player team, provider player id, competition, and event start time. Raw source context can live in `platform_props.metadata` and snapshot `details_json`; reliable normalized context can later be promoted into `games`, `teams`, and `provider_entity_links`.
 
 Approved provider links are used by `/api/debug/soccer/results/api-sports/world-cup/coverage` to report player-link coverage and debug market joins. The coverage response keeps player-link coverage separate from market join coverage. Public Soccer grading remains disabled.
 
@@ -267,10 +273,32 @@ Invoke-RestMethod "$base/api/debug/soccer/player-identity/api-sports/world-cup/p
 Invoke-RestMethod "$base/api/debug/soccer/player-identity/api-sports/world-cup/review-queue?fromDate=2026-06-11&toDate=2026-06-21&minConfidence=0.80&hasCandidate=true&suggestedAction=NeedsReview&maxResults=25" |
   ConvertTo-Json -Depth 80
 
+Invoke-RestMethod "$base/api/debug/soccer/player-identity/api-sports/world-cup/review-queue?fromDate=2026-06-11&toDate=2026-06-21&minConfidence=0.80&hasCandidate=true&safeOnly=true&maxResults=25" |
+  ConvertTo-Json -Depth 80
+
+Invoke-RestMethod "$base/api/debug/soccer/player-identity/api-sports/world-cup/review-queue/export?fromDate=2026-06-11&toDate=2026-06-21&minConfidence=0.80&safeOnly=true&maxResults=25" |
+  ConvertTo-Json -Depth 80
+
 Invoke-RestMethod -Method Post "$base/api/debug/soccer/player-identity/api-sports/world-cup/approve-link" `
   -ContentType "application/json" `
   -Body '{"providerEntityLinkId":"<providerEntityLinkId>","canonicalPlayerId":"<canonicalPlayerId>","dryRun":true,"reason":"manual review"}' |
   ConvertTo-Json -Depth 40
+
+Invoke-RestMethod -Method Post "$base/api/debug/soccer/player-identity/api-sports/world-cup/bulk-approve-links" `
+  -ContentType "application/json" `
+  -Body '{
+    "dryRun": true,
+    "allowPartial": false,
+    "allowNeedsReview": false,
+    "approvals": [
+      {
+        "providerEntityLinkId": "<providerEntityLinkId>",
+        "canonicalPlayerId": "<canonicalPlayerId>",
+        "reason": "manual exact-name review"
+      }
+    ]
+  }' |
+  ConvertTo-Json -Depth 80
 
 Invoke-RestMethod -Method Post "$base/api/debug/soccer/player-identity/api-sports/world-cup/reject-link" `
   -ContentType "application/json" `
