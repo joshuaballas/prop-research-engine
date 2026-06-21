@@ -48,6 +48,7 @@ All API-Sports endpoints are debug-only and force-live gated.
 - `GET /api/debug/soccer/results/api-sports/import-fixture/status?fixtureId=...`
 - `GET /api/debug/soccer/results/api-sports/world-cup/import-status`
 - `POST /api/debug/soccer/results/api-sports/world-cup/backfill-completed`
+- `GET /api/debug/soccer/results/api-sports/world-cup/coverage`
 
 Rules:
 
@@ -236,4 +237,14 @@ Invoke-RestMethod "$base/api/debug/soccer/results/api-sports/world-cup/import-st
 ```
 
 `import-status` in persisted-only mode reports local `importedFixtureCount`, `rowsByFixture`, `totalRows`, `latestImportedEventDate`, and `latestImportedAtUtc` without calling API-Sports. Discovery-dependent counts such as discovered, completed, and missing completed fixtures are only populated when `forceLive=true`.
+
+`coverage` is read-only and never calls API-Sports. It inventories imported World Cup `prop_results` by fixture, player, prop type, and rule confidence, then checks whether imported rows have local join candidates in platform props, recommendation snapshots, or market snapshots. The diagnostic is conservative: `prop_results` do not store provider/bookmaker/market keys, and market snapshots do not store API-Sports fixture ids, so unmatched rows are reported by mismatch category instead of being silently ignored.
+
+```powershell
+Invoke-RestMethod "$base/api/debug/soccer/results/api-sports/world-cup/coverage?fromDate=2026-06-11&toDate=2026-06-21" |
+  ConvertTo-Json -Depth 60
+
+Invoke-RestMethod "$base/api/debug/soccer/results/api-sports/world-cup/coverage?fromDate=2026-06-11&toDate=2026-06-21&includeSamples=true&maxSamples=10" |
+  ConvertTo-Json -Depth 80
+```
 

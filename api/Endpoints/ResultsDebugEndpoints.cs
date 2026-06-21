@@ -768,6 +768,242 @@ public static class ResultsDebugEndpoints
         .WithName("ApiSportsSoccerWorldCupImportStatusDebug")
         .WithSummary("Read-only World Cup 2026 API-Sports Soccer import coverage diagnostics.");
 
+        endpoints.MapGet("/api/debug/soccer/results/api-sports/world-cup/coverage", async (
+            DateOnly? fromDate,
+            DateOnly? toDate,
+            string? fixtureId,
+            bool? includeSamples,
+            int? maxSamples,
+            ApplicationDbContext dbContext,
+            CancellationToken cancellationToken) =>
+        {
+            var range = NormalizeApiSportsWorldCupDateRange(fromDate, toDate);
+            var normalizedFixtureId = string.IsNullOrWhiteSpace(fixtureId) ? null : fixtureId.Trim();
+            var sampleLimit = Math.Clamp(maxSamples ?? 25, 1, 100);
+            var resultRows = await dbContext.PropResults
+                .AsNoTracking()
+                .Include(result => result.Player)
+                .Include(result => result.PropType)
+                .Where(result => result.ExternalSource == ApiSportsFootballResultSource
+                    && result.EventDate >= range.FromDate
+                    && result.EventDate <= range.ToDate
+                    && result.ExternalSourceIdentifier.StartsWith($"{ApiSportsFootballResultSource}:"))
+                .Select(result => new ApiSportsCoverageResultRow(
+                    result.Id,
+                    result.EventDate,
+                    ExtractApiSportsFixtureId(result.ExternalSourceIdentifier),
+                    result.PlayerId,
+                    result.Player == null ? string.Empty : result.Player.DisplayName,
+                    NormalizeResultPlayerName(result.Player == null ? null : result.Player.DisplayName),
+                    result.PropTypeId,
+                    result.PropType == null ? string.Empty : result.PropType.Name,
+                    result.PropType == null ? string.Empty : result.PropType.StatKey,
+                    NormalizeResultPropTypeName(result.PropType == null ? null : result.PropType.Name),
+                    result.ActualResultValue,
+                    result.ExternalSourceIdentifier))
+                .ToListAsync(cancellationToken);
+
+            if (!string.IsNullOrWhiteSpace(normalizedFixtureId))
+            {
+                resultRows = resultRows
+                    .Where(row => string.Equals(row.FixtureId, normalizedFixtureId, StringComparison.OrdinalIgnoreCase))
+                    .ToList();
+            }
+
+            var soccerPlatformProps = await dbContext.PlatformProps
+                .AsNoTracking()
+                .Include(platformProp => platformProp.Prop)!.ThenInclude(prop => prop!.Player)
+                .Include(platformProp => platformProp.Prop)!.ThenInclude(prop => prop!.PropType)
+                .Include(platformProp => platformProp.Prop)!.ThenInclude(prop => prop!.League)!.ThenInclude(league => league!.Sport)
+                .Where(platformProp => platformProp.Prop != null
+                    && platformProp.Prop.League != null
+                    && platformProp.Prop.League.Sport != null
+                    && platformProp.Prop.League.Sport.Code == "SOCCER")
+                .Select(platformProp => new ApiSportsCoverageMarketRow(
+                    "PlatformProp",
+                    platformProp.Prop!.PlayerId,
+                    platformProp.Prop.Player == null ? string.Empty : platformProp.Prop.Player.DisplayName,
+                    NormalizeResultPlayerName(platformProp.Prop.Player == null ? null : platformProp.Prop.Player.DisplayName),
+                    platformProp.Prop.PropTypeId,
+                    platformProp.Prop.PropType == null ? string.Empty : platformProp.Prop.PropType.Name,
+                    platformProp.Prop.PropType == null ? string.Empty : platformProp.Prop.PropType.StatKey,
+                    NormalizeResultPropTypeName(platformProp.Prop.PropType == null ? null : platformProp.Prop.PropType.Name),
+                    DateOnly.FromDateTime(platformProp.Prop.StartsAt.UtcDateTime),
+                    platformProp.PlatformPropId,
+                    platformProp.ExternalStableKey,
+                    platformProp.Status))
+                .ToListAsync(cancellationToken);
+            var soccerTopSnapshots = await dbContext.MarketTopPickSnapshots
+                .AsNoTracking()
+                .Where(snapshot => snapshot.Sport == "SOCCER"
+                    && snapshot.SlateDate >= range.FromDate
+                    && snapshot.SlateDate <= range.ToDate)
+                .Select(snapshot => new ApiSportsCoverageSnapshotRow(
+                    "TopPickSnapshot",
+                    snapshot.Player,
+                    NormalizeResultPlayerName(snapshot.Player),
+                    snapshot.PropType,
+                    string.Empty,
+                    NormalizeResultPropTypeName(snapshot.PropType),
+                    snapshot.EventStartTime.HasValue ? DateOnly.FromDateTime(snapshot.EventStartTime.Value.UtcDateTime) : snapshot.SlateDate,
+                    snapshot.EventId,
+                    snapshot.Bookmaker,
+                    snapshot.ProviderCategory))
+                .ToListAsync(cancellationToken);
+            var soccerLineSnapshots = await dbContext.MarketLineShoppingSnapshots
+                .AsNoTracking()
+                .Where(snapshot => snapshot.Sport == "SOCCER"
+                    && snapshot.SlateDate >= range.FromDate
+                    && snapshot.SlateDate <= range.ToDate)
+                .Select(snapshot => new ApiSportsCoverageSnapshotRow(
+                    "LineShoppingSnapshot",
+                    snapshot.Player,
+                    NormalizeResultPlayerName(snapshot.Player),
+                    snapshot.PropType,
+                    string.Empty,
+                    NormalizeResultPropTypeName(snapshot.PropType),
+                    snapshot.EventStartTime.HasValue ? DateOnly.FromDateTime(snapshot.EventStartTime.Value.UtcDateTime) : snapshot.SlateDate,
+                    snapshot.EventId,
+                    snapshot.Bookmaker,
+                    snapshot.ProviderCategory))
+                .ToListAsync(cancellationToken);
+            var soccerRecommendationSnapshots = await dbContext.RecommendationSnapshots
+                .AsNoTracking()
+                .Where(snapshot => snapshot.Sport == "SOCCER"
+                    && snapshot.ExpectedResultDate >= range.FromDate
+                    && snapshot.ExpectedResultDate <= range.ToDate)
+                .Select(snapshot => new ApiSportsCoverageSnapshotRow(
+                    "RecommendationSnapshot",
+                    snapshot.PlayerName,
+                    snapshot.NormalizedPlayerName,
+                    snapshot.PropType,
+                    string.Empty,
+                    snapshot.NormalizedPropType,
+                    snapshot.ExpectedResultDate,
+                    snapshot.EventId,
+                    snapshot.Bookmaker,
+                    snapshot.ProviderCategory))
+                .ToListAsync(cancellationToken);
+
+            var snapshotRows = soccerTopSnapshots.Concat(soccerLineSnapshots).Concat(soccerRecommendationSnapshots).ToArray();
+            var marketRows = soccerPlatformProps.ToArray();
+            var noMarketDataAvailable = marketRows.Length == 0 && snapshotRows.Length == 0;
+            var resultDiagnostics = resultRows.Select(row => BuildApiSportsCoverageMatch(row, marketRows, snapshotRows, noMarketDataAvailable)).ToArray();
+            var matchedPlatformCount = resultDiagnostics.Count(row => row.MatchedToPlatformProps);
+            var matchedSnapshotCount = resultDiagnostics.Count(row => row.MatchedToSnapshots);
+            var matchedAnyCount = resultDiagnostics.Count(row => row.MatchedToPlatformProps || row.MatchedToSnapshots);
+            var unmatched = resultDiagnostics.Where(row => !row.MatchedToPlatformProps && !row.MatchedToSnapshots).ToArray();
+            var confidenceByStatKey = ApiSportsSoccerResultMappings
+                .Where(mapping => mapping.ImportSupported)
+                .GroupBy(mapping => mapping.StatKey, StringComparer.OrdinalIgnoreCase)
+                .ToDictionary(group => group.Key, group => group.First().RuleConfidence, StringComparer.OrdinalIgnoreCase);
+            var rowsByPropType = resultRows
+                .GroupBy(row => new { row.PropTypeId, row.PropTypeName, row.StatKey })
+                .OrderBy(group => group.Key.PropTypeName)
+                .Select(group => new
+                {
+                    propTypeId = group.Key.PropTypeId,
+                    displayName = group.Key.PropTypeName,
+                    statKey = group.Key.StatKey,
+                    rowCount = group.Count(),
+                    ruleConfidence = confidenceByStatKey.GetValueOrDefault(group.Key.StatKey, "Unknown")
+                })
+                .ToArray();
+
+            return Results.Ok(new
+            {
+                generatedAtUtc = DateTimeOffset.UtcNow,
+                callsExternalApis = false,
+                readOnly = true,
+                scope = new
+                {
+                    sport = "SOCCER",
+                    provider = "API-Sports",
+                    product = "API-Sports Football",
+                    competition = "World Cup",
+                    season = ApiSportsWorldCupSeason,
+                    range.FromDate,
+                    range.ToDate,
+                    fixtureId = normalizedFixtureId
+                },
+                importedResultSummary = new
+                {
+                    totalRows = resultRows.Count,
+                    distinctFixtures = resultRows.Select(row => row.FixtureId).Where(id => !string.IsNullOrWhiteSpace(id)).Distinct(StringComparer.OrdinalIgnoreCase).Count(),
+                    distinctPlayers = resultRows.Select(row => row.PlayerId).Distinct().Count(),
+                    rowsByFixture = resultRows
+                        .GroupBy(row => new { row.FixtureId, row.EventDate })
+                        .OrderBy(group => group.Key.EventDate)
+                        .ThenBy(group => group.Key.FixtureId)
+                        .Select(group => new { group.Key.FixtureId, group.Key.EventDate, rowCount = group.Count() })
+                        .ToArray(),
+                    rowsByPropType,
+                    rowsByRuleConfidence = rowsByPropType
+                        .GroupBy(row => row.ruleConfidence)
+                        .OrderBy(group => group.Key)
+                        .Select(group => new { ruleConfidence = group.Key, rowCount = group.Sum(row => row.rowCount) })
+                        .ToArray()
+                },
+                propTypeCoverage = rowsByPropType.Select(row => new
+                {
+                    row.propTypeId,
+                    row.statKey,
+                    row.displayName,
+                    row.rowCount,
+                    row.ruleConfidence,
+                    gradeableNow = string.Equals(row.ruleConfidence, "Known", StringComparison.OrdinalIgnoreCase),
+                    publicSoccerGradingEnabled = false
+                }).ToArray(),
+                marketJoinCoverage = new
+                {
+                    totalImportedResults = resultRows.Count,
+                    matchedToPlatformProps = matchedPlatformCount,
+                    matchedToSnapshots = matchedSnapshotCount,
+                    matchedAny = matchedAnyCount,
+                    unmatchedCount = unmatched.Length,
+                    matchRate = resultRows.Count == 0 ? 0 : decimal.Round((decimal)matchedAnyCount / resultRows.Count, 4),
+                    noMarketDataAvailable,
+                    soccerPlatformProps = marketRows.Length,
+                    soccerSnapshots = snapshotRows.Length,
+                    soccerTopPickSnapshots = soccerTopSnapshots.Count,
+                    soccerLineShoppingSnapshots = soccerLineSnapshots.Count,
+                    soccerRecommendationSnapshots = soccerRecommendationSnapshots.Count,
+                    identifiersMissing = new[]
+                    {
+                        "prop_results do not store provider/bookmaker/market keys.",
+                        "market snapshots do not store API-Sports fixture ids.",
+                        "snapshot matching uses normalized player name, prop type display name, and event/result date."
+                    }
+                },
+                mismatchBreakdown = new
+                {
+                    playerMissing = unmatched.Count(row => row.Reason == "PlayerMissing"),
+                    propTypeMissing = unmatched.Count(row => row.Reason == "PropTypeMissing"),
+                    dateMismatch = unmatched.Count(row => row.Reason == "DateMismatch"),
+                    eventMismatch = unmatched.Count(row => row.Reason == "EventIdentifierUnavailable"),
+                    marketMissing = unmatched.Count(row => row.Reason == "MarketMissing"),
+                    unknown = unmatched.Count(row => row.Reason == "Unknown")
+                },
+                samples = includeSamples == true ? new
+                {
+                    matched = resultDiagnostics
+                        .Where(row => row.MatchedToPlatformProps || row.MatchedToSnapshots)
+                        .Take(sampleLimit)
+                        .ToArray(),
+                    unmatchedPlayers = unmatched.Where(row => row.Reason == "PlayerMissing").Take(sampleLimit).ToArray(),
+                    unmatchedPropTypes = unmatched.Where(row => row.Reason == "PropTypeMissing").Take(sampleLimit).ToArray(),
+                    marketMissing = unmatched.Where(row => row.Reason == "MarketMissing").Take(sampleLimit).ToArray(),
+                    dateMismatches = unmatched.Where(row => row.Reason == "DateMismatch").Take(sampleLimit).ToArray()
+                } : null,
+                publicSoccerGradingEnabled = false,
+                recommendation = matchedAnyCount > 0
+                    ? "Imported Soccer results have at least one local market join candidate, but public Soccer grading remains disabled until matching is reviewed."
+                    : "Imported Soccer results are persisted, but no safe market join path was proven in this diagnostic range."
+            });
+        })
+        .WithName("ApiSportsSoccerWorldCupCoverageDebug")
+        .WithSummary("Read-only local coverage diagnostics for imported API-Sports World Cup Soccer prop_results.");
+
         endpoints.MapPost("/api/debug/soccer/results/api-sports/world-cup/backfill-completed", async (
             ApiSportsWorldCupBackfillCompletedRequest request,
             IOptions<ApiSportsOptions> options,
@@ -1628,6 +1864,59 @@ public static class ResultsDebugEndpoints
         return parts.Length >= 2 && string.Equals(parts[0], ApiSportsFootballResultSource, StringComparison.OrdinalIgnoreCase)
             ? parts[1]
             : null;
+    }
+
+    private static ApiSportsCoverageMatchDiagnostic BuildApiSportsCoverageMatch(
+        ApiSportsCoverageResultRow result,
+        IReadOnlyList<ApiSportsCoverageMarketRow> platformRows,
+        IReadOnlyList<ApiSportsCoverageSnapshotRow> snapshotRows,
+        bool noMarketDataAvailable)
+    {
+        if (noMarketDataAvailable)
+        {
+            return ApiSportsCoverageMatchDiagnostic.FromResult(result, false, false, "MarketMissing", "No Soccer platform props, recommendations, or market snapshots exist in this date range.");
+        }
+
+        var platformPlayerMatches = platformRows.Where(row => row.PlayerId == result.PlayerId).ToArray();
+        var platformPropMatches = platformPlayerMatches.Where(row => row.PropTypeId == result.PropTypeId || string.Equals(row.StatKey, result.StatKey, StringComparison.OrdinalIgnoreCase)).ToArray();
+        var platformDateMatches = platformPropMatches.Where(row => row.EventDate == result.EventDate).ToArray();
+        var snapshotPlayerMatches = snapshotRows.Where(row => row.NormalizedPlayerName == result.NormalizedPlayerName).ToArray();
+        var snapshotPropMatches = snapshotPlayerMatches
+            .Where(row => row.NormalizedPropType == result.NormalizedPropTypeName
+                || (!string.IsNullOrWhiteSpace(row.StatKey) && string.Equals(row.StatKey, result.StatKey, StringComparison.OrdinalIgnoreCase)))
+            .ToArray();
+        var snapshotDateMatches = snapshotPropMatches.Where(row => row.EventDate == result.EventDate).ToArray();
+        var matchedPlatform = platformDateMatches.Length > 0;
+        var matchedSnapshot = snapshotDateMatches.Length > 0;
+
+        if (matchedPlatform || matchedSnapshot)
+        {
+            return ApiSportsCoverageMatchDiagnostic.FromResult(
+                result,
+                matchedPlatform,
+                matchedSnapshot,
+                "Matched",
+                matchedPlatform
+                    ? "Matched by canonical player id, prop type/statKey, and event date."
+                    : "Matched by normalized player name, prop type, and event date.");
+        }
+
+        if (platformPlayerMatches.Length == 0 && snapshotPlayerMatches.Length == 0)
+        {
+            return ApiSportsCoverageMatchDiagnostic.FromResult(result, false, false, "PlayerMissing", "No matching Soccer player was found in platform props, recommendations, or market snapshots.");
+        }
+
+        if (platformPropMatches.Length == 0 && snapshotPropMatches.Length == 0)
+        {
+            return ApiSportsCoverageMatchDiagnostic.FromResult(result, false, false, "PropTypeMissing", "Player matched, but no local market row matched the imported result prop type/statKey.");
+        }
+
+        if (platformDateMatches.Length == 0 && snapshotDateMatches.Length == 0)
+        {
+            return ApiSportsCoverageMatchDiagnostic.FromResult(result, false, false, "DateMismatch", "Player and prop matched, but no local market row matched the imported event/result date.");
+        }
+
+        return ApiSportsCoverageMatchDiagnostic.FromResult(result, false, false, "Unknown", "No safe local join path was identified.");
     }
 
     private static ApiSportsSoccerResultPreview BuildApiSportsSoccerResultPreview(
@@ -2658,6 +2947,79 @@ public static class ResultsDebugEndpoints
         string? LatestImportedFixtureId,
         DateOnly? LatestImportedDate,
         DateTimeOffset? LatestImportedAtUtc);
+
+    private sealed record ApiSportsCoverageResultRow(
+        Guid ResultId,
+        DateOnly EventDate,
+        string? FixtureId,
+        Guid PlayerId,
+        string PlayerName,
+        string NormalizedPlayerName,
+        Guid PropTypeId,
+        string PropTypeName,
+        string StatKey,
+        string NormalizedPropTypeName,
+        decimal ActualResultValue,
+        string ExternalSourceIdentifier);
+
+    private sealed record ApiSportsCoverageMarketRow(
+        string Source,
+        Guid PlayerId,
+        string PlayerName,
+        string NormalizedPlayerName,
+        Guid PropTypeId,
+        string PropTypeName,
+        string StatKey,
+        string NormalizedPropTypeName,
+        DateOnly EventDate,
+        string? ExternalId,
+        string? ExternalStableKey,
+        string? Status);
+
+    private sealed record ApiSportsCoverageSnapshotRow(
+        string Source,
+        string PlayerName,
+        string NormalizedPlayerName,
+        string PropTypeName,
+        string StatKey,
+        string NormalizedPropType,
+        DateOnly EventDate,
+        string? EventId,
+        string? Bookmaker,
+        string? ProviderCategory);
+
+    private sealed record ApiSportsCoverageMatchDiagnostic(
+        Guid ResultId,
+        string? FixtureId,
+        DateOnly EventDate,
+        string PlayerName,
+        string PropTypeName,
+        string StatKey,
+        bool MatchedToPlatformProps,
+        bool MatchedToSnapshots,
+        string Reason,
+        string Detail)
+    {
+        public static ApiSportsCoverageMatchDiagnostic FromResult(
+            ApiSportsCoverageResultRow result,
+            bool matchedToPlatformProps,
+            bool matchedToSnapshots,
+            string reason,
+            string detail)
+        {
+            return new ApiSportsCoverageMatchDiagnostic(
+                result.ResultId,
+                result.FixtureId,
+                result.EventDate,
+                result.PlayerName,
+                result.PropTypeName,
+                result.StatKey,
+                matchedToPlatformProps,
+                matchedToSnapshots,
+                reason,
+                detail);
+        }
+    }
 
     private sealed record ApiSportsSoccerFixtureImportResult(
         ApiSportsFixtureSummary FixtureSummary,

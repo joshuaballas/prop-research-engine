@@ -94,6 +94,7 @@ API-Sports Football has a debug-only single-fixture result import spike for Worl
 - `GET /api/debug/soccer/results/api-sports/import-fixture/status?fixtureId=...`
 - `POST /api/debug/soccer/results/api-sports/world-cup/backfill-completed`
 - `GET /api/debug/soccer/results/api-sports/world-cup/import-status`
+- `GET /api/debug/soccer/results/api-sports/world-cup/coverage`
 
 The import endpoint is force-live gated, supports `dryRun=true`, and writes only supported mappings for the requested fixture when `dryRun=false`. It reuses `prop_results` with `ExternalSource=api-sports-football`; no Soccer grading is enabled globally.
 
@@ -151,4 +152,6 @@ Invoke-RestMethod "$base/api/debug/soccer/results/api-sports/world-cup/import-st
 ```
 
 World Cup import status is persisted-only by default and does not call API-Sports. It still reports imported fixture counts, rows by fixture, total rows, and latest imported timestamps. Add `forceLive=true` only when live discovery counts and missing completed fixture diagnostics are needed.
+
+The World Cup coverage endpoint is read-only and checks whether imported API-Sports `prop_results` can connect to local Soccer platform props, recommendation snapshots, or market snapshots. It reports inventory counts, prop type coverage, join coverage, mismatch reasons, and optional samples. Public Soccer grading remains disabled until those diagnostics prove a safe join path.
 

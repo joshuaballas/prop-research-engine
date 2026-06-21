@@ -1018,6 +1018,62 @@ public sealed class RefreshSafetyTests
     }
 
     [Fact]
+    public async Task ApiSportsWorldCupCoverage_ReturnsPersistedResultCountsReadOnly()
+    {
+        await using var factory = new SafetyTestApplicationFactory(ApiSportsLiveConfig());
+        using var client = factory.CreateClient();
+        await factory.EnsureDatabaseAsync();
+        var importResponse = await client.PostAsJsonAsync("/api/debug/soccer/results/api-sports/world-cup/backfill-completed", new
+        {
+            fromDate = "2026-06-11",
+            toDate = "2026-06-11",
+            dryRun = false,
+            forceLive = true
+        });
+        await EnsureSuccessWithBodyAsync(importResponse);
+        var before = await CountApiSportsSoccerResultsAsync(factory);
+
+        var response = await client.GetAsync("/api/debug/soccer/results/api-sports/world-cup/coverage?fromDate=2026-06-11&toDate=2026-06-11");
+
+        await EnsureSuccessWithBodyAsync(response);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.False(json.GetProperty("callsExternalApis").GetBoolean());
+        Assert.True(json.GetProperty("readOnly").GetBoolean());
+        Assert.Equal(before, json.GetProperty("importedResultSummary").GetProperty("totalRows").GetInt32());
+        Assert.Equal(1, json.GetProperty("importedResultSummary").GetProperty("distinctFixtures").GetInt32());
+        Assert.NotEmpty(json.GetProperty("importedResultSummary").GetProperty("rowsByPropType").EnumerateArray());
+        Assert.Equal(before, await CountApiSportsSoccerResultsAsync(factory));
+    }
+
+    [Fact]
+    public async Task ApiSportsWorldCupCoverage_ReportsNoMarketDataGracefully_WithSamples()
+    {
+        await using var factory = new SafetyTestApplicationFactory(ApiSportsLiveConfig());
+        using var client = factory.CreateClient();
+        await factory.EnsureDatabaseAsync();
+        var importResponse = await client.PostAsJsonAsync("/api/debug/soccer/results/api-sports/world-cup/backfill-completed", new
+        {
+            fromDate = "2026-06-11",
+            toDate = "2026-06-11",
+            dryRun = false,
+            forceLive = true
+        });
+        await EnsureSuccessWithBodyAsync(importResponse);
+
+        var response = await client.GetAsync("/api/debug/soccer/results/api-sports/world-cup/coverage?fromDate=2026-06-11&toDate=2026-06-11&includeSamples=true&maxSamples=5");
+
+        await EnsureSuccessWithBodyAsync(response);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        var join = json.GetProperty("marketJoinCoverage");
+        Assert.True(join.GetProperty("noMarketDataAvailable").GetBoolean());
+        Assert.Equal(0, join.GetProperty("matchedAny").GetInt32());
+        Assert.True(join.GetProperty("unmatchedCount").GetInt32() > 0);
+        Assert.True(json.GetProperty("mismatchBreakdown").GetProperty("marketMissing").GetInt32() > 0);
+        Assert.NotEmpty(json.GetProperty("samples").GetProperty("marketMissing").EnumerateArray());
+        Assert.False(json.GetProperty("publicSoccerGradingEnabled").GetBoolean());
+    }
+
+    [Fact]
     public async Task RefreshPlanHistory_ReadOnly_DoesNotCallProviders()
     {
         await using var factory = new SafetyTestApplicationFactory();
