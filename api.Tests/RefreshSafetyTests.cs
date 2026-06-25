@@ -2027,7 +2027,7 @@ public sealed class RefreshSafetyTests
     }
 
     [Fact]
-    public async Task ApiSportsHistoricalBackfill_RejectsDryRunFalse()
+    public async Task ApiSportsHistoricalBackfill_RejectsRangeOverMaxDays()
     {
         await using var factory = new SafetyTestApplicationFactory(ApiSportsLiveConfig());
         using var client = factory.CreateClient();
@@ -2036,15 +2036,17 @@ public sealed class RefreshSafetyTests
         {
             competitionKey = "EPL",
             fromDate = "2026-06-11",
-            toDate = "2026-06-11",
-            dryRun = false,
+            toDate = "2026-06-20",
+            dryRun = true,
             forceLive = true
         });
 
         await AssertStatusWithBodyAsync(response, HttpStatusCode.Conflict);
         var json = await response.Content.ReadFromJsonAsync<JsonElement>();
-        Assert.Equal("DryRunOnly", json.GetProperty("blockReason").GetString());
+        Assert.Equal("DateRangeTooLarge", json.GetProperty("blockReason").GetString());
         Assert.False(json.GetProperty("callsExternalApis").GetBoolean());
+        Assert.Equal(7, json.GetProperty("maxRangeDays").GetInt32());
+        Assert.Equal(10, json.GetProperty("requestedRangeDays").GetInt32());
         Assert.Equal(0, factory.ApiSportsFootballClient.FixturesCallCount);
         Assert.Equal(0, factory.ApiSportsFootballClient.FixturePlayerStatsCallCount);
     }
@@ -2072,7 +2074,8 @@ public sealed class RefreshSafetyTests
         Assert.True(json.GetProperty("readOnly").GetBoolean());
         Assert.False(json.GetProperty("writesRows").GetBoolean());
         Assert.False(json.GetProperty("guardrails").GetProperty("publicSoccerGradingEnabled").GetBoolean());
-        Assert.True(json.GetProperty("guardrails").GetProperty("dryRunOnly").GetBoolean());
+        Assert.True(json.GetProperty("guardrails").GetProperty("dryRunDefault").GetBoolean());
+        Assert.False(json.GetProperty("guardrails").GetProperty("importsRows").GetBoolean());
         Assert.Equal("EPL", json.GetProperty("scope").GetProperty("key").GetString());
         Assert.Equal(39, json.GetProperty("scope").GetProperty("leagueId").GetInt32());
         Assert.Equal(2025, json.GetProperty("scope").GetProperty("season").GetInt32());
@@ -2082,15 +2085,64 @@ public sealed class RefreshSafetyTests
         Assert.Equal(1, json.GetProperty("previewedFixtureCount").GetInt32());
         Assert.Equal(0, json.GetProperty("failedFixtureCount").GetInt32());
         Assert.True(json.GetProperty("previewResultRows").GetInt32() > 0);
+        Assert.Equal(0, json.GetProperty("resultRowsWritten").GetInt32());
+        Assert.Equal(0, json.GetProperty("resultRowsInserted").GetInt32());
+        Assert.Equal(0, json.GetProperty("resultRowsUpdated").GetInt32());
+        Assert.Equal(0, json.GetProperty("resultRowsUnchanged").GetInt32());
         Assert.True(json.GetProperty("distinctPlayers").GetInt32() > 0);
         Assert.Equal(4, json.GetProperty("apiCallsUsed").GetInt32());
         var preview = Assert.Single(json.GetProperty("previews").EnumerateArray());
+        Assert.Equal(0, preview.GetProperty("resultRowsWritten").GetInt32());
+        Assert.Equal(0, preview.GetProperty("resultRowsInserted").GetInt32());
+        Assert.Equal(0, preview.GetProperty("resultRowsUpdated").GetInt32());
+        Assert.Equal(0, preview.GetProperty("resultRowsUnchanged").GetInt32());
         var rowsByStat = preview.GetProperty("rowsByStat").EnumerateArray().ToArray();
         Assert.Contains(rowsByStat, row => row.GetProperty("statKey").GetString() == "GOALS" && row.GetProperty("resultRows").GetInt32() > 0);
         Assert.Contains(rowsByStat, row => row.GetProperty("statKey").GetString() == "ASSISTS" && row.GetProperty("resultRows").GetInt32() > 0);
         Assert.Contains(rowsByStat, row => row.GetProperty("statKey").GetString() == "SHOTS" && row.GetProperty("resultRows").GetInt32() > 0);
         Assert.Contains(rowsByStat, row => row.GetProperty("statKey").GetString() == "SHOTS_ON_TARGET" && row.GetProperty("resultRows").GetInt32() > 0);
         Assert.Equal(before, await CountApiSportsSoccerResultsAsync(factory));
+    }
+
+    [Fact]
+    public async Task ApiSportsHistoricalBackfill_WritesIdempotently_WhenDryRunFalse()
+    {
+        await using var factory = new SafetyTestApplicationFactory(ApiSportsLiveConfig());
+        using var client = factory.CreateClient();
+        await factory.EnsureDatabaseAsync();
+        var before = await CountApiSportsSoccerResultsAsync(factory);
+
+        var request = new
+        {
+            competitionKey = "EPL",
+            fromDate = "2026-06-11",
+            toDate = "2026-06-11",
+            dryRun = false,
+            forceLive = true
+        };
+
+        var firstResponse = await client.PostAsJsonAsync("/api/debug/soccer/results/api-sports/historical/backfill-completed", request);
+        await EnsureSuccessWithBodyAsync(firstResponse);
+        var first = await firstResponse.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.True(first.GetProperty("callsExternalApis").GetBoolean());
+        Assert.False(first.GetProperty("readOnly").GetBoolean());
+        Assert.True(first.GetProperty("writesRows").GetBoolean());
+        Assert.True(first.GetProperty("guardrails").GetProperty("importsRows").GetBoolean());
+        var inserted = first.GetProperty("resultRowsInserted").GetInt32();
+        Assert.True(inserted > 0);
+        Assert.Equal(inserted, first.GetProperty("resultRowsWritten").GetInt32());
+        Assert.Equal(0, first.GetProperty("resultRowsUpdated").GetInt32());
+        Assert.Equal(0, first.GetProperty("resultRowsUnchanged").GetInt32());
+        Assert.Equal(before + inserted, await CountApiSportsSoccerResultsAsync(factory));
+
+        var secondResponse = await client.PostAsJsonAsync("/api/debug/soccer/results/api-sports/historical/backfill-completed", request);
+        await EnsureSuccessWithBodyAsync(secondResponse);
+        var second = await secondResponse.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal(0, second.GetProperty("resultRowsInserted").GetInt32());
+        Assert.Equal(0, second.GetProperty("resultRowsUpdated").GetInt32());
+        Assert.Equal(0, second.GetProperty("resultRowsWritten").GetInt32());
+        Assert.Equal(inserted, second.GetProperty("resultRowsUnchanged").GetInt32());
+        Assert.Equal(before + inserted, await CountApiSportsSoccerResultsAsync(factory));
     }
 
     [Fact]

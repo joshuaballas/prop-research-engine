@@ -428,9 +428,15 @@ Invoke-RestMethod -Method Post "$base/api/debug/soccer/results/api-sports/histor
   -ContentType "application/json" `
   -Body '{"competitionKey":"EPL","fromDate":"2026-01-01","toDate":"2026-01-07","dryRun":true,"forceLive":true}' |
   ConvertTo-Json -Depth 80
+
+# After reviewing the dry-run, write the same one-week window idempotently:
+Invoke-RestMethod -Method Post "$base/api/debug/soccer/results/api-sports/historical/backfill-completed" `
+  -ContentType "application/json" `
+  -Body '{"competitionKey":"EPL","fromDate":"2026-01-01","toDate":"2026-01-07","dryRun":false,"forceLive":true}' |
+  ConvertTo-Json -Depth 80
 ```
 
-Configured competitions live under `ApiSports:Football:HistoricalCompetitions` and default to EPL, La Liga, Bundesliga, Serie A, Ligue 1, MLS, and Champions League. Coverage status reads only local `prop_results` for Goals, Assists, Shots, and Shots On Target. The historical backfill endpoint is preview-only in this pass: `dryRun=false` is rejected, `forceLive=true` is required for fixture/stat discovery, and no rows are written. It does not enable Soccer grading, Soccer predictions, or Soccer Entry Builder.
+Configured competitions live under `ApiSports:Football:HistoricalCompetitions` and default to EPL, La Liga, Bundesliga, Serie A, Ligue 1, MLS, and Champions League. Coverage status reads only local `prop_results` for Goals, Assists, Shots, and Shots On Target. Historical backfill defaults to `dryRun=true`, requires `forceLive=true` for API-Sports fixture/stat discovery, and is limited to `maxDays` default `7` per request. With `dryRun=false&forceLive=true`, it writes only Goals, Assists, Shots, and Shots On Target idempotently by `external_source_identifier=api-sports-football:{fixtureId}:{playerId}:{statKey}` and reports inserted/updated/unchanged rows plus `coverageByDate`. It does not enable Soccer grading, Soccer predictions, or Soccer Entry Builder.
 
 ```powershell
 Invoke-RestMethod "$base/api/debug/soccer/results/api-sports/world-cup/coverage?fromDate=2026-06-11&toDate=2026-06-21" |

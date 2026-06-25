@@ -1275,8 +1275,14 @@ public static class ResultsDebugEndpoints
             try
             {
                 writeSummary = dryRun
-                    ? new ApiSportsSoccerImportWriteSummary(0, 0)
-                    : await UpsertApiSportsSoccerResultsAsync(dbContext, fixtureSummary, preview.Rows, cancellationToken);
+                    ? new ApiSportsSoccerImportWriteSummary(0, 0, 0)
+                    : await UpsertApiSportsSoccerResultsAsync(
+                        dbContext,
+                        fixtureSummary,
+                        preview.Rows,
+                        "WORLD_CUP",
+                        "WorldCupResultImport",
+                        cancellationToken);
             }
             catch (ApiSportsPropTypeResolutionException exception)
             {
@@ -1577,6 +1583,7 @@ public static class ResultsDebugEndpoints
         {
             var dryRun = request.DryRun != false;
             var range = NormalizeApiSportsHistoricalCoverageDateRange(request.FromDate, request.ToDate);
+            var maxRangeDays = Math.Clamp(request.MaxDays ?? 7, 1, 31);
             var competitionKey = request.CompetitionKey?.Trim();
             if (string.IsNullOrWhiteSpace(competitionKey))
             {
@@ -1590,7 +1597,8 @@ public static class ResultsDebugEndpoints
                 });
             }
 
-            if (!dryRun)
+            var rangeDays = CountDateRangeDays(range.FromDate, range.ToDate);
+            if (rangeDays > maxRangeDays)
             {
                 return Results.Conflict(new
                 {
@@ -1599,8 +1607,10 @@ public static class ResultsDebugEndpoints
                     readOnly = true,
                     writesRows = false,
                     blocked = true,
-                    blockReason = "DryRunOnly",
-                    message = "Historical Soccer backfill is preview-only in this pass. Rerun with dryRun=true."
+                    blockReason = "DateRangeTooLarge",
+                    maxRangeDays,
+                    requestedRangeDays = rangeDays,
+                    message = $"Historical Soccer backfill is limited to {maxRangeDays} day(s) per request."
                 });
             }
 
@@ -1627,6 +1637,7 @@ public static class ResultsDebugEndpoints
                 range.ToDate,
                 dryRun,
                 forceLive = request.ForceLive == true,
+                maxRangeDays,
                 competition.LeagueId,
                 competition.Season
             };
@@ -1658,6 +1669,10 @@ public static class ResultsDebugEndpoints
             var imports = new List<ApiSportsHistoricalFixturePreviewOutcome>();
             var failures = new List<ApiSportsWorldCupFixtureImportFailure>();
             var totalPreviewRows = 0;
+            var totalWritten = 0;
+            var totalInserted = 0;
+            var totalUpdated = 0;
+            var totalUnchanged = 0;
             var totalDistinctPlayers = new HashSet<int>();
 
             foreach (var fixture in completed)
@@ -1669,7 +1684,20 @@ public static class ResultsDebugEndpoints
                     var playerStats = ExtractApiSportsPlayerStats(statsResponse.Payload.RootElement);
                     var eventDate = fixture.EventDate ?? DateOnly.FromDateTime(fixture.KickoffUtc?.UtcDateTime ?? DateTime.UtcNow);
                     var preview = BuildApiSportsSoccerResultPreview(fixture.FixtureId, eventDate, playerStats, mappingSet);
+                    var writeSummary = dryRun
+                        ? new ApiSportsSoccerImportWriteSummary(0, 0, 0)
+                        : await UpsertApiSportsSoccerResultsAsync(
+                            dbContext,
+                            ToHistoricalApiSportsFixtureSummary(fixture, competition),
+                            preview.Rows,
+                            BuildApiSportsHistoricalLeagueCode(competition),
+                            "HistoricalResultImport",
+                            cancellationToken);
                     totalPreviewRows += preview.Rows.Count;
+                    totalWritten += writeSummary.Inserted + writeSummary.Updated;
+                    totalInserted += writeSummary.Inserted;
+                    totalUpdated += writeSummary.Updated;
+                    totalUnchanged += writeSummary.Unchanged;
                     foreach (var playerId in preview.Rows.Select(row => row.PlayerId).Where(id => id.HasValue).Select(id => id!.Value))
                     {
                         totalDistinctPlayers.Add(playerId);
@@ -1686,6 +1714,10 @@ public static class ResultsDebugEndpoints
                         statsResponse.SanitizedUrl,
                         playerStats.Count,
                         preview.Rows.Count,
+                        writeSummary.Inserted + writeSummary.Updated,
+                        writeSummary.Inserted,
+                        writeSummary.Updated,
+                        writeSummary.Unchanged,
                         preview.Rows.Select(row => row.PlayerId).Where(id => id.HasValue).Distinct().Count(),
                         preview.Rows
                             .GroupBy(row => row.StatKey)
@@ -1723,8 +1755,8 @@ public static class ResultsDebugEndpoints
                 generatedAtUtc = DateTimeOffset.UtcNow,
                 callsExternalApis = true,
                 externalApiCalled = true,
-                readOnly = true,
-                writesRows = false,
+                readOnly = dryRun,
+                writesRows = !dryRun,
                 provider = "API-Sports",
                 product = "API-Sports Football",
                 scope = new
@@ -1743,11 +1775,12 @@ public static class ResultsDebugEndpoints
                 request = requestDiagnostics,
                 guardrails = new
                 {
-                    dryRunOnly = true,
+                    dryRunDefault = true,
+                    maxRangeDays,
                     publicSoccerGradingEnabled = false,
                     soccerPredictionsEnabled = false,
                     soccerEntryBuilderEnabled = false,
-                    importsRows = false
+                    importsRows = !dryRun
                 },
                 statsOfInterest = ApiSportsHistoricalStatKeysOfInterest.Select(statKey => new { statKey, displayName = ToApiSportsHistoricalStatDisplayName(statKey) }).ToArray(),
                 discoveredFixtureCount = discovered.Count,
@@ -1756,6 +1789,10 @@ public static class ResultsDebugEndpoints
                 previewedFixtureCount = imports.Count,
                 failedFixtureCount = failures.Count,
                 previewResultRows = totalPreviewRows,
+                resultRowsWritten = totalWritten,
+                resultRowsInserted = totalInserted,
+                resultRowsUpdated = totalUpdated,
+                resultRowsUnchanged = totalUnchanged,
                 distinctPlayers = totalDistinctPlayers.Count,
                 apiCallsUsed = CountDateRangeDays(range.FromDate, range.ToDate) + completed.Length,
                 coverageByDate,
@@ -1763,11 +1800,13 @@ public static class ResultsDebugEndpoints
                 skippedFixtures = skipped,
                 previews = imports,
                 failures,
-                recommendedNextAction = "Review preview rows and coverage before adding a dryRun=false historical import path. Public Soccer grading remains disabled."
+                recommendedNextAction = dryRun
+                    ? "Review preview rows and coverage, then rerun with dryRun=false only for a small approved date range. Public Soccer grading remains disabled."
+                    : "Historical Soccer result rows were written idempotently. Review coverage-status before using these rows in charts or model features; public Soccer grading remains disabled."
             });
         })
         .WithName("ApiSportsSoccerHistoricalBackfillCompletedPreviewDebug")
-        .WithSummary("Dry-run-only completed fixture player-stat preview for one configured API-Sports Soccer historical competition.");
+        .WithSummary("Guarded completed fixture player-stat backfill for one configured API-Sports Soccer historical competition.");
 
         endpoints.MapGet("/api/debug/soccer/results/api-sports/world-cup/import-status", async (
             DateOnly? fromDate,
@@ -4323,8 +4362,14 @@ public static class ResultsDebugEndpoints
         var mappings = await LoadApiSportsSoccerResultMappingsAsync(dbContext, cancellationToken);
         var preview = BuildApiSportsSoccerResultPreview(fixtureId, fixtureSummary.EventDate.Value, playerStats, mappings);
         var writeSummary = dryRun
-            ? new ApiSportsSoccerImportWriteSummary(0, 0)
-            : await UpsertApiSportsSoccerResultsAsync(dbContext, fixtureSummary, preview.Rows, cancellationToken);
+            ? new ApiSportsSoccerImportWriteSummary(0, 0, 0)
+            : await UpsertApiSportsSoccerResultsAsync(
+                dbContext,
+                fixtureSummary,
+                preview.Rows,
+                "WORLD_CUP",
+                "WorldCupResultImport",
+                cancellationToken);
         var ruleConfidenceCounts = preview.Rows
             .GroupBy(row => row.RuleConfidence)
             .OrderBy(group => group.Key)
@@ -4509,6 +4554,23 @@ public static class ResultsDebugEndpoints
     {
         var key = Regex.Replace(competition.Key.Trim().ToUpperInvariant(), @"[^A-Z0-9]+", "_").Trim('_');
         return $"API_SPORTS_{key}_{competition.Season}";
+    }
+
+    private static ApiSportsFixtureSummary ToHistoricalApiSportsFixtureSummary(
+        ApiSportsFixtureDiscoveryRow fixture,
+        ApiSportsFootballHistoricalCompetitionOptions competition)
+    {
+        return new ApiSportsFixtureSummary(
+            fixture.FixtureId,
+            fixture.KickoffUtc,
+            fixture.EventDate,
+            competition.LeagueId,
+            competition.DisplayName,
+            competition.Season,
+            null,
+            fixture.HomeTeamName,
+            null,
+            fixture.AwayTeamName);
     }
 
     private static string ToApiSportsHistoricalStatDisplayName(string statKey)
@@ -4721,7 +4783,7 @@ public static class ResultsDebugEndpoints
                     discoveredForDate.Length,
                     completedForDate.Length,
                     previewsForDate.Length,
-                    0,
+                    previewsForDate.Sum(row => row.ResultRowsWritten),
                     previewsForDate.Sum(row => row.PreviewResultRows),
                     skippedForDate.Length,
                     0,
@@ -9617,21 +9679,23 @@ public static class ResultsDebugEndpoints
         ApplicationDbContext dbContext,
         ApiSportsFixtureSummary fixtureSummary,
         IReadOnlyList<ApiSportsSoccerResultPreviewRow> rows,
+        string leagueCode,
+        string providerLinkImportSource,
         CancellationToken cancellationToken)
     {
         if (rows.Count == 0)
         {
-            return new ApiSportsSoccerImportWriteSummary(0, 0);
+            return new ApiSportsSoccerImportWriteSummary(0, 0, 0);
         }
 
         var observedAt = DateTimeOffset.UtcNow;
         await using var transaction = await dbContext.Database.BeginTransactionAsync(cancellationToken);
 
         var sport = await GetOrCreateSportAsync(dbContext, "Soccer", "SOCCER", cancellationToken);
-        var league = await GetOrCreateLeagueAsync(dbContext, sport, fixtureSummary.LeagueName ?? "World Cup", "WORLD_CUP", cancellationToken);
+        var league = await GetOrCreateLeagueAsync(dbContext, sport, fixtureSummary.LeagueName ?? "World Cup", leagueCode, cancellationToken);
         var teamByProviderId = await UpsertApiSportsTeamsAsync(dbContext, league, fixtureSummary, rows, observedAt, cancellationToken);
         var playerByProviderId = await UpsertApiSportsPlayersAsync(dbContext, league, teamByProviderId, rows, observedAt, cancellationToken);
-        await UpsertApiSportsProviderPlayerLinksAsync(dbContext, sport, fixtureSummary, rows, observedAt, cancellationToken);
+        await UpsertApiSportsProviderPlayerLinksAsync(dbContext, sport, fixtureSummary, rows, observedAt, providerLinkImportSource, cancellationToken);
         var propTypeByStatKey = await GetOrCreatePropTypesAsync(dbContext, sport, rows.Select(row => (row.PropType, row.StatKey)).Distinct().ToArray(), cancellationToken);
         await AttachApiSportsMappingsToCanonicalPropTypesAsync(dbContext, sport, propTypeByStatKey, observedAt, cancellationToken);
         var identifiers = rows.Select(row => row.ExternalSourceIdentifier).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
@@ -9642,6 +9706,7 @@ public static class ResultsDebugEndpoints
 
         var inserted = 0;
         var updated = 0;
+        var unchanged = 0;
         foreach (var row in rows)
         {
             if (!row.PlayerId.HasValue || !playerByProviderId.TryGetValue(row.PlayerId.Value, out var player))
@@ -9688,6 +9753,10 @@ public static class ResultsDebugEndpoints
                     existing.UpdatedAt = observedAt;
                     updated++;
                 }
+                else
+                {
+                    unchanged++;
+                }
 
                 continue;
             }
@@ -9712,7 +9781,7 @@ public static class ResultsDebugEndpoints
 
         await dbContext.SaveChangesAsync(cancellationToken);
         await transaction.CommitAsync(cancellationToken);
-        return new ApiSportsSoccerImportWriteSummary(inserted, updated);
+        return new ApiSportsSoccerImportWriteSummary(inserted, updated, unchanged);
     }
 
     private static async Task AttachApiSportsMappingsToCanonicalPropTypesAsync(
@@ -9928,6 +9997,7 @@ public static class ResultsDebugEndpoints
         ApiSportsFixtureSummary fixtureSummary,
         IReadOnlyList<ApiSportsSoccerResultPreviewRow> rows,
         DateTimeOffset observedAt,
+        string importSource,
         CancellationToken cancellationToken)
     {
         var candidates = rows
@@ -9973,7 +10043,7 @@ public static class ResultsDebugEndpoints
             {
                 provider = "API-Sports",
                 product = "API-Sports Football",
-                importSource = "WorldCupResultImport",
+                importSource,
                 fixtureIds = candidate.FixtureIds,
                 resultRowCount = candidate.ResultRowCount,
                 fixtureSummary.FixtureId,
@@ -10659,7 +10729,8 @@ public static class ResultsDebugEndpoints
         DateOnly? FromDate,
         DateOnly? ToDate,
         bool? DryRun,
-        bool? ForceLive);
+        bool? ForceLive,
+        int? MaxDays);
 
     private sealed record ApiSportsConfigDiagnostics(
         bool configured,
@@ -10743,6 +10814,10 @@ public static class ResultsDebugEndpoints
         string? SanitizedStatsUrl,
         int PlayerRowsRead,
         int PreviewResultRows,
+        int ResultRowsWritten,
+        int ResultRowsInserted,
+        int ResultRowsUpdated,
+        int ResultRowsUnchanged,
         int DistinctPlayers,
         IReadOnlyList<ApiSportsHistoricalStatPreviewCount> RowsByStat,
         object UnsupportedSkippedSummary);
@@ -11840,7 +11915,7 @@ public static class ResultsDebugEndpoints
         string Reason,
         string Notes);
 
-    private sealed record ApiSportsSoccerImportWriteSummary(int Inserted, int Updated);
+    private sealed record ApiSportsSoccerImportWriteSummary(int Inserted, int Updated, int Unchanged);
 
     private sealed record ApiSportsSoccerResultMapping(
         string PropType,
