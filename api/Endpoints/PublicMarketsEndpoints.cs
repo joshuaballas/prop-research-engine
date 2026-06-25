@@ -1018,6 +1018,7 @@ public static class PublicMarketsEndpoints
                 soccerPredictionService,
                 soccerPredictionOptions,
                 soccerGradingOptions,
+                soccerTopPicksOptions,
                 dbContext,
                 cancellationToken);
             var soccerTopPickCandidates = soccerLineShopping.ComparisonGroups
@@ -1028,16 +1029,31 @@ public static class PublicMarketsEndpoints
                     && group.TryGetPropertyValue("selectedSideProbability", out var probability)
                     && probability is not null
                     && probability.GetValueKind() == JsonValueKind.Number
-                    && probability.GetValue<decimal>() >= soccerPredictionOptions.MinimumTopPickHitProbability
+                    && probability.GetValue<decimal>() >= soccerTopPicksOptions.MinimumHitProbability
                     && group.TryGetPropertyValue("historicalSampleSize", out var sampleSize)
                     && sampleSize is not null
                     && sampleSize.GetValueKind() == JsonValueKind.Number
-                    && sampleSize.GetValue<int>() >= soccerPredictionOptions.TopPickMinimumSampleSize)
+                    && sampleSize.GetValue<int>() >= soccerTopPicksOptions.MinimumTopPickSampleSize)
                 .Select(group => group!)
                 .ToArray();
+            var researchOnlyBlockedSoccerCandidates = soccerLineShopping.ComparisonGroups
+                .Select(group => JsonSerializer.SerializeToNode(group) as JsonObject)
+                .Count(group => group is not null
+                    && HasSoccerModelProbability(group)
+                    && IsActiveSoccerTopPickGroup(group)
+                    && IsResearchOnlySoccerGroup(group));
+            var sampleBlockedSoccerCandidates = soccerLineShopping.ComparisonGroups
+                .Select(group => JsonSerializer.SerializeToNode(group) as JsonObject)
+                .Count(group => group is not null
+                    && HasSoccerModelProbability(group)
+                    && IsActiveSoccerTopPickGroup(group)
+                    && group.TryGetPropertyValue("historicalSampleSize", out var sampleSize)
+                    && sampleSize is not null
+                    && sampleSize.GetValueKind() == JsonValueKind.Number
+                    && sampleSize.GetValue<int>() < soccerTopPicksOptions.MinimumTopPickSampleSize);
             var staleOrExpiredSoccerCandidates = soccerTopPickCandidates.Count(group => !IsActiveSoccerTopPickGroup(group));
             var soccerTopPicks = soccerTopPickCandidates
-                .Where(IsActiveSoccerTopPickGroup)
+                .Where(group => IsActiveSoccerTopPickGroup(group) && IsSoccerRecommendationGroup(group))
                 .Take(Math.Clamp(take ?? 25, 1, 250))
                 .ToArray();
             var soccerTopPicksFallbackReason = soccerTopPicks.Length == 0
@@ -1066,10 +1082,14 @@ public static class PublicMarketsEndpoints
                 summary = new
                 {
                     activeCandidateCount = soccerTopPicks.Length,
+                    entryActionableCandidateCount = 0,
                     actionableCandidateCount = 0,
                     returnedTopPicks = soccerTopPicks.Length,
+                    recommendationEligibleCount = soccerTopPickCandidates.Length,
                     modelEligibleBeforeLifecycleCount = soccerTopPickCandidates.Length,
                     staleOrExpiredModelEligibleCount = staleOrExpiredSoccerCandidates,
+                    sampleBlockedCount = sampleBlockedSoccerCandidates,
+                    researchOnlyBlockedCount = researchOnlyBlockedSoccerCandidates,
                     totalActiveComparisonGroups = soccerLineShopping.ComparisonGroups.Count
                 },
                 soccerLineShopping.StrategyClassificationSummary,
@@ -1240,6 +1260,7 @@ public static class PublicMarketsEndpoints
                 soccerPredictionService,
                 soccerPredictionOptions,
                 soccerGradingOptions,
+                soccerTopPicksOptions,
                 dbContext,
                 cancellationToken);
 
@@ -1476,6 +1497,43 @@ public static class PublicMarketsEndpoints
         return string.Equals(lifecycleStatus, "Active", StringComparison.OrdinalIgnoreCase)
             && !isStale
             && !isExpired;
+    }
+
+    private static bool HasSoccerModelProbability(JsonObject group)
+    {
+        return group.TryGetPropertyValue("modelProbabilityAvailable", out var available)
+            && available?.GetValueKind() == JsonValueKind.True
+            && group.TryGetPropertyValue("selectedSideProbability", out var probability)
+            && probability is not null
+            && probability.GetValueKind() == JsonValueKind.Number;
+    }
+
+    private static bool IsSoccerRecommendationGroup(JsonObject group)
+    {
+        return group.TryGetPropertyValue("isRecommendation", out var recommendation)
+            && recommendation?.GetValueKind() == JsonValueKind.True
+            && !IsResearchOnlySoccerGroup(group);
+    }
+
+    private static bool IsResearchOnlySoccerGroup(JsonObject group)
+    {
+        var strategyTier = group.TryGetPropertyValue("strategyTier", out var tierNode)
+            && tierNode?.GetValueKind() == JsonValueKind.String
+            ? tierNode.GetValue<string>()
+            : null;
+        var trustLevel = group.TryGetPropertyValue("trustLevel", out var trustNode)
+            && trustNode?.GetValueKind() == JsonValueKind.String
+            ? trustNode.GetValue<string>()
+            : null;
+        if (string.Equals(strategyTier, "ResearchOnly", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(trustLevel, "ResearchOnly", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        return group.TryGetPropertyValue("riskTags", out var riskTagsNode)
+            && riskTagsNode is JsonArray riskTags
+            && riskTags.Any(tag => string.Equals(tag?.GetValue<string>(), "ResearchOnlySample", StringComparison.OrdinalIgnoreCase));
     }
 
     private static object[] BuildSupportedCompetitionDiagnostics(bool soccerResultGradingSupported = false)

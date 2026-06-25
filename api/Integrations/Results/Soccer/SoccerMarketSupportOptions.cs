@@ -23,4 +23,7 @@ public sealed class SoccerTopPicksOptions
     public const string SectionName = "SoccerTopPicks";
 
     public bool Enabled { get; set; }
+    public int MinimumTopPickSampleSize { get; set; } = 20;
+    public decimal MinimumHitProbability { get; set; } = 0.55m;
+    public bool AllowNegativeEv { get; set; } = true;
 }

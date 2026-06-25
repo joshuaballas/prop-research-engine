@@ -134,7 +134,7 @@ public sealed class SoccerWorldCupPredictionServiceTests
     public async Task PublicSoccerTopPicks_ReturnsEligibleRows_WhenExplicitlyEnabled()
     {
         await using var factory = CreateFactory(predictionsEnabled: true, gradingEnabled: true, topPicksEnabled: true);
-        await SeedSoccerScenarioAsync(factory, historicalValues: [2m, 1m, 3m, 0m, 2m], line: 0.5m);
+        await SeedSoccerScenarioAsync(factory, historicalValues: BuildSoccerHistory(overWins: 18, underWins: 5), line: 0.5m);
         using var client = factory.CreateClient();
 
         var response = await client.GetAsync("/api/markets/top-picks?sport=SOCCER&competition=World%20Cup&take=10");
@@ -148,9 +148,44 @@ public sealed class SoccerWorldCupPredictionServiceTests
         Assert.Contains("Soccer predictions and grading are enabled", json.GetProperty("limitation").GetString());
         Assert.Equal(1, json.GetProperty("summary").GetProperty("activeCandidateCount").GetInt32());
         Assert.True(pick.GetProperty("modelProbabilityAvailable").GetBoolean());
+        Assert.True(pick.GetProperty("isRecommendation").GetBoolean());
+        Assert.True(pick.GetProperty("recommendationActionableForUser").GetBoolean());
+        Assert.Equal("Sportsbook", pick.GetProperty("recommendationType").GetString());
         Assert.False(pick.GetProperty("entryActionableForUser").GetBoolean());
         Assert.True(pick.GetProperty("resultGradingSupported").GetBoolean());
+        Assert.False(pick.GetProperty("sportsbookContextResearchOnly").GetBoolean());
+        Assert.False(pick.GetProperty("isResearchOnly").GetBoolean());
+        Assert.NotEqual("ResearchOnly", pick.GetProperty("strategyClassification").GetString());
+        Assert.NotEqual("ResearchOnly", pick.GetProperty("strategyTier").GetString());
+        Assert.NotEqual("ResearchOnly", pick.GetProperty("trustLevel").GetString());
+        Assert.DoesNotContain(
+            pick.GetProperty("riskTags").EnumerateArray(),
+            tag => string.Equals(tag.GetString(), "ResearchOnlySample", StringComparison.OrdinalIgnoreCase));
+        Assert.Equal("Soccer sportsbook recommendation. Entry Builder is disabled for Soccer.", pick.GetProperty("entryUnavailableReason").GetString());
         Assert.Equal(0, factory.TheOddsAdapter.CallCount);
+    }
+
+    [Fact]
+    public async Task PublicSoccerTopPicks_DoesNotReturnResearchOnlyLowSampleRows()
+    {
+        await using var factory = CreateFactory(predictionsEnabled: true, gradingEnabled: true, topPicksEnabled: true);
+        await SeedSoccerScenarioAsync(factory, historicalValues: [2m, 1m, 3m, 0m, 2m], line: 0.5m);
+        using var client = factory.CreateClient();
+
+        var topPicksResponse = await client.GetAsync("/api/markets/top-picks?sport=SOCCER&competition=World%20Cup&take=10");
+        var lineShoppingResponse = await client.GetAsync("/api/markets/line-shopping?sport=SOCCER&competition=World%20Cup&includeBookmakerPrices=false");
+
+        topPicksResponse.EnsureSuccessStatusCode();
+        lineShoppingResponse.EnsureSuccessStatusCode();
+        var topPicks = await topPicksResponse.Content.ReadFromJsonAsync<JsonElement>();
+        var lineShopping = await lineShoppingResponse.Content.ReadFromJsonAsync<JsonElement>();
+        var lineGroup = Assert.Single(lineShopping.GetProperty("comparisonGroups").EnumerateArray());
+
+        Assert.Empty(topPicks.GetProperty("topPicks").EnumerateArray());
+        Assert.Equal(1, topPicks.GetProperty("summary").GetProperty("sampleBlockedCount").GetInt32());
+        Assert.True(lineGroup.GetProperty("modelProbabilityAvailable").GetBoolean());
+        Assert.True(lineGroup.GetProperty("isResearchOnly").GetBoolean());
+        Assert.Equal("ResearchOnly", lineGroup.GetProperty("strategyTier").GetString());
     }
 
     [Fact]
@@ -159,7 +194,7 @@ public sealed class SoccerWorldCupPredictionServiceTests
         await using var factory = CreateFactory(predictionsEnabled: true, gradingEnabled: true, topPicksEnabled: true);
         await SeedSoccerScenarioAsync(
             factory,
-            historicalValues: [2m, 1m, 3m, 0m, 2m],
+            historicalValues: BuildSoccerHistory(overWins: 18, underWins: 5),
             line: 0.5m,
             eventStart: DateTimeOffset.UtcNow.AddDays(-1));
         using var client = factory.CreateClient();
@@ -181,7 +216,7 @@ public sealed class SoccerWorldCupPredictionServiceTests
         await using var factory = CreateFactory(predictionsEnabled: true, gradingEnabled: true, topPicksEnabled: true);
         await SeedSoccerScenarioAsync(
             factory,
-            historicalValues: [2m, 1m, 3m, 0m, 2m],
+            historicalValues: BuildSoccerHistory(overWins: 18, underWins: 5),
             line: 0.5m,
             eventStart: DateTimeOffset.UtcNow.AddDays(1),
             observedAt: DateTimeOffset.UtcNow.AddHours(-2));
@@ -266,7 +301,10 @@ public sealed class SoccerWorldCupPredictionServiceTests
         bool gradingEnabled = false,
         bool topPicksEnabled = false,
         int minimumSampleSize = 5,
-        int lowSampleThreshold = 10)
+        int lowSampleThreshold = 10,
+        int topPickMinimumSampleSize = 20,
+        decimal topPickMinimumHitProbability = 0.55m,
+        bool allowNegativeEv = true)
     {
         return new SafetyTestApplicationFactory(new Dictionary<string, string?>
         {
@@ -276,8 +314,19 @@ public sealed class SoccerWorldCupPredictionServiceTests
             ["SoccerPredictions:TopPickMinimumSampleSize"] = minimumSampleSize.ToString(),
             ["SoccerPredictions:MinimumTopPickHitProbability"] = "0.55",
             ["SoccerGrading:Enabled"] = gradingEnabled.ToString(),
-            ["SoccerTopPicks:Enabled"] = topPicksEnabled.ToString()
+            ["SoccerTopPicks:Enabled"] = topPicksEnabled.ToString(),
+            ["SoccerTopPicks:MinimumTopPickSampleSize"] = topPickMinimumSampleSize.ToString(),
+            ["SoccerTopPicks:MinimumHitProbability"] = topPickMinimumHitProbability.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            ["SoccerTopPicks:AllowNegativeEv"] = allowNegativeEv.ToString()
         });
+    }
+
+    private static IReadOnlyList<decimal> BuildSoccerHistory(int overWins, int underWins)
+    {
+        return Enumerable
+            .Repeat(1m, overWins)
+            .Concat(Enumerable.Repeat(0m, underWins))
+            .ToArray();
     }
 
     private static async Task<SeededSoccerPredictionScenario> SeedSoccerScenarioAsync(

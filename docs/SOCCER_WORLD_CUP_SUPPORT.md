@@ -1,6 +1,6 @@
 # Soccer / World Cup Provider-Line Support
 
-Phase 1 supports persisted provider-line reads for Soccer / World Cup. The next guarded backend step can compute read-only model probabilities and grading coverage for the safe stat subset, but Entry Builder remains disabled for Soccer.
+Phase 1 supports persisted provider-line reads for Soccer / World Cup. Guarded backend prediction and grading support can promote supported sportsbook rows into real Top Picks recommendations when Soccer flags and gates pass, but Entry Builder remains disabled for Soccer.
 
 ## Terminology
 
@@ -24,13 +24,15 @@ Phase 1 public app behavior is intentionally narrow:
 - Line Shopping may surface persisted World Cup sportsbook context with `sport=SOCCER&competition=World Cup`.
 - If Soccer line-shopping snapshots do not exist because no Soccer prediction-backed groups were generated, public Line Shopping builds read-only research groups directly from persisted The Odds `platform_props` context rows.
 - Public Line Shopping fallback rows include compact `playerHistorySummary` when an approved `api-sports-football` bridge link resolves the platform player to persisted API-Sports `prop_results`. Unlinked rows return an unavailable summary.
-- Top Picks remains disabled unless `SoccerTopPicks:Enabled=true`.
-- Soccer rows remain non-entry-actionable sportsbook context: `providerCategory=Sportsbook` and `entryActionableForUser=false`.
+- Top Picks remains disabled unless `SoccerTopPicks:Enabled=true`. When enabled, Soccer Top Picks return only non-stale sportsbook recommendations that pass model-probability, sample-size, lifecycle, and supported-prop gates; research-only Soccer rows are excluded from Top Picks.
+- Soccer rows remain non-entry-actionable sportsbook context: `providerCategory=Sportsbook` and `entryActionableForUser=false`, even when a row is promoted to a sportsbook recommendation.
 - With `SoccerPredictions:Enabled=false`, Soccer rows keep null model hit chance fields and unavailable reasons.
 - With `SoccerPredictions:Enabled=true`, the backend may expose model probabilities for Goals, Assists, Shots, and Shots On Target only, using persisted approved API-Sports links and local `prop_results`.
 - With `SoccerGrading:Enabled=false`, rows still return `resultGradingSupported=false`; grading coverage remains diagnostic/read-only.
 - EV is shown only when a sportsbook row has real odds plus model probability. No DFS-style or fake EV is generated.
 - Entry Builder must not treat Soccer sportsbook context as playable DFS legs.
+
+Soccer Top Picks gates are separate from Line Shopping display. The current defaults are `SoccerPredictions:MinimumSampleSize=10`, `SoccerTopPicks:MinimumTopPickSampleSize=20`, `SoccerTopPicks:MinimumHitProbability=0.55`, and explicit `SoccerTopPicks:AllowNegativeEv`. Rows that fail these gates remain Line Shopping context with specific blockers instead of appearing as Top Picks.
 
 ## Prediction And Grading Guardrails
 
@@ -260,9 +262,9 @@ The World Cup backfill endpoint is intentionally narrow: API-Sports Football onl
 
 `import-status` is persisted-only unless `forceLive=true`. Persisted-only status reports imported fixture/result rows and `coverageByDate` without API-Sports calls. Force-live status adds discovered fixture count, completed fixture count, skipped pending fixture count, missing completed fixture count, and per-date API call estimates. `backfill-completed` returns the same `coverageByDate` shape plus previewed/written result rows, failed fixtures, and per-fixture import diagnostics.
 
-Broader current-year Soccer history is guarded debug-only. `GET /api/debug/soccer/results/api-sports/historical/coverage-status` reports configured API-Sports Football historical competitions and local imported coverage for Goals, Assists, Shots, and Shots On Target. `POST /api/debug/soccer/results/api-sports/historical/backfill-completed` can dry-run one configured competition with `forceLive=true` to discover completed fixtures and preview player-stat rows for those same four stats. `dryRun=false&forceLive=true` writes rows idempotently by `external_source_identifier=api-sports-football:{fixtureId}:{playerId}:{statKey}`. Requests are limited to `maxDays` default `7`; larger ranges are blocked before API calls. The default configured set is EPL, La Liga, Bundesliga, Serie A, Ligue 1, MLS, and Champions League. Public Soccer grading, Soccer predictions, and Soccer Entry Builder remain disabled.
+Broader current-year Soccer history is guarded debug-only. `GET /api/debug/soccer/results/api-sports/historical/coverage-status` reports configured API-Sports Football historical competitions and local imported coverage for Goals, Assists, Shots, and Shots On Target. `POST /api/debug/soccer/results/api-sports/historical/backfill-completed` can dry-run one configured competition with `forceLive=true` to discover completed fixtures and preview player-stat rows for those same four stats. `dryRun=false&forceLive=true` writes rows idempotently by `external_source_identifier=api-sports-football:{fixtureId}:{playerId}:{statKey}`. Requests are limited to `maxDays` default `7`; larger ranges are blocked before API calls. The default configured set is EPL, La Liga, Bundesliga, Serie A, Ligue 1, MLS, and Champions League. This import path does not enable public Soccer grading, predictions, Top Picks, or Entry Builder by itself.
 
-`GET /api/debug/soccer/player-history` exposes that persisted API-Sports Football history for research/detail diagnostics only. It accepts `playerId`, `providerPlayerId`, or `playerName`, plus optional `propType`, `fromDate`, `toDate`, `competitionKey`, and `limit`. Matching uses local `players.id`, `player_external_refs` with `provider=api-sports-football`, and approved API-Sports `provider_entity_links`; it never calls API-Sports. The response includes matched player info, API-Sports refs/links, rows grouped by stat, recent game logs, per-stat averages, per-competition breakdowns, sample sizes, and hard guardrails showing public Soccer grading, predictions, Top Picks, and Entry Builder remain disabled. `GET /api/debug/soccer/player-history/readiness` summarizes how many historical API-Sports result players and Soccer platform players can already bridge through those identity links.
+`GET /api/debug/soccer/player-history` exposes that persisted API-Sports Football history for research/detail diagnostics only. It accepts `playerId`, `providerPlayerId`, or `playerName`, plus optional `propType`, `fromDate`, `toDate`, `competitionKey`, and `limit`. Matching uses local `players.id`, `player_external_refs` with `provider=api-sports-football`, and approved API-Sports `provider_entity_links`; it never calls API-Sports. The response includes matched player info, API-Sports refs/links, rows grouped by stat, recent game logs, per-stat averages, per-competition breakdowns, sample sizes, and guardrail flags for Soccer grading, predictions, Top Picks, and Entry Builder. `GET /api/debug/soccer/player-history/readiness` summarizes how many historical API-Sports result players and Soccer platform players can already bridge through those identity links.
 
 `GET /api/debug/soccer/player-history/visible-missing` starts from the same persisted The Odds context-v2 sportsbook rows used by public World Cup Line Shopping fallback and explains why visible rows do or do not have `playerHistorySummary`. It is read-only, calls no providers, and reports reason codes such as `NoApprovedApiSportsProviderEntityLink`, `ApprovedLinkExistsButNoPlayerExternalRef`, `ApprovedLinkExistsButNoPropResults`, `ApprovedLinkExistsButNoSupportedStats`, `LocalPlayerIdMismatch`, `CanonicalPlayerIdMismatch`, `NameMismatchPossibleAlias`, and `HasHistory`. Use it before approving any additional bridge links for visible players like Carlos Casemiro, Danilo Luiz da Silva, or Douglas Santos de Melo.
 
@@ -460,9 +462,9 @@ The spike-status alias summary intentionally separates `aliasPlatformPlayerNames
 
 `/api/debug/soccer/player-identity/the-odds/api-sports/alias-link-batch` is the dry-run-first batch persistence step. It defaults to `dryRun=true`, only persists `SafeAliasCandidate` rows above `minConfidence`, skips already-linked and conflicting rows, and never writes `NeedsReview`, ambiguous, no-candidate, or below-confidence rows. Because The Odds alias links are currently event-scoped, the batch write may create one approved link per provider event even when the same long-form name maps to the same API-Sports player across fixtures.
 
-## Public History Still Disabled
+## Public Soccer Guardrails
 
-Soccer result grading and public player prop history are intentionally unavailable until the Soccer import workflow is promoted beyond debug-only and grading semantics are explicitly enabled. The debug player-history endpoint above is research-only and does not change public `/api/markets/*` behavior.
+Soccer public grading and Top Picks are explicitly config-gated. Public Line Shopping may show persisted player history context from approved API-Sports links, but public endpoints still do not import results, refresh odds, or make Soccer rows Entry Builder actionable.
 
 - `/api/markets/prop-history?sport=SOCCER...` returns `Soccer grading and model hit chance are not available yet.`
 - Model Performance should not include Soccer as graded performance.
@@ -485,8 +487,8 @@ Safety behavior:
 - `dryRun=true&forceLive=false` does not call The Odds and estimates the maximum request shape.
 - `dryRun=true&forceLive=true` calls only event discovery, writes nothing, and returns `eventsDiscovered`, `eventsEligible`, `eventsToFetch`, `estimatedApiCalls`, skip reasons, and per-event request plans.
 - `dryRun=false&forceLive=true` writes provider context rows for the selected events.
-- Soccer sportsbook rows remain research-only and non-entry-actionable. Public Soccer grading remains disabled.
-- Public Soccer market reads may expose persisted market context, but response rows are forced to `entryActionableForUser=false`, `sportsbookContextResearchOnly=true`, and `entryProviderCategory=Sportsbook` as a backstop. Entry Builder must not treat Soccer sportsbook context as playable legs.
+- Soccer sportsbook rows remain non-entry-actionable. Rows that fail prediction/sample/lifecycle gates remain research-only; rows that pass Soccer Top Picks gates can be promoted to sportsbook recommendations when config is enabled.
+- Public Soccer market reads may expose persisted market context, but response rows are forced to `entryActionableForUser=false` and `entryProviderCategory=Sportsbook` as a backstop. `sportsbookContextResearchOnly=true` is reserved for blocked/research rows; promoted Soccer sportsbook recommendations can set it false while Entry Builder remains disabled.
 
 ## Verification
 
@@ -634,5 +636,5 @@ The World Cup coverage endpoint is read-only and checks whether imported API-Spo
 
 The player identity diagnostics are also read-only and never call external APIs. Use them before any future alias approval workflow so API-Sports result players can be reviewed against provider/platform player identities without changing data.
 
-Provider stat mappings for API-Sports Football / World Cup live in `provider_stat_mappings`; see `docs/PROVIDER_STAT_MAPPING.md`. These mappings drive Soccer result import mechanics while keeping public Soccer grading disabled.
+Provider stat mappings for API-Sports Football / World Cup live in `provider_stat_mappings`; see `docs/PROVIDER_STAT_MAPPING.md`. These mappings drive Soccer result import mechanics and gate the safe public grading subset.
 

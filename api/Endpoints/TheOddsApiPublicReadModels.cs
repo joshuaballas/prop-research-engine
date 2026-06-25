@@ -394,6 +394,7 @@ public static partial class TheOddsApiDebugEndpoints
         ISoccerWorldCupPredictionService soccerPredictionService,
         SoccerPredictionsOptions soccerPredictionOptions,
         SoccerGradingOptions soccerGradingOptions,
+        SoccerTopPicksOptions soccerTopPicksOptions,
         ApplicationDbContext dbContext,
         CancellationToken cancellationToken)
     {
@@ -435,6 +436,7 @@ public static partial class TheOddsApiDebugEndpoints
                 includeBookmakerPrices,
                 soccerPredictionOptions.Enabled,
                 soccerGradingOptions.Enabled,
+                soccerTopPicksOptions,
                 predictionUnavailableReasonsByKey.GetValueOrDefault(new SoccerWorldCupPredictionKey(group.PlayerId, group.PropTypeId, group.Line)),
                 playerHistoryEnrichment.SummariesByPlayerId.GetValueOrDefault(group.PlayerId)))
             .ToArray();
@@ -1932,6 +1934,7 @@ public static partial class TheOddsApiDebugEndpoints
         bool includeBookmakerPrices,
         bool soccerPredictionsEnabled,
         bool publicGradingEnabled,
+        SoccerTopPicksOptions soccerTopPicksOptions,
         string? predictionUnavailableReason,
         JsonObject? playerHistorySummary)
     {
@@ -1941,10 +1944,12 @@ public static partial class TheOddsApiDebugEndpoints
         var lifecycleBlocked = !string.Equals(group.LifecycleStatus, "Active", StringComparison.OrdinalIgnoreCase) ||
             group.IsStale ||
             group.IsExpired;
-        var soccerResearchOnly = !modelProbabilityAvailable || lifecycleBlocked;
         var resultGradingSupported = publicGradingEnabled &&
             group.BestProbability.HasValue &&
             SoccerWorldCupPredictionService.ResolveSupportedStatKey(group.NormalizedPropType, group.MarketKey) is not null;
+        var soccerRecommendationEligible = IsSoccerWorldCupRecommendationEligible(group, soccerTopPicksOptions, lifecycleBlocked);
+        var soccerResearchOnly = !soccerRecommendationEligible;
+
         node["sport"] = "SOCCER";
         node["competition"] = "World Cup";
         node["providerCategory"] = "Sportsbook";
@@ -1964,8 +1969,15 @@ public static partial class TheOddsApiDebugEndpoints
                 ? "Soccer grading is not available for this row."
                 : unavailableReason;
         node["publicSoccerGradingEnabled"] = publicGradingEnabled;
-        node["entryUnavailableReason"] = "Soccer World Cup sportsbook context is research-only and not Entry Builder playable.";
-        node["entryRuleWarning"] = "Soccer World Cup sportsbook context is research-only and not Entry Builder playable.";
+        node["recommendationActionableForUser"] = soccerRecommendationEligible;
+        node["isRecommendation"] = soccerRecommendationEligible;
+        node["recommendationType"] = soccerRecommendationEligible ? "Sportsbook" : null;
+        node["entryUnavailableReason"] = soccerRecommendationEligible
+            ? "Soccer sportsbook recommendation. Entry Builder is disabled for Soccer."
+            : "Soccer World Cup sportsbook context is research-only and not Entry Builder playable.";
+        node["entryRuleWarning"] = soccerRecommendationEligible
+            ? "Soccer sportsbook recommendation. Entry Builder is disabled for Soccer."
+            : "Soccer World Cup sportsbook context is research-only and not Entry Builder playable.";
         if (!modelProbabilityAvailable)
         {
             node["showExpectedValue"] = false;
@@ -1993,11 +2005,100 @@ public static partial class TheOddsApiDebugEndpoints
             node["isWatchlist"] = false;
             node["isTopPick"] = false;
         }
+        else if (soccerRecommendationEligible)
+        {
+            node["trustLevel"] = BuildSoccerWorldCupRecommendationTrustLevel(group);
+            node["strategyClassification"] = "Candidate";
+            node["strategyTier"] = "SoccerSportsbookRecommendation";
+            node["strategyReasons"] = new JsonArray("Meets Soccer sportsbook recommendation gates: active market, supported prop, model hit chance, and sample size.");
+            node["strategyWarnings"] = FilterSoccerWorldCupResearchOnlyMessages(node["strategyWarnings"] as JsonArray);
+            node["riskTags"] = FilterSoccerWorldCupResearchOnlyTags(node["riskTags"] as JsonArray);
+            node["isCandidate"] = true;
+            node["isTopPick"] = true;
+            node["isWatchlist"] = false;
+            node["isResearchOnly"] = false;
+            node["sportsbookContextResearchOnly"] = false;
+            node["candidateStrategyName"] = "SoccerSportsbookRecommendation";
+        }
 
         node["isAvoid"] = false;
         node["playerHistorySummary"] = playerHistorySummary?.DeepClone();
 
         return node;
+    }
+
+    private static bool IsSoccerWorldCupRecommendationEligible(
+        TheOddsLineShoppingGroup group,
+        SoccerTopPicksOptions options,
+        bool lifecycleBlocked)
+    {
+        if (lifecycleBlocked ||
+            !group.BestProbability.HasValue ||
+            group.BestProbability.Value < options.MinimumHitProbability ||
+            group.HistoricalSampleSize < Math.Max(1, options.MinimumTopPickSampleSize) ||
+            SoccerWorldCupPredictionService.ResolveSupportedStatKey(group.NormalizedPropType, group.MarketKey) is null)
+        {
+            return false;
+        }
+
+        if (!options.AllowNegativeEv && group.BestEstimatedEv < 0m)
+        {
+            return false;
+        }
+
+        return true;
+    }
+
+    private static string BuildSoccerWorldCupRecommendationTrustLevel(TheOddsLineShoppingGroup group)
+    {
+        return group.BestProbability >= 0.70m && group.HistoricalSampleSize >= 20
+            ? "Strong"
+            : "Medium";
+    }
+
+    private static JsonArray FilterSoccerWorldCupResearchOnlyTags(JsonArray? riskTags)
+    {
+        var filtered = new JsonArray();
+        if (riskTags is null)
+        {
+            return filtered;
+        }
+
+        foreach (var tag in riskTags)
+        {
+            var value = tag?.GetValue<string>();
+            if (string.Equals(value, "ResearchOnlySample", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            filtered.Add(value);
+        }
+
+        return filtered;
+    }
+
+    private static JsonArray FilterSoccerWorldCupResearchOnlyMessages(JsonArray? messages)
+    {
+        var filtered = new JsonArray();
+        if (messages is null)
+        {
+            return filtered;
+        }
+
+        foreach (var message in messages)
+        {
+            var value = message?.GetValue<string>();
+            if (string.IsNullOrWhiteSpace(value) ||
+                value.Contains("research-only", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            filtered.Add(value);
+        }
+
+        return filtered;
     }
 
     private static string BuildSoccerWorldCupUnavailableReason(
