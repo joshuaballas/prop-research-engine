@@ -11,6 +11,7 @@ public sealed record MlbResultCoverageAuditResponse(
     int DatesPartial,
     int DatesMissing,
     int DatesPending,
+    int DatesNoGames,
     int DatesFailed,
     IReadOnlyCollection<MlbResultCoverageDateAudit> Details,
     IReadOnlyCollection<object> RecommendedRepairActions);

@@ -132,6 +132,12 @@ public sealed class MlbResultImportService(
         dateState.DistinctPropTypes = coverage.DistinctPropTypes;
         dateState.CoverageStatus = coverage.CoverageStatus;
         dateState.CoverageReason = coverage.CoverageReason;
+        if (providerRecords.Count == 0 && eventDate < DateOnly.FromDateTime(DateTime.UtcNow))
+        {
+            dateState.Status = "skipped";
+            dateState.CoverageStatus = "NoGames";
+            dateState.CoverageReason = "MLB provider returned no result records for this completed date.";
+        }
         dateState.UpdatedAt = completedAt;
         await dbContext.SaveChangesAsync(cancellationToken);
 

@@ -59,33 +59,36 @@ public sealed class MlbResultImportWorker(
 
             var maxBackfillDates = Math.Max(1, options.Value.MaxBackfillDatesPerRun);
             var datesToProcess = await dbContext.MlbResultImportDateStates
-                .Where(dateState => dateState.EventDate <= latestCompletedDate && dateState.CoverageStatus != "Complete")
+                .Where(dateState => dateState.EventDate <= latestCompletedDate
+                    && dateState.CoverageStatus != "Complete"
+                    && dateState.CoverageStatus != "NoGames")
                 .OrderBy(dateState => dateState.EventDate)
                 .ThenBy(dateState => dateState.Attempts)
                 .Take(maxBackfillDates)
                 .ToListAsync(cancellationToken);
 
-            var datesSucceeded = 0;
-            var datesFailed = 0;
+            var outcomes = new List<MlbResultImportWorkerDateOutcome>();
 
             foreach (var dateState in datesToProcess)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                await ProcessDateAsync(importService, dbContext, state, dateState, cancellationToken);
-
-                if (dateState.CoverageStatus == "Complete")
-                {
-                    datesSucceeded++;
-                }
-                else
-                {
-                    datesFailed++;
-                }
+                outcomes.Add(await ProcessDateAsync(importService, dbContext, state, dateState, cancellationToken));
             }
 
+            var datesComplete = outcomes.Count(outcome => outcome.OutcomeCategory == MlbResultImportWorkerOutcomeCategory.Complete);
+            var datesPartial = outcomes.Count(outcome => outcome.OutcomeCategory == MlbResultImportWorkerOutcomeCategory.Partial);
+            var datesPending = outcomes.Count(outcome => outcome.OutcomeCategory == MlbResultImportWorkerOutcomeCategory.PendingGames);
+            var datesNoGames = outcomes.Count(outcome => outcome.OutcomeCategory == MlbResultImportWorkerOutcomeCategory.NoGames);
+            var datesSkipped = outcomes.Count(outcome => outcome.OutcomeCategory == MlbResultImportWorkerOutcomeCategory.Skipped);
+            var datesFailed = outcomes.Count(outcome => outcome.OutcomeCategory == MlbResultImportWorkerOutcomeCategory.Failed);
+            var datesNonFatal = datesPartial + datesPending + datesNoGames + datesSkipped;
             var completedAt = DateTimeOffset.UtcNow;
             state.LastCompletedAt = completedAt;
-            state.LastStatus = datesFailed == 0 ? "succeeded" : "partial_failure";
+            state.LastStatus = datesFailed > 0
+                ? "partial_failure"
+                : datesNonFatal > 0
+                    ? "completed_with_coverage_gaps"
+                    : "succeeded";
             state.UpdatedAt = completedAt;
 
             if (datesFailed == 0)
@@ -96,9 +99,13 @@ public sealed class MlbResultImportWorker(
             await dbContext.SaveChangesAsync(cancellationToken);
 
             logger.LogInformation(
-                "MLB result import worker cycle completed. Dates processed: {DatesProcessed}; succeeded: {DatesSucceeded}; failed: {DatesFailed}.",
+                "MLB result import worker cycle completed. Dates processed: {DatesProcessed}; complete: {DatesComplete}; partial: {DatesPartial}; pending: {DatesPending}; noGames: {DatesNoGames}; skipped: {DatesSkipped}; failed: {DatesFailed}.",
                 datesToProcess.Count,
-                datesSucceeded,
+                datesComplete,
+                datesPartial,
+                datesPending,
+                datesNoGames,
+                datesSkipped,
                 datesFailed);
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
@@ -133,13 +140,17 @@ public sealed class MlbResultImportWorker(
         }
     }
 
-    private async Task ProcessDateAsync(
+    private async Task<MlbResultImportWorkerDateOutcome> ProcessDateAsync(
         IMlbResultImportService importService,
         ApplicationDbContext dbContext,
         MlbResultImportState state,
         MlbResultImportDateState dateState,
         CancellationToken cancellationToken)
     {
+        var beforeCoverageStatus = dateState.CoverageStatus;
+        var beforeStatus = dateState.Status;
+        var selectedReason = BuildSelectedReason(dateState, DateOnly.FromDateTime(DateTime.UtcNow.AddDays(-1)));
+
         try
         {
             var result = await importService.ImportAsync(dateState.EventDate, cancellationToken);
@@ -157,6 +168,24 @@ public sealed class MlbResultImportWorker(
             }
 
             await dbContext.SaveChangesAsync(cancellationToken);
+            var outcome = ClassifyDateOutcome(dateState.CoverageStatus, dateState.Status, result.RecordsFound, exceptionOccurred: false);
+            LogDateOutcome(dateState, selectedReason, beforeCoverageStatus, beforeStatus, outcome, null);
+            return new MlbResultImportWorkerDateOutcome(
+                dateState.EventDate,
+                selectedReason,
+                beforeCoverageStatus,
+                beforeStatus,
+                dateState.CompletedGamesExpected,
+                dateState.CompletedGamesImported,
+                result.RecordsFound,
+                result.RecordsMapped,
+                dateState.ImportedResults,
+                dateState.DistinctPlayers,
+                dateState.DistinctPropTypes,
+                dateState.CoverageStatus,
+                outcome,
+                null,
+                null);
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
@@ -173,7 +202,90 @@ public sealed class MlbResultImportWorker(
             dateState.LastErrorMessage = exception.Message;
             dateState.UpdatedAt = DateTimeOffset.UtcNow;
             await dbContext.SaveChangesAsync(cancellationToken);
+            LogDateOutcome(dateState, selectedReason, beforeCoverageStatus, beforeStatus, MlbResultImportWorkerOutcomeCategory.Failed, exception);
+            return new MlbResultImportWorkerDateOutcome(
+                dateState.EventDate,
+                selectedReason,
+                beforeCoverageStatus,
+                beforeStatus,
+                dateState.CompletedGamesExpected,
+                dateState.CompletedGamesImported,
+                dateState.RecordsFound,
+                dateState.RecordsMapped,
+                dateState.ImportedResults,
+                dateState.DistinctPlayers,
+                dateState.DistinctPropTypes,
+                dateState.CoverageStatus,
+                MlbResultImportWorkerOutcomeCategory.Failed,
+                exception.GetType().Name,
+                exception.Message);
         }
+    }
+
+    internal static MlbResultImportWorkerOutcomeCategory ClassifyDateOutcome(
+        string? coverageStatus,
+        string? importStatus,
+        int recordsFound,
+        bool exceptionOccurred)
+    {
+        if (exceptionOccurred || string.Equals(coverageStatus, "Failed", StringComparison.OrdinalIgnoreCase))
+        {
+            return MlbResultImportWorkerOutcomeCategory.Failed;
+        }
+
+        if (string.Equals(coverageStatus, "Complete", StringComparison.OrdinalIgnoreCase))
+        {
+            return MlbResultImportWorkerOutcomeCategory.Complete;
+        }
+
+        if (string.Equals(coverageStatus, "Partial", StringComparison.OrdinalIgnoreCase))
+        {
+            return MlbResultImportWorkerOutcomeCategory.Partial;
+        }
+
+        if (string.Equals(coverageStatus, "PendingGames", StringComparison.OrdinalIgnoreCase))
+        {
+            return MlbResultImportWorkerOutcomeCategory.PendingGames;
+        }
+
+        if (string.Equals(coverageStatus, "NoGames", StringComparison.OrdinalIgnoreCase)
+            || (string.Equals(coverageStatus, "NotStarted", StringComparison.OrdinalIgnoreCase)
+                && string.Equals(importStatus, "skipped", StringComparison.OrdinalIgnoreCase))
+            || (string.Equals(coverageStatus, "NotStarted", StringComparison.OrdinalIgnoreCase) && recordsFound == 0))
+        {
+            return MlbResultImportWorkerOutcomeCategory.NoGames;
+        }
+
+        return MlbResultImportWorkerOutcomeCategory.Skipped;
+    }
+
+    private void LogDateOutcome(
+        MlbResultImportDateState dateState,
+        string selectedReason,
+        string? beforeCoverageStatus,
+        string? beforeStatus,
+        MlbResultImportWorkerOutcomeCategory outcome,
+        Exception? exception)
+    {
+        var logLevel = outcome == MlbResultImportWorkerOutcomeCategory.Failed ? LogLevel.Error : LogLevel.Information;
+        logger.Log(
+            logLevel,
+            exception,
+            "MLB result import worker date outcome. Date: {EventDate}; selectedReason: {SelectedReason}; beforeCoverageStatus: {BeforeCoverageStatus}; beforeStatus: {BeforeStatus}; gamesScheduled: {GamesScheduled}; gamesFinal: {GamesFinal}; recordsFound: {RecordsFound}; recordsMapped: {RecordsMapped}; importedRows: {ImportedRows}; distinctPlayers: {DistinctPlayers}; distinctPropTypes: {DistinctPropTypes}; afterCoverageStatus: {AfterCoverageStatus}; outcomeCategory: {OutcomeCategory}; error: {ErrorMessage}.",
+            dateState.EventDate,
+            selectedReason,
+            beforeCoverageStatus,
+            beforeStatus,
+            dateState.CompletedGamesExpected,
+            dateState.CompletedGamesImported,
+            dateState.RecordsFound,
+            dateState.RecordsMapped,
+            dateState.ImportedResults,
+            dateState.DistinctPlayers,
+            dateState.DistinctPropTypes,
+            dateState.CoverageStatus,
+            outcome,
+            dateState.LastErrorMessage);
     }
 
     private static async Task<MlbResultImportState> GetOrCreateStateAsync(
@@ -308,6 +420,23 @@ public sealed class MlbResultImportWorker(
         await dbContext.SaveChangesAsync(cancellationToken);
     }
 
+    private static string BuildSelectedReason(MlbResultImportDateState dateState, DateOnly latestCompletedDate)
+    {
+        if (dateState.EventDate > latestCompletedDate)
+        {
+            return "FutureOrCurrentDateExcluded";
+        }
+
+        return dateState.CoverageStatus switch
+        {
+            "Partial" => "CoveragePartial",
+            "NotStarted" => "CoverageNotStarted",
+            "PendingGames" => "PendingGamesRecheck",
+            "Failed" => "PreviousFailureRetry",
+            _ => "CoverageNotComplete"
+        };
+    }
+
     private static string ResolveFallbackCoverageStatus(
         int importedResults,
         int distinctPlayers,
@@ -372,3 +501,30 @@ public sealed class MlbResultImportWorker(
         }
     }
 }
+
+internal enum MlbResultImportWorkerOutcomeCategory
+{
+    Complete,
+    Partial,
+    PendingGames,
+    NoGames,
+    Skipped,
+    Failed
+}
+
+internal sealed record MlbResultImportWorkerDateOutcome(
+    DateOnly Date,
+    string SelectedReason,
+    string? BeforeCoverageStatus,
+    string? BeforeStatus,
+    int? GamesScheduled,
+    int? GamesFinal,
+    int RecordsFound,
+    int RecordsMapped,
+    int ImportedRows,
+    int DistinctPlayers,
+    int DistinctPropTypes,
+    string AfterCoverageStatus,
+    MlbResultImportWorkerOutcomeCategory OutcomeCategory,
+    string? ExceptionType,
+    string? ErrorMessage);

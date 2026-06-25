@@ -54,6 +54,7 @@ public sealed class MlbResultCoverageService(
             details.Count(row => row.CoverageStatus == "Partial"),
             details.Count(row => row.CoverageStatus == "NotStarted"),
             details.Count(row => row.CoverageStatus == "PendingGames"),
+            details.Count(row => row.CoverageStatus == "NoGames"),
             details.Count(row => row.CoverageStatus == "Failed"),
             includeDetails ? details : [],
             recommendedRepairActions);
@@ -109,7 +110,7 @@ public sealed class MlbResultCoverageService(
                 {
                     Id = Guid.NewGuid(),
                     EventDate = eventDate,
-                    Status = status == "Complete" ? "succeeded" : status == "Failed" ? "failed" : "pending",
+                    Status = status == "Complete" ? "succeeded" : status == "Failed" ? "failed" : status == "NoGames" ? "skipped" : "pending",
                     CreatedAt = observedAt
                 };
                 dbContext.MlbResultImportDateStates.Add(dateState);
@@ -127,7 +128,7 @@ public sealed class MlbResultCoverageService(
 
             if (status != "Complete" && dateState.Status == "succeeded")
             {
-                dateState.Status = status == "Partial" ? "partial" : "pending";
+                dateState.Status = status == "Partial" ? "partial" : status == "NoGames" ? "skipped" : "pending";
             }
 
             await dbContext.SaveChangesAsync(cancellationToken);
@@ -152,6 +153,7 @@ public sealed class MlbResultCoverageService(
                 "NotStarted" => "ImportMissingDate",
                 "Failed" => "ReviewLatestErrorThenRetry",
                 "PendingGames" => "WaitForGamesToComplete",
+                "NoGames" => "NoRepairNeeded",
                 _ => "None"
             });
     }
@@ -174,6 +176,11 @@ public sealed class MlbResultCoverageService(
         if (eventDate >= todayUtc && importedResults == 0)
         {
             return "PendingGames";
+        }
+
+        if (string.Equals(importStatus, "skipped", StringComparison.OrdinalIgnoreCase) && importedResults == 0)
+        {
+            return "NoGames";
         }
 
         if (importedResults == 0)
@@ -201,6 +208,7 @@ public sealed class MlbResultCoverageService(
             "Partial" => $"Fallback coverage thresholds not met: importedResults={importedResults}/{options.MinimumCompleteImportedResults}, distinctPlayers={distinctPlayers}/{options.MinimumCompleteDistinctPlayers}, distinctPropTypes={distinctPropTypes}/{options.MinimumCompleteDistinctPropTypes}.",
             "NotStarted" => "No persisted MLB prop_results exist for this completed date.",
             "PendingGames" => "Date is not a completed historical MLB result date yet.",
+            "NoGames" => "MLB provider returned no result records for this completed date.",
             "Failed" => "Latest import attempt failed and no persisted MLB prop_results exist for this date.",
             _ => "Coverage status is unknown."
         };

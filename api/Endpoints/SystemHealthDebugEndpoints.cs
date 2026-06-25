@@ -268,7 +268,7 @@ public static class SystemHealthDebugEndpoints
             ? "Disabled"
             : failedDateCount > 0 || state?.LastStatus == "failed"
                 ? "Error"
-                : pendingDateCount > 0 || state?.LastStatus == "partial_failure"
+                : pendingDateCount > 0 || state?.LastStatus is "partial_failure" or "completed_with_coverage_gaps"
                     ? "Warning"
                     : "Healthy";
 

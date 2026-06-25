@@ -20,6 +20,23 @@ public static class ResultsDebugEndpoints
     private const int ApiSportsWorldCupLeagueId = 1;
     private const int ApiSportsWorldCupSeason = 2026;
     private static readonly DateOnly ApiSportsWorldCup2026StartDate = new(2026, 6, 11);
+    private sealed record MlbLatestWorkerCycleDateOutcome(
+        DateOnly EventDate,
+        string SelectedReason,
+        string Status,
+        int? CompletedGamesExpected,
+        int? CompletedGamesImported,
+        int RecordsFound,
+        int RecordsMapped,
+        int ImportedResults,
+        int DistinctPlayers,
+        int DistinctPropTypes,
+        string CoverageStatus,
+        string? CoverageReason,
+        string OutcomeCategory,
+        DateTimeOffset? LastAttemptedAt,
+        DateTimeOffset? LastSuccessfulAt,
+        string? LastErrorMessage);
 
     public static IEndpointRouteBuilder MapResultsDebugEndpoints(this IEndpointRouteBuilder endpoints)
     {
@@ -549,11 +566,58 @@ public static class ResultsDebugEndpoints
             var latestCompletedDate = DateOnly.FromDateTime(DateTime.UtcNow.AddDays(-1));
             var pendingBackfillDates = await dbContext.MlbResultImportDateStates
                 .AsNoTracking()
-                .Where(dateState => dateState.EventDate <= latestCompletedDate && dateState.CoverageStatus != "Complete")
+                .Where(dateState => dateState.EventDate <= latestCompletedDate
+                    && dateState.CoverageStatus != "Complete"
+                    && dateState.CoverageStatus != "NoGames")
                 .OrderBy(dateState => dateState.EventDate)
                 .Select(dateState => dateState.EventDate)
                 .Take(100)
                 .ToArrayAsync(cancellationToken);
+            var latestCycleDates = Array.Empty<MlbLatestWorkerCycleDateOutcome>();
+            if (state?.LastStartedAt is not null)
+            {
+                var latestCycleDateStates = await dbContext.MlbResultImportDateStates
+                    .AsNoTracking()
+                    .Where(dateState => dateState.LastAttemptedAt >= state.LastStartedAt)
+                    .Where(dateState => state.LastCompletedAt == null || dateState.LastAttemptedAt <= state.LastCompletedAt)
+                    .OrderBy(dateState => dateState.EventDate)
+                    .ToArrayAsync(cancellationToken);
+                latestCycleDates = latestCycleDateStates
+                    .Select(dateState => new MlbLatestWorkerCycleDateOutcome(
+                        dateState.EventDate,
+                        dateState.CoverageStatus == "Complete"
+                            ? "CompletedDuringLatestCycle"
+                            : dateState.CoverageStatus == "NoGames"
+                                ? "NoGamesSkippedAfterSuccessfulCheck"
+                                : dateState.CoverageStatus == "Partial"
+                                    ? "CoveragePartial"
+                                    : dateState.CoverageStatus == "NotStarted"
+                                        ? "CoverageNotStarted"
+                                        : dateState.CoverageStatus == "PendingGames"
+                                            ? "PendingGamesRecheck"
+                                            : dateState.CoverageStatus == "Failed"
+                                                ? "PreviousFailureRetry"
+                                                : "CoverageNotComplete",
+                        dateState.Status,
+                        dateState.CompletedGamesExpected,
+                        dateState.CompletedGamesImported,
+                        dateState.RecordsFound,
+                        dateState.RecordsMapped,
+                        dateState.ImportedResults,
+                        dateState.DistinctPlayers,
+                        dateState.DistinctPropTypes,
+                        dateState.CoverageStatus,
+                        dateState.CoverageReason,
+                        MlbResultImportWorker.ClassifyDateOutcome(
+                            dateState.CoverageStatus,
+                            dateState.Status,
+                            dateState.RecordsFound,
+                            exceptionOccurred: false).ToString(),
+                        dateState.LastAttemptedAt,
+                        dateState.LastSuccessfulAt,
+                        dateState.LastErrorMessage))
+                    .ToArray();
+            }
             var missingDates = coverage is null
                 ? []
                 : await BuildMissingMlbImportDatesAsync(dbContext, coverage.Start, latestCompletedDate, cancellationToken);
@@ -586,6 +650,22 @@ public static class ResultsDebugEndpoints
                         state.LastSuccessfulRunAt,
                         state.LastErrorMessage
                     },
+                latestWorkerCycle = state is null
+                    ? null
+                    : new
+                    {
+                        state.LastStartedAt,
+                        state.LastCompletedAt,
+                        state.LastStatus,
+                        processedDates = latestCycleDates.Length,
+                        complete = latestCycleDates.Count(row => row.OutcomeCategory == "Complete"),
+                        partial = latestCycleDates.Count(row => row.OutcomeCategory == "Partial"),
+                        pendingGames = latestCycleDates.Count(row => row.OutcomeCategory == "PendingGames"),
+                        noGames = latestCycleDates.Count(row => row.OutcomeCategory == "NoGames"),
+                        skipped = latestCycleDates.Count(row => row.OutcomeCategory == "Skipped"),
+                        failed = latestCycleDates.Count(row => row.OutcomeCategory == "Failed"),
+                        dateOutcomes = latestCycleDates
+                    },
                 latestSuccessfulImportAttemptForRequestedDate = dateCoverage?.LatestImportAttemptUtc,
                 latestRepairRunForRequestedDate = dateCoverage?.LatestSuccessfulRepairUtc,
                 dateStatus = dateStatus is null
@@ -608,6 +688,108 @@ public static class ResultsDebugEndpoints
         })
         .WithName("MlbResultsImportStatusDebug")
         .WithSummary("Returns MLB result import worker status and optional date-specific import status.");
+
+        endpoints.MapGet("/api/debug/results/import/mlb-range/status", async (
+            ApplicationDbContext dbContext,
+            CancellationToken cancellationToken) =>
+        {
+            var state = await dbContext.MlbResultImportStates
+                .AsNoTracking()
+                .SingleOrDefaultAsync(importState => importState.Source == "mlb", cancellationToken);
+            var latestCompletedDate = DateOnly.FromDateTime(DateTime.UtcNow.AddDays(-1));
+            var pendingBackfillDates = await dbContext.MlbResultImportDateStates
+                .AsNoTracking()
+                .Where(dateState => dateState.EventDate <= latestCompletedDate
+                    && dateState.CoverageStatus != "Complete"
+                    && dateState.CoverageStatus != "NoGames")
+                .OrderBy(dateState => dateState.EventDate)
+                .Select(dateState => new
+                {
+                    dateState.EventDate,
+                    dateState.CoverageStatus,
+                    dateState.CoverageReason,
+                    dateState.Attempts,
+                    dateState.LastAttemptedAt
+                })
+                .Take(100)
+                .ToArrayAsync(cancellationToken);
+            var latestCycleDates = Array.Empty<MlbLatestWorkerCycleDateOutcome>();
+            if (state?.LastStartedAt is not null)
+            {
+                var latestCycleDateStates = await dbContext.MlbResultImportDateStates
+                    .AsNoTracking()
+                    .Where(dateState => dateState.LastAttemptedAt >= state.LastStartedAt)
+                    .Where(dateState => state.LastCompletedAt == null || dateState.LastAttemptedAt <= state.LastCompletedAt)
+                    .OrderBy(dateState => dateState.EventDate)
+                    .ToArrayAsync(cancellationToken);
+                latestCycleDates = latestCycleDateStates
+                    .Select(dateState => new MlbLatestWorkerCycleDateOutcome(
+                        dateState.EventDate,
+                        dateState.CoverageStatus == "Complete"
+                            ? "CompletedDuringLatestCycle"
+                            : dateState.CoverageStatus == "NoGames"
+                                ? "NoGamesSkippedAfterSuccessfulCheck"
+                                : dateState.CoverageStatus == "Partial"
+                                    ? "CoveragePartial"
+                                    : dateState.CoverageStatus == "NotStarted"
+                                        ? "CoverageNotStarted"
+                                        : dateState.CoverageStatus == "PendingGames"
+                                            ? "PendingGamesRecheck"
+                                            : dateState.CoverageStatus == "Failed"
+                                                ? "PreviousFailureRetry"
+                                                : "CoverageNotComplete",
+                        dateState.Status,
+                        dateState.CompletedGamesExpected,
+                        dateState.CompletedGamesImported,
+                        dateState.RecordsFound,
+                        dateState.RecordsMapped,
+                        dateState.ImportedResults,
+                        dateState.DistinctPlayers,
+                        dateState.DistinctPropTypes,
+                        dateState.CoverageStatus,
+                        dateState.CoverageReason,
+                        MlbResultImportWorker.ClassifyDateOutcome(
+                            dateState.CoverageStatus,
+                            dateState.Status,
+                            dateState.RecordsFound,
+                            exceptionOccurred: false).ToString(),
+                        dateState.LastAttemptedAt,
+                        dateState.LastSuccessfulAt,
+                        dateState.LastErrorMessage))
+                    .ToArray();
+            }
+
+            return Results.Ok(new
+            {
+                generatedAtUtc = DateTimeOffset.UtcNow,
+                callsExternalApis = false,
+                readOnly = true,
+                latestCompletedDate,
+                pendingBackfillDateCount = pendingBackfillDates.Length,
+                pendingBackfillDates,
+                latestWorkerCycle = state is null
+                    ? null
+                    : new
+                    {
+                        state.LastStartedAt,
+                        state.LastCompletedAt,
+                        state.LastStatus,
+                        state.LastSuccessfulRunAt,
+                        state.LastSuccessfulImportDate,
+                        state.LastErrorMessage,
+                        processedDates = latestCycleDates.Length,
+                        complete = latestCycleDates.Count(row => row.OutcomeCategory == "Complete"),
+                        partial = latestCycleDates.Count(row => row.OutcomeCategory == "Partial"),
+                        pendingGames = latestCycleDates.Count(row => row.OutcomeCategory == "PendingGames"),
+                        noGames = latestCycleDates.Count(row => row.OutcomeCategory == "NoGames"),
+                        skipped = latestCycleDates.Count(row => row.OutcomeCategory == "Skipped"),
+                        failed = latestCycleDates.Count(row => row.OutcomeCategory == "Failed"),
+                        dateOutcomes = latestCycleDates
+                    }
+            });
+        })
+        .WithName("MlbResultsImportRangeStatusDebug")
+        .WithSummary("Read-only MLB range import worker diagnostics with latest per-date outcomes.");
 
         endpoints.MapPost("/api/debug/results/import/mlb-range", async (
             MlbResultImportRangeRequest request,

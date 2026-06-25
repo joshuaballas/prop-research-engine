@@ -4007,6 +4007,132 @@ public sealed class RefreshSafetyTests
     }
 
     [Fact]
+    public void MlbResultImportWorkerOutcomeClassifier_TreatsCoverageGapsAsNonFatal()
+    {
+        Assert.Equal(
+            MlbResultImportWorkerOutcomeCategory.Complete,
+            MlbResultImportWorker.ClassifyDateOutcome("Complete", "succeeded", recordsFound: 1200, exceptionOccurred: false));
+        Assert.Equal(
+            MlbResultImportWorkerOutcomeCategory.Partial,
+            MlbResultImportWorker.ClassifyDateOutcome("Partial", "partial", recordsFound: 500, exceptionOccurred: false));
+        Assert.Equal(
+            MlbResultImportWorkerOutcomeCategory.PendingGames,
+            MlbResultImportWorker.ClassifyDateOutcome("PendingGames", "pending", recordsFound: 0, exceptionOccurred: false));
+        Assert.Equal(
+            MlbResultImportWorkerOutcomeCategory.NoGames,
+            MlbResultImportWorker.ClassifyDateOutcome("NoGames", "skipped", recordsFound: 0, exceptionOccurred: false));
+        Assert.Equal(
+            MlbResultImportWorkerOutcomeCategory.NoGames,
+            MlbResultImportWorker.ClassifyDateOutcome("NotStarted", "pending", recordsFound: 0, exceptionOccurred: false));
+        Assert.Equal(
+            MlbResultImportWorkerOutcomeCategory.Failed,
+            MlbResultImportWorker.ClassifyDateOutcome("Partial", "partial", recordsFound: 500, exceptionOccurred: true));
+    }
+
+    [Fact]
+    public async Task MlbImportStatus_IncludesLatestWorkerCycleDateOutcomes()
+    {
+        await using var factory = new SafetyTestApplicationFactory();
+        using var client = factory.CreateClient();
+        await factory.EnsureDatabaseAsync();
+        var startedAt = DateTimeOffset.UtcNow.AddMinutes(-5);
+        var completedAt = DateTimeOffset.UtcNow.AddMinutes(-4);
+        var completeDate = new DateOnly(2026, 6, 20);
+        var partialDate = new DateOnly(2026, 6, 21);
+        var noGamesDate = new DateOnly(2026, 6, 22);
+        var failedDate = new DateOnly(2026, 6, 23);
+
+        using (var scope = factory.Services.CreateScope())
+        {
+            var dbContext = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+            dbContext.MlbResultImportStates.Add(new MlbResultImportState
+            {
+                Id = Guid.NewGuid(),
+                Source = "mlb",
+                LastStartedAt = startedAt,
+                LastCompletedAt = completedAt,
+                LastStatus = "completed_with_coverage_gaps",
+                CreatedAt = startedAt,
+                UpdatedAt = completedAt
+            });
+            dbContext.MlbResultImportDateStates.AddRange(
+                new MlbResultImportDateState
+                {
+                    Id = Guid.NewGuid(),
+                    EventDate = completeDate,
+                    Status = "succeeded",
+                    CoverageStatus = "Complete",
+                    RecordsFound = 1200,
+                    RecordsMapped = 1200,
+                    ImportedResults = 1200,
+                    DistinctPlayers = 120,
+                    DistinctPropTypes = 12,
+                    LastAttemptedAt = startedAt.AddSeconds(10),
+                    LastSuccessfulAt = startedAt.AddSeconds(12)
+                },
+                new MlbResultImportDateState
+                {
+                    Id = Guid.NewGuid(),
+                    EventDate = partialDate,
+                    Status = "partial",
+                    CoverageStatus = "Partial",
+                    RecordsFound = 500,
+                    RecordsMapped = 500,
+                    ImportedResults = 500,
+                    DistinctPlayers = 80,
+                    DistinctPropTypes = 10,
+                    LastAttemptedAt = startedAt.AddSeconds(20),
+                    LastSuccessfulAt = startedAt.AddSeconds(22)
+                },
+                new MlbResultImportDateState
+                {
+                    Id = Guid.NewGuid(),
+                    EventDate = noGamesDate,
+                    Status = "skipped",
+                    CoverageStatus = "NoGames",
+                    RecordsFound = 0,
+                    RecordsMapped = 0,
+                    ImportedResults = 0,
+                    DistinctPlayers = 0,
+                    DistinctPropTypes = 0,
+                    LastAttemptedAt = startedAt.AddSeconds(30),
+                    LastSuccessfulAt = startedAt.AddSeconds(31)
+                },
+                new MlbResultImportDateState
+                {
+                    Id = Guid.NewGuid(),
+                    EventDate = failedDate,
+                    Status = "failed",
+                    CoverageStatus = "Failed",
+                    RecordsFound = 0,
+                    RecordsMapped = 0,
+                    ImportedResults = 0,
+                    DistinctPlayers = 0,
+                    DistinctPropTypes = 0,
+                    LastAttemptedAt = startedAt.AddSeconds(40),
+                    LastErrorMessage = "Provider rejected request."
+                });
+            await dbContext.SaveChangesAsync();
+        }
+
+        var response = await client.GetAsync("/api/debug/results/import/mlb/status");
+
+        await EnsureSuccessWithBodyAsync(response);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        var latestCycle = json.GetProperty("latestWorkerCycle");
+        Assert.Equal(4, latestCycle.GetProperty("processedDates").GetInt32());
+        Assert.Equal(1, latestCycle.GetProperty("complete").GetInt32());
+        Assert.Equal(1, latestCycle.GetProperty("partial").GetInt32());
+        Assert.Equal(1, latestCycle.GetProperty("noGames").GetInt32());
+        Assert.Equal(1, latestCycle.GetProperty("failed").GetInt32());
+        var outcomes = latestCycle.GetProperty("dateOutcomes").EnumerateArray().ToArray();
+        Assert.Contains(outcomes, row => row.GetProperty("eventDate").GetString() == partialDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)
+            && row.GetProperty("outcomeCategory").GetString() == "Partial");
+        Assert.Contains(outcomes, row => row.GetProperty("eventDate").GetString() == noGamesDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)
+            && row.GetProperty("outcomeCategory").GetString() == "NoGames");
+    }
+
+    [Fact]
     public async Task MlbRepairMissing_DryRunDoesNotWriteAndRealRepairIsIdempotent()
     {
         await using var factory = new SafetyTestApplicationFactory();

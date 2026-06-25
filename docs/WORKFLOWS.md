@@ -424,6 +424,8 @@ Invoke-RestMethod -Uri "http://localhost:5299/api/debug/results/import/mlb/cover
 Invoke-RestMethod -Uri "http://localhost:5299/api/debug/results/import/mlb/coverage-audit?fromDate=2026-06-19&toDate=2026-06-23&includeDetails=true"
 ```
 
+`/api/debug/results/import/mlb/status` includes `latestWorkerCycle` when a worker run has persisted date attempts. Each date outcome reports the selection reason, row/player/prop counts, coverage status, and an `outcomeCategory`. `Complete` is a successful finished date. `Partial`, `PendingGames`, and `NoGames` are coverage outcomes, not hard worker failures. `Failed` is reserved for provider exceptions, rejected/rate-limited API calls, database errors, or other true per-date exceptions.
+
 Manual one-day import:
 
 ```powershell
@@ -450,7 +452,7 @@ Invoke-RestMethod `
   -Body '{"fromDate":"2026-06-23","toDate":"2026-06-23","dryRun":false,"repairPartial":true,"repairMissing":true}'
 ```
 
-Performance summary skips dates whose MLB result coverage is `Partial`, `NotStarted`, `PendingGames`, or `Failed` when complete coverage states exist. Check `diagnostics.resultCoverage` for the clearest read: `latestCoverageStatus` describes the latest available/imported date, while `selectedGradedDateCoverageStatus` and `resultCoverageCompleteForSelectedDate` describe the date actually used for performance. The older `dataAvailability` coverage fields remain for compatibility.
+Performance summary skips dates whose MLB result coverage is `Partial`, `NotStarted`, `PendingGames`, `NoGames`, or `Failed` when complete coverage states exist. Check `diagnostics.resultCoverage` for the clearest read: `latestCoverageStatus` describes the latest available/imported date, while `selectedGradedDateCoverageStatus` and `resultCoverageCompleteForSelectedDate` describe the date actually used for performance. The older `dataAvailability` coverage fields remain for compatibility.
 
 Manual range import:
 
