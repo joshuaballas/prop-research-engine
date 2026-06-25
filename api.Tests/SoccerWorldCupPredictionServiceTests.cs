@@ -243,6 +243,24 @@ public sealed class SoccerWorldCupPredictionServiceTests
         Assert.Equal(JsonValueKind.Null, group.GetProperty("selectedSideProbability").ValueKind);
     }
 
+    [Fact]
+    public async Task PublicSoccerLineShopping_UsesSpecificUnavailableReason_WhenSampleIsLow()
+    {
+        await using var factory = CreateFactory(predictionsEnabled: true, minimumSampleSize: 5);
+        await SeedSoccerScenarioAsync(factory, historicalValues: [1m, 0m], line: 0.5m);
+        using var client = factory.CreateClient();
+
+        var response = await client.GetAsync("/api/markets/line-shopping?sport=SOCCER&competition=World%20Cup&includeBookmakerPrices=false");
+
+        response.EnsureSuccessStatusCode();
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        var group = Assert.Single(json.GetProperty("comparisonGroups").EnumerateArray());
+        var reason = group.GetProperty("hitChanceUnavailableReason").GetString();
+        Assert.False(group.GetProperty("modelProbabilityAvailable").GetBoolean());
+        Assert.Contains("only 2 historical matches", reason);
+        Assert.DoesNotContain("not available yet", reason);
+    }
+
     private static SafetyTestApplicationFactory CreateFactory(
         bool predictionsEnabled,
         bool gradingEnabled = false,

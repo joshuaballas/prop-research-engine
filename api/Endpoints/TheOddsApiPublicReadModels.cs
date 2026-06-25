@@ -427,12 +427,15 @@ public static partial class TheOddsApiDebugEndpoints
             dbContext,
             groups,
             cancellationToken);
+        var predictionUnavailableReasonsByKey = predictionBatch.PredictionsByKey
+            .ToDictionary(row => row.Key, row => row.Value.UnavailableReason, EqualityComparer<SoccerWorldCupPredictionKey>.Default);
         var comparisonGroups = groups
             .Select(group => ToSoccerWorldCupResearchOnlyResponseGroup(
                 group,
                 includeBookmakerPrices,
                 soccerPredictionOptions.Enabled,
                 soccerGradingOptions.Enabled,
+                predictionUnavailableReasonsByKey.GetValueOrDefault(new SoccerWorldCupPredictionKey(group.PlayerId, group.PropTypeId, group.Line)),
                 playerHistoryEnrichment.SummariesByPlayerId.GetValueOrDefault(group.PlayerId)))
             .ToArray();
         var strategyClassificationSummary = BuildTheOddsStrategyClassificationSummary(groups);
@@ -1601,8 +1604,7 @@ public static partial class TheOddsApiDebugEndpoints
             .Select(row =>
             {
                 var key = new SoccerWorldCupPredictionKey(row.PlayerId, row.PropTypeId, row.Line);
-                if (!predictionBatch.PredictionsByKey.TryGetValue(key, out var prediction) ||
-                    !prediction.ModelProbabilityAvailable)
+                if (!predictionBatch.PredictionsByKey.TryGetValue(key, out var prediction))
                 {
                     return row;
                 }
@@ -1610,19 +1612,19 @@ public static partial class TheOddsApiDebugEndpoints
                 return row with
                 {
                     IsEligibleAsNormalRecommendation = prediction.TopPickEligible,
-                    ModelProbabilityOver = prediction.ModelProbabilityOver,
-                    ModelProbabilityUnder = prediction.ModelProbabilityUnder,
-                    ModelProbabilityPush = prediction.ModelProbabilityPush,
+                    ModelProbabilityOver = prediction.ModelProbabilityAvailable ? prediction.ModelProbabilityOver : null,
+                    ModelProbabilityUnder = prediction.ModelProbabilityAvailable ? prediction.ModelProbabilityUnder : null,
+                    ModelProbabilityPush = prediction.ModelProbabilityAvailable ? prediction.ModelProbabilityPush : null,
                     ModelProjection = prediction.ModelProjection,
-                    ProjectionEdge = prediction.ProjectionEdge,
-                    RankingScore = prediction.SelectedSideProbability ?? 0m,
-                    OverProbabilityEdge = prediction.ModelProbabilityOver.HasValue ? prediction.ModelProbabilityOver.Value - 0.5m : null,
-                    UnderProbabilityEdge = prediction.ModelProbabilityUnder.HasValue ? prediction.ModelProbabilityUnder.Value - 0.5m : null,
-                    OverEstimatedEv = prediction.OverEstimatedEv,
-                    UnderEstimatedEv = prediction.UnderEstimatedEv,
+                    ProjectionEdge = prediction.ModelProbabilityAvailable ? prediction.ProjectionEdge : null,
+                    RankingScore = prediction.ModelProbabilityAvailable ? prediction.SelectedSideProbability ?? 0m : 0m,
+                    OverProbabilityEdge = prediction.ModelProbabilityAvailable && prediction.ModelProbabilityOver.HasValue ? prediction.ModelProbabilityOver.Value - 0.5m : null,
+                    UnderProbabilityEdge = prediction.ModelProbabilityAvailable && prediction.ModelProbabilityUnder.HasValue ? prediction.ModelProbabilityUnder.Value - 0.5m : null,
+                    OverEstimatedEv = prediction.ModelProbabilityAvailable ? prediction.OverEstimatedEv : null,
+                    UnderEstimatedEv = prediction.ModelProbabilityAvailable ? prediction.UnderEstimatedEv : null,
                     HistoricalSampleSize = prediction.HistoricalSampleSize,
                     ProbabilityMethod = prediction.ProbabilityMethod,
-                    ConfidenceScore = prediction.SelectedSideProbability ?? 0m
+                    ConfidenceScore = prediction.ModelProbabilityAvailable ? prediction.SelectedSideProbability ?? 0m : 0m
                 };
             })
             .ToList();
@@ -1930,6 +1932,7 @@ public static partial class TheOddsApiDebugEndpoints
         bool includeBookmakerPrices,
         bool soccerPredictionsEnabled,
         bool publicGradingEnabled,
+        string? predictionUnavailableReason,
         JsonObject? playerHistorySummary)
     {
         var node = NormalizeJsonObjectPropertyCasing(
@@ -1951,13 +1954,15 @@ public static partial class TheOddsApiDebugEndpoints
         node["sportsbookContextResearchOnly"] = soccerResearchOnly;
         node["isResearchOnly"] = soccerResearchOnly;
         node["resultGradingSupported"] = resultGradingSupported;
+        var unavailableReason = BuildSoccerWorldCupUnavailableReason(
+            predictionUnavailableReason,
+            group.HistoricalSampleSize,
+            soccerPredictionsEnabled);
         node["resultGradingUnavailableReason"] = resultGradingSupported
             ? null
             : modelProbabilityAvailable
                 ? "Soccer grading is not available for this row."
-                : soccerPredictionsEnabled
-                    ? "Soccer grading and model hit chance are not available for this row."
-                    : "Soccer grading and model hit chance are not available yet.";
+                : unavailableReason;
         node["publicSoccerGradingEnabled"] = publicGradingEnabled;
         node["entryUnavailableReason"] = "Soccer World Cup sportsbook context is research-only and not Entry Builder playable.";
         node["entryRuleWarning"] = "Soccer World Cup sportsbook context is research-only and not Entry Builder playable.";
@@ -1976,9 +1981,7 @@ public static partial class TheOddsApiDebugEndpoints
             node["modelProjection"] = null;
             node["projectionEdge"] = null;
             node["probabilitySource"] = null;
-            node["hitChanceUnavailableReason"] = soccerPredictionsEnabled
-                ? "Soccer model hit chance is not available for this row."
-                : "Soccer grading and model hit chance are not available yet.";
+            node["hitChanceUnavailableReason"] = unavailableReason;
             node["strategyClassification"] = "ResearchOnly";
             node["strategyTier"] = "ResearchOnly";
             node["isCandidate"] = false;
@@ -1995,6 +1998,27 @@ public static partial class TheOddsApiDebugEndpoints
         node["playerHistorySummary"] = playerHistorySummary?.DeepClone();
 
         return node;
+    }
+
+    private static string BuildSoccerWorldCupUnavailableReason(
+        string? predictionUnavailableReason,
+        int historicalSampleSize,
+        bool soccerPredictionsEnabled)
+    {
+        if (!soccerPredictionsEnabled)
+        {
+            return "Soccer grading and model hit chance are not available yet.";
+        }
+
+        return predictionUnavailableReason switch
+        {
+            "NoApprovedApiSportsProviderEntityLink" => "Soccer model hit chance is unavailable because this player is not linked to an API-Sports history profile.",
+            "ApprovedLinkExistsButNoSupportedHistoricalRows" => "Soccer model hit chance is unavailable because no supported API-Sports history rows exist for this player and prop type.",
+            "InsufficientHistoricalSample" => $"Soccer model hit chance is unavailable because only {historicalSampleSize} historical matches are available for this player and prop type.",
+            "UnsupportedSoccerPropType" => "Soccer model hit chance is unavailable because this prop type is not supported for Soccer predictions.",
+            null or "" => "Soccer model hit chance is unavailable for this row.",
+            _ => $"Soccer model hit chance is unavailable for this row: {predictionUnavailableReason}."
+        };
     }
 
     private static JsonObject NormalizeJsonObjectPropertyCasing(JsonObject source)
