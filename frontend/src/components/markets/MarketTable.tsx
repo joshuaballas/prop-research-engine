@@ -18,6 +18,7 @@ import { AppDataTable } from '../ui/AppDataTable';
 import { AppRowActions, desktopRowActionButtonSx, desktopRowDetailsButtonSx } from '../ui/AppRowActions';
 import { AppTableEvValue, AppTableMetricValue, AppTablePrimaryText, AppTableSecondaryText } from '../ui/AppTableTypography';
 import { OpportunityPickText } from '../ui/OpportunityCard';
+import { marketDisplayLabel } from '../../utils/marketDisplay';
 import { TagsLabelWithHelp } from './TagsLabelWithHelp';
 import { marketTagLabel } from '../../utils/marketTags';
 import { getDisplayExpectedValue } from '../../utils/expectedValueDisplay';
@@ -94,7 +95,7 @@ export function MarketTable({ markets }: { markets: MarketOpportunity[] }) {
                 </TableCell>
                 {showSportColumn ? (
                   <TableCell sx={{ py: 1.05 }}>
-                    <AppTableMetricValue>{market.sport}</AppTableMetricValue>
+                    <AppTableMetricValue>{marketDisplayLabel(market)}</AppTableMetricValue>
                   </TableCell>
                 ) : null}
                 <TableCell sx={{ overflow: 'hidden', py: 1.05 }}>

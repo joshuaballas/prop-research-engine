@@ -2,6 +2,7 @@ import DeleteOutlineRoundedIcon from '@mui/icons-material/DeleteOutlineRounded';
 import { Button, Typography } from '@mui/material';
 import type { EntryLeg } from '../../types/entryBuilder';
 import { formatPercent } from '../../utils/formatters';
+import { marketDisplayLabel } from '../../utils/marketDisplay';
 import { renderOpportunityCautionText } from '../../utils/warnings';
 import { ProjectionModifierBadge } from '../markets/ProjectionModifierBadge';
 import { TrustValue } from '../metrics/TrustValue';
@@ -23,7 +24,7 @@ export function EntryLegCard({ leg, onRemove }: { leg: EntryLeg; onRemove?: (id:
           {formatSignedPercent(leg.probabilityEdge)}
         </Typography>
       }
-      event={leg.sport}
+      event={marketDisplayLabel(leg)}
       market={<OpportunityPickText side={leg.side} propType={leg.propType} line={leg.line} />}
       provider={
         <OpportunityProviderRow provider={leg.entryProvider} category={leg.providerCategory} sx={{ justifyContent: 'flex-start', gap: 0.8 }}>
@@ -33,7 +34,7 @@ export function EntryLegCard({ leg, onRemove }: { leg: EntryLeg; onRemove?: (id:
       metrics={
         <OpportunityMetricGrid columns={{ xs: 2, sm: 4 }} sx={{ borderTop: 0, pt: 0 }}>
           <OpportunityMetricItem label="Edge" value={formatSignedPercent(leg.probabilityEdge)} metric="edge" />
-          <OpportunityMetricItem label="Model hit chance" value={formatPercent(leg.modelProbability)} metric="hitChance" />
+          <OpportunityMetricItem label="Hit chance" value={formatPercent(leg.modelProbability)} metric="hitChance" />
           <OpportunityMetricItem label="Trust" value={<TrustValue level={leg.trustLevel} sx={{ fontSize: 14, fontWeight: 950, lineHeight: 1.5 }} />} metric="trust" />
           <OpportunityMetricItem label="Sample" value={String(leg.historicalSampleSize)} />
         </OpportunityMetricGrid>

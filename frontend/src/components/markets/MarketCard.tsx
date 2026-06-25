@@ -22,6 +22,7 @@ import {
 import { marketTagLabel } from '../../utils/marketTags';
 import { CautionLabels } from './CautionLabels';
 import { getDisplayExpectedValue } from '../../utils/expectedValueDisplay';
+import { marketDisplayLabel } from '../../utils/marketDisplay';
 
 export function MarketCard({ market }: { market: MarketOpportunity }) {
   const [detailsOpen, setDetailsOpen] = useState(false);
@@ -33,6 +34,7 @@ export function MarketCard({ market }: { market: MarketOpportunity }) {
   const cautions = getOperationalMarketCautions(market, { locked: incompatible && addable });
   const displayEv = getDisplayExpectedValue(market);
   const headlineValue = displayEv ?? market.probabilityEdge;
+  const displayLabel = marketDisplayLabel(market);
   const actions = (
     <>
       {canAddFromScanner || selected ? (
@@ -72,7 +74,7 @@ export function MarketCard({ market }: { market: MarketOpportunity }) {
         event={
           <Box
             component="span"
-            title={`${market.sport} - ${market.event} - ${market.startTime}`}
+            title={`${displayLabel} - ${market.event} - ${market.startTime}`}
             sx={{
               minHeight: 38,
               display: '-webkit-box',
@@ -81,7 +83,7 @@ export function MarketCard({ market }: { market: MarketOpportunity }) {
               overflow: 'hidden'
             }}
           >
-            {market.sport} - {market.event} - {market.startTime}
+            {displayLabel} - {market.event} - {market.startTime}
           </Box>
         }
         market={<OpportunityPickText side={market.side} propType={market.propType} line={market.line} />}
@@ -106,7 +108,7 @@ export function MarketCard({ market }: { market: MarketOpportunity }) {
           <Box>
             <OpportunityMetricGrid columns={{ xs: 2, sm: 4 }} sx={{ borderTop: 0, pt: 0 }}>
               <OpportunityMetricItem label="Edge" value={formatPercent(market.probabilityEdge, { signed: true })} metric="edge" />
-              <OpportunityMetricItem label="Model hit chance" value={formatPercent(market.modelProbability)} metric="hitChance" />
+              <OpportunityMetricItem label="Hit chance" value={formatPercent(market.modelProbability)} metric="hitChance" />
               <OpportunityMetricItem label="Trust" value={<TrustValue level={market.trustLevel} sx={{ fontSize: 14, fontWeight: 950, lineHeight: 1.5 }} />} metric="trust" />
               <OpportunityMetricItem label="Sample" value={String(market.historicalSampleSize)} />
             </OpportunityMetricGrid>

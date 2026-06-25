@@ -5,13 +5,15 @@ import { metricHelp, type MetricHelpKey } from './metricHelp';
 interface MetricLabelWithHelpProps {
   metric: MetricHelpKey;
   align?: 'left' | 'right' | 'center';
+  label?: string;
   variant?: 'caption' | 'table';
   iconPosition?: 'before' | 'after';
   sx?: SxProps<Theme>;
 }
 
-export function MetricLabelWithHelp({ metric, align = 'left', variant = 'caption', iconPosition = 'after', sx }: MetricLabelWithHelpProps) {
+export function MetricLabelWithHelp({ metric, align = 'left', label: labelOverride, variant = 'caption', iconPosition = 'after', sx }: MetricLabelWithHelpProps) {
   const help = metricHelp[metric];
+  const displayLabel = labelOverride ?? (metric === 'hitChance' && variant === 'table' ? 'Hit chance' : help.label);
   const justifyContent = align === 'right' ? 'flex-end' : align === 'center' ? 'center' : 'flex-start';
   const icon = (
     <Tooltip title={help.description} arrow enterTouchDelay={0} leaveTouchDelay={5000}>
@@ -54,7 +56,7 @@ export function MetricLabelWithHelp({ metric, align = 'left', variant = 'caption
       fontWeight={variant === 'table' ? 850 : 800}
       sx={{ lineHeight: 1.1, whiteSpace: 'nowrap' }}
     >
-      {help.label}
+      {displayLabel}
     </Typography>
   );
 

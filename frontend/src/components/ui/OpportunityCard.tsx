@@ -110,7 +110,7 @@ export function OpportunityMetricItem({
   return (
     <Stack spacing={0.2} minWidth={0}>
       {resolvedMetric ? (
-        <MetricLabelWithHelp metric={resolvedMetric} />
+        <MetricLabelWithHelp metric={resolvedMetric} label={label} />
       ) : (
         <Typography variant="caption" color="text.secondary" fontWeight={850} sx={{ lineHeight: 1.1, whiteSpace: 'nowrap' }}>
           {label}

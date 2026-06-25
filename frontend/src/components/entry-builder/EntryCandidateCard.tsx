@@ -5,6 +5,7 @@ import { Button, Stack, Typography } from '@mui/material';
 import { useState } from 'react';
 import type { MarketOpportunity } from '../../types/markets';
 import { palette } from '../../theme/palette';
+import { marketDisplayLabel } from '../../utils/marketDisplay';
 import { renderOpportunityCautionText } from '../../utils/warnings';
 import { MetricLabelWithHelp } from '../metrics/MetricLabelWithHelp';
 import { TrustValue } from '../metrics/TrustValue';
@@ -53,7 +54,7 @@ export function EntryCandidateCard({ market, lockedProvider, selected = false, o
               : undefined)
         }}
       >
-        {selected ? 'Remove' : incompatible ? 'Locked' : 'Add leg'}
+        {selected ? 'Remove' : 'Add leg'}
       </Button>
       <Button
         variant="outlined"
@@ -72,7 +73,7 @@ export function EntryCandidateCard({ market, lockedProvider, selected = false, o
         context={
           <>
             <Typography variant="caption" color="primary.main" fontWeight={900}>
-              {market.sport}
+              {marketDisplayLabel(market)}
             </Typography>
             <StatusPill label={market.strategyClassification} sx={{ height: 22 }} />
             <ProjectionModifierBadge modifier={market.projectionModifier} sx={{ height: 22 }} />
@@ -95,7 +96,7 @@ export function EntryCandidateCard({ market, lockedProvider, selected = false, o
         metrics={
           <OpportunityMetricGrid columns={{ xs: 2, sm: 4 }} sx={{ borderTop: 0, pt: 0 }}>
             <OpportunityMetricItem label="Edge" value={formatSignedPercent(market.probabilityEdge)} metric="edge" />
-            <OpportunityMetricItem label="Model hit chance" value={formatPercent(market.modelProbability)} metric="hitChance" />
+            <OpportunityMetricItem label="Hit chance" value={formatPercent(market.modelProbability)} metric="hitChance" />
             <OpportunityMetricItem label="Trust" value={<TrustValue level={market.trustLevel} sx={{ fontSize: 14, fontWeight: 950, lineHeight: 1.5 }} />} metric="trust" />
             <OpportunityMetricItem label="Sample" value={String(market.historicalSampleSize)} />
           </OpportunityMetricGrid>

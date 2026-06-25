@@ -85,6 +85,9 @@ function mapMarketGroupToOpportunity(group: MarketGroupDto, index: number, sourc
   const specialProjectionWarning = readString(group, 'specialProjectionWarning', 'SpecialProjectionWarning') ?? null;
   const sportsbookContextResearchOnly = readBoolean(group, 'sportsbookContextResearchOnly', 'SportsbookContextResearchOnly') ?? false;
   const isResearchOnly = readBoolean(group, 'isResearchOnly', 'IsResearchOnly') ?? sportsbookContextResearchOnly;
+  const isRecommendation = readBoolean(group, 'isRecommendation') ?? false;
+  const recommendationActionableForUser = readBoolean(group, 'recommendationActionableForUser') ?? false;
+  const recommendationType = readString(group, 'recommendationType') ?? null;
   const resultGradingSupported = readBoolean(group, 'resultGradingSupported', 'ResultGradingSupported') ?? true;
   const resultGradingUnavailableReason = readString(group, 'resultGradingUnavailableReason', 'ResultGradingUnavailableReason') ?? null;
   const entryUnavailableReason = readString(group, 'entryUnavailableReason', 'EntryUnavailableReason') ?? null;
@@ -97,7 +100,8 @@ function mapMarketGroupToOpportunity(group: MarketGroupDto, index: number, sourc
     ...(specialProjectionWarning ? [specialProjectionWarning] : [])
   ]
     .map(cleanWarning)
-    .filter(Boolean);
+    .filter(Boolean)
+    .filter((warning, index, allWarnings) => allWarnings.indexOf(warning) === index);
 
   return {
     id: `${eventId ?? event}-${player}-${propType}-${line || index}-${side}-${provider}`.replace(/\s+/g, '-').toLowerCase(),
@@ -111,6 +115,7 @@ function mapMarketGroupToOpportunity(group: MarketGroupDto, index: number, sourc
     startTime: formatStartTime(eventStartTimeUtc),
     eventStartTimeUtc,
     sport: normalizeSport(readString(group, 'sport', 'Sport')),
+    competition: readString(group, 'competition', 'Competition') ?? null,
     propType,
     side,
     line,
@@ -123,9 +128,13 @@ function mapMarketGroupToOpportunity(group: MarketGroupDto, index: number, sourc
     expectedValueUnavailableReason,
     sportsbookContextResearchOnly,
     isResearchOnly,
+    isRecommendation,
+    recommendationActionableForUser,
+    recommendationType,
     resultGradingSupported,
     resultGradingUnavailableReason,
     entryUnavailableReason,
+    entryRuleWarning,
     entryCompatibilityGroup,
     entryProvider: provider,
     canAddToEntry: providerCategory === 'DFS' && entryActionable && !isExpired && (!lifecycleStatusNormalized || lifecycleStatusNormalized === 'active'),

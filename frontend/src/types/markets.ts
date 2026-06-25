@@ -28,6 +28,7 @@ export interface MarketOpportunity {
   startTime: string;
   eventStartTimeUtc?: string;
   sport: Exclude<SportCode, 'ALL'>;
+  competition?: string | null;
   propType: string;
   side: 'Over' | 'Under';
   line: number;
@@ -40,9 +41,13 @@ export interface MarketOpportunity {
   expectedValueUnavailableReason?: string | null;
   sportsbookContextResearchOnly?: boolean;
   isResearchOnly?: boolean;
+  isRecommendation?: boolean;
+  recommendationActionableForUser?: boolean;
+  recommendationType?: 'Sportsbook' | 'DFS' | string | null;
   resultGradingSupported?: boolean;
   resultGradingUnavailableReason?: string | null;
   entryUnavailableReason?: string | null;
+  entryRuleWarning?: string | null;
   entryCompatibilityGroup: string;
   entryProvider: string;
   canAddToEntry: boolean;

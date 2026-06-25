@@ -58,7 +58,7 @@ export function getMarketCautions(market: MarketOpportunity, options: { locked?:
   const keys = new Set<CautionKey>();
 
   if (options.locked) keys.add('Locked');
-  if (market.providerCategory === 'Sportsbook') keys.add('Research only');
+  if (market.providerCategory === 'Sportsbook' && !market.isRecommendation) keys.add('Research only');
   if (market.freshness === 'Stale') keys.add('Stale');
   if (market.freshness === 'Unavailable') keys.add('Provider issue');
   if (market.estimatedEv <= 0) keys.add('Non-positive EV');

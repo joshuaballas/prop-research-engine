@@ -7,6 +7,7 @@ import { useState } from 'react';
 import { useEntryBuilder } from '../../hooks/useEntryBuilder';
 import type { MarketOpportunity, PlayerHistoryStatSummary, ProviderLine } from '../../types/markets';
 import { formatDecimal, formatPercent } from '../../utils/formatters';
+import { marketDisplayLabel } from '../../utils/marketDisplay';
 import { hasRenderableWarning, renderOpportunityCautionText, renderWarningText } from '../../utils/warnings';
 import { palette } from '../../theme/palette';
 import { MetricLabelWithHelp } from '../metrics/MetricLabelWithHelp';
@@ -104,7 +105,7 @@ function LineShoppingRow({
                     side={market.side}
                     propType={market.propType}
                     line={market.line}
-                    sport={market.sport}
+                    sport={marketDisplayLabel(market)}
                     sx={{
                       fontSize: 13,
                       flexWrap: 'nowrap',
@@ -148,20 +149,23 @@ function LineShoppingActionCell({ market, onDetails }: { market: MarketOpportuni
   const selected = builder.isSelected(market.id);
   const incompatible = !selected && !builder.isCompatible(market);
   const canAdd = market.canAddToEntry && market.estimatedEv > 0 && !incompatible;
-  const researchOnly = market.sportsbookContextResearchOnly || (market.sport === 'SOCCER' && market.providerCategory === 'Sportsbook');
+  const researchOnly = isResearchOnlyMarket(market);
+  const entryDisabled = isSoccerEntryBuilderDisabled(market) && !researchOnly && !selected;
+  const locked = researchOnly || entryDisabled || incompatible;
 
   return (
     <TableCell data-sticky-action="true" align="center" sx={{ ...stickyActionCellSx, minWidth: 130 }}>
       <AppRowActions sx={{ mx: 'auto' }}>
         <Button
-          startIcon={selected ? <RemoveCircleOutlineRoundedIcon /> : researchOnly || incompatible ? <LockRoundedIcon /> : <AddCircleOutlineRoundedIcon />}
+          startIcon={selected ? <RemoveCircleOutlineRoundedIcon /> : locked ? <LockRoundedIcon /> : <AddCircleOutlineRoundedIcon />}
           size="small"
           variant="contained"
           disabled={!selected && !canAdd}
           onClick={() => (selected || canAdd ? builder.toggleLeg(market) : undefined)}
-          sx={entryButtonSx(selected, researchOnly || incompatible)}
+          title={entryDisabled ? market.entryRuleWarning ?? market.entryUnavailableReason ?? 'Entry Builder disabled for Soccer' : researchOnly ? market.entryUnavailableReason ?? market.resultGradingUnavailableReason ?? 'Research-only row' : undefined}
+          sx={entryButtonSx(selected, locked)}
         >
-          {selected ? 'Remove' : researchOnly ? 'Research only' : incompatible ? 'Locked' : 'Add leg'}
+          {selected ? 'Remove' : 'Add leg'}
         </Button>
         <Button size="small" variant="outlined" onClick={onDetails} sx={detailsButtonSx}>
           Details
@@ -184,19 +188,22 @@ export function LineShoppingCard({ market }: { market: MarketOpportunity }) {
   const selected = builder.isSelected(market.id);
   const incompatible = !selected && !builder.isCompatible(market);
   const canAdd = market.canAddToEntry && market.estimatedEv > 0 && !incompatible;
-  const researchOnly = market.sportsbookContextResearchOnly || (market.sport === 'SOCCER' && market.providerCategory === 'Sportsbook');
+  const researchOnly = isResearchOnlyMarket(market);
+  const entryDisabled = isSoccerEntryBuilderDisabled(market) && !researchOnly && !selected;
+  const locked = researchOnly || entryDisabled || incompatible;
   const warning = renderOpportunityCautionText(market.warnings);
   const actions = (
     <>
       <Button
-        startIcon={selected ? <RemoveCircleOutlineRoundedIcon /> : researchOnly || incompatible ? <LockRoundedIcon /> : <AddCircleOutlineRoundedIcon />}
+        startIcon={selected ? <RemoveCircleOutlineRoundedIcon /> : locked ? <LockRoundedIcon /> : <AddCircleOutlineRoundedIcon />}
         size="small"
         variant="contained"
         disabled={!selected && !canAdd}
         onClick={() => (selected || canAdd ? builder.toggleLeg(market) : undefined)}
-        sx={mobileEntryButtonSxFor(selected, researchOnly || incompatible)}
+        title={entryDisabled ? market.entryRuleWarning ?? market.entryUnavailableReason ?? 'Entry Builder disabled for Soccer' : researchOnly ? market.entryUnavailableReason ?? market.resultGradingUnavailableReason ?? 'Research-only row' : undefined}
+        sx={mobileEntryButtonSxFor(selected, locked)}
       >
-        {selected ? 'Remove' : researchOnly ? 'Research only' : incompatible ? 'Locked' : 'Add leg'}
+        {selected ? 'Remove' : 'Add leg'}
       </Button>
       <Button size="small" variant="outlined" onClick={() => setDetailsOpen(true)} sx={mobileDetailsButtonSx}>
         Details
@@ -290,7 +297,7 @@ export function LineShoppingCard({ market }: { market: MarketOpportunity }) {
             <Divider />
             <OpportunityMetricGrid columns={{ xs: 2 }} sx={{ borderTop: 0, pt: 0 }}>
               <OpportunityMetricItem label="Edge" value={formatPercent(market.probabilityEdge, { signed: true })} metric="edge" />
-              <OpportunityMetricItem label="Model hit chance" value={formatPercent(market.modelProbability)} metric="hitChance" />
+              <OpportunityMetricItem label="Hit chance" value={formatPercent(market.modelProbability)} metric="hitChance" />
               <OpportunityMetricItem label="Trust" value={<TrustValue level={confidence} sx={{ fontSize: 14, fontWeight: 950, lineHeight: 1.5 }} />} metric="trust" />
               <OpportunityMetricItem label="Sample" value={String(market.historicalSampleSize)} />
             </OpportunityMetricGrid>
@@ -312,19 +319,22 @@ function LineShoppingCardActions({ market, onDetails }: { market: MarketOpportun
   const selected = builder.isSelected(market.id);
   const incompatible = !selected && !builder.isCompatible(market);
   const canAdd = market.canAddToEntry && market.estimatedEv > 0 && !incompatible;
-  const researchOnly = market.sportsbookContextResearchOnly || (market.sport === 'SOCCER' && market.providerCategory === 'Sportsbook');
+  const researchOnly = isResearchOnlyMarket(market);
+  const entryDisabled = isSoccerEntryBuilderDisabled(market) && !researchOnly && !selected;
+  const locked = researchOnly || entryDisabled || incompatible;
 
   return (
     <AppRowActions sx={{ mx: 'auto' }}>
       <Button
-        startIcon={selected ? <RemoveCircleOutlineRoundedIcon /> : researchOnly || incompatible ? <LockRoundedIcon /> : <AddCircleOutlineRoundedIcon />}
+        startIcon={selected ? <RemoveCircleOutlineRoundedIcon /> : locked ? <LockRoundedIcon /> : <AddCircleOutlineRoundedIcon />}
         size="small"
         variant="contained"
         disabled={!selected && !canAdd}
         onClick={() => (selected || canAdd ? builder.toggleLeg(market) : undefined)}
-        sx={entryButtonSx(selected, researchOnly || incompatible)}
+        title={entryDisabled ? market.entryRuleWarning ?? market.entryUnavailableReason ?? 'Entry Builder disabled for Soccer' : researchOnly ? market.entryUnavailableReason ?? market.resultGradingUnavailableReason ?? 'Research-only row' : undefined}
+        sx={entryButtonSx(selected, locked)}
       >
-        {selected ? 'Remove' : researchOnly ? 'Research only' : incompatible ? 'Locked' : 'Add leg'}
+        {selected ? 'Remove' : 'Add leg'}
       </Button>
       <Button size="small" variant="outlined" onClick={onDetails} sx={detailsButtonSx}>
         Details
@@ -394,7 +404,7 @@ function LineShoppingComparisonRow({
               side={market.side}
               propType={market.propType}
               line={market.line}
-              sport={market.sport}
+              sport={marketDisplayLabel(market)}
               sx={{
                 fontSize: 13,
                 flexWrap: 'nowrap',
@@ -842,6 +852,10 @@ function hasReferenceLine(market: MarketOpportunity) {
 }
 
 function resolveConfidence(market: MarketOpportunity): 'Strong' | 'Medium' | 'Weak' {
+  if (market.isRecommendation && market.recommendationActionableForUser && isDisplayableTrustLevel(market.trustLevel)) {
+    return market.trustLevel;
+  }
+
   const warningText = renderWarningText(market.warnings).toLowerCase();
   const hasMajorCaution =
     market.estimatedEv <= 0 ||
@@ -862,4 +876,16 @@ function resolveConfidence(market: MarketOpportunity): 'Strong' | 'Medium' | 'We
   }
 
   return edge > 0 ? 'Medium' : 'Weak';
+}
+
+function isResearchOnlyMarket(market: MarketOpportunity) {
+  return Boolean(market.sportsbookContextResearchOnly || market.isResearchOnly || market.strategyClassification === 'ResearchOnly');
+}
+
+function isSoccerEntryBuilderDisabled(market: MarketOpportunity) {
+  return market.sport === 'SOCCER' && market.providerCategory === 'Sportsbook' && !market.canAddToEntry;
+}
+
+function isDisplayableTrustLevel(value: MarketOpportunity['trustLevel']): value is 'Strong' | 'Medium' | 'Weak' {
+  return value === 'Strong' || value === 'Medium' || value === 'Weak';
 }

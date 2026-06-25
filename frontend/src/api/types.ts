@@ -252,6 +252,8 @@ export interface MarketGroupDto {
   SpecialProjectionWarning?: string | null;
   providerCategory?: string;
   ProviderCategory?: string;
+  competition?: string | null;
+  Competition?: string | null;
   isDfs?: boolean;
   IsDfs?: boolean;
   isSportsbook?: boolean;
@@ -264,6 +266,9 @@ export interface MarketGroupDto {
   ExpectedValueUnavailableReason?: string | null;
   sportsbookContextResearchOnly?: boolean;
   SportsbookContextResearchOnly?: boolean;
+  isRecommendation?: boolean;
+  recommendationActionableForUser?: boolean;
+  recommendationType?: string | null;
   resultGradingSupported?: boolean;
   ResultGradingSupported?: boolean;
   resultGradingUnavailableReason?: string | null;

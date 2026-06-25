@@ -230,7 +230,7 @@ function DashboardOpportunityCard({ market, builder }: { market: MarketOpportuni
         onClick={() => (selected || canAdd ? builder.toggleLeg(market) : undefined)}
         sx={entryButtonSx(selected, incompatible)}
       >
-        {selected ? 'Remove' : incompatible ? 'Locked' : 'Add leg'}
+        {selected ? 'Remove' : 'Add leg'}
       </Button>
       <Button size="small" variant="outlined" onClick={() => setDetailsOpen(true)} sx={compareButtonSx}>
         Details
@@ -255,7 +255,7 @@ function DashboardOpportunityCard({ market, builder }: { market: MarketOpportuni
         metrics={
           <OpportunityMetricGrid columns={{ xs: 2, sm: 3 }} sx={{ borderTop: 0, pt: 0 }}>
             <OpportunityMetricItem label="Edge" value={formatPercent(market.probabilityEdge, { signed: true })} metric="edge" />
-            <OpportunityMetricItem label="Model hit chance" value={formatPercent(market.modelProbability)} metric="hitChance" />
+            <OpportunityMetricItem label="Hit chance" value={formatPercent(market.modelProbability)} metric="hitChance" />
             <OpportunityMetricItem
               label="Trust"
               value={<TrustValue level={market.trustLevel} sx={{ fontSize: '0.875rem', fontWeight: 900, lineHeight: 1.43 }} />}

@@ -24,6 +24,7 @@ import { palette } from '../../theme/palette';
 import type { MarketOpportunity } from '../../types/markets';
 import { formatPercent } from '../../utils/formatters';
 import { marketTagLabel, marketTagValue } from '../../utils/marketTags';
+import { marketDisplayLabel } from '../../utils/marketDisplay';
 import { buildAvailableSportOptions, getAvailableSportCodes } from '../../utils/sportOptions';
 import { normalizeTrustLevel } from '../../utils/trustColors';
 
@@ -407,6 +408,8 @@ function RankedPicksTable({ markets, rankOffset, builder }: { markets: MarketOpp
               const confidence = getTopPickConfidence(market);
               const selected = builder.isSelected(market.id);
               const incompatible = !selected && !builder.isCompatible(market);
+              const entryDisabled = isSoccerEntryBuilderDisabled(market) && !selected;
+              const locked = incompatible || entryDisabled;
               return (
               <TableRow key={market.id} hover sx={appTableRowSx}>
                 <TableCell>
@@ -419,7 +422,7 @@ function RankedPicksTable({ markets, rankOffset, builder }: { markets: MarketOpp
                       side={market.side}
                       propType={market.propType}
                       line={market.line}
-                      sport={market.sport}
+                      sport={marketDisplayLabel(market)}
                       sx={{
                         fontSize: 13,
                         flexWrap: 'nowrap',
@@ -445,14 +448,15 @@ function RankedPicksTable({ markets, rankOffset, builder }: { markets: MarketOpp
                 <TableCell data-sticky-action="true" align="center" sx={{ ...stickyActionCellSx, minWidth: 130 }}>
                   <AppRowActions sx={{ mx: 'auto' }}>
                     <Button
-                      startIcon={selected ? <RemoveCircleOutlineRoundedIcon /> : incompatible ? <LockRoundedIcon /> : <AddCircleOutlineRoundedIcon />}
+                      startIcon={selected ? <RemoveCircleOutlineRoundedIcon /> : locked ? <LockRoundedIcon /> : <AddCircleOutlineRoundedIcon />}
                       size="small"
                       variant="contained"
-                      disabled={!market.canAddToEntry || incompatible}
-                      onClick={() => builder.toggleLeg(market)}
-                      sx={entryButtonSx(selected, incompatible)}
+                      disabled={locked || !market.canAddToEntry}
+                      onClick={() => (locked || !market.canAddToEntry ? undefined : builder.toggleLeg(market))}
+                      title={entryDisabled ? market.entryRuleWarning ?? market.entryUnavailableReason ?? 'Entry Builder disabled for Soccer' : undefined}
+                      sx={entryButtonSx(selected, locked)}
                     >
-                      {selected ? 'Remove' : incompatible ? 'Locked' : 'Add leg'}
+                      {selected ? 'Remove' : 'Add leg'}
                     </Button>
                     <Button size="small" variant="outlined" onClick={() => setDetailsMarket(market)} sx={compareButtonSx}>
                       Details
@@ -467,6 +471,10 @@ function RankedPicksTable({ markets, rankOffset, builder }: { markets: MarketOpp
       <PropDetailsModal market={detailsMarket} open={Boolean(detailsMarket)} onClose={() => setDetailsMarket(null)} />
     </>
   );
+}
+
+function isSoccerEntryBuilderDisabled(market: MarketOpportunity) {
+  return market.sport === 'SOCCER' && market.providerCategory === 'Sportsbook' && !market.canAddToEntry;
 }
 
 const actionButtonSx = desktopRowActionButtonSx;

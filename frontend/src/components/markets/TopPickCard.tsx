@@ -4,6 +4,7 @@ import RemoveCircleOutlineRoundedIcon from '@mui/icons-material/RemoveCircleOutl
 import { Button, Stack, Typography } from '@mui/material';
 import { useState } from 'react';
 import { formatAmericanOdds, formatDecimal, formatPercent } from '../../utils/formatters';
+import { marketDisplayLabel } from '../../utils/marketDisplay';
 import type { MarketOpportunity } from '../../types/markets';
 import { MetricLabelWithHelp } from '../metrics/MetricLabelWithHelp';
 import { TrustValue } from '../metrics/TrustValue';
@@ -73,7 +74,7 @@ function TopPickStatus({
     <>
       {includeRank ? (
         <Typography variant="caption" color="primary.main" fontWeight={950}>
-          #{market.rank ?? '-'} {market.sport}
+          #{market.rank ?? '-'} {marketDisplayLabel(market)}
         </Typography>
       ) : null}
       {label ? <StatusPill label={label} /> : null}
@@ -144,7 +145,7 @@ function TopPickMetrics({ market, detailed, confidence }: { market: MarketOpport
           <OpportunityMetricItem label="Modifier" value={market.projectionModifier === 'Normal' ? '-' : market.projectionModifier} noWrap={false} />
         </>
       ) : null}
-      <OpportunityMetricItem label="Model hit chance" value={formatPercent(market.modelProbability)} metric="hitChance" />
+      <OpportunityMetricItem label="Hit chance" value={formatPercent(market.modelProbability)} metric="hitChance" />
       {showSportsbookPricing ? <OpportunityMetricItem label="Break-even" value={formatPercent(market.impliedProbability)} /> : null}
       <OpportunityMetricItem label="Edge" value={formatPercent(market.probabilityEdge, { signed: true })} metric="edge" />
       {detailed && market.showExpectedValue ? (
@@ -173,17 +174,20 @@ function TopPickActions({
   onAdd?: (market: MarketOpportunity) => void;
   onDetails: () => void;
 }) {
+  const entryDisabled = isSoccerEntryBuilderDisabled(market) && !selected;
+  const locked = incompatible || entryDisabled;
   return (
     <>
       <Button
         variant="contained"
         size="small"
-        startIcon={selected ? <RemoveCircleOutlineRoundedIcon /> : incompatible ? <LockRoundedIcon /> : <AddCircleOutlineRoundedIcon />}
-        onClick={() => onAdd?.(market)}
-        disabled={incompatible}
-        sx={entryButtonSx(selected, incompatible)}
+        startIcon={selected ? <RemoveCircleOutlineRoundedIcon /> : locked ? <LockRoundedIcon /> : <AddCircleOutlineRoundedIcon />}
+        onClick={() => (locked ? undefined : onAdd?.(market))}
+        disabled={locked}
+        title={entryDisabled ? market.entryRuleWarning ?? market.entryUnavailableReason ?? 'Entry Builder disabled for Soccer' : undefined}
+        sx={entryButtonSx(selected, locked)}
       >
-        {selected ? 'Remove' : incompatible ? 'Locked' : 'Add leg'}
+        {selected ? 'Remove' : 'Add leg'}
       </Button>
       <Button variant="outlined" size="small" onClick={onDetails} sx={compareButtonSx}>
         Details
@@ -205,17 +209,20 @@ function TopPickMobileActions({
   onAdd?: (market: MarketOpportunity) => void;
   onDetails: () => void;
 }) {
+  const entryDisabled = isSoccerEntryBuilderDisabled(market) && !selected;
+  const locked = incompatible || entryDisabled;
   return (
     <>
       <Button
         variant="contained"
         size="small"
-        startIcon={selected ? <RemoveCircleOutlineRoundedIcon /> : incompatible ? <LockRoundedIcon /> : <AddCircleOutlineRoundedIcon />}
-        onClick={() => onAdd?.(market)}
-        disabled={incompatible}
-        sx={mobileEntryButtonSx(selected, incompatible)}
+        startIcon={selected ? <RemoveCircleOutlineRoundedIcon /> : locked ? <LockRoundedIcon /> : <AddCircleOutlineRoundedIcon />}
+        onClick={() => (locked ? undefined : onAdd?.(market))}
+        disabled={locked}
+        title={entryDisabled ? market.entryRuleWarning ?? market.entryUnavailableReason ?? 'Entry Builder disabled for Soccer' : undefined}
+        sx={mobileEntryButtonSx(selected, locked)}
       >
-        {selected ? 'Remove' : incompatible ? 'Locked' : 'Add leg'}
+        {selected ? 'Remove' : 'Add leg'}
       </Button>
       <Button variant="outlined" size="small" onClick={onDetails} sx={mobileCardDetailsButtonSx}>
         Details
@@ -225,6 +232,10 @@ function TopPickMobileActions({
 }
 
 function resolveConfidence(market: MarketOpportunity): 'Strong' | 'Medium' | 'Weak' {
+  if (market.isRecommendation && market.recommendationActionableForUser && isDisplayableTrustLevel(market.trustLevel)) {
+    return market.trustLevel;
+  }
+
   const warningText = renderWarningText(market.warnings).toLowerCase();
   const hasMajorCaution =
     market.estimatedEv <= 0 ||
@@ -245,6 +256,14 @@ function resolveConfidence(market: MarketOpportunity): 'Strong' | 'Medium' | 'We
   }
 
   return edge > 0 ? 'Medium' : 'Weak';
+}
+
+function isSoccerEntryBuilderDisabled(market: MarketOpportunity) {
+  return market.sport === 'SOCCER' && market.providerCategory === 'Sportsbook' && !market.canAddToEntry;
+}
+
+function isDisplayableTrustLevel(value: MarketOpportunity['trustLevel']): value is 'Strong' | 'Medium' | 'Weak' {
+  return value === 'Strong' || value === 'Medium' || value === 'Weak';
 }
 
 function cleanWarning(warning: string) {
