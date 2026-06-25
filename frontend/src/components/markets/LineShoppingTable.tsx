@@ -5,8 +5,8 @@ import ExpandMoreRoundedIcon from '@mui/icons-material/ExpandMoreRounded';
 import { Accordion, AccordionDetails, AccordionSummary, Box, Button, Collapse, Divider, IconButton, Stack, TableBody, TableCell, TableHead, TableRow, Typography } from '@mui/material';
 import { useState } from 'react';
 import { useEntryBuilder } from '../../hooks/useEntryBuilder';
-import type { MarketOpportunity, ProviderLine } from '../../types/markets';
-import { formatPercent } from '../../utils/formatters';
+import type { MarketOpportunity, PlayerHistoryStatSummary, ProviderLine } from '../../types/markets';
+import { formatDecimal, formatPercent } from '../../utils/formatters';
 import { hasRenderableWarning, renderOpportunityCautionText, renderWarningText } from '../../utils/warnings';
 import { palette } from '../../theme/palette';
 import { MetricLabelWithHelp } from '../metrics/MetricLabelWithHelp';
@@ -179,7 +179,7 @@ export function LineShoppingCard({ market }: { market: MarketOpportunity }) {
     note: `${market.side} ${line.line}`
   })), market.provider);
   const referenceLines = market.providerLines?.filter((line) => line.providerCategory === 'Sportsbook') ?? [];
-  const canExpand = providerLines.length > 1 || referenceLines.length > 0;
+  const canExpand = providerLines.length > 1 || referenceLines.length > 0 || hasAvailableSoccerHistory(market);
   const builder = useEntryBuilder();
   const selected = builder.isSelected(market.id);
   const incompatible = !selected && !builder.isCompatible(market);
@@ -224,6 +224,7 @@ export function LineShoppingCard({ market }: { market: MarketOpportunity }) {
         </Stack>
       </Stack>
       <OpportunityPickText side={market.side} propType={market.propType} line={market.line} />
+      <LineShoppingPlayerHistoryContext market={market} compact />
       <Stack direction="row" justifyContent="space-between" alignItems="center" gap={1.2} flexWrap="wrap">
         <ProviderLabel provider={market.provider} category={market.providerCategory} compact />
         <Stack direction="row" gap={0.6} flexWrap="wrap" useFlexGap justifyContent="flex-end">
@@ -380,7 +381,7 @@ function LineShoppingComparisonRow({
 }) {
   const market = group.bestMarket;
   const confidence = resolveConfidence(market);
-  const canExpand = group.providerLines.length > 1 || group.referenceLines.length > 0;
+  const canExpand = group.providerLines.length > 1 || group.referenceLines.length > 0 || hasAvailableSoccerHistory(market);
   const expandedVisible = canExpand && expanded;
 
   return (
@@ -456,7 +457,10 @@ function LineShoppingComparisonRow({
                   pl: 4
                 }}
               >
-                <ComparisonLineGroups providerLines={group.providerLines} referenceLines={group.referenceLines} marketId={group.key} bestProvider={market.provider} />
+                <Stack spacing={1.2}>
+                  <ComparisonLineGroups providerLines={group.providerLines} referenceLines={group.referenceLines} marketId={group.key} bestProvider={market.provider} />
+                  <LineShoppingPlayerHistoryContext market={market} />
+                </Stack>
               </Box>
             </Collapse>
           </TableCell>
@@ -617,6 +621,100 @@ function BestLineLabel() {
       Best
     </Typography>
   );
+}
+
+function LineShoppingPlayerHistoryContext({ market, compact = false }: { market: MarketOpportunity; compact?: boolean }) {
+  const stat = resolveHistoryStat(market);
+  const summary = market.playerHistorySummary;
+  if (!summary?.available || !stat) return null;
+
+  const sampleSize = stat.count ?? summary.sampleSize;
+  const latestDate = formatHistoryDate(summary.latestResultDate);
+
+  return (
+    <Box
+      sx={{
+        border: '1px solid rgba(148,163,184,.14)',
+        borderRadius: 2,
+        bgcolor: 'rgba(15,23,42,.34)',
+        px: compact ? 1 : 1.15,
+        py: compact ? 0.75 : 0.9
+      }}
+    >
+      <Stack spacing={0.7}>
+        <Stack direction="row" justifyContent="space-between" alignItems="center" gap={1.2}>
+          <Typography variant="caption" color="text.secondary" fontWeight={850}>
+            Player history
+          </Typography>
+          {latestDate ? (
+            <Typography variant="caption" color="text.secondary" fontWeight={750} sx={{ whiteSpace: 'nowrap' }}>
+              {latestDate}
+            </Typography>
+          ) : null}
+        </Stack>
+        <Box
+          sx={{
+            display: 'grid',
+            gridTemplateColumns: compact ? 'repeat(2, minmax(0, 1fr))' : { xs: 'repeat(2, minmax(0, 1fr))', sm: 'repeat(5, minmax(0, auto))' },
+            gap: compact ? 0.8 : 1.1,
+            alignItems: 'start'
+          }}
+        >
+          <HistoryStatValue label="Sample" value={sampleSize === undefined ? '-' : String(sampleSize)} />
+          <HistoryStatValue label="Avg" value={formatHistoryAverage(stat.average)} />
+          <HistoryStatValue label="Last 5" value={formatHistoryAverage(stat.last5Average)} />
+          <HistoryStatValue label="Last 10" value={formatHistoryAverage(stat.last10Average)} />
+          {!compact && latestDate ? <HistoryStatValue label="Latest" value={latestDate} /> : null}
+        </Box>
+      </Stack>
+    </Box>
+  );
+}
+
+function HistoryStatValue({ label, value }: { label: string; value: string }) {
+  return (
+    <Stack spacing={0.1} minWidth={0}>
+      <Typography variant="caption" color="text.secondary" fontWeight={800} lineHeight={1.15}>
+        {label}
+      </Typography>
+      <Typography variant="body2" fontWeight={900} lineHeight={1.2} sx={{ whiteSpace: 'nowrap' }}>
+        {value}
+      </Typography>
+    </Stack>
+  );
+}
+
+function hasAvailableSoccerHistory(market: MarketOpportunity) {
+  return market.sport === 'SOCCER' && market.playerHistorySummary?.available === true && Boolean(resolveHistoryStat(market));
+}
+
+function resolveHistoryStat(market: MarketOpportunity): PlayerHistoryStatSummary | null {
+  if (market.sport !== 'SOCCER' || !market.playerHistorySummary?.available) return null;
+  const statKey = historyStatKeyForProp(market.propType);
+  return statKey ? market.playerHistorySummary.stats?.[statKey] ?? null : null;
+}
+
+function historyStatKeyForProp(propType: string) {
+  const normalized = propType.replace(/[\s_-]+/g, '').toLowerCase();
+  if (normalized === 'goals' || normalized === 'playergoals') return 'Goals';
+  if (normalized === 'assists' || normalized === 'playerassists') return 'Assists';
+  if (normalized === 'shots' || normalized === 'playershots') return 'Shots';
+  if (normalized === 'shotsontarget' || normalized === 'playershotsontarget' || normalized === 'sot' || normalized === 'playersot') return 'ShotsOnTarget';
+  return null;
+}
+
+function formatHistoryAverage(value?: number) {
+  return typeof value === 'number' ? formatDecimal(value, 2) : '-';
+}
+
+function formatHistoryDate(value?: string | null) {
+  if (!value) return null;
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return new Intl.DateTimeFormat('en-US', {
+    month: 'short',
+    day: 'numeric'
+  }).format(date);
 }
 
 function DetailLine({ label, value, tone = 'text.primary', metric }: { label: string; value: string; tone?: string; metric?: 'ev' | 'edge' | 'hitChance' | 'trust' | 'warning' }) {

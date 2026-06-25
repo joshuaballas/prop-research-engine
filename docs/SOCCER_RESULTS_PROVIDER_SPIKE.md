@@ -450,6 +450,92 @@ Invoke-RestMethod "$base/api/debug/soccer/player-history?playerName=Erling%20Haa
 Invoke-RestMethod "$base/api/debug/soccer/player-history/readiness" |
   ConvertTo-Json -Depth 80
 
+# Diagnose visible World Cup Line Shopping rows that lack playerHistorySummary.
+$stamp = Get-Date -Format "yyyyMMdd-HHmmss"
+$visibleMissingPath = "tmp-soccer-visible-missing-history-$stamp.json"
+$visibleMissing = Invoke-RestMethod "$base/api/debug/soccer/player-history/visible-missing?competition=World%20Cup&take=100&onlyMissingHistory=true&includeResolvedHistory=false"
+$visibleMissing | ConvertTo-Json -Depth 100 | Set-Content $visibleMissingPath
+$visibleMissing.summary | ConvertTo-Json -Depth 20
+$visibleMissing.summary.missingByReasonCode | ConvertTo-Json -Depth 20
+
+# Discover persisted API-Sports historical alias candidates for those visible missing rows.
+$visibleAliasPath = "tmp-soccer-visible-alias-candidates-$stamp.json"
+$visibleAliasCandidates = Invoke-RestMethod "$base/api/debug/soccer/player-history/visible-alias-candidates?competition=World%20Cup&take=100&minScore=0.70"
+$visibleAliasCandidates | ConvertTo-Json -Depth 100 | Set-Content $visibleAliasPath
+$visibleAliasCandidates.summary | ConvertTo-Json -Depth 20
+$visibleAliasCandidates.players |
+  Where-Object { $_.playerName -eq "Carlos Casemiro" } |
+  Select-Object -ExpandProperty bestCandidate |
+  ConvertTo-Json -Depth 30
+$visibleAliasCandidates.players |
+  Select-Object playerName,candidateCount,@{Name='best';Expression={$_.bestCandidate.providerDisplayName}},@{Name='score';Expression={$_.bestCandidate.score}},@{Name='confidence';Expression={$_.bestCandidate.confidenceBucket}} |
+  ConvertTo-Json -Depth 20
+
+# Guarded dry-run apply for reviewed visible missing-history aliases.
+$visibleAliasApplyDryRunPath = "tmp-soccer-visible-alias-apply-dryrun-$stamp.json"
+$visibleAliasApplyDryRun = Invoke-RestMethod -Method Post "$base/api/debug/soccer/player-history/visible-alias-link-apply" `
+  -ContentType "application/json" `
+  -Body '{"competition":"World Cup","dryRun":true,"minScore":0.90,"requireAlreadyApprovedProvider":true,"maxCandidateCount":3,"allowMediumConfidence":true}'
+$visibleAliasApplyDryRun | ConvertTo-Json -Depth 100 | Set-Content $visibleAliasApplyDryRunPath
+$visibleAliasApplyDryRun.summary | ConvertTo-Json -Depth 20
+$visibleAliasApplyDryRun.rows | Select-Object playerName,selectedProviderDisplayName,score,confidenceBucket,decision,blockReasons,wouldWrite | ConvertTo-Json -Depth 30
+
+# Only after reviewing dry-run output.
+$visibleAliasApplyWritePath = "tmp-soccer-visible-alias-apply-write-$stamp.json"
+$visibleAliasApplyWrite = Invoke-RestMethod -Method Post "$base/api/debug/soccer/player-history/visible-alias-link-apply" `
+  -ContentType "application/json" `
+  -Body '{"competition":"World Cup","dryRun":false,"forceWrite":true,"minScore":0.90,"requireAlreadyApprovedProvider":true,"maxCandidateCount":3,"allowMediumConfidence":true}'
+$visibleAliasApplyWrite | ConvertTo-Json -Depth 100 | Set-Content $visibleAliasApplyWritePath
+$visibleAliasApplyWrite.summary | ConvertTo-Json -Depth 20
+$visibleAliasApplyWrite.rows | Select-Object playerName,selectedProviderDisplayName,score,confidenceBucket,decision,writtenLinkId | ConvertTo-Json -Depth 30
+
+# Post-write history/missing smoke.
+$visibleMissingPostWritePath = "tmp-soccer-visible-missing-history-postwrite-$stamp.json"
+$visibleMissingPostWrite = Invoke-RestMethod "$base/api/debug/soccer/player-history/visible-missing?competition=World%20Cup&take=100&onlyMissingHistory=true&includeResolvedHistory=false"
+$visibleMissingPostWrite | ConvertTo-Json -Depth 100 | Set-Content $visibleMissingPostWritePath
+$visibleMissingPostWrite.summary | ConvertTo-Json -Depth 20
+$visibleMissingPostWrite.summary.missingByReasonCode | ConvertTo-Json -Depth 20
+
+# Compact plan for remaining manual visible alias approvals.
+$visibleAliasApprovalPlanPath = "tmp-soccer-visible-alias-approval-plan-$stamp.json"
+$visibleAliasApprovalPlan = Invoke-RestMethod "$base/api/debug/soccer/player-history/visible-alias-approval-plan?competition=World%20Cup&onlyMissingHistory=true&minScore=0.80"
+$visibleAliasApprovalPlan | ConvertTo-Json -Depth 100 | Set-Content $visibleAliasApprovalPlanPath
+$visibleAliasApprovalPlan.summary | ConvertTo-Json -Depth 20
+$visibleAliasApprovalPlan.rows | Select-Object playerName,localPlayerId,candidateCount,@{Name='providerPlayerId';Expression={$_.bestCandidate.providerPlayerId}},@{Name='best';Expression={$_.bestCandidate.providerDisplayName}},@{Name='score';Expression={$_.bestCandidate.score}},suggestedApproval,riskWarnings | ConvertTo-Json -Depth 30
+
+# Manual dry-run for explicit reviewed pairs.
+$manualVisibleAliasDryRunPath = "tmp-soccer-visible-alias-manual-dryrun-$stamp.json"
+$manualVisibleAliasDryRunBody = @{
+  competition = "World Cup"
+  dryRun = $true
+  approvals = @(
+    @{ localPlayerId = "<LOCAL_PLAYER_ID>"; providerPlayerId = "<API_SPORTS_PROVIDER_PLAYER_ID>"; note = "manual reviewed visible alias" }
+  )
+} | ConvertTo-Json -Depth 10
+$manualVisibleAliasDryRun = Invoke-RestMethod -Method Post "$base/api/debug/soccer/player-history/visible-alias-link-approve" `
+  -ContentType "application/json" `
+  -Body $manualVisibleAliasDryRunBody
+$manualVisibleAliasDryRun | ConvertTo-Json -Depth 100 | Set-Content $manualVisibleAliasDryRunPath
+$manualVisibleAliasDryRun.summary | ConvertTo-Json -Depth 20
+$manualVisibleAliasDryRun.rows | Select-Object playerName,selectedProviderDisplayName,score,confidenceBucket,decision,blockReasons,wouldWrite | ConvertTo-Json -Depth 30
+
+# Only after reviewing dry-run output.
+$manualVisibleAliasWritePath = "tmp-soccer-visible-alias-manual-write-$stamp.json"
+$manualVisibleAliasWriteBody = @{
+  competition = "World Cup"
+  dryRun = $false
+  forceWrite = $true
+  approvals = @(
+    @{ localPlayerId = "<LOCAL_PLAYER_ID>"; providerPlayerId = "<API_SPORTS_PROVIDER_PLAYER_ID>"; note = "manual reviewed visible alias" }
+  )
+} | ConvertTo-Json -Depth 10
+$manualVisibleAliasWrite = Invoke-RestMethod -Method Post "$base/api/debug/soccer/player-history/visible-alias-link-approve" `
+  -ContentType "application/json" `
+  -Body $manualVisibleAliasWriteBody
+$manualVisibleAliasWrite | ConvertTo-Json -Depth 100 | Set-Content $manualVisibleAliasWritePath
+$manualVisibleAliasWrite.summary | ConvertTo-Json -Depth 20
+$manualVisibleAliasWrite.rows | Select-Object playerName,selectedProviderDisplayName,score,confidenceBucket,decision,writtenLinkId | ConvertTo-Json -Depth 30
+
 Invoke-RestMethod "$base/api/debug/soccer/player-identity/bridge-preview?playerName=Erling%20Haaland&minConfidence=0.98&limit=25" |
   ConvertTo-Json -Depth 80
 
@@ -500,6 +586,14 @@ $write | Select-Object summary,pagination | ConvertTo-Json -Depth 20
 ```
 
 `player-history` matches by local `playerId`, API-Sports `player_external_refs`, approved API-Sports `provider_entity_links`, or local Soccer player name. It returns matched player info, linked API-Sports refs, rows grouped by stat, recent game-log rows, per-stat averages, per-competition breakdowns, and sample sizes. It is research-only: public Soccer grading, predictions, Top Picks, and Entry Builder remain disabled.
+
+`player-history/visible-missing` is the persisted-only diagnostic for public World Cup Line Shopping rows whose compact history summary is missing. It starts from The Odds context-v2 sportsbook rows, returns the visible event/market/bookmaker/player context, and distinguishes missing-link, missing-ref, missing-result, unsupported-stat, local/canonical mismatch, possible-alias, and already-has-history cases without writing links or calling providers.
+
+`player-history/visible-alias-candidates` proposes persisted API-Sports Football historical player candidates for those visible missing rows. It uses local-only name similarity strategies, requires supported historical result rows for useful candidates, reports existing approved-link conflicts, and remains diagnostic-only. It is useful for long-form The Odds names such as Carlos Casemiro, Danilo Luiz da Silva, Maximiliano Javier Araujo Vilches, and Kevin Lenini Goncalves Pereira de Pina before any manual bridge-link approval.
+
+`player-history/visible-alias-link-apply` is the guarded apply step for reviewed visible missing-history aliases. It defaults to dry-run, requires `forceWrite=true` for writes, creates only approved `api-sports-football` `provider_entity_links`, blocks rows whose local/canonical player already has an approved API-Sports link, requires supported historical rows, and can require that the provider player id is already approved for another local Soccer player. It does not merge players, rewrite `prop_results`, call providers, or enable public Soccer grading.
+
+`player-history/visible-alias-approval-plan` and `player-history/visible-alias-link-approve` support one-by-one manual approval for remaining reviewed visible aliases. The plan endpoint is read-only and flags suggested approvals versus riskier rows. The manual apply endpoint requires explicit `localPlayerId` + `providerPlayerId` pairs, defaults to dry-run, requires `forceWrite=true` for writes, verifies the provider id appears in that player's visible alias candidates, requires supported history rows, blocks existing local/canonical API-Sports links, and writes only `api-sports-football` `provider_entity_links` with source `ManualVisibleAliasApproval`.
 
 `bridge-preview` and `bridge-apply` are the safe identity bridge workflow for platform/sportsbook Soccer players. Preview is read-only and returns `SafeExactName`, `NeedsReview`, `Conflict`, `AlreadyLinked`, and `NoCandidate` rows with reasons, blocking conflicts, total category counts, and pagination. Both endpoints support `offset`, `limit`, `category`, and `excludeAlreadyLinked`; preview defaults `excludeAlreadyLinked=false`, while apply defaults it to `true` so repeated safe applies can continue past already-approved rows. Apply is dry-run-first; real writes require `forceWrite=true` and only persist conflict-free `SafeExactName` rows as approved `provider_entity_links`. It never merges players, rewrites `prop_results`, calls providers, or enables public Soccer grading.
 

@@ -1,6 +1,6 @@
-import type { MarketOpportunity, ProjectionModifier, ProviderCategory, StrategyClassification } from '../types/markets';
+import type { MarketOpportunity, PlayerHistoryStatKey, PlayerHistorySummary, ProjectionModifier, ProviderCategory, StrategyClassification } from '../types/markets';
 import type { PerformanceGroup } from '../types/performance';
-import type { BookmakerPriceDto, MarketGroupDto, MarketPerformanceSummaryDto, PerformanceGroupDto } from './types';
+import type { BookmakerPriceDto, MarketGroupDto, MarketPerformanceSummaryDto, PerformanceGroupDto, PlayerHistoryCompetitionBreakdownDto, PlayerHistoryGameLogRowDto, PlayerHistoryStatSummaryDto, PlayerHistorySummaryDto } from './types';
 
 export function mapMarketGroupsToOpportunities(groups: MarketGroupDto[] | undefined, sourcePrefix = 'market'): MarketOpportunity[] {
   return (groups ?? []).map((group, index) => mapMarketGroupToOpportunity(group, index, sourcePrefix));
@@ -158,6 +158,7 @@ function mapMarketGroupToOpportunity(group: MarketGroupDto, index: number, sourc
     reasons: (strategyReasons.length ? strategyReasons : ['Persisted market row']).map(cleanReason),
     warnings,
     sportsbookContext: formatReferenceContext(bookmakerPrices),
+    playerHistorySummary: mapPlayerHistorySummary(group),
     providerLines: bookmakerPrices.map((priceLine) => ({
       provider: cleanProvider(readString(priceLine, 'bookmaker', 'Bookmaker', 'bookmakerKey', 'BookmakerKey') ?? 'Unknown'),
       providerCategory: normalizeProviderCategory(readString(priceLine, 'providerCategory', 'ProviderCategory')),
@@ -167,6 +168,71 @@ function mapMarketGroupToOpportunity(group: MarketGroupDto, index: number, sourc
       note: readString(priceLine, 'region', 'Region')
     }))
   };
+}
+
+function mapPlayerHistorySummary(group: MarketGroupDto): PlayerHistorySummary | null {
+  const summary = readField<PlayerHistorySummaryDto>(group, 'playerHistorySummary', 'PlayerHistorySummary');
+  if (!summary || typeof summary !== 'object') return null;
+
+  const statsSource = readField<Record<string, PlayerHistoryStatSummaryDto | undefined>>(summary, 'stats', 'Stats') ?? {};
+  const recentRows = readArray<PlayerHistoryGameLogRowDto>(summary, 'recentGameLog', 'RecentGameLog') ?? [];
+
+  return {
+    available: readBoolean(summary, 'available', 'Available') ?? false,
+    unavailableReason: readString(summary, 'unavailableReason', 'UnavailableReason') ?? null,
+    provider: readString(summary, 'provider', 'Provider'),
+    providerPlayerId: readString(summary, 'providerPlayerId', 'ProviderPlayerId') ?? null,
+    sampleSize: readNumber(summary, 'sampleSize', 'SampleSize'),
+    latestResultDate: readString(summary, 'latestResultDate', 'LatestResultDate') ?? null,
+    stats: mapPlayerHistoryStats(statsSource),
+    competitionBreakdown: (readArray<PlayerHistoryCompetitionBreakdownDto>(summary, 'competitionBreakdown', 'CompetitionBreakdown') ?? []).map((row) => ({
+      competitionKey: readString(row, 'competitionKey', 'CompetitionKey') ?? null,
+      competitionName: readString(row, 'competitionName', 'CompetitionName') ?? null,
+      sampleSize: readNumber(row, 'sampleSize', 'SampleSize'),
+      latestResultDate: readString(row, 'latestResultDate', 'LatestResultDate') ?? null
+    })),
+    recentGameLog: recentRows.map((row) => ({
+      eventDate: readString(row, 'eventDate', 'EventDate') ?? null,
+      competition: readString(row, 'competition', 'Competition') ?? null,
+      competitionKey: readString(row, 'competitionKey', 'CompetitionKey') ?? null,
+      fixtureId: readString(row, 'fixtureId', 'FixtureId') ?? null,
+      stats: mapNumericHistoryStats(readField<Record<string, number | undefined>>(row, 'stats', 'Stats') ?? {})
+    }))
+  };
+}
+
+function mapPlayerHistoryStats(source: Record<string, PlayerHistoryStatSummaryDto | undefined>): PlayerHistorySummary['stats'] {
+  const mapped: PlayerHistorySummary['stats'] = {};
+  Object.entries(source).forEach(([key, value]) => {
+    const statKey = normalizeHistoryStatKey(key);
+    if (!statKey || !value) return;
+    mapped[statKey] = {
+      count: readNumber(value, 'count', 'Count'),
+      average: readNumber(value, 'average', 'Average'),
+      last5Average: readNumber(value, 'last5Average', 'Last5Average'),
+      last10Average: readNumber(value, 'last10Average', 'Last10Average')
+    };
+  });
+  return mapped;
+}
+
+function mapNumericHistoryStats(source: Record<string, number | undefined>) {
+  const mapped: Partial<Record<PlayerHistoryStatKey, number>> = {};
+  Object.entries(source).forEach(([key, value]) => {
+    const statKey = normalizeHistoryStatKey(key);
+    if (!statKey || typeof value !== 'number') return;
+    mapped[statKey] = value;
+  });
+  return mapped;
+}
+
+function normalizeHistoryStatKey(value: string): PlayerHistoryStatKey | null {
+  const normalized = value.replace(/[\s_-]+/g, '').toLowerCase();
+  if (normalized === 'goals') return 'Goals';
+  if (normalized === 'assists') return 'Assists';
+  if (normalized === 'shots') return 'Shots';
+  if (normalized === 'shotsontarget' || normalized === 'shotson target' || normalized === 'sot') return 'ShotsOnTarget';
+  return null;
 }
 
 function mapPerformanceGroup(row: PerformanceGroupDto, fallbackType: string): PerformanceGroup {

@@ -7,6 +7,7 @@ using SportsBetting.Api.Utilities;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using System.Globalization;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
@@ -22,6 +23,20 @@ public static class ResultsDebugEndpoints
     private const int ApiSportsWorldCupSeason = 2026;
     private static readonly DateOnly ApiSportsWorldCup2026StartDate = new(2026, 6, 11);
     private static readonly string[] ApiSportsHistoricalStatKeysOfInterest = ["GOALS", "ASSISTS", "SHOTS", "SHOTS_ON_TARGET"];
+    private static readonly HashSet<string> SoccerAliasParticles = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "de",
+        "da",
+        "do",
+        "dos",
+        "das",
+        "del",
+        "el",
+        "la",
+        "le",
+        "van",
+        "von"
+    };
     private sealed record MlbLatestWorkerCycleDateOutcome(
         DateOnly EventDate,
         string SelectedReason,
@@ -2177,6 +2192,633 @@ public static class ResultsDebugEndpoints
         })
         .WithName("ApiSportsSoccerPlayerHistoryDebug")
         .WithSummary("Read-only persisted API-Sports Soccer player history.");
+
+        endpoints.MapGet("/api/debug/soccer/player-history/visible-missing", async (
+            string? competition,
+            int? take,
+            string? playerName,
+            bool? onlyMissingHistory,
+            bool? includeResolvedHistory,
+            ApplicationDbContext dbContext,
+            CancellationToken cancellationToken) =>
+        {
+            var requestedCompetition = string.IsNullOrWhiteSpace(competition) ? "World Cup" : competition.Trim();
+            var rowLimit = Math.Clamp(take ?? 100, 1, 500);
+            var normalizedPlayerNameFilter = string.IsNullOrWhiteSpace(playerName) ? null : NormalizeResultPlayerName(playerName);
+            var missingOnly = onlyMissingHistory ?? true;
+            var includeResolved = includeResolvedHistory ?? false;
+            var visibleRows = await LoadVisibleSoccerWorldCupPlatformRowsAsync(
+                dbContext,
+                requestedCompetition,
+                normalizedPlayerNameFilter,
+                rowLimit,
+                cancellationToken);
+            var diagnostics = await BuildVisibleSoccerHistoryMissingDiagnosticsAsync(
+                dbContext,
+                visibleRows,
+                cancellationToken);
+            var rows = diagnostics
+                .Where(row => includeResolved || !row.PlayerHistoryAvailable)
+                .Where(row => !missingOnly || !row.PlayerHistoryAvailable)
+                .ToArray();
+            var missingByReasonCode = rows
+                .Where(row => !row.PlayerHistoryAvailable)
+                .GroupBy(row => row.DiagnosticReasonCode, StringComparer.OrdinalIgnoreCase)
+                .OrderByDescending(group => group.Count())
+                .ThenBy(group => group.Key)
+                .Select(group => new { reasonCode = group.Key, count = group.Count() })
+                .ToArray();
+
+            return Results.Ok(new
+            {
+                generatedAtUtc = DateTimeOffset.UtcNow,
+                callsExternalApis = false,
+                readOnly = true,
+                writesRows = false,
+                guardrails = BuildSoccerResearchOnlyGuardrails(),
+                filters = new
+                {
+                    competition = requestedCompetition,
+                    take = rowLimit,
+                    playerName,
+                    onlyMissingHistory = missingOnly,
+                    includeResolvedHistory = includeResolved
+                },
+                summary = new
+                {
+                    visibleRowCount = diagnostics.Count,
+                    distinctVisiblePlayerCount = diagnostics.Select(row => row.LocalPlayerId).Distinct().Count(),
+                    rowsWithHistory = diagnostics.Count(row => row.PlayerHistoryAvailable),
+                    rowsMissingHistory = diagnostics.Count(row => !row.PlayerHistoryAvailable),
+                    missingByReasonCode,
+                    distinctMissingPlayerCount = diagnostics.Where(row => !row.PlayerHistoryAvailable).Select(row => row.LocalPlayerId).Distinct().Count(),
+                    sameNameCandidateCount = diagnostics.Count(row =>
+                        row.IdentityCandidates.SameNameApprovedLinks.Count > 0 ||
+                        row.IdentityCandidates.SameNameHistoricalApiSportsPlayers.Count > 0),
+                    potentialAliasCandidateCount = diagnostics.Count(row =>
+                        !row.PlayerHistoryAvailable &&
+                        (row.IdentityCandidates.SameNameApprovedLinks.Count > 0 ||
+                         row.IdentityCandidates.SameNameHistoricalApiSportsPlayers.Count > 0))
+                },
+                rows
+            });
+        })
+        .WithName("ApiSportsSoccerVisibleMissingPlayerHistoryDebug")
+        .WithSummary("Explains why visible Soccer World Cup Line Shopping context rows lack player history.");
+
+        endpoints.MapGet("/api/debug/soccer/player-history/visible-alias-candidates", async (
+            string? competition,
+            string? playerName,
+            int? take,
+            decimal? minScore,
+            bool? includeLowConfidence,
+            ApplicationDbContext dbContext,
+            CancellationToken cancellationToken) =>
+        {
+            var requestedCompetition = string.IsNullOrWhiteSpace(competition) ? "World Cup" : competition.Trim();
+            var rowLimit = Math.Clamp(take ?? 100, 1, 500);
+            var minimumScore = Math.Clamp(minScore ?? 0.70m, 0m, 1m);
+            var includeLow = includeLowConfidence ?? false;
+            var normalizedPlayerNameFilter = string.IsNullOrWhiteSpace(playerName) ? null : NormalizeResultPlayerName(playerName);
+            var visibleRows = await LoadVisibleSoccerWorldCupPlatformRowsAsync(
+                dbContext,
+                requestedCompetition,
+                normalizedPlayerNameFilter,
+                rowLimit,
+                cancellationToken);
+            var missingDiagnostics = (await BuildVisibleSoccerHistoryMissingDiagnosticsAsync(
+                    dbContext,
+                    visibleRows,
+                    cancellationToken))
+                .Where(row => !row.PlayerHistoryAvailable)
+                .ToArray();
+            var candidateGroups = await BuildVisibleSoccerAliasCandidateGroupsAsync(
+                dbContext,
+                missingDiagnostics,
+                minimumScore,
+                includeLow,
+                cancellationToken);
+            var candidateReasonBreakdown = candidateGroups
+                .SelectMany(group => group.Candidates)
+                .SelectMany(candidate => candidate.MatchReasons)
+                .GroupBy(reason => reason, StringComparer.OrdinalIgnoreCase)
+                .OrderByDescending(group => group.Count())
+                .ThenBy(group => group.Key)
+                .Select(group => new { reason = group.Key, count = group.Count() })
+                .ToArray();
+
+            return Results.Ok(new
+            {
+                generatedAtUtc = DateTimeOffset.UtcNow,
+                callsExternalApis = false,
+                readOnly = true,
+                writesRows = false,
+                guardrails = BuildSoccerResearchOnlyGuardrails(),
+                filters = new
+                {
+                    competition = requestedCompetition,
+                    playerName,
+                    take = rowLimit,
+                    minScore = minimumScore,
+                    includeLowConfidence = includeLow
+                },
+                summary = new
+                {
+                    visibleMissingPlayerCount = candidateGroups.Count,
+                    playersWithCandidates = candidateGroups.Count(group => group.CandidateCount > 0),
+                    playersWithoutCandidates = candidateGroups.Count(group => group.CandidateCount == 0),
+                    highConfidenceCandidateCount = candidateGroups.Sum(group => group.Candidates.Count(candidate => candidate.ConfidenceBucket == "High")),
+                    mediumConfidenceCandidateCount = candidateGroups.Sum(group => group.Candidates.Count(candidate => candidate.ConfidenceBucket == "Medium")),
+                    lowConfidenceCandidateCount = candidateGroups.Sum(group => group.Candidates.Count(candidate => candidate.ConfidenceBucket == "Low")),
+                    candidateReasonBreakdown
+                },
+                players = candidateGroups
+            });
+        })
+        .WithName("ApiSportsSoccerVisibleMissingPlayerHistoryAliasCandidatesDebug")
+        .WithSummary("Suggests persisted API-Sports historical alias candidates for visible Soccer World Cup rows missing player history.");
+
+        endpoints.MapPost("/api/debug/soccer/player-history/visible-alias-link-apply", async (
+            VisibleSoccerAliasLinkApplyRequest request,
+            ApplicationDbContext dbContext,
+            CancellationToken cancellationToken) =>
+        {
+            var requestedCompetition = string.IsNullOrWhiteSpace(request.Competition) ? "World Cup" : request.Competition.Trim();
+            var dryRun = request.DryRun != false;
+            var forceWrite = request.ForceWrite == true;
+            var minimumScore = Math.Clamp(request.MinScore ?? 0.90m, 0m, 1m);
+            var requireAlreadyApprovedProvider = request.RequireAlreadyApprovedProvider ?? true;
+            var maxCandidateCount = Math.Clamp(request.MaxCandidateCount ?? 3, 1, 25);
+            var allowMediumConfidence = request.AllowMediumConfidence == true;
+            var explicitLocalPlayerIds = request.LocalPlayerIds?.Where(id => id != Guid.Empty).Distinct().ToArray() ?? [];
+            var explicitProviderPlayerIds = request.ProviderPlayerIds?
+                .Where(value => !string.IsNullOrWhiteSpace(value))
+                .Select(value => value.Trim())
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToArray() ?? [];
+            var hasExplicitSelection = explicitLocalPlayerIds.Length > 0 || explicitProviderPlayerIds.Length > 0;
+            var normalizedPlayerNameFilter = string.IsNullOrWhiteSpace(request.PlayerName) ? null : NormalizeResultPlayerName(request.PlayerName);
+            var visibleRows = await LoadVisibleSoccerWorldCupPlatformRowsAsync(
+                dbContext,
+                requestedCompetition,
+                normalizedPlayerNameFilter,
+                500,
+                cancellationToken);
+            var missingDiagnostics = (await BuildVisibleSoccerHistoryMissingDiagnosticsAsync(
+                    dbContext,
+                    visibleRows,
+                    cancellationToken))
+                .Where(row => !row.PlayerHistoryAvailable)
+                .Where(row => explicitLocalPlayerIds.Length == 0 || explicitLocalPlayerIds.Contains(row.LocalPlayerId))
+                .ToArray();
+            var candidateGroups = await BuildVisibleSoccerAliasCandidateGroupsAsync(
+                dbContext,
+                missingDiagnostics,
+                Math.Min(minimumScore, 0.70m),
+                includeLowConfidence: true,
+                cancellationToken);
+            var soccerSport = await dbContext.Sports
+                .AsNoTracking()
+                .SingleOrDefaultAsync(sport => sport.Code == "SOCCER", cancellationToken);
+            if (soccerSport is null)
+            {
+                return Results.Conflict(new
+                {
+                    generatedAtUtc = DateTimeOffset.UtcNow,
+                    callsExternalApis = false,
+                    readOnly = true,
+                    writesRows = false,
+                    blocked = true,
+                    blockReason = "SoccerSportMissing",
+                    guardrails = BuildSoccerResearchOnlyGuardrails()
+                });
+            }
+
+            var playerIdsToCheck = candidateGroups
+                .SelectMany(group => new[] { group.LocalPlayerId, group.CanonicalPlayerId })
+                .Distinct()
+                .ToArray();
+            var existingLocalLinks = await dbContext.ProviderEntityLinks
+                .AsNoTracking()
+                .Where(link => link.ProviderKey == ApiSportsFootballPlayerRefProvider
+                    && link.EntityType == "Player"
+                    && link.LinkStatus == "Approved"
+                    && link.CanonicalEntityId.HasValue
+                    && playerIdsToCheck.Contains(link.CanonicalEntityId.Value))
+                .Select(link => new
+                {
+                    link.Id,
+                    localPlayerId = link.CanonicalEntityId!.Value,
+                    link.ProviderEntityId,
+                    link.ProviderEntityName
+                })
+                .ToArrayAsync(cancellationToken);
+
+            if (!dryRun && !forceWrite)
+            {
+                return Results.Conflict(new
+                {
+                    generatedAtUtc = DateTimeOffset.UtcNow,
+                    callsExternalApis = false,
+                    readOnly = true,
+                    writesRows = false,
+                    blocked = true,
+                    blockReason = "ForceWriteRequired",
+                    guardrails = BuildSoccerResearchOnlyGuardrails(),
+                    message = "visible-alias-link-apply requires forceWrite=true when dryRun=false."
+                });
+            }
+
+            var now = DateTimeOffset.UtcNow;
+            var rows = new List<VisibleSoccerAliasLinkApplyRow>();
+            foreach (var group in candidateGroups)
+            {
+                var selectedCandidate = SelectVisibleSoccerAliasApplyCandidate(group, explicitProviderPlayerIds);
+                var blockReasons = BuildVisibleSoccerAliasApplyBlockReasons(
+                    group,
+                    selectedCandidate,
+                    existingLocalLinks.Where(link => link.localPlayerId == group.LocalPlayerId || link.localPlayerId == group.CanonicalPlayerId).ToArray(),
+                    minimumScore,
+                    requireAlreadyApprovedProvider,
+                    maxCandidateCount,
+                    allowMediumConfidence,
+                    hasExplicitSelection);
+                var wouldWrite = blockReasons.Count == 0 && selectedCandidate is not null;
+                var decision = wouldWrite ? "Linkable" : "Blocked";
+                Guid? writtenLinkId = null;
+
+                if (wouldWrite && !dryRun)
+                {
+                    var link = new ProviderEntityLink
+                    {
+                        Id = Guid.NewGuid(),
+                        SportId = soccerSport.Id,
+                        EntityType = "Player",
+                        CanonicalEntityId = group.LocalPlayerId,
+                        CanonicalEntityKind = "Player",
+                        CanonicalEntityName = group.PlayerName,
+                        ProviderKey = ApiSportsFootballPlayerRefProvider,
+                        ProviderEntityId = selectedCandidate!.ProviderPlayerId,
+                        ProviderEntityName = selectedCandidate.ProviderDisplayName,
+                        ProviderCompetitionId = "soccer_fifa_world_cup",
+                        ProviderCompetitionName = requestedCompetition,
+                        Confidence = selectedCandidate.Score,
+                        LinkStatus = "Approved",
+                        LinkSource = "VisibleMissingHistoryAliasApply",
+                        MetadataJson = JsonSerializer.SerializeToDocument(new
+                        {
+                            source = "SoccerVisibleMissingHistoryAliasApply",
+                            group.PlayerName,
+                            group.LocalPlayerId,
+                            group.CanonicalPlayerId,
+                            selectedCandidate.ProviderPlayerId,
+                            selectedCandidate.ProviderDisplayName,
+                            selectedCandidate.Score,
+                            selectedCandidate.ConfidenceBucket,
+                            selectedCandidate.MatchReasons,
+                            selectedCandidate.ConflictWarnings,
+                            selectedCandidate.TotalSupportedResultRows,
+                            group.CandidateCount,
+                            minScore = minimumScore,
+                            requireAlreadyApprovedProvider,
+                            maxCandidateCount,
+                            allowMediumConfidence,
+                            publicSoccerGradingEnabled = false,
+                            dryRunFirstEndpoint = "/api/debug/soccer/player-history/visible-alias-link-apply",
+                            appliedAtUtc = now
+                        }),
+                        CreatedAtUtc = now,
+                        UpdatedAtUtc = now,
+                        ApprovedAtUtc = now,
+                        ApprovedBy = "debug/visible-missing-history-alias"
+                    };
+                    dbContext.ProviderEntityLinks.Add(link);
+                    writtenLinkId = link.Id;
+                    decision = "Written";
+                }
+
+                rows.Add(new VisibleSoccerAliasLinkApplyRow(
+                    group.PlayerName,
+                    group.LocalPlayerId,
+                    group.CanonicalPlayerId,
+                    selectedCandidate?.ProviderPlayerId,
+                    selectedCandidate?.ProviderDisplayName,
+                    selectedCandidate?.Score,
+                    selectedCandidate?.ConfidenceBucket,
+                    selectedCandidate?.TotalSupportedResultRows ?? 0,
+                    selectedCandidate?.ExistingApprovedLinksToOtherLocalPlayers.Count ?? 0,
+                    decision,
+                    blockReasons,
+                    wouldWrite,
+                    writtenLinkId));
+            }
+
+            if (!dryRun)
+            {
+                await dbContext.SaveChangesAsync(cancellationToken);
+            }
+
+            return Results.Ok(new
+            {
+                generatedAtUtc = DateTimeOffset.UtcNow,
+                callsExternalApis = false,
+                readOnly = dryRun,
+                writesRows = !dryRun,
+                guardrails = BuildSoccerResearchOnlyGuardrails(),
+                filters = new
+                {
+                    competition = requestedCompetition,
+                    request.PlayerName,
+                    dryRun,
+                    forceWrite,
+                    minScore = minimumScore,
+                    requireAlreadyApprovedProvider,
+                    maxCandidateCount,
+                    allowMediumConfidence,
+                    localPlayerIds = explicitLocalPlayerIds,
+                    providerPlayerIds = explicitProviderPlayerIds
+                },
+                summary = new
+                {
+                    visibleMissingPlayerCount = missingDiagnostics.Select(row => row.LocalPlayerId).Distinct().Count(),
+                    candidatePlayersEvaluated = rows.Count,
+                    linkableCount = rows.Count(row => row.Decision is "Linkable" or "Written"),
+                    blockedCount = rows.Count(row => row.Decision == "Blocked"),
+                    writtenCount = rows.Count(row => row.Decision == "Written"),
+                    dryRun
+                },
+                rows
+            });
+        })
+        .WithName("ApiSportsSoccerVisibleMissingPlayerHistoryAliasApplyDebug")
+        .WithSummary("Dry-run-first guarded apply for visible Soccer World Cup missing-history alias links.");
+
+        endpoints.MapGet("/api/debug/soccer/player-history/visible-alias-approval-plan", async (
+            string? competition,
+            bool? onlyMissingHistory,
+            decimal? minScore,
+            ApplicationDbContext dbContext,
+            CancellationToken cancellationToken) =>
+        {
+            var requestedCompetition = string.IsNullOrWhiteSpace(competition) ? "World Cup" : competition.Trim();
+            var minimumScore = Math.Clamp(minScore ?? 0.80m, 0m, 1m);
+            var missingOnly = onlyMissingHistory ?? true;
+            var visibleRows = await LoadVisibleSoccerWorldCupPlatformRowsAsync(
+                dbContext,
+                requestedCompetition,
+                normalizedPlayerNameFilter: null,
+                take: 500,
+                cancellationToken);
+            var diagnostics = await BuildVisibleSoccerHistoryMissingDiagnosticsAsync(
+                dbContext,
+                visibleRows,
+                cancellationToken);
+            var targetDiagnostics = diagnostics
+                .Where(row => !missingOnly || !row.PlayerHistoryAvailable)
+                .ToArray();
+            var candidateGroups = await BuildVisibleSoccerAliasCandidateGroupsAsync(
+                dbContext,
+                targetDiagnostics,
+                minimumScore,
+                includeLowConfidence: true,
+                cancellationToken);
+            var rows = candidateGroups
+                .Select(group => BuildVisibleSoccerAliasApprovalPlanRow(group, minimumScore))
+                .ToArray();
+
+            return Results.Ok(new
+            {
+                generatedAtUtc = DateTimeOffset.UtcNow,
+                callsExternalApis = false,
+                readOnly = true,
+                writesRows = false,
+                guardrails = BuildSoccerResearchOnlyGuardrails(),
+                filters = new
+                {
+                    competition = requestedCompetition,
+                    onlyMissingHistory = missingOnly,
+                    minScore = minimumScore
+                },
+                summary = new
+                {
+                    visiblePlayerCount = rows.Length,
+                    suggestedApprovalCount = rows.Count(row => row.SuggestedApproval),
+                    notSuggestedCount = rows.Count(row => !row.SuggestedApproval),
+                    candidatePlayers = rows.Count(row => row.CandidateCount > 0)
+                },
+                rows
+            });
+        })
+        .WithName("ApiSportsSoccerVisibleAliasApprovalPlanDebug")
+        .WithSummary("Read-only manual approval plan for visible Soccer World Cup missing-history aliases.");
+
+        endpoints.MapPost("/api/debug/soccer/player-history/visible-alias-link-approve", async (
+            VisibleSoccerAliasManualApproveRequest request,
+            ApplicationDbContext dbContext,
+            CancellationToken cancellationToken) =>
+        {
+            var requestedCompetition = string.IsNullOrWhiteSpace(request.Competition) ? "World Cup" : request.Competition.Trim();
+            var dryRun = request.DryRun != false;
+            var forceWrite = request.ForceWrite == true;
+            var approvals = request.Approvals?
+                .Where(approval => approval.LocalPlayerId != Guid.Empty && !string.IsNullOrWhiteSpace(approval.ProviderPlayerId))
+                .Select(approval => approval with { ProviderPlayerId = approval.ProviderPlayerId.Trim() })
+                .ToArray() ?? [];
+
+            if (approvals.Length == 0)
+            {
+                return Results.BadRequest(new
+                {
+                    generatedAtUtc = DateTimeOffset.UtcNow,
+                    callsExternalApis = false,
+                    readOnly = true,
+                    writesRows = false,
+                    blocked = true,
+                    blockReason = "ApprovalPairsRequired",
+                    message = "visible-alias-link-approve requires at least one localPlayerId/providerPlayerId approval pair."
+                });
+            }
+
+            if (!dryRun && !forceWrite)
+            {
+                return Results.Conflict(new
+                {
+                    generatedAtUtc = DateTimeOffset.UtcNow,
+                    callsExternalApis = false,
+                    readOnly = true,
+                    writesRows = false,
+                    blocked = true,
+                    blockReason = "ForceWriteRequired",
+                    guardrails = BuildSoccerResearchOnlyGuardrails(),
+                    message = "visible-alias-link-approve requires forceWrite=true when dryRun=false."
+                });
+            }
+
+            var visibleRows = await LoadVisibleSoccerWorldCupPlatformRowsAsync(
+                dbContext,
+                requestedCompetition,
+                normalizedPlayerNameFilter: null,
+                take: 500,
+                cancellationToken);
+            var missingDiagnostics = (await BuildVisibleSoccerHistoryMissingDiagnosticsAsync(
+                    dbContext,
+                    visibleRows,
+                    cancellationToken))
+                .Where(row => !row.PlayerHistoryAvailable)
+                .Where(row => approvals.Any(approval => approval.LocalPlayerId == row.LocalPlayerId))
+                .ToArray();
+            var candidateGroups = await BuildVisibleSoccerAliasCandidateGroupsAsync(
+                dbContext,
+                missingDiagnostics,
+                minimumScore: 0.0m,
+                includeLowConfidence: true,
+                cancellationToken);
+            var soccerSport = await dbContext.Sports
+                .AsNoTracking()
+                .SingleOrDefaultAsync(sport => sport.Code == "SOCCER", cancellationToken);
+            if (soccerSport is null)
+            {
+                return Results.Conflict(new
+                {
+                    generatedAtUtc = DateTimeOffset.UtcNow,
+                    callsExternalApis = false,
+                    readOnly = true,
+                    writesRows = false,
+                    blocked = true,
+                    blockReason = "SoccerSportMissing",
+                    guardrails = BuildSoccerResearchOnlyGuardrails()
+                });
+            }
+
+            var localPlayerIds = approvals.Select(approval => approval.LocalPlayerId).Distinct().ToArray();
+            var canonicalPlayerIds = candidateGroups.Select(group => group.CanonicalPlayerId).Distinct().ToArray();
+            var playerIdsToCheck = localPlayerIds.Concat(canonicalPlayerIds).Distinct().ToArray();
+            var existingLocalLinks = await dbContext.ProviderEntityLinks
+                .AsNoTracking()
+                .Where(link => link.ProviderKey == ApiSportsFootballPlayerRefProvider
+                    && link.EntityType == "Player"
+                    && link.LinkStatus == "Approved"
+                    && link.CanonicalEntityId.HasValue
+                    && playerIdsToCheck.Contains(link.CanonicalEntityId.Value))
+                .Select(link => new
+                {
+                    link.Id,
+                    localPlayerId = link.CanonicalEntityId!.Value,
+                    link.ProviderEntityId,
+                    link.ProviderEntityName
+                })
+                .ToArrayAsync(cancellationToken);
+
+            var now = DateTimeOffset.UtcNow;
+            var rows = new List<VisibleSoccerAliasLinkApplyRow>();
+            foreach (var approval in approvals)
+            {
+                var group = candidateGroups.FirstOrDefault(candidateGroup => candidateGroup.LocalPlayerId == approval.LocalPlayerId);
+                var selectedCandidate = group?.Candidates.FirstOrDefault(candidate => string.Equals(candidate.ProviderPlayerId, approval.ProviderPlayerId, StringComparison.OrdinalIgnoreCase));
+                var blockReasons = BuildVisibleSoccerAliasManualApprovalBlockReasons(
+                    approval,
+                    group,
+                    selectedCandidate,
+                    existingLocalLinks.Where(link => link.localPlayerId == approval.LocalPlayerId || (group is not null && link.localPlayerId == group.CanonicalPlayerId)).ToArray());
+                var wouldWrite = blockReasons.Count == 0 && group is not null && selectedCandidate is not null;
+                var decision = wouldWrite ? "Linkable" : "Blocked";
+                Guid? writtenLinkId = null;
+
+                if (wouldWrite && !dryRun)
+                {
+                    var link = new ProviderEntityLink
+                    {
+                        Id = Guid.NewGuid(),
+                        SportId = soccerSport.Id,
+                        EntityType = "Player",
+                        CanonicalEntityId = group!.LocalPlayerId,
+                        CanonicalEntityKind = "Player",
+                        CanonicalEntityName = group.PlayerName,
+                        ProviderKey = ApiSportsFootballPlayerRefProvider,
+                        ProviderEntityId = selectedCandidate!.ProviderPlayerId,
+                        ProviderEntityName = selectedCandidate.ProviderDisplayName,
+                        ProviderCompetitionId = "soccer_fifa_world_cup",
+                        ProviderCompetitionName = requestedCompetition,
+                        Confidence = selectedCandidate.Score,
+                        LinkStatus = "Approved",
+                        LinkSource = "ManualVisibleAliasApproval",
+                        MetadataJson = JsonSerializer.SerializeToDocument(new
+                        {
+                            source = "SoccerManualVisibleAliasApproval",
+                            approval.Note,
+                            group.PlayerName,
+                            group.LocalPlayerId,
+                            group.CanonicalPlayerId,
+                            selectedCandidate.ProviderPlayerId,
+                            selectedCandidate.ProviderDisplayName,
+                            selectedCandidate.Score,
+                            selectedCandidate.ConfidenceBucket,
+                            selectedCandidate.MatchReasons,
+                            selectedCandidate.ConflictWarnings,
+                            selectedCandidate.TotalSupportedResultRows,
+                            group.CandidateCount,
+                            publicSoccerGradingEnabled = false,
+                            dryRunFirstEndpoint = "/api/debug/soccer/player-history/visible-alias-link-approve",
+                            approvedAtUtc = now
+                        }),
+                        CreatedAtUtc = now,
+                        UpdatedAtUtc = now,
+                        ApprovedAtUtc = now,
+                        ApprovedBy = "debug/manual-visible-alias-approval"
+                    };
+                    dbContext.ProviderEntityLinks.Add(link);
+                    writtenLinkId = link.Id;
+                    decision = "Written";
+                }
+
+                rows.Add(new VisibleSoccerAliasLinkApplyRow(
+                    group?.PlayerName ?? "Unknown",
+                    approval.LocalPlayerId,
+                    group?.CanonicalPlayerId ?? approval.LocalPlayerId,
+                    selectedCandidate?.ProviderPlayerId ?? approval.ProviderPlayerId,
+                    selectedCandidate?.ProviderDisplayName,
+                    selectedCandidate?.Score,
+                    selectedCandidate?.ConfidenceBucket,
+                    selectedCandidate?.TotalSupportedResultRows ?? 0,
+                    selectedCandidate?.ExistingApprovedLinksToOtherLocalPlayers.Count ?? 0,
+                    decision,
+                    blockReasons,
+                    wouldWrite,
+                    writtenLinkId));
+            }
+
+            if (!dryRun)
+            {
+                await dbContext.SaveChangesAsync(cancellationToken);
+            }
+
+            return Results.Ok(new
+            {
+                generatedAtUtc = DateTimeOffset.UtcNow,
+                callsExternalApis = false,
+                readOnly = dryRun,
+                writesRows = !dryRun,
+                guardrails = BuildSoccerResearchOnlyGuardrails(),
+                filters = new
+                {
+                    competition = requestedCompetition,
+                    dryRun,
+                    forceWrite,
+                    approvalCount = approvals.Length
+                },
+                summary = new
+                {
+                    approvalsRequested = approvals.Length,
+                    linkableCount = rows.Count(row => row.Decision is "Linkable" or "Written"),
+                    blockedCount = rows.Count(row => row.Decision == "Blocked"),
+                    writtenCount = rows.Count(row => row.Decision == "Written"),
+                    dryRun
+                },
+                rows
+            });
+        })
+        .WithName("ApiSportsSoccerManualVisibleAliasApprovalDebug")
+        .WithSummary("Dry-run-first manual pair approval for visible Soccer World Cup missing-history aliases.");
 
         endpoints.MapGet("/api/debug/soccer/player-history/readiness", async (
             ApplicationDbContext dbContext,
@@ -5458,6 +6100,1063 @@ public static class ResultsDebugEndpoints
         return parts.Length >= 4 && string.Equals(parts[0], ApiSportsFootballResultSource, StringComparison.OrdinalIgnoreCase)
             ? parts[2]
             : null;
+    }
+
+    private static async Task<IReadOnlyList<VisibleSoccerWorldCupPlatformRow>> LoadVisibleSoccerWorldCupPlatformRowsAsync(
+        ApplicationDbContext dbContext,
+        string competition,
+        string? normalizedPlayerNameFilter,
+        int take,
+        CancellationToken cancellationToken)
+    {
+        var rows = await dbContext.PlatformProps
+            .AsNoTracking()
+            .Include(platformProp => platformProp.Platform)
+            .Include(platformProp => platformProp.Prop)!.ThenInclude(prop => prop!.Player)
+            .Include(platformProp => platformProp.Prop)!.ThenInclude(prop => prop!.PropType)
+            .Include(platformProp => platformProp.Prop)!.ThenInclude(prop => prop!.League)!.ThenInclude(league => league!.Sport)
+            .Include(platformProp => platformProp.Prop)!.ThenInclude(prop => prop!.Game)!.ThenInclude(game => game!.HomeTeam)
+            .Include(platformProp => platformProp.Prop)!.ThenInclude(prop => prop!.Game)!.ThenInclude(game => game!.AwayTeam)
+            .Where(platformProp => platformProp.Prop != null
+                && platformProp.Prop.Player != null
+                && platformProp.Prop.PropType != null
+                && platformProp.Prop.League != null
+                && platformProp.Prop.League.Sport != null
+                && platformProp.Prop.League.Sport.Code == "SOCCER")
+            .Select(platformProp => new
+            {
+                platformProp.Id,
+                platformProp.PlatformPropId,
+                platformProp.ExternalStableKey,
+                platformProp.CurrentLine,
+                platformProp.OverAvailable,
+                platformProp.UnderAvailable,
+                platformProp.Status,
+                platformProp.ObservedAt,
+                platformProp.Metadata,
+                Provider = platformProp.Platform == null ? null : platformProp.Platform.Name,
+                Bookmaker = platformProp.Platform == null ? null : platformProp.Platform.Slug,
+                PlayerId = platformProp.Prop!.PlayerId,
+                PlayerName = platformProp.Prop.Player!.DisplayName,
+                PropTypeId = platformProp.Prop.PropTypeId,
+                PropTypeName = platformProp.Prop.PropType!.Name,
+                StatKey = platformProp.Prop.PropType.StatKey,
+                EventStartTimeUtc = platformProp.Prop.StartsAt,
+                HomeTeam = platformProp.Prop.Game == null || platformProp.Prop.Game.HomeTeam == null ? null : platformProp.Prop.Game.HomeTeam.Name,
+                AwayTeam = platformProp.Prop.Game == null || platformProp.Prop.Game.AwayTeam == null ? null : platformProp.Prop.Game.AwayTeam.Name
+            })
+            .ToListAsync(cancellationToken);
+
+        return rows
+            .Select(row =>
+            {
+                var providerCategory = FirstNonBlank(
+                    ExtractApiSportsContextMetadataRootString(row.Metadata, "providerCategory"),
+                    ExtractApiSportsContextMetadataString(row.Metadata, "entry", "providerCategory"));
+                return new VisibleSoccerWorldCupPlatformRow(
+                    row.Id,
+                    row.PlatformPropId,
+                    row.PlayerId,
+                    row.PlayerName,
+                    NormalizeResultPlayerName(row.PlayerName),
+                    row.PropTypeId,
+                    row.PropTypeName,
+                    row.StatKey,
+                    row.CurrentLine,
+                    ResolveApiSportsMarketJoinSide(row.OverAvailable, row.UnderAvailable),
+                    FirstNonBlank(
+                        ExtractApiSportsContextMetadataString(row.Metadata, "eventInfo", "providerEventId"),
+                        ExtractApiSportsContextMetadataString(row.Metadata, "eventInfo", "eventId"),
+                        row.ExternalStableKey),
+                    row.EventStartTimeUtc,
+                    FirstNonBlank(row.HomeTeam, ExtractApiSportsContextMetadataString(row.Metadata, "eventInfo", "homeTeam")),
+                    FirstNonBlank(row.AwayTeam, ExtractApiSportsContextMetadataString(row.Metadata, "eventInfo", "awayTeam")),
+                    ExtractApiSportsContextMetadataString(row.Metadata, "market", "key"),
+                    row.Provider,
+                    row.Bookmaker,
+                    providerCategory,
+                    ExtractApiSportsContextMetadataRootString(row.Metadata, "dataProvider"),
+                    ExtractApiSportsContextMetadataRootString(row.Metadata, "contextSchemaVersion"),
+                    ExtractApiSportsContextMetadataString(row.Metadata, "sport", "providerSportKey"),
+                    FirstNonBlank(
+                        ExtractApiSportsContextMetadataRootString(row.Metadata, "competition"),
+                        ExtractApiSportsContextMetadataString(row.Metadata, "sport", "competition"),
+                        ExtractApiSportsContextMetadataString(row.Metadata, "eventInfo", "competition")),
+                    ExtractApiSportsContextMetadataBool(row.Metadata, "isActionableForUser")
+                        ?? ExtractApiSportsContextMetadataBool(row.Metadata, "entry", "actionableForUser")
+                        ?? false,
+                    ExtractApiSportsContextMetadataBool(row.Metadata, "sportsbookContextResearchOnly")
+                        ?? string.Equals(providerCategory, "Sportsbook", StringComparison.OrdinalIgnoreCase),
+                    row.Status,
+                    row.ObservedAt);
+            })
+            .Where(row => string.Equals(row.DataProvider, "The Odds API", StringComparison.OrdinalIgnoreCase))
+            .Where(row => string.Equals(row.ContextSchemaVersion, "the-odds-provider-context-v2", StringComparison.OrdinalIgnoreCase))
+            .Where(row => string.Equals(row.ProviderSportKey, "soccer_fifa_world_cup", StringComparison.OrdinalIgnoreCase))
+            .Where(row => string.Equals(row.Competition, competition, StringComparison.OrdinalIgnoreCase))
+            .Where(row => string.Equals(row.ProviderCategory, "Sportsbook", StringComparison.OrdinalIgnoreCase))
+            .Where(row => !IsSyntheticSoccerProviderEventId(row.EventId))
+            .Where(row => normalizedPlayerNameFilter is null || row.NormalizedPlayerName.Contains(normalizedPlayerNameFilter, StringComparison.OrdinalIgnoreCase))
+            .OrderByDescending(row => row.EventStartTimeUtc)
+            .ThenBy(row => row.PlayerName)
+            .ThenBy(row => row.NormalizedPropType)
+            .ThenBy(row => row.Line)
+            .ThenBy(row => row.Bookmaker)
+            .Take(take)
+            .ToArray();
+    }
+
+    private static async Task<IReadOnlyList<VisibleSoccerPlayerHistoryDiagnosticRow>> BuildVisibleSoccerHistoryMissingDiagnosticsAsync(
+        ApplicationDbContext dbContext,
+        IReadOnlyList<VisibleSoccerWorldCupPlatformRow> visibleRows,
+        CancellationToken cancellationToken)
+    {
+        if (visibleRows.Count == 0)
+        {
+            return [];
+        }
+
+        var localPlayerIds = visibleRows.Select(row => row.LocalPlayerId).Distinct().ToArray();
+        var normalizedNames = visibleRows.Select(row => row.NormalizedPlayerName).Where(value => !string.IsNullOrWhiteSpace(value)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        var aliasProviderEntityIds = visibleRows
+            .Where(row => !string.IsNullOrWhiteSpace(row.EventId))
+            .Select(row => BuildTheOddsSoccerAliasProviderEntityId(row.EventId!, row.NormalizedPlayerName))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        var aliasLinks = await dbContext.ProviderEntityLinks
+            .AsNoTracking()
+            .Where(link => link.ProviderKey == TheOddsSoccerAliasProviderKey
+                && link.EntityType == "Player"
+                && link.LinkStatus == "Approved"
+                && link.CanonicalEntityId.HasValue
+                && aliasProviderEntityIds.Contains(link.ProviderEntityId))
+            .Select(link => new { link.ProviderEntityId, CanonicalPlayerId = link.CanonicalEntityId!.Value })
+            .ToArrayAsync(cancellationToken);
+        var aliasByProviderEntityId = aliasLinks
+            .GroupBy(link => link.ProviderEntityId, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(group => group.Key, group => group.First().CanonicalPlayerId, StringComparer.OrdinalIgnoreCase);
+        var canonicalPlayerIds = visibleRows
+            .Select(row => ResolveVisibleSoccerCanonicalPlayerId(row, aliasByProviderEntityId))
+            .Concat(localPlayerIds)
+            .Distinct()
+            .ToArray();
+        var approvedLinks = await dbContext.ProviderEntityLinks
+            .AsNoTracking()
+            .Where(link => link.ProviderKey == ApiSportsFootballPlayerRefProvider
+                && link.EntityType == "Player"
+                && link.LinkStatus == "Approved"
+                && link.CanonicalEntityId.HasValue)
+            .Select(link => new VisibleSoccerApprovedLink(
+                link.Id,
+                link.CanonicalEntityId!.Value,
+                link.ProviderKey,
+                link.ProviderEntityId,
+                link.ProviderEntityName,
+                link.ProviderTeamName,
+                link.ProviderCompetitionName,
+                link.Confidence,
+                link.LinkSource,
+                link.ApprovedAtUtc))
+            .ToArrayAsync(cancellationToken);
+        var approvedProviderIds = approvedLinks
+            .Select(link => link.ProviderEntityId)
+            .Where(value => !string.IsNullOrWhiteSpace(value))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        var externalRefs = await dbContext.PlayerExternalRefs
+            .AsNoTracking()
+            .Where(reference => reference.Provider == ApiSportsFootballPlayerRefProvider
+                && (canonicalPlayerIds.Contains(reference.PlayerId) || approvedProviderIds.Contains(reference.ProviderPlayerId)))
+            .Select(reference => new VisibleSoccerExternalRef(
+                reference.PlayerId,
+                reference.Provider,
+                reference.ProviderPlayerId,
+                reference.ProviderDisplayName,
+                reference.CreatedAt,
+                reference.UpdatedAt))
+            .ToArrayAsync(cancellationToken);
+        var historicalPlayerIds = externalRefs.Select(reference => reference.PlayerId).Distinct().ToArray();
+        var resultRows = await dbContext.PropResults
+            .AsNoTracking()
+            .Include(result => result.PropType)
+            .Where(result => result.ExternalSource == ApiSportsFootballResultSource
+                && historicalPlayerIds.Contains(result.PlayerId)
+                && result.PropType != null)
+            .Select(result => new VisibleSoccerHistoryResult(
+                result.PlayerId,
+                result.EventDate,
+                result.PropType!.Name,
+                result.PropType.StatKey))
+            .ToArrayAsync(cancellationToken);
+        var playerNames = await dbContext.Players
+            .AsNoTracking()
+            .Where(player => canonicalPlayerIds.Contains(player.Id)
+                || localPlayerIds.Contains(player.Id)
+                || historicalPlayerIds.Contains(player.Id)
+                || approvedLinks.Select(link => link.PlayerId).Contains(player.Id))
+            .Select(player => new { player.Id, player.DisplayName })
+            .ToDictionaryAsync(player => player.Id, player => player.DisplayName, cancellationToken);
+        var sameNamePlatformPlayers = await dbContext.PlatformProps
+            .AsNoTracking()
+            .Include(platformProp => platformProp.Platform)
+            .Include(platformProp => platformProp.Prop)!.ThenInclude(prop => prop!.Player)
+            .Include(platformProp => platformProp.Prop)!.ThenInclude(prop => prop!.League)!.ThenInclude(league => league!.Sport)
+            .Where(platformProp => platformProp.Prop != null
+                && platformProp.Prop.Player != null
+                && platformProp.Prop.League != null
+                && platformProp.Prop.League.Sport != null
+                && platformProp.Prop.League.Sport.Code == "SOCCER")
+            .Select(platformProp => new VisibleSoccerPlatformPlayer(
+                platformProp.Prop!.PlayerId,
+                platformProp.Prop.Player!.DisplayName,
+                platformProp.Platform == null ? null : platformProp.Platform.Name))
+            .ToArrayAsync(cancellationToken);
+        var sameNamePlatformByName = sameNamePlatformPlayers
+            .Select(row => new { Row = row, NormalizedName = NormalizeResultPlayerName(row.PlayerName) })
+            .Where(row => normalizedNames.Contains(row.NormalizedName, StringComparer.OrdinalIgnoreCase))
+            .GroupBy(row => row.NormalizedName, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(group => group.Key, group => group.Select(row => row.Row).Distinct().ToArray(), StringComparer.OrdinalIgnoreCase);
+        var historicalRefsByName = externalRefs
+            .GroupBy(reference => NormalizeResultPlayerName(reference.ProviderDisplayName), StringComparer.OrdinalIgnoreCase)
+            .Where(group => normalizedNames.Contains(group.Key, StringComparer.OrdinalIgnoreCase))
+            .ToDictionary(group => group.Key, group => group.ToArray(), StringComparer.OrdinalIgnoreCase);
+
+        return visibleRows
+            .Select(row =>
+            {
+                var canonicalPlayerId = ResolveVisibleSoccerCanonicalPlayerId(row, aliasByProviderEntityId);
+                var playerIdsToCheck = new[] { row.LocalPlayerId, canonicalPlayerId }.Distinct().ToArray();
+                var playerLinks = approvedLinks.Where(link => playerIdsToCheck.Contains(link.PlayerId)).ToArray();
+                var providerIds = playerLinks
+                    .Select(link => link.ProviderEntityId)
+                    .Where(value => !string.IsNullOrWhiteSpace(value))
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .ToArray();
+                var matchingRefs = externalRefs.Where(reference => providerIds.Contains(reference.ProviderPlayerId, StringComparer.OrdinalIgnoreCase)).ToArray();
+                var matchingHistoricalPlayerIds = matchingRefs.Select(reference => reference.PlayerId).Distinct().ToArray();
+                var playerResultRows = resultRows.Where(result => matchingHistoricalPlayerIds.Contains(result.PlayerId)).ToArray();
+                var supportedRows = playerResultRows.Where(result => ApiSportsHistoricalStatKeysOfInterest.Contains(result.StatKey)).ToArray();
+                sameNamePlatformByName.TryGetValue(row.NormalizedPlayerName, out var sameNamePlatforms);
+                sameNamePlatforms ??= [];
+                var sameNameApprovedLinks = approvedLinks
+                    .Where(link => !playerIdsToCheck.Contains(link.PlayerId))
+                    .Where(link => sameNamePlatforms.Any(platform => platform.PlayerId == link.PlayerId))
+                    .ToArray();
+                historicalRefsByName.TryGetValue(row.NormalizedPlayerName, out var sameNameHistoricalRefs);
+                sameNameHistoricalRefs ??= [];
+                var reasonCode = BuildVisibleSoccerHistoryReasonCode(
+                    row,
+                    canonicalPlayerId,
+                    playerLinks,
+                    matchingRefs,
+                    playerResultRows,
+                    supportedRows,
+                    sameNameApprovedLinks,
+                    sameNameHistoricalRefs);
+                var hasHistory = reasonCode == "HasHistory";
+
+                return new VisibleSoccerPlayerHistoryDiagnosticRow(
+                    row.PlayerName,
+                    row.LocalPlayerId,
+                    canonicalPlayerId,
+                    row.EventId,
+                    row.EventStartTimeUtc,
+                    row.HomeTeam,
+                    row.AwayTeam,
+                    row.NormalizedPropType,
+                    row.MarketKey,
+                    row.Provider,
+                    row.Bookmaker,
+                    row.Line,
+                    row.ProviderCategory ?? "Sportsbook",
+                    row.EntryActionableForUser,
+                    row.SportsbookContextResearchOnly,
+                    false,
+                    hasHistory,
+                    hasHistory ? null : BuildVisibleSoccerHistoryUnavailableReason(reasonCode),
+                    reasonCode,
+                    new VisibleSoccerPlayerHistoryIdentityCandidates(
+                        playerLinks.Select(link => new
+                        {
+                            link.Id,
+                            localPlayerId = link.PlayerId,
+                            localPlayerName = playerNames.GetValueOrDefault(link.PlayerId),
+                            link.ProviderKey,
+                            apiSportsProviderPlayerId = link.ProviderEntityId,
+                            apiSportsPlayerName = link.ProviderEntityName,
+                            link.ProviderTeamName,
+                            link.ProviderCompetitionName,
+                            link.Confidence,
+                            link.LinkSource,
+                            link.ApprovedAtUtc
+                        }).Cast<object>().ToArray(),
+                        providerIds,
+                        matchingRefs.Select(reference => new
+                        {
+                            reference.PlayerId,
+                            historicalPlayerName = playerNames.GetValueOrDefault(reference.PlayerId),
+                            reference.Provider,
+                            reference.ProviderPlayerId,
+                            reference.ProviderDisplayName,
+                            reference.CreatedAt,
+                            reference.UpdatedAt
+                        }).Cast<object>().ToArray(),
+                        matchingRefs
+                            .GroupBy(reference => reference.ProviderPlayerId, StringComparer.OrdinalIgnoreCase)
+                            .Select(group => new
+                            {
+                                providerPlayerId = group.Key,
+                                resultRows = resultRows.Count(result => group.Any(reference => reference.PlayerId == result.PlayerId)),
+                                supportedResultRows = supportedRows.Count(result => group.Any(reference => reference.PlayerId == result.PlayerId)),
+                                stats = resultRows
+                                    .Where(result => group.Any(reference => reference.PlayerId == result.PlayerId))
+                                    .GroupBy(result => result.StatKey)
+                                    .OrderBy(statGroup => statGroup.Key)
+                                    .Select(statGroup => new
+                                    {
+                                        statKey = statGroup.Key,
+                                        count = statGroup.Count(),
+                                        latestResultDate = statGroup.Max(result => result.EventDate)
+                                    })
+                                    .ToArray()
+                            }).Cast<object>().ToArray(),
+                        sameNameApprovedLinks.Select(link => new
+                        {
+                            localPlayerId = link.PlayerId,
+                            localPlayerName = playerNames.GetValueOrDefault(link.PlayerId),
+                            apiSportsProviderPlayerId = link.ProviderEntityId,
+                            apiSportsPlayerName = link.ProviderEntityName,
+                            link.Confidence,
+                            link.LinkSource
+                        }).Cast<object>().ToArray(),
+                        sameNameHistoricalRefs.Select(reference => new
+                        {
+                            reference.PlayerId,
+                            historicalPlayerName = playerNames.GetValueOrDefault(reference.PlayerId),
+                            reference.ProviderPlayerId,
+                            reference.ProviderDisplayName
+                        }).Cast<object>().ToArray(),
+                        sameNamePlatforms.Select(platform => new
+                        {
+                            localPlayerId = platform.PlayerId,
+                            platform.PlayerName,
+                            platform.PlatformName
+                        }).Cast<object>().ToArray()));
+            })
+            .ToArray();
+    }
+
+    private static async Task<IReadOnlyList<VisibleSoccerAliasCandidateGroup>> BuildVisibleSoccerAliasCandidateGroupsAsync(
+        ApplicationDbContext dbContext,
+        IReadOnlyList<VisibleSoccerPlayerHistoryDiagnosticRow> missingRows,
+        decimal minimumScore,
+        bool includeLowConfidence,
+        CancellationToken cancellationToken)
+    {
+        if (missingRows.Count == 0)
+        {
+            return [];
+        }
+
+        var historicalRows = await dbContext.PropResults
+            .AsNoTracking()
+            .Include(result => result.Player)
+            .ThenInclude(player => player!.Team)
+            .Include(result => result.League)
+            .Include(result => result.PropType)
+            .Where(result => result.ExternalSource == ApiSportsFootballResultSource
+                && result.ExternalSourceIdentifier.StartsWith($"{ApiSportsFootballResultSource}:")
+                && result.Player != null
+                && result.League != null
+                && result.PropType != null
+                && ApiSportsHistoricalStatKeysOfInterest.Contains(result.PropType.StatKey))
+            .Select(result => new
+            {
+                result.PlayerId,
+                PlayerName = result.Player!.DisplayName,
+                TeamName = result.Player.Team == null ? null : result.Player.Team.Name,
+                LeagueCode = result.League!.Code,
+                LeagueName = result.League.Name,
+                result.EventDate,
+                result.PropType!.StatKey,
+                result.ExternalSourceIdentifier
+            })
+            .ToArrayAsync(cancellationToken);
+        var externalRefs = await dbContext.PlayerExternalRefs
+            .AsNoTracking()
+            .Where(reference => reference.Provider == ApiSportsFootballPlayerRefProvider)
+            .Select(reference => new VisibleSoccerExternalRef(
+                reference.PlayerId,
+                reference.Provider,
+                reference.ProviderPlayerId,
+                reference.ProviderDisplayName,
+                reference.CreatedAt,
+                reference.UpdatedAt))
+            .ToArrayAsync(cancellationToken);
+        var approvedLinks = await dbContext.ProviderEntityLinks
+            .AsNoTracking()
+            .Where(link => link.ProviderKey == ApiSportsFootballPlayerRefProvider
+                && link.EntityType == "Player"
+                && link.LinkStatus == "Approved"
+                && link.CanonicalEntityId.HasValue)
+            .Select(link => new VisibleSoccerApprovedLink(
+                link.Id,
+                link.CanonicalEntityId!.Value,
+                link.ProviderKey,
+                link.ProviderEntityId,
+                link.ProviderEntityName,
+                link.ProviderTeamName,
+                link.ProviderCompetitionName,
+                link.Confidence,
+                link.LinkSource,
+                link.ApprovedAtUtc))
+            .ToArrayAsync(cancellationToken);
+        var approvedLinkPlayerIds = approvedLinks.Select(link => link.PlayerId).Distinct().ToArray();
+        var externalRefPlayerIds = externalRefs.Select(reference => reference.PlayerId).Distinct().ToArray();
+        var playerNames = await dbContext.Players
+            .AsNoTracking()
+            .Where(player => approvedLinkPlayerIds.Contains(player.Id)
+                || externalRefPlayerIds.Contains(player.Id))
+            .Select(player => new { player.Id, player.DisplayName })
+            .ToDictionaryAsync(player => player.Id, player => player.DisplayName, cancellationToken);
+        var refsByProviderId = externalRefs
+            .GroupBy(reference => reference.ProviderPlayerId, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(group => group.Key, group => group.ToArray(), StringComparer.OrdinalIgnoreCase);
+        var linksByProviderId = approvedLinks
+            .GroupBy(link => link.ProviderEntityId, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(group => group.Key, group => group.ToArray(), StringComparer.OrdinalIgnoreCase);
+        var historicalPlayers = historicalRows
+            .Select(row => new
+            {
+                Row = row,
+                ProviderPlayerId = TryExtractApiSportsPlayerIdFromResultIdentifier(row.ExternalSourceIdentifier)
+            })
+            .Where(row => !string.IsNullOrWhiteSpace(row.ProviderPlayerId))
+            .GroupBy(row => row.ProviderPlayerId!, StringComparer.OrdinalIgnoreCase)
+            .Select(group =>
+            {
+                var first = group.First().Row;
+                refsByProviderId.TryGetValue(group.Key, out var providerRefs);
+                providerRefs ??= [];
+                var displayName = FirstNonBlank(
+                    providerRefs.Select(reference => reference.ProviderDisplayName).FirstOrDefault(value => !string.IsNullOrWhiteSpace(value)),
+                    first.PlayerName) ?? first.PlayerName;
+                return new VisibleSoccerAliasHistoricalPlayer(
+                    group.Key,
+                    displayName,
+                    NormalizeAliasCompact(displayName, removeParticles: false),
+                    NormalizeAliasCompact(displayName, removeParticles: true),
+                    first.PlayerId,
+                    group.Select(row => row.Row.PlayerId).Distinct().ToArray(),
+                    providerRefs,
+                    group.GroupBy(row => row.Row.StatKey, StringComparer.OrdinalIgnoreCase)
+                        .ToDictionary(statGroup => statGroup.Key, statGroup => statGroup.Count(), StringComparer.OrdinalIgnoreCase),
+                    group.Count(),
+                    group.Max(row => row.Row.EventDate),
+                    group.GroupBy(row => new { row.Row.LeagueCode, row.Row.LeagueName })
+                        .OrderByDescending(competitionGroup => competitionGroup.Count())
+                        .ThenBy(competitionGroup => competitionGroup.Key.LeagueCode)
+                        .Select(competitionGroup => new VisibleSoccerAliasCompetitionBreakdown(
+                            competitionGroup.Key.LeagueCode,
+                            competitionGroup.Key.LeagueName,
+                            competitionGroup.Count(),
+                            competitionGroup.Max(row => row.Row.EventDate)))
+                        .ToArray());
+            })
+            .Where(player => player.TotalSupportedResultRows > 0)
+            .ToArray();
+
+        return missingRows
+            .GroupBy(row => new { row.LocalPlayerId, row.CanonicalPlayerId, row.PlayerName })
+            .Select(group =>
+            {
+                var first = group.First();
+                var visibleMarkets = group
+                    .Select(row => new
+                    {
+                        row.NormalizedPropType,
+                        row.MarketKey,
+                        row.Line,
+                        row.Provider,
+                        row.Bookmaker,
+                        row.EventId,
+                        row.EventStartTimeUtc
+                    })
+                    .Distinct()
+                    .OrderBy(row => row.NormalizedPropType)
+                    .ThenBy(row => row.MarketKey)
+                    .ThenBy(row => row.Provider)
+                    .ThenBy(row => row.Bookmaker)
+                    .ToArray();
+                var candidates = historicalPlayers
+                    .Select(historical =>
+                    {
+                        linksByProviderId.TryGetValue(historical.ProviderPlayerId, out var providerLinks);
+                        providerLinks ??= [];
+                        return BuildVisibleSoccerAliasCandidate(first, historical, providerLinks, playerNames);
+                    })
+                    .Where(candidate => candidate.Score >= minimumScore)
+                    .Where(candidate => includeLowConfidence || candidate.ConfidenceBucket != "Low")
+                    .OrderByDescending(candidate => candidate.Score)
+                    .ThenByDescending(candidate => candidate.TotalSupportedResultRows)
+                    .ThenBy(candidate => candidate.ProviderDisplayName)
+                    .Take(10)
+                    .ToArray();
+
+                return new VisibleSoccerAliasCandidateGroup(
+                    first.PlayerName,
+                    first.LocalPlayerId,
+                    first.CanonicalPlayerId,
+                    group.Count(),
+                    visibleMarkets.Cast<object>().ToArray(),
+                    candidates.Length,
+                    candidates.FirstOrDefault(),
+                    candidates);
+            })
+            .OrderByDescending(group => group.BestCandidate?.Score ?? 0m)
+            .ThenBy(group => group.PlayerName)
+            .ToArray();
+    }
+
+    private static VisibleSoccerAliasCandidate BuildVisibleSoccerAliasCandidate(
+        VisibleSoccerPlayerHistoryDiagnosticRow visiblePlayer,
+        VisibleSoccerAliasHistoricalPlayer historicalPlayer,
+        IReadOnlyCollection<VisibleSoccerApprovedLink> existingApprovedLinks,
+        IReadOnlyDictionary<Guid, string> playerNames)
+    {
+        var reasons = new List<string>();
+        var warnings = new List<string>();
+        var visibleRaw = visiblePlayer.PlayerName;
+        var providerRaw = historicalPlayer.ProviderDisplayName;
+        var visibleCompact = NormalizeAliasCompact(visibleRaw, removeParticles: false);
+        var providerCompact = NormalizeAliasCompact(providerRaw, removeParticles: false);
+        var visibleNoParticles = NormalizeAliasCompact(visibleRaw, removeParticles: true);
+        var providerNoParticles = NormalizeAliasCompact(providerRaw, removeParticles: true);
+        var visibleTokens = TokenizeSoccerAliasName(visibleRaw, removeParticles: true);
+        var providerTokens = TokenizeSoccerAliasName(providerRaw, removeParticles: true);
+        var score = 0m;
+
+        if (visibleCompact == providerCompact)
+        {
+            score = 1.00m;
+            reasons.Add("NormalizedExactMatch");
+        }
+        else if (visibleNoParticles == providerNoParticles)
+        {
+            score = 0.98m;
+            reasons.Add("ParticleInsensitiveExactMatch");
+        }
+
+        if (score < 0.94m && visibleTokens.Count > 1 && providerTokens.Count > 1 && TokensEquivalentIgnoringOrder(visibleTokens, providerTokens))
+        {
+            score = Math.Max(score, 0.94m);
+            reasons.Add("ReversedNameTokenMatch");
+        }
+
+        if (score < 0.92m && TokenSubsetMatch(providerTokens, visibleTokens))
+        {
+            var subsetScore = providerTokens.Count == 1
+                ? 0.88m
+                : 0.92m;
+            if (providerTokens.Count == 1 && visibleTokens.Count > 1 && TokensEquivalent(providerTokens[0], visibleTokens[^1]))
+            {
+                subsetScore = 0.92m;
+                reasons.Add("MiddleNameCompression");
+            }
+            else
+            {
+                reasons.Add("TokenSubsetMatch");
+            }
+
+            score = Math.Max(score, subsetScore);
+        }
+
+        if (score < 0.91m && TokenSubsetMatch(visibleTokens, providerTokens))
+        {
+            score = Math.Max(score, 0.91m);
+            reasons.Add("ProviderNameContainsVisibleTokens");
+        }
+
+        if (score < 0.90m && FirstAndLastTokenMatch(visibleTokens, providerTokens))
+        {
+            score = Math.Max(score, 0.90m);
+            reasons.Add("FirstAndLastTokenMatch");
+        }
+
+        if (score < 0.86m && LastTokenOnlyMatch(visibleTokens, providerTokens))
+        {
+            score = Math.Max(score, 0.82m);
+            reasons.Add("LastTokenOnlyMatch");
+        }
+
+        var jaccard = CalculateAliasTokenJaccard(visibleTokens, providerTokens);
+        if (jaccard > 0)
+        {
+            score = Math.Max(score, decimal.Round(jaccard * 0.86m, 2));
+            reasons.Add("TokenOverlapJaccard");
+        }
+
+        if (historicalPlayer.TotalSupportedResultRows > 0)
+        {
+            reasons.Add("SupportedPropResultsExist");
+        }
+
+        if (existingApprovedLinks.Any(link => link.PlayerId != visiblePlayer.LocalPlayerId && link.PlayerId != visiblePlayer.CanonicalPlayerId))
+        {
+            warnings.Add("ApiSportsProviderAlreadyApprovedForDifferentLocalPlayer");
+        }
+
+        var strongAliasMatch = reasons.Any(reason => reason is
+            "NormalizedExactMatch" or
+            "ParticleInsensitiveExactMatch" or
+            "ReversedNameTokenMatch" or
+            "MiddleNameCompression" or
+            "FirstAndLastTokenMatch");
+        var confidenceBucket = score >= 0.90m && strongAliasMatch && warnings.Count == 0 && historicalPlayer.TotalSupportedResultRows > 0
+            ? "High"
+            : score >= 0.80m
+                ? "Medium"
+                : "Low";
+
+        return new VisibleSoccerAliasCandidate(
+            historicalPlayer.ProviderPlayerId,
+            historicalPlayer.ProviderDisplayName,
+            historicalPlayer.NormalizedProviderName,
+            score,
+            confidenceBucket,
+            reasons.Distinct(StringComparer.OrdinalIgnoreCase).Order().ToArray(),
+            historicalPlayer.SupportedStatCounts,
+            historicalPlayer.TotalSupportedResultRows,
+            historicalPlayer.LatestResultDate,
+            historicalPlayer.CompetitionBreakdown,
+            existingApprovedLinks.Select(link => new
+            {
+                link.Id,
+                localPlayerId = link.PlayerId,
+                localPlayerName = playerNames.GetValueOrDefault(link.PlayerId),
+                link.ProviderEntityId,
+                link.ProviderEntityName,
+                link.Confidence,
+                link.LinkSource,
+                link.ApprovedAtUtc
+            }).Cast<object>().ToArray(),
+            warnings.Distinct(StringComparer.OrdinalIgnoreCase).Order().ToArray());
+    }
+
+    private static VisibleSoccerAliasCandidate? SelectVisibleSoccerAliasApplyCandidate(
+        VisibleSoccerAliasCandidateGroup group,
+        IReadOnlyCollection<string> explicitProviderPlayerIds)
+    {
+        if (group.Candidates.Count == 0)
+        {
+            return null;
+        }
+
+        if (explicitProviderPlayerIds.Count > 0)
+        {
+            return group.Candidates.FirstOrDefault(candidate => explicitProviderPlayerIds.Contains(candidate.ProviderPlayerId, StringComparer.OrdinalIgnoreCase));
+        }
+
+        return group.BestCandidate;
+    }
+
+    private static IReadOnlyList<string> BuildVisibleSoccerAliasApplyBlockReasons(
+        VisibleSoccerAliasCandidateGroup group,
+        VisibleSoccerAliasCandidate? selectedCandidate,
+        IReadOnlyCollection<object> existingLocalLinks,
+        decimal minimumScore,
+        bool requireAlreadyApprovedProvider,
+        int maxCandidateCount,
+        bool allowMediumConfidence,
+        bool hasExplicitSelection)
+    {
+        var blockReasons = new List<string>();
+        if (selectedCandidate is null)
+        {
+            blockReasons.Add("NoSelectedCandidate");
+            return blockReasons;
+        }
+
+        if (existingLocalLinks.Count > 0)
+        {
+            blockReasons.Add("LocalPlayerAlreadyHasApprovedApiSportsProviderLink");
+        }
+
+        if (selectedCandidate.TotalSupportedResultRows <= 0)
+        {
+            blockReasons.Add("SelectedCandidateHasNoSupportedPropResults");
+        }
+
+        if (selectedCandidate.Score < minimumScore)
+        {
+            blockReasons.Add("SelectedCandidateBelowMinScore");
+        }
+
+        if (!allowMediumConfidence && selectedCandidate.ConfidenceBucket != "High")
+        {
+            blockReasons.Add("MediumConfidenceRequiresAllowMediumConfidence");
+        }
+
+        if (group.CandidateCount > maxCandidateCount && !hasExplicitSelection)
+        {
+            blockReasons.Add("CandidateCountExceedsMaxCandidateCount");
+        }
+
+        if (requireAlreadyApprovedProvider && selectedCandidate.ExistingApprovedLinksToOtherLocalPlayers.Count == 0)
+        {
+            blockReasons.Add("SelectedProviderPlayerIdNotAlreadyApprovedForAnotherLocalPlayer");
+        }
+
+        var closeCandidates = group.Candidates
+            .Where(candidate => candidate.ProviderPlayerId != selectedCandidate.ProviderPlayerId)
+            .Where(candidate => candidate.Score >= minimumScore)
+            .Where(candidate => selectedCandidate.Score - candidate.Score <= 0.03m)
+            .ToArray();
+        if (closeCandidates.Length > 0 && !hasExplicitSelection)
+        {
+            blockReasons.Add("MultipleCloseScoringCandidates");
+        }
+
+        return blockReasons.Distinct(StringComparer.OrdinalIgnoreCase).Order().ToArray();
+    }
+
+    private static VisibleSoccerAliasApprovalPlanRow BuildVisibleSoccerAliasApprovalPlanRow(
+        VisibleSoccerAliasCandidateGroup group,
+        decimal minimumScore)
+    {
+        var best = group.BestCandidate;
+        var riskWarnings = new List<string>();
+        var suggested = false;
+        var suggestedReason = "No candidate at or above the minimum score.";
+
+        if (best is not null)
+        {
+            if (group.CandidateCount > 3)
+            {
+                riskWarnings.Add("CandidateFanOutAboveReviewThreshold");
+            }
+
+            if (HasMultipleCloseAliasCandidates(group, best, minimumScore))
+            {
+                riskWarnings.Add("MultipleCloseScoringCandidates");
+            }
+
+            if (best.ConflictWarnings.Count > 0)
+            {
+                riskWarnings.AddRange(best.ConflictWarnings);
+            }
+
+            var exactFirstTokenSingleName = IsExactFirstTokenSingleNameAlias(group.PlayerName, best.ProviderDisplayName);
+            var strongReason = best.MatchReasons.Any(reason => reason is
+                "NormalizedExactMatch" or
+                "ParticleInsensitiveExactMatch" or
+                "ReversedNameTokenMatch" or
+                "MiddleNameCompression" or
+                "FirstAndLastTokenMatch");
+            suggested = best.Score >= minimumScore
+                && best.TotalSupportedResultRows > 0
+                && group.CandidateCount <= 3
+                && !HasMultipleCloseAliasCandidates(group, best, minimumScore)
+                && (strongReason || exactFirstTokenSingleName || best.Score >= 0.90m)
+                && !IsFuzzySingleTokenAlias(group.PlayerName, best.ProviderDisplayName);
+            suggestedReason = suggested
+                ? "Best candidate is a reviewed-looking alias with supported persisted API-Sports history and no high fan-out ambiguity."
+                : "Candidate should stay manual review because score, fan-out, close alternatives, or weak token evidence is not strong enough.";
+        }
+
+        return new VisibleSoccerAliasApprovalPlanRow(
+            group.PlayerName,
+            group.LocalPlayerId,
+            group.CanonicalPlayerId,
+            group.VisibleRowCount,
+            group.CandidateCount,
+            best is null ? null : new
+            {
+                best.ProviderPlayerId,
+                best.ProviderDisplayName,
+                best.Score,
+                best.ConfidenceBucket,
+                reasons = best.MatchReasons,
+                supportedResultRows = best.TotalSupportedResultRows,
+                best.LatestResultDate
+            },
+            suggested,
+            suggestedReason,
+            riskWarnings.Distinct(StringComparer.OrdinalIgnoreCase).Order().ToArray());
+    }
+
+    private static IReadOnlyList<string> BuildVisibleSoccerAliasManualApprovalBlockReasons(
+        VisibleSoccerAliasManualApproval approval,
+        VisibleSoccerAliasCandidateGroup? group,
+        VisibleSoccerAliasCandidate? selectedCandidate,
+        IReadOnlyCollection<object> existingLocalLinks)
+    {
+        var blockReasons = new List<string>();
+        if (group is null)
+        {
+            blockReasons.Add("LocalPlayerIsNotVisibleMissingHistoryPlayer");
+            return blockReasons;
+        }
+
+        if (selectedCandidate is null)
+        {
+            blockReasons.Add("ProviderPlayerIdNotFoundInVisibleAliasCandidates");
+            return blockReasons;
+        }
+
+        if (existingLocalLinks.Count > 0)
+        {
+            blockReasons.Add("LocalPlayerAlreadyHasApprovedApiSportsProviderLink");
+        }
+
+        if (selectedCandidate.TotalSupportedResultRows <= 0)
+        {
+            blockReasons.Add("SelectedCandidateHasNoSupportedPropResults");
+        }
+
+        return blockReasons.Distinct(StringComparer.OrdinalIgnoreCase).Order().ToArray();
+    }
+
+    private static bool HasMultipleCloseAliasCandidates(
+        VisibleSoccerAliasCandidateGroup group,
+        VisibleSoccerAliasCandidate selectedCandidate,
+        decimal minimumScore)
+    {
+        return group.Candidates.Any(candidate => candidate.ProviderPlayerId != selectedCandidate.ProviderPlayerId
+            && candidate.Score >= minimumScore
+            && selectedCandidate.Score - candidate.Score <= 0.03m);
+    }
+
+    private static bool IsExactFirstTokenSingleNameAlias(string visibleName, string providerName)
+    {
+        var visibleTokens = TokenizeSoccerAliasName(visibleName, removeParticles: true);
+        var providerTokens = TokenizeSoccerAliasName(providerName, removeParticles: true);
+        return visibleTokens.Count > 1
+            && providerTokens.Count == 1
+            && string.Equals(visibleTokens[0], providerTokens[0], StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsFuzzySingleTokenAlias(string visibleName, string providerName)
+    {
+        var visibleTokens = TokenizeSoccerAliasName(visibleName, removeParticles: true);
+        var providerTokens = TokenizeSoccerAliasName(providerName, removeParticles: true);
+        return visibleTokens.Count > 1
+            && providerTokens.Count == 1
+            && !string.Equals(visibleTokens[0], providerTokens[0], StringComparison.OrdinalIgnoreCase)
+            && TokensEquivalent(visibleTokens[0], providerTokens[0]);
+    }
+
+    private static string NormalizeAliasCompact(string? value, bool removeParticles)
+    {
+        return string.Concat(TokenizeSoccerAliasName(value, removeParticles));
+    }
+
+    private static IReadOnlyList<string> TokenizeSoccerAliasName(string? value, bool removeParticles)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return [];
+        }
+
+        var withoutDiacritics = RemoveDiacritics(value);
+        var tokens = Regex.Split(withoutDiacritics.ToLowerInvariant(), @"[^a-z0-9]+")
+            .Where(token => !string.IsNullOrWhiteSpace(token))
+            .ToArray();
+        return removeParticles
+            ? tokens.Where(token => !SoccerAliasParticles.Contains(token)).ToArray()
+            : tokens;
+    }
+
+    private static string RemoveDiacritics(string value)
+    {
+        var normalized = value.Normalize(NormalizationForm.FormD);
+        return new string(normalized.Where(character => CharUnicodeInfo.GetUnicodeCategory(character) != UnicodeCategory.NonSpacingMark).ToArray())
+            .Normalize(NormalizationForm.FormC);
+    }
+
+    private static bool TokensEquivalentIgnoringOrder(IReadOnlyList<string> left, IReadOnlyList<string> right)
+    {
+        return left.Count == right.Count && TokenSubsetMatch(left, right) && TokenSubsetMatch(right, left);
+    }
+
+    private static bool TokenSubsetMatch(IReadOnlyList<string> subset, IReadOnlyList<string> superset)
+    {
+        return subset.Count > 0 && subset.All(token => superset.Any(candidate => TokensEquivalent(token, candidate)));
+    }
+
+    private static bool FirstAndLastTokenMatch(IReadOnlyList<string> left, IReadOnlyList<string> right)
+    {
+        return left.Count >= 2
+            && right.Count >= 2
+            && TokensEquivalent(left[0], right[0])
+            && TokensEquivalent(left[^1], right[^1]);
+    }
+
+    private static bool LastTokenOnlyMatch(IReadOnlyList<string> left, IReadOnlyList<string> right)
+    {
+        return left.Count > 0
+            && right.Count > 0
+            && TokensEquivalent(left[^1], right[^1]);
+    }
+
+    private static decimal CalculateAliasTokenJaccard(IReadOnlyList<string> left, IReadOnlyList<string> right)
+    {
+        if (left.Count == 0 || right.Count == 0)
+        {
+            return 0m;
+        }
+
+        var matchedRight = new HashSet<int>();
+        var intersection = 0;
+        foreach (var leftToken in left.Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            for (var index = 0; index < right.Count; index++)
+            {
+                if (matchedRight.Contains(index) || !TokensEquivalent(leftToken, right[index]))
+                {
+                    continue;
+                }
+
+                matchedRight.Add(index);
+                intersection++;
+                break;
+            }
+        }
+
+        var union = left.Distinct(StringComparer.OrdinalIgnoreCase).Count()
+            + right.Distinct(StringComparer.OrdinalIgnoreCase).Count()
+            - intersection;
+        return union <= 0 ? 0m : (decimal)intersection / union;
+    }
+
+    private static bool TokensEquivalent(string left, string right)
+    {
+        return string.Equals(left, right, StringComparison.OrdinalIgnoreCase)
+            || (left.Length >= 5 && right.Length >= 5 && CalculateLevenshteinDistance(left, right) <= 1);
+    }
+
+    private static int CalculateLevenshteinDistance(string left, string right)
+    {
+        if (left.Length == 0)
+        {
+            return right.Length;
+        }
+
+        if (right.Length == 0)
+        {
+            return left.Length;
+        }
+
+        var distances = new int[left.Length + 1, right.Length + 1];
+        for (var i = 0; i <= left.Length; i++)
+        {
+            distances[i, 0] = i;
+        }
+
+        for (var j = 0; j <= right.Length; j++)
+        {
+            distances[0, j] = j;
+        }
+
+        for (var i = 1; i <= left.Length; i++)
+        {
+            for (var j = 1; j <= right.Length; j++)
+            {
+                var cost = left[i - 1] == right[j - 1] ? 0 : 1;
+                distances[i, j] = Math.Min(
+                    Math.Min(distances[i - 1, j] + 1, distances[i, j - 1] + 1),
+                    distances[i - 1, j - 1] + cost);
+            }
+        }
+
+        return distances[left.Length, right.Length];
+    }
+
+    private static Guid ResolveVisibleSoccerCanonicalPlayerId(
+        VisibleSoccerWorldCupPlatformRow row,
+        IReadOnlyDictionary<string, Guid> aliasByProviderEntityId)
+    {
+        if (!string.IsNullOrWhiteSpace(row.EventId))
+        {
+            var aliasProviderEntityId = BuildTheOddsSoccerAliasProviderEntityId(row.EventId, row.NormalizedPlayerName);
+            if (aliasByProviderEntityId.TryGetValue(aliasProviderEntityId, out var aliasCanonicalPlayerId))
+            {
+                return aliasCanonicalPlayerId;
+            }
+        }
+
+        return row.LocalPlayerId;
+    }
+
+    private static bool IsSyntheticSoccerProviderEventId(string? eventId)
+    {
+        return string.IsNullOrWhiteSpace(eventId)
+            || eventId.Contains("|balanced", StringComparison.OrdinalIgnoreCase)
+            || eventId.Contains("|alternate", StringComparison.OrdinalIgnoreCase)
+            || eventId.Contains("SCR_game", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string BuildVisibleSoccerHistoryReasonCode(
+        VisibleSoccerWorldCupPlatformRow row,
+        Guid canonicalPlayerId,
+        IReadOnlyCollection<VisibleSoccerApprovedLink> approvedLinks,
+        IReadOnlyCollection<VisibleSoccerExternalRef> matchingRefs,
+        IReadOnlyCollection<VisibleSoccerHistoryResult> resultRows,
+        IReadOnlyCollection<VisibleSoccerHistoryResult> supportedRows,
+        IReadOnlyCollection<VisibleSoccerApprovedLink> sameNameApprovedLinks,
+        IReadOnlyCollection<VisibleSoccerExternalRef> sameNameHistoricalRefs)
+    {
+        if (supportedRows.Count > 0)
+        {
+            return "HasHistory";
+        }
+
+        if (approvedLinks.Count == 0)
+        {
+            if (sameNameApprovedLinks.Count > 0)
+            {
+                return canonicalPlayerId != row.LocalPlayerId ? "CanonicalPlayerIdMismatch" : "LocalPlayerIdMismatch";
+            }
+
+            if (sameNameHistoricalRefs.Count > 0)
+            {
+                return "NameMismatchPossibleAlias";
+            }
+
+            return "NoApprovedApiSportsProviderEntityLink";
+        }
+
+        if (matchingRefs.Count == 0)
+        {
+            return "ApprovedLinkExistsButNoPlayerExternalRef";
+        }
+
+        if (resultRows.Count == 0)
+        {
+            return "ApprovedLinkExistsButNoPropResults";
+        }
+
+        if (resultRows.Count > 0)
+        {
+            return "ApprovedLinkExistsButNoSupportedStats";
+        }
+
+        return "Unknown";
+    }
+
+    private static string BuildVisibleSoccerHistoryUnavailableReason(string reasonCode)
+    {
+        return reasonCode switch
+        {
+            "NoApprovedApiSportsProviderEntityLink" => "No approved API-Sports player link exists for this visible Soccer platform player.",
+            "ApprovedLinkExistsButNoPlayerExternalRef" => "An approved API-Sports player link exists, but no matching player_external_refs row points to persisted historical rows.",
+            "ApprovedLinkExistsButNoPropResults" => "An approved API-Sports player link exists, but no persisted API-Sports prop_results were found for that player.",
+            "ApprovedLinkExistsButNoSupportedStats" => "An approved API-Sports player link exists, but no persisted Goals, Assists, Shots, or Shots On Target history was found.",
+            "LocalPlayerIdMismatch" => "A same-name Soccer platform player has an approved API-Sports link, but this visible local player row is not linked.",
+            "CanonicalPlayerIdMismatch" => "A canonical/alias player id differs from the visible local player id and the approved API-Sports link does not resolve to this visible row.",
+            "NameMismatchPossibleAlias" => "A same-name API-Sports historical player exists, but this visible platform player has no approved link.",
+            _ => "Player history is not available for this row."
+        };
     }
 
     private static object BuildSoccerResearchOnlyGuardrails()
@@ -12297,6 +13996,29 @@ public static class ResultsDebugEndpoints
         bool? DryRun,
         bool? ForceWrite);
 
+    private sealed record VisibleSoccerAliasLinkApplyRequest(
+        string? Competition,
+        string? PlayerName,
+        bool? DryRun,
+        bool? ForceWrite,
+        decimal? MinScore,
+        bool? RequireAlreadyApprovedProvider,
+        int? MaxCandidateCount,
+        bool? AllowMediumConfidence,
+        Guid[]? LocalPlayerIds,
+        string[]? ProviderPlayerIds);
+
+    private sealed record VisibleSoccerAliasManualApproveRequest(
+        string? Competition,
+        bool? DryRun,
+        bool? ForceWrite,
+        VisibleSoccerAliasManualApproval[]? Approvals);
+
+    private sealed record VisibleSoccerAliasManualApproval(
+        Guid LocalPlayerId,
+        string ProviderPlayerId,
+        string? Note);
+
     private sealed record SoccerApiSportsBridgePlatformPlayer(
         Guid PlayerId,
         string PlayerName,
@@ -12576,6 +14298,165 @@ public static class ResultsDebugEndpoints
         bool? EntryActionableForUser,
         bool? SportsbookContextResearchOnly,
         Guid? AliasCanonicalPlayerId);
+
+    private sealed record VisibleSoccerWorldCupPlatformRow(
+        Guid PlatformPropId,
+        string PlatformPropExternalId,
+        Guid LocalPlayerId,
+        string PlayerName,
+        string NormalizedPlayerName,
+        Guid PropTypeId,
+        string NormalizedPropType,
+        string StatKey,
+        decimal Line,
+        string Side,
+        string? EventId,
+        DateTimeOffset EventStartTimeUtc,
+        string? HomeTeam,
+        string? AwayTeam,
+        string? MarketKey,
+        string? Provider,
+        string? Bookmaker,
+        string? ProviderCategory,
+        string? DataProvider,
+        string? ContextSchemaVersion,
+        string? ProviderSportKey,
+        string? Competition,
+        bool EntryActionableForUser,
+        bool SportsbookContextResearchOnly,
+        string Status,
+        DateTimeOffset ObservedAt);
+
+    private sealed record VisibleSoccerApprovedLink(
+        Guid Id,
+        Guid PlayerId,
+        string ProviderKey,
+        string ProviderEntityId,
+        string? ProviderEntityName,
+        string? ProviderTeamName,
+        string? ProviderCompetitionName,
+        decimal? Confidence,
+        string LinkSource,
+        DateTimeOffset? ApprovedAtUtc);
+
+    private sealed record VisibleSoccerExternalRef(
+        Guid PlayerId,
+        string Provider,
+        string ProviderPlayerId,
+        string ProviderDisplayName,
+        DateTimeOffset CreatedAt,
+        DateTimeOffset UpdatedAt);
+
+    private sealed record VisibleSoccerHistoryResult(
+        Guid PlayerId,
+        DateOnly EventDate,
+        string PropTypeName,
+        string StatKey);
+
+    private sealed record VisibleSoccerPlatformPlayer(
+        Guid PlayerId,
+        string PlayerName,
+        string? PlatformName);
+
+    private sealed record VisibleSoccerPlayerHistoryIdentityCandidates(
+        IReadOnlyList<object> ApprovedProviderEntityLinks,
+        IReadOnlyList<string> ApiSportsProviderPlayerIds,
+        IReadOnlyList<object> MatchingPlayerExternalRefs,
+        IReadOnlyList<object> PropResultsByProviderPlayerId,
+        IReadOnlyList<object> SameNameApprovedLinks,
+        IReadOnlyList<object> SameNameHistoricalApiSportsPlayers,
+        IReadOnlyList<object> SameNameVisiblePlatformPlayers);
+
+    private sealed record VisibleSoccerPlayerHistoryDiagnosticRow(
+        string PlayerName,
+        Guid LocalPlayerId,
+        Guid CanonicalPlayerId,
+        string? EventId,
+        DateTimeOffset EventStartTimeUtc,
+        string? HomeTeam,
+        string? AwayTeam,
+        string NormalizedPropType,
+        string? MarketKey,
+        string? Provider,
+        string? Bookmaker,
+        decimal Line,
+        string ProviderCategory,
+        bool EntryActionableForUser,
+        bool SportsbookContextResearchOnly,
+        bool ResultGradingSupported,
+        bool PlayerHistoryAvailable,
+        string? UnavailableReason,
+        string DiagnosticReasonCode,
+        VisibleSoccerPlayerHistoryIdentityCandidates IdentityCandidates);
+
+    private sealed record VisibleSoccerAliasCompetitionBreakdown(
+        string CompetitionKey,
+        string CompetitionName,
+        int SampleSize,
+        DateOnly LatestResultDate);
+
+    private sealed record VisibleSoccerAliasHistoricalPlayer(
+        string ProviderPlayerId,
+        string ProviderDisplayName,
+        string NormalizedProviderName,
+        string ParticleInsensitiveProviderName,
+        Guid PrimaryLocalHistoryPlayerId,
+        IReadOnlyList<Guid> LocalHistoryPlayerIds,
+        IReadOnlyList<VisibleSoccerExternalRef> PlayerExternalRefs,
+        IReadOnlyDictionary<string, int> SupportedStatCounts,
+        int TotalSupportedResultRows,
+        DateOnly LatestResultDate,
+        IReadOnlyList<VisibleSoccerAliasCompetitionBreakdown> CompetitionBreakdown);
+
+    private sealed record VisibleSoccerAliasCandidate(
+        string ProviderPlayerId,
+        string ProviderDisplayName,
+        string NormalizedProviderName,
+        decimal Score,
+        string ConfidenceBucket,
+        IReadOnlyList<string> MatchReasons,
+        IReadOnlyDictionary<string, int> SupportedStatCounts,
+        int TotalSupportedResultRows,
+        DateOnly LatestResultDate,
+        IReadOnlyList<VisibleSoccerAliasCompetitionBreakdown> CompetitionBreakdown,
+        IReadOnlyList<object> ExistingApprovedLinksToOtherLocalPlayers,
+        IReadOnlyList<string> ConflictWarnings);
+
+    private sealed record VisibleSoccerAliasCandidateGroup(
+        string PlayerName,
+        Guid LocalPlayerId,
+        Guid CanonicalPlayerId,
+        int VisibleRowCount,
+        IReadOnlyList<object> VisibleMarkets,
+        int CandidateCount,
+        VisibleSoccerAliasCandidate? BestCandidate,
+        IReadOnlyList<VisibleSoccerAliasCandidate> Candidates);
+
+    private sealed record VisibleSoccerAliasLinkApplyRow(
+        string PlayerName,
+        Guid LocalPlayerId,
+        Guid CanonicalPlayerId,
+        string? SelectedProviderPlayerId,
+        string? SelectedProviderDisplayName,
+        decimal? Score,
+        string? ConfidenceBucket,
+        int SupportedResultRows,
+        int ExistingApprovedAliasCount,
+        string Decision,
+        IReadOnlyList<string> BlockReasons,
+        bool WouldWrite,
+        Guid? WrittenLinkId);
+
+    private sealed record VisibleSoccerAliasApprovalPlanRow(
+        string PlayerName,
+        Guid LocalPlayerId,
+        Guid CanonicalPlayerId,
+        int VisibleRowCount,
+        int CandidateCount,
+        object? BestCandidate,
+        bool SuggestedApproval,
+        string SuggestedApprovalReason,
+        IReadOnlyList<string> RiskWarnings);
 
     private sealed record ApiSportsMarketJoinMatchedSample(
         Guid ResultId,

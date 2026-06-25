@@ -74,6 +74,7 @@ export interface MarketOpportunity {
   warnings: string[];
   sportsbookContext?: string;
   providerLines?: ProviderLine[];
+  playerHistorySummary?: PlayerHistorySummary | null;
 }
 
 export interface ProviderLine {
@@ -83,4 +84,40 @@ export interface ProviderLine {
   overPrice?: number;
   underPrice?: number;
   note?: string;
+}
+
+export interface PlayerHistorySummary {
+  available: boolean;
+  unavailableReason?: string | null;
+  provider?: string;
+  providerPlayerId?: string | null;
+  sampleSize?: number;
+  latestResultDate?: string | null;
+  stats?: Partial<Record<PlayerHistoryStatKey, PlayerHistoryStatSummary>>;
+  competitionBreakdown?: PlayerHistoryCompetitionBreakdown[];
+  recentGameLog?: PlayerHistoryGameLogRow[];
+}
+
+export type PlayerHistoryStatKey = 'Goals' | 'Assists' | 'Shots' | 'ShotsOnTarget';
+
+export interface PlayerHistoryStatSummary {
+  count?: number;
+  average?: number;
+  last5Average?: number;
+  last10Average?: number;
+}
+
+export interface PlayerHistoryCompetitionBreakdown {
+  competitionKey?: string | null;
+  competitionName?: string | null;
+  sampleSize?: number;
+  latestResultDate?: string | null;
+}
+
+export interface PlayerHistoryGameLogRow {
+  eventDate?: string | null;
+  competition?: string | null;
+  competitionKey?: string | null;
+  fixtureId?: string | null;
+  stats?: Partial<Record<PlayerHistoryStatKey, number>>;
 }

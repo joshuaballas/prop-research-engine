@@ -13,7 +13,7 @@ import { TrustValue } from '../metrics/TrustValue';
 import { ProviderLabel } from '../providers/ProviderLabel';
 import { AppCard } from '../ui/AppCard';
 import { CautionLabels } from '../markets/CautionLabels';
-import type { MarketOpportunity } from '../../types/markets';
+import type { MarketOpportunity, PlayerHistoryStatKey } from '../../types/markets';
 import { PropHistoryCard } from './PropHistoryCard';
 
 interface PropDetailsModalProps {
@@ -24,8 +24,10 @@ interface PropDetailsModalProps {
 
 export function PropDetailsModal({ market, open, onClose }: PropDetailsModalProps) {
   const demoHistory = market ? findHistoryForMarket(market) : null;
-  const { data: apiHistory, loading, error } = usePropHistory(market, open && !isDemoDataMode);
+  const soccerHistory = market ? buildSoccerPlayerHistory(market) : null;
+  const { data: apiHistory, loading, error } = usePropHistory(market, open && !isDemoDataMode && !soccerHistory);
   const hasApiHistory = Boolean(apiHistory?.games?.length);
+  const detailsHistory = hasApiHistory ? apiHistory : soccerHistory;
 
   return (
     <Dialog
@@ -93,19 +95,17 @@ export function PropDetailsModal({ market, open, onClose }: PropDetailsModalProp
                 </Stack>
               </AppCard>
             ) : null}
-            {!isDemoDataMode && !loading && hasApiHistory && apiHistory ? (
+            {!isDemoDataMode && !loading && detailsHistory ? (
               <AppCard contentSx={{ p: { xs: 1.25, md: 2 } }}>
-                <PropHistoryCard history={apiHistory} selectedOffering={market} />
+                <PropHistoryCard history={detailsHistory} selectedOffering={market} />
               </AppCard>
             ) : null}
-            {(!isDemoDataMode && !loading && !hasApiHistory) || (isDemoDataMode && !demoHistory) ? (
+            {(!isDemoDataMode && !loading && !hasApiHistory && !soccerHistory) || (isDemoDataMode && !demoHistory) ? (
               <AppCard>
                 <Stack spacing={0.85}>
                   <Typography variant="h5">Prop history</Typography>
                   <Typography color="text.secondary">
-                    {error
-                      ? 'Prop history could not be loaded right now.'
-                      : apiHistory?.emptyReason ?? 'Prop history is not available for this opportunity yet.'}
+                    {getPropHistoryUnavailableMessage(market, apiHistory, error)}
                   </Typography>
                   <Typography variant="body2" color="text.secondary">
                     {market.provider} - {market.side} {market.propType} {formatLineNumber(market.line)}
@@ -161,6 +161,18 @@ function usePropHistory(market: MarketOpportunity | null, enabled: boolean) {
   }, [enabled, market?.canonicalPlayerId, market?.id, market?.line, market?.player, market?.playerId, market?.propType, market?.provider, market?.side, market?.sport]);
 
   return state;
+}
+
+function getPropHistoryUnavailableMessage(market: MarketOpportunity, apiHistory?: PropHistoryResponseDto, error?: Error) {
+  if (market.sport === 'SOCCER' && market.playerHistorySummary?.available === false) {
+    return market.playerHistorySummary.unavailableReason?.trim() || 'Player history is not available for this row.';
+  }
+
+  if (error) {
+    return 'Prop history could not be loaded right now.';
+  }
+
+  return apiHistory?.emptyReason ?? 'Prop history is not available for this opportunity yet.';
 }
 
 function MetricStrip({ market }: { market: MarketOpportunity }) {
@@ -234,6 +246,72 @@ function findHistoryForMarket(market: MarketOpportunity) {
   if (!stat) return null;
 
   return { stat, allLines: player.currentLines };
+}
+
+function buildSoccerPlayerHistory(market: MarketOpportunity): PropHistoryResponseDto | null {
+  if (market.sport !== 'SOCCER' || !market.playerHistorySummary?.available) return null;
+
+  const statKey = soccerHistoryStatKeyForProp(market.propType);
+  if (!statKey) return null;
+
+  const summary = market.playerHistorySummary;
+  const stat = summary.stats?.[statKey];
+  if (!stat) return null;
+
+  return {
+    sport: market.sport,
+    playerId: market.playerId ?? market.canonicalPlayerId,
+    player: market.player,
+    propType: market.propType,
+    displayPropType: market.propType,
+    side: market.side,
+    line: market.line,
+    provider: market.provider,
+    games: (summary.recentGameLog ?? [])
+      .map((row) => {
+        const value = row.stats?.[statKey];
+        if (typeof value !== 'number') return null;
+        return {
+          date: row.eventDate ?? undefined,
+          event: row.competition ?? row.competitionKey ?? 'Soccer match',
+          value,
+          line: market.line,
+          selectedLine: market.line,
+          side: market.side
+        };
+      })
+      .filter((row): row is NonNullable<typeof row> => Boolean(row)),
+    summary: {
+      sampleSize: stat.count ?? summary.sampleSize,
+      last5Average: stat.last5Average ?? null,
+      last10Average: stat.last10Average ?? null,
+      seasonAverage: stat.average ?? null,
+      bestLabel: formatSoccerHistoryDate(summary.latestResultDate) ?? '-'
+    },
+    diagnostics: {
+      lookupMode: 'soccerPlayerHistorySummary'
+    }
+  };
+}
+
+function soccerHistoryStatKeyForProp(propType: string): PlayerHistoryStatKey | null {
+  const normalized = propType.replace(/[\s_-]+/g, '').toLowerCase();
+  if (normalized === 'goals' || normalized === 'playergoals') return 'Goals';
+  if (normalized === 'assists' || normalized === 'playerassists') return 'Assists';
+  if (normalized === 'shots' || normalized === 'playershots') return 'Shots';
+  if (normalized === 'shotsontarget' || normalized === 'playershotsontarget' || normalized === 'sot' || normalized === 'playersot') return 'ShotsOnTarget';
+  return null;
+}
+
+function formatSoccerHistoryDate(value?: string | null) {
+  if (!value) return null;
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return new Intl.DateTimeFormat('en-US', {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric'
+  }).format(date);
 }
 
 function normalizeLabel(value: string) {

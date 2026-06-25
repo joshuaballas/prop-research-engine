@@ -235,6 +235,98 @@ Broader current-year Soccer history is guarded debug-only. `GET /api/debug/socce
 
 `GET /api/debug/soccer/player-history` exposes that persisted API-Sports Football history for research/detail diagnostics only. It accepts `playerId`, `providerPlayerId`, or `playerName`, plus optional `propType`, `fromDate`, `toDate`, `competitionKey`, and `limit`. Matching uses local `players.id`, `player_external_refs` with `provider=api-sports-football`, and approved API-Sports `provider_entity_links`; it never calls API-Sports. The response includes matched player info, API-Sports refs/links, rows grouped by stat, recent game logs, per-stat averages, per-competition breakdowns, sample sizes, and hard guardrails showing public Soccer grading, predictions, Top Picks, and Entry Builder remain disabled. `GET /api/debug/soccer/player-history/readiness` summarizes how many historical API-Sports result players and Soccer platform players can already bridge through those identity links.
 
+`GET /api/debug/soccer/player-history/visible-missing` starts from the same persisted The Odds context-v2 sportsbook rows used by public World Cup Line Shopping fallback and explains why visible rows do or do not have `playerHistorySummary`. It is read-only, calls no providers, and reports reason codes such as `NoApprovedApiSportsProviderEntityLink`, `ApprovedLinkExistsButNoPlayerExternalRef`, `ApprovedLinkExistsButNoPropResults`, `ApprovedLinkExistsButNoSupportedStats`, `LocalPlayerIdMismatch`, `CanonicalPlayerIdMismatch`, `NameMismatchPossibleAlias`, and `HasHistory`. Use it before approving any additional bridge links for visible players like Carlos Casemiro, Danilo Luiz da Silva, or Douglas Santos de Melo.
+
+`GET /api/debug/soccer/player-history/visible-alias-candidates` is the read-only follow-up when visible rows are missing history because no approved API-Sports bridge link exists. It compares those visible missing player names against persisted API-Sports Football historical players that have supported local `prop_results`, using normalized exact, diacritic-insensitive, particle-insensitive, token-overlap, reversed-name, middle-name compression, first/last-token, and last-token checks. It returns candidate scores, high/medium/low confidence buckets, match reasons, supported stat counts, competition breakdowns, existing approved-link conflicts, and does not write links.
+
+`POST /api/debug/soccer/player-history/visible-alias-link-apply` applies that review path with strict guards. It defaults to `dryRun=true`, requires `forceWrite=true` for writes, only creates `api-sports-football` `provider_entity_links`, blocks local/canonical players that already have an approved API-Sports link, requires supported historical rows, and does not merge players or rewrite `prop_results`. The recommended first review uses `minScore=0.90`, `requireAlreadyApprovedProvider=true`, `maxCandidateCount=3`, and `allowMediumConfidence=true`.
+
+For remaining reviewed aliases, `GET /api/debug/soccer/player-history/visible-alias-approval-plan` returns a compact manual plan and `POST /api/debug/soccer/player-history/visible-alias-link-approve` approves explicit `localPlayerId` + `providerPlayerId` pairs. This manual route still defaults to dry-run, requires `forceWrite=true` for writes, requires the provider id to appear in the visible alias candidates, requires supported local history rows, and blocks any local/canonical player that already has an approved API-Sports link.
+
+```powershell
+$base = "http://localhost:5299"
+$stamp = Get-Date -Format "yyyyMMdd-HHmmss"
+$path = "tmp-soccer-visible-missing-history-$stamp.json"
+$response = Invoke-RestMethod "$base/api/debug/soccer/player-history/visible-missing?competition=World%20Cup&take=100&onlyMissingHistory=true&includeResolvedHistory=false"
+$response | ConvertTo-Json -Depth 100 | Set-Content $path
+$response.summary | ConvertTo-Json -Depth 20
+$response.summary.missingByReasonCode | ConvertTo-Json -Depth 20
+
+$aliasPath = "tmp-soccer-visible-alias-candidates-$stamp.json"
+$aliasCandidates = Invoke-RestMethod "$base/api/debug/soccer/player-history/visible-alias-candidates?competition=World%20Cup&take=100&minScore=0.70"
+$aliasCandidates | ConvertTo-Json -Depth 100 | Set-Content $aliasPath
+$aliasCandidates.summary | ConvertTo-Json -Depth 20
+$aliasCandidates.players |
+  Where-Object { $_.playerName -eq "Carlos Casemiro" } |
+  Select-Object -ExpandProperty bestCandidate |
+  ConvertTo-Json -Depth 30
+$aliasCandidates.players |
+  Select-Object playerName,candidateCount,@{Name='best';Expression={$_.bestCandidate.providerDisplayName}},@{Name='score';Expression={$_.bestCandidate.score}},@{Name='confidence';Expression={$_.bestCandidate.confidenceBucket}} |
+  ConvertTo-Json -Depth 20
+
+$dryRunPath = "tmp-soccer-visible-alias-apply-dryrun-$stamp.json"
+$dryRun = Invoke-RestMethod -Method Post "$base/api/debug/soccer/player-history/visible-alias-link-apply" `
+  -ContentType "application/json" `
+  -Body '{"competition":"World Cup","dryRun":true,"minScore":0.90,"requireAlreadyApprovedProvider":true,"maxCandidateCount":3,"allowMediumConfidence":true}'
+$dryRun | ConvertTo-Json -Depth 100 | Set-Content $dryRunPath
+$dryRun.summary | ConvertTo-Json -Depth 20
+$dryRun.rows | Select-Object playerName,selectedProviderDisplayName,score,confidenceBucket,decision,blockReasons,wouldWrite | ConvertTo-Json -Depth 30
+
+# Only after reviewing the saved dry-run JSON.
+$writePath = "tmp-soccer-visible-alias-apply-write-$stamp.json"
+$write = Invoke-RestMethod -Method Post "$base/api/debug/soccer/player-history/visible-alias-link-apply" `
+  -ContentType "application/json" `
+  -Body '{"competition":"World Cup","dryRun":false,"forceWrite":true,"minScore":0.90,"requireAlreadyApprovedProvider":true,"maxCandidateCount":3,"allowMediumConfidence":true}'
+$write | ConvertTo-Json -Depth 100 | Set-Content $writePath
+$write.summary | ConvertTo-Json -Depth 20
+$write.rows | Select-Object playerName,selectedProviderDisplayName,score,confidenceBucket,decision,writtenLinkId | ConvertTo-Json -Depth 30
+
+$postWritePath = "tmp-soccer-visible-missing-history-postwrite-$stamp.json"
+$postWrite = Invoke-RestMethod "$base/api/debug/soccer/player-history/visible-missing?competition=World%20Cup&take=100&onlyMissingHistory=true&includeResolvedHistory=false"
+$postWrite | ConvertTo-Json -Depth 100 | Set-Content $postWritePath
+$postWrite.summary | ConvertTo-Json -Depth 20
+$postWrite.summary.missingByReasonCode | ConvertTo-Json -Depth 20
+
+$manualPlanPath = "tmp-soccer-visible-alias-approval-plan-$stamp.json"
+$manualPlan = Invoke-RestMethod "$base/api/debug/soccer/player-history/visible-alias-approval-plan?competition=World%20Cup&onlyMissingHistory=true&minScore=0.80"
+$manualPlan | ConvertTo-Json -Depth 100 | Set-Content $manualPlanPath
+$manualPlan.summary | ConvertTo-Json -Depth 20
+$manualPlan.rows | Select-Object playerName,localPlayerId,candidateCount,@{Name='providerPlayerId';Expression={$_.bestCandidate.providerPlayerId}},@{Name='best';Expression={$_.bestCandidate.providerDisplayName}},@{Name='score';Expression={$_.bestCandidate.score}},suggestedApproval,riskWarnings | ConvertTo-Json -Depth 30
+
+# Manual dry-run. Replace the sample ids with reviewed pairs from the approval plan.
+$manualDryRunPath = "tmp-soccer-visible-alias-manual-dryrun-$stamp.json"
+$manualDryRunBody = @{
+  competition = "World Cup"
+  dryRun = $true
+  approvals = @(
+    @{ localPlayerId = "<LOCAL_PLAYER_ID>"; providerPlayerId = "<API_SPORTS_PROVIDER_PLAYER_ID>"; note = "manual reviewed visible alias" }
+  )
+} | ConvertTo-Json -Depth 10
+$manualDryRun = Invoke-RestMethod -Method Post "$base/api/debug/soccer/player-history/visible-alias-link-approve" `
+  -ContentType "application/json" `
+  -Body $manualDryRunBody
+$manualDryRun | ConvertTo-Json -Depth 100 | Set-Content $manualDryRunPath
+$manualDryRun.summary | ConvertTo-Json -Depth 20
+$manualDryRun.rows | Select-Object playerName,selectedProviderDisplayName,score,confidenceBucket,decision,blockReasons,wouldWrite | ConvertTo-Json -Depth 30
+
+# Only after reviewing dry-run output.
+$manualWritePath = "tmp-soccer-visible-alias-manual-write-$stamp.json"
+$manualWriteBody = @{
+  competition = "World Cup"
+  dryRun = $false
+  forceWrite = $true
+  approvals = @(
+    @{ localPlayerId = "<LOCAL_PLAYER_ID>"; providerPlayerId = "<API_SPORTS_PROVIDER_PLAYER_ID>"; note = "manual reviewed visible alias" }
+  )
+} | ConvertTo-Json -Depth 10
+$manualWrite = Invoke-RestMethod -Method Post "$base/api/debug/soccer/player-history/visible-alias-link-approve" `
+  -ContentType "application/json" `
+  -Body $manualWriteBody
+$manualWrite | ConvertTo-Json -Depth 100 | Set-Content $manualWritePath
+$manualWrite.summary | ConvertTo-Json -Depth 20
+$manualWrite.rows | Select-Object playerName,selectedProviderDisplayName,score,confidenceBucket,decision,writtenLinkId | ConvertTo-Json -Depth 30
+```
+
 `GET /api/debug/soccer/player-identity/bridge-preview` is the read-only review queue for linking local platform/sportsbook Soccer players to historical API-Sports player ids. It compares normalized display names, existing API-Sports refs, existing approved provider links, duplicate local player names, and available competition context. Categories are `SafeExactName`, `NeedsReview`, `Conflict`, `AlreadyLinked`, and `NoCandidate`. Preview supports `offset`, `limit`, `category`, and `excludeAlreadyLinked=false` by default so reviewers can inspect linked and unlinked rows. `POST /api/debug/soccer/player-identity/bridge-apply` supports the same paging/filtering fields, defaults `excludeAlreadyLinked=true`, and defaults to `dryRun=true`; real writes require `dryRun=false` and `forceWrite=true`, and only conflict-free `SafeExactName` rows are approved. The apply step writes `provider_entity_links` with `provider_key=api-sports-football`; it does not merge duplicate local players, move historical `prop_results`, call API-Sports, or enable public Soccer grading.
 
 To continue safe linking after a first page has been approved, use `category=SafeExactName&excludeAlreadyLinked=true` with `limit=500`. Repeating apply at `offset=0` will keep selecting the next safe unlinked candidates because already-linked rows are filtered before pagination.

@@ -328,10 +328,68 @@ export interface MarketGroupDto {
   EntryActionableForUser?: boolean;
   entryRuleWarning?: string | null;
   EntryRuleWarning?: string | null;
+  playerHistorySummary?: PlayerHistorySummaryDto | null;
+  PlayerHistorySummary?: PlayerHistorySummaryDto | null;
   supportedEntryTypes?: string[];
   SupportedEntryTypes?: string[];
   allowedLegCounts?: number[];
   AllowedLegCounts?: number[];
+}
+
+export interface PlayerHistorySummaryDto {
+  available?: boolean;
+  Available?: boolean;
+  unavailableReason?: string | null;
+  UnavailableReason?: string | null;
+  provider?: string;
+  Provider?: string;
+  providerPlayerId?: string | null;
+  ProviderPlayerId?: string | null;
+  sampleSize?: number;
+  SampleSize?: number;
+  latestResultDate?: string | null;
+  LatestResultDate?: string | null;
+  stats?: Record<string, PlayerHistoryStatSummaryDto | undefined>;
+  Stats?: Record<string, PlayerHistoryStatSummaryDto | undefined>;
+  competitionBreakdown?: PlayerHistoryCompetitionBreakdownDto[];
+  CompetitionBreakdown?: PlayerHistoryCompetitionBreakdownDto[];
+  recentGameLog?: PlayerHistoryGameLogRowDto[];
+  RecentGameLog?: PlayerHistoryGameLogRowDto[];
+}
+
+export interface PlayerHistoryStatSummaryDto {
+  count?: number;
+  Count?: number;
+  average?: number;
+  Average?: number;
+  last5Average?: number;
+  Last5Average?: number;
+  last10Average?: number;
+  Last10Average?: number;
+}
+
+export interface PlayerHistoryCompetitionBreakdownDto {
+  competitionKey?: string | null;
+  CompetitionKey?: string | null;
+  competitionName?: string | null;
+  CompetitionName?: string | null;
+  sampleSize?: number;
+  SampleSize?: number;
+  latestResultDate?: string | null;
+  LatestResultDate?: string | null;
+}
+
+export interface PlayerHistoryGameLogRowDto {
+  eventDate?: string | null;
+  EventDate?: string | null;
+  competition?: string | null;
+  Competition?: string | null;
+  competitionKey?: string | null;
+  CompetitionKey?: string | null;
+  fixtureId?: string | null;
+  FixtureId?: string | null;
+  stats?: Record<string, number | undefined>;
+  Stats?: Record<string, number | undefined>;
 }
 
 export interface BookmakerPriceDto {

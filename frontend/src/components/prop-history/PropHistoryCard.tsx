@@ -27,10 +27,12 @@ interface PropHistoryView {
   label: string;
   selectedLine?: number | null;
   selectedSide?: MarketOpportunity['side'] | string | null;
+  summaryMode?: 'default' | 'soccerPlayerHistory';
   last5Average: string;
   last10Average: string;
   seasonAverage: string;
   bestRecentResult: string;
+  sampleSize?: string;
   sampleWarning?: string | null;
   log: PropHistoryLogRow[];
 }
@@ -213,13 +215,21 @@ function StatSummary({
   const displayedClears = displayedResults.filter((result) => result === 'Cleared').length;
   const alternatives = allLines.filter((line) => line.propType === selectedOffering.propType && line.id !== selectedOffering.id);
   const alternativeProviders = Array.from(new Set(alternatives.map((line) => line.provider))).slice(0, 3);
-  const metrics = [
-    ['Last 5', stat.last5Average],
-    ['Last 10', stat.last10Average],
-    ['Season', stat.seasonAverage],
-    ['Hit rate', hitRate],
-    ['Best', stat.bestRecentResult]
-  ];
+  const metrics = stat.summaryMode === 'soccerPlayerHistory'
+    ? [
+        ['Sample', stat.sampleSize ?? hitRate],
+        ['Latest', stat.bestRecentResult],
+        ['Average', stat.seasonAverage],
+        ['Last 5', stat.last5Average],
+        ['Last 10', stat.last10Average]
+      ]
+    : [
+        ['Last 5', stat.last5Average],
+        ['Last 10', stat.last10Average],
+        ['Season', stat.seasonAverage],
+        ['Hit rate', hitRate],
+        ['Best', stat.bestRecentResult]
+      ];
   const warning = renderWarningText(stat.sampleWarning);
   const hasWarning = Boolean(warning);
   const displayedGameCount = displayedResults.length;
@@ -363,6 +373,7 @@ function mapPlayerStatToView(stat: PlayerResearchStat): PropHistoryView {
     last10Average: stat.last10Average,
     seasonAverage: stat.seasonAverage,
     bestRecentResult: stat.bestRecentResult,
+    sampleSize: undefined,
     sampleWarning: stat.sampleWarning,
     log: stat.log.map((row) => ({
       date: row.date,
@@ -378,10 +389,12 @@ function mapApiHistoryToView(history: PropHistoryResponseDto): PropHistoryView {
     label: history.displayPropType ?? history.propType ?? 'Prop',
     selectedLine: history.line,
     selectedSide: history.side,
+    summaryMode: history.diagnostics?.lookupMode === 'soccerPlayerHistorySummary' ? 'soccerPlayerHistory' : 'default',
     last5Average: formatSummaryNumber(summary?.last5Average),
     last10Average: formatSummaryNumber(summary?.last10Average),
     seasonAverage: formatSummaryNumber(summary?.seasonAverage),
     bestRecentResult: summary?.bestLabel ?? summary?.bestRecentResult ?? 'No recent result',
+    sampleSize: summary?.sampleSize === undefined ? undefined : String(summary.sampleSize),
     sampleWarning: history.warning,
     log: (history.games ?? []).map((game) => ({
       date: game.dateLabel ?? formatDateLabel(game.date),
