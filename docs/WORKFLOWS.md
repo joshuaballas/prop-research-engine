@@ -499,6 +499,8 @@ DFS candidate tiers prioritize selected-side hit chance, projection edge, sample
 
 Public market rows distinguish model hit chance from historical chart hit rate. `selectedSideProbability`/`modelProbability` may be null when no selected side has a usable model probability even if the details chart has historical results. In that case the frontend should show an unavailable marker for Model hit chance and keep the chart metric labeled as historical hit rate. Do not default missing model probability to 0, and do not substitute historical hit rate as the model probability. Use `/api/debug/predictions/mlb/public-row-probability-audit` with `playerName`, `provider`, `propType`, `side`, and `line` to trace a public row back to snapshot details, prediction joins, and persisted result history.
 
+Public Top Picks and Line Shopping reads should stay snapshot-backed when snapshots are available and should not regenerate prediction features or issue per-row `prop_results` history queries. MLB prediction generation batches historical `prop_results` by prop type/date and computes per-player features and selected-side probabilities in memory; repeated `player_id ANY / prop_type_id ANY / event_date <` queries during startup usually indicate a live refresh or prediction-generation path, not DTO read-time probability enrichment.
+
 Persist strategy simulation snapshots after a slate is graded:
 
 ```powershell

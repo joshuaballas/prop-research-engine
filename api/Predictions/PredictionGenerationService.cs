@@ -10,7 +10,6 @@ namespace SportsBetting.Api.Predictions;
 public sealed class PredictionGenerationService(
     ApplicationDbContext dbContext,
     IPredictionRepository predictionRepository,
-    IPredictionFeatureService featureService,
     IPlayerIdentityAliasService playerIdentityAliasService,
     IOptions<PredictionGenerationOptions> options,
     ILogger<PredictionGenerationService> logger) : IPredictionGenerationService
@@ -79,9 +78,18 @@ public sealed class PredictionGenerationService(
             .Where(propType => !string.IsNullOrWhiteSpace(propType))
             .Select(NormalizePropTypeName)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var historyContextStopwatch = Stopwatch.StartNew();
+        var historyContext = await LoadBatchPredictionHistoryContextAsync(
+            props
+                .Where(prop => !string.IsNullOrWhiteSpace(prop.PropTypeName) && prop.SportsbookLine.HasValue)
+                .ToArray(),
+            cancellationToken);
+        historyContextStopwatch.Stop();
 
         var featureGenerationMs = 0L;
         var probabilityOrRecommendationMs = 0L;
+        var rowsRequiringHistory = 0;
+        var rowsWithHistory = 0;
 
         foreach (var prop in props)
         {
@@ -101,13 +109,18 @@ public sealed class PredictionGenerationService(
 
             var eventDate = DateOnly.FromDateTime(prop.StartsAt.UtcDateTime);
             var featureStopwatch = Stopwatch.StartNew();
-            var features = await featureService.GeneratePlayerFeaturesAsync(
+            var features = GeneratePlayerFeaturesFromBatch(
                 prop.PlayerId,
                 prop.PropTypeId,
                 eventDate,
-                cancellationToken);
+                historyContext);
             featureStopwatch.Stop();
             featureGenerationMs += featureStopwatch.ElapsedMilliseconds;
+            rowsRequiringHistory++;
+            if (features.HistoricalGamesAvailable > 0)
+            {
+                rowsWithHistory++;
+            }
 
             if (features.HistoricalGamesAvailable == 0)
             {
@@ -131,12 +144,12 @@ public sealed class PredictionGenerationService(
             var recommendationStopwatch = Stopwatch.StartNew();
             var edge = Math.Round(predictedValue - prop.SportsbookLine.Value, 4);
             var confidence = CalculateConfidence(features);
-            var sideProbability = await CalculateSideProbabilitiesAsync(
+            var sideProbability = CalculateSideProbabilitiesFromBatch(
                 prop.PlayerId,
                 prop.PropTypeId,
                 prop.SportsbookLine.Value,
                 eventDate,
-                cancellationToken);
+                historyContext);
             var recommendationDecision = GetRecommendation(
                 edge,
                 prop.PropTypeName,
@@ -187,13 +200,17 @@ public sealed class PredictionGenerationService(
         stopwatch.Stop();
 
         logger.LogInformation(
-            "Generated MLB baseline predictions. Scope: {Scope}; props evaluated: {PropsEvaluated}; predictions generated: {PredictionsGenerated}; skipped props: {SkippedProps}; threshold suppressions: {ThresholdSuppressions}; prop-type suppressions: {PropTypeSuppressions}; duration: {DurationMs}ms.",
+            "Generated MLB baseline predictions. Scope: {Scope}; props evaluated: {PropsEvaluated}; predictions generated: {PredictionsGenerated}; skipped props: {SkippedProps}; threshold suppressions: {ThresholdSuppressions}; prop-type suppressions: {PropTypeSuppressions}; history rows inspected: {HistoryRowsInspected}; rows requiring history: {RowsRequiringHistory}; rows with history: {RowsWithHistory}; history batch load: {HistoryBatchLoadMs}ms; duration: {DurationMs}ms.",
             scope,
             props.Count,
             predictionRun.Predictions.Count,
             skipCounts.Values.Sum(),
             suppressionCounts["RecommendationSuppressedByThreshold"],
             suppressionCounts["RecommendationSuppressedByPropTypeFilter"],
+            historyContext.HistoricalRows.Count,
+            rowsRequiringHistory,
+            rowsWithHistory,
+            historyContextStopwatch.ElapsedMilliseconds,
             stopwatch.ElapsedMilliseconds);
 
         return new PredictionGenerationResult(
@@ -213,7 +230,7 @@ public sealed class PredictionGenerationService(
                 probabilityOrRecommendationMs,
                 persistenceStopwatch.ElapsedMilliseconds,
                 skippedReasonAggregationStopwatch.ElapsedMilliseconds,
-                0),
+                historyContextStopwatch.ElapsedMilliseconds),
             scope == PredictionGenerationScope.TheOdds ? "TheOddsApiMlb" : "FullMlb");
     }
 
@@ -372,6 +389,168 @@ public sealed class PredictionGenerationService(
     private static void IncrementSkip(Dictionary<string, int> skipCounts, string reason)
     {
         skipCounts[reason] = skipCounts.GetValueOrDefault(reason) + 1;
+    }
+
+    private async Task<BatchPredictionHistoryContext> LoadBatchPredictionHistoryContextAsync(
+        IReadOnlyCollection<PredictionCandidateProp> props,
+        CancellationToken cancellationToken)
+    {
+        if (props.Count == 0)
+        {
+            return new BatchPredictionHistoryContext(
+                new Dictionary<Guid, Guid[]>(),
+                new Dictionary<Guid, Guid[]>(),
+                new Dictionary<PlayerPropTypeKey, HistoricalResultRow[]>(),
+                new Dictionary<Guid, HistoricalResultRow[]>(),
+                []);
+        }
+
+        var equivalentPropTypeIds = await LoadEquivalentPropTypeIdsAsync(cancellationToken);
+        equivalentPropTypeIdsById = equivalentPropTypeIds;
+        var playerIds = props
+            .Select(prop => prop.PlayerId)
+            .Distinct()
+            .ToArray();
+        var playerAliasMap = new Dictionary<Guid, Guid[]>();
+        foreach (var playerId in playerIds)
+        {
+            var equivalentPlayerIds = await playerIdentityAliasService.GetEquivalentPlayerIdsAsync(
+                playerId,
+                "MLB",
+                cancellationToken);
+            playerAliasMap[playerId] = equivalentPlayerIds.Distinct().ToArray();
+        }
+
+        var relevantPropTypeIds = props
+            .Select(prop => prop.PropTypeId)
+            .SelectMany(propTypeId => equivalentPropTypeIds.TryGetValue(propTypeId, out var ids) ? ids : [propTypeId])
+            .Distinct()
+            .ToArray();
+        var maxEventDate = props.Max(prop => DateOnly.FromDateTime(prop.StartsAt.UtcDateTime));
+        var historicalRows = relevantPropTypeIds.Length == 0
+            ? []
+            : await dbContext.PropResults
+                .AsNoTracking()
+                .Where(result => relevantPropTypeIds.Contains(result.PropTypeId)
+                    && result.EventDate < maxEventDate)
+                .Select(result => new HistoricalResultRow(
+                    result.PlayerId,
+                    result.PropTypeId,
+                    result.EventDate,
+                    result.ActualResultValue))
+                .ToListAsync(cancellationToken);
+
+        var byPlayerPropType = historicalRows
+            .GroupBy(result => new PlayerPropTypeKey(result.PlayerId, result.PropTypeId))
+            .ToDictionary(
+                group => group.Key,
+                group => group.OrderByDescending(result => result.EventDate).ToArray());
+        var byPropType = historicalRows
+            .GroupBy(result => result.PropTypeId)
+            .ToDictionary(
+                group => group.Key,
+                group => group.OrderByDescending(result => result.EventDate).ToArray());
+
+        return new BatchPredictionHistoryContext(
+            playerAliasMap,
+            equivalentPropTypeIds,
+            byPlayerPropType,
+            byPropType,
+            historicalRows);
+    }
+
+    private static PlayerPredictionFeatures GeneratePlayerFeaturesFromBatch(
+        Guid playerId,
+        Guid propTypeId,
+        DateOnly eventDate,
+        BatchPredictionHistoryContext historyContext)
+    {
+        var historicalResults = GetPlayerHistoricalRowsFromBatch(playerId, propTypeId, eventDate, historyContext);
+        var last5 = historicalResults.Take(5).ToArray();
+        var last10 = historicalResults.Take(10).ToArray();
+        var seasonResults = historicalResults
+            .Where(result => result.EventDate.Year == eventDate.Year)
+            .ToArray();
+        var latestResult = historicalResults.FirstOrDefault();
+
+        return new PlayerPredictionFeatures(
+            playerId,
+            propTypeId,
+            eventDate,
+            Average(last5.Select(result => result.Value)),
+            Average(last10.Select(result => result.Value)),
+            Average(seasonResults.Select(result => result.Value)),
+            StandardDeviation(last10.Select(result => result.Value)),
+            NonZeroHitRate(last5.Select(result => result.Value)),
+            NonZeroHitRate(last10.Select(result => result.Value)),
+            latestResult is null ? null : eventDate.DayNumber - latestResult.EventDate.DayNumber,
+            historicalResults.Length,
+            seasonResults.Length,
+            "Share of historical games in the window where actual_result_value > 0. No sportsbook line is used.",
+            "Last 10 historical games before event_date.");
+    }
+
+    private static SideProbabilityEstimate CalculateSideProbabilitiesFromBatch(
+        Guid playerId,
+        Guid propTypeId,
+        decimal line,
+        DateOnly eventDate,
+        BatchPredictionHistoryContext historyContext)
+    {
+        var playerResults = GetPlayerHistoricalRowsFromBatch(playerId, propTypeId, eventDate, historyContext)
+            .Select(result => result.Value)
+            .ToArray();
+        var priorResults = GetEquivalentPropTypeIdsFromBatch(propTypeId, historyContext)
+            .Where(historyContext.HistoricalResultsByPropType.ContainsKey)
+            .SelectMany(propTypeId => historyContext.HistoricalResultsByPropType[propTypeId])
+            .Where(result => result.EventDate < eventDate)
+            .Select(result => result.Value)
+            .ToArray();
+
+        if (playerResults.Length == 0 && priorResults.Length == 0)
+        {
+            return new SideProbabilityEstimate(null, null, null, 0, 0);
+        }
+
+        var playerProbability = CalculateEmpiricalProbability(playerResults, line);
+        var priorProbability = CalculateEmpiricalProbability(priorResults, line);
+        var sampleWeight = playerResults.Length / (decimal)(playerResults.Length + PriorSampleWeight);
+
+        return new SideProbabilityEstimate(
+            BlendProbability(playerProbability.Over, priorProbability.Over, sampleWeight),
+            BlendProbability(playerProbability.Under, priorProbability.Under, sampleWeight),
+            BlendProbability(playerProbability.Push, priorProbability.Push, sampleWeight),
+            playerResults.Length,
+            priorResults.Length);
+    }
+
+    private static HistoricalResultRow[] GetPlayerHistoricalRowsFromBatch(
+        Guid playerId,
+        Guid propTypeId,
+        DateOnly eventDate,
+        BatchPredictionHistoryContext historyContext)
+    {
+        var equivalentPlayerIds = historyContext.EquivalentPlayerIdsByPlayerId.TryGetValue(playerId, out var playerIds)
+            ? playerIds
+            : [playerId];
+        var equivalentPropTypeIds = GetEquivalentPropTypeIdsFromBatch(propTypeId, historyContext);
+
+        return equivalentPlayerIds
+            .SelectMany(equivalentPlayerId => equivalentPropTypeIds.Select(equivalentPropTypeId => new PlayerPropTypeKey(equivalentPlayerId, equivalentPropTypeId)))
+            .Where(historyContext.HistoricalResultsByPlayerPropType.ContainsKey)
+            .SelectMany(key => historyContext.HistoricalResultsByPlayerPropType[key])
+            .Where(result => result.EventDate < eventDate)
+            .OrderByDescending(result => result.EventDate)
+            .ToArray();
+    }
+
+    private static Guid[] GetEquivalentPropTypeIdsFromBatch(
+        Guid propTypeId,
+        BatchPredictionHistoryContext historyContext)
+    {
+        return historyContext.EquivalentPropTypeIdsByPropTypeId.TryGetValue(propTypeId, out var equivalentPropTypeIds)
+            ? equivalentPropTypeIds
+            : [propTypeId];
     }
 
     private async Task<SideProbabilityEstimate> CalculateSideProbabilitiesAsync(
@@ -625,6 +804,33 @@ public sealed class PredictionGenerationService(
         return Math.Min(confidence, 0.90m);
     }
 
+    private static decimal? Average(IEnumerable<decimal> values)
+    {
+        var valueArray = values.ToArray();
+        return valueArray.Length == 0 ? null : Math.Round(valueArray.Average(), 4);
+    }
+
+    private static decimal? StandardDeviation(IEnumerable<decimal> values)
+    {
+        var valueArray = values.ToArray();
+        if (valueArray.Length == 0)
+        {
+            return null;
+        }
+
+        var average = valueArray.Average();
+        var variance = valueArray.Sum(value => Math.Pow((double)(value - average), 2)) / valueArray.Length;
+        return Math.Round((decimal)Math.Sqrt(variance), 4);
+    }
+
+    private static decimal? NonZeroHitRate(IEnumerable<decimal> values)
+    {
+        var valueArray = values.ToArray();
+        return valueArray.Length == 0
+            ? null
+            : Math.Round(valueArray.Count(value => value > 0m) / (decimal)valueArray.Length, 4);
+    }
+
     private enum PredictionGenerationScope
     {
         FullMlb,
@@ -645,6 +851,21 @@ public sealed class PredictionGenerationService(
         decimal? ProbabilityPush,
         int PlayerSampleSize,
         int PriorSampleSize);
+
+    private sealed record BatchPredictionHistoryContext(
+        IReadOnlyDictionary<Guid, Guid[]> EquivalentPlayerIdsByPlayerId,
+        IReadOnlyDictionary<Guid, Guid[]> EquivalentPropTypeIdsByPropTypeId,
+        IReadOnlyDictionary<PlayerPropTypeKey, HistoricalResultRow[]> HistoricalResultsByPlayerPropType,
+        IReadOnlyDictionary<Guid, HistoricalResultRow[]> HistoricalResultsByPropType,
+        IReadOnlyCollection<HistoricalResultRow> HistoricalRows);
+
+    private readonly record struct PlayerPropTypeKey(Guid PlayerId, Guid PropTypeId);
+
+    private sealed record HistoricalResultRow(
+        Guid PlayerId,
+        Guid PropTypeId,
+        DateOnly EventDate,
+        decimal Value);
 
     private sealed record EmpiricalProbability(
         decimal? Over,
