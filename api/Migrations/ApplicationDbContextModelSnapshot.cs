@@ -2328,7 +2328,7 @@ namespace SportsBetting.Api.Migrations
                     b.HasIndex("SportId", "EntityType", "LinkStatus")
                         .HasDatabaseName("ix_provider_entity_links_sport_entity_status");
 
-                    b.HasIndex("ProviderKey", "EntityType", "ProviderEntityId", "SportId", "LinkStatus")
+                    b.HasIndex("ProviderKey", "EntityType", "ProviderEntityId", "SportId", "LinkStatus", "CanonicalEntityId")
                         .IsUnique()
                         .HasDatabaseName("ix_provider_entity_links_provider_identity_status");
 

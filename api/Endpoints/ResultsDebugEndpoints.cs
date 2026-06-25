@@ -1875,6 +1875,795 @@ public static class ResultsDebugEndpoints
         .WithName("ApiSportsSoccerHistoricalBackfillCompletedPreviewDebug")
         .WithSummary("Guarded completed fixture player-stat backfill for one configured API-Sports Soccer historical competition.");
 
+        endpoints.MapGet("/api/debug/soccer/player-history", async (
+            Guid? playerId,
+            string? providerPlayerId,
+            string? playerName,
+            string? propType,
+            DateOnly? fromDate,
+            DateOnly? toDate,
+            string? competitionKey,
+            int? limit,
+            ApplicationDbContext dbContext,
+            CancellationToken cancellationToken) =>
+        {
+            var rowLimit = Math.Clamp(limit ?? 50, 1, 500);
+            var normalizedProviderPlayerId = string.IsNullOrWhiteSpace(providerPlayerId) ? null : providerPlayerId.Trim();
+            var normalizedPlayerName = string.IsNullOrWhiteSpace(playerName) ? null : playerName.Trim();
+            var normalizedPropType = string.IsNullOrWhiteSpace(propType) ? null : NormalizeSoccerHistoryToken(propType);
+            var normalizedCompetitionKey = string.IsNullOrWhiteSpace(competitionKey) ? null : NormalizeSoccerHistoryToken(competitionKey);
+
+            if (!playerId.HasValue && normalizedProviderPlayerId is null && normalizedPlayerName is null)
+            {
+                return Results.BadRequest(new
+                {
+                    generatedAtUtc = DateTimeOffset.UtcNow,
+                    callsExternalApis = false,
+                    readOnly = true,
+                    writesRows = false,
+                    error = "playerId, providerPlayerId, or playerName is required."
+                });
+            }
+
+            var soccerSport = await dbContext.Sports
+                .AsNoTracking()
+                .SingleOrDefaultAsync(sport => sport.Code == "SOCCER", cancellationToken);
+            if (soccerSport is null)
+            {
+                return Results.NotFound(new
+                {
+                    generatedAtUtc = DateTimeOffset.UtcNow,
+                    callsExternalApis = false,
+                    readOnly = true,
+                    writesRows = false,
+                    error = "Soccer sport row was not found."
+                });
+            }
+
+            var playerQuery = dbContext.Players
+                .AsNoTracking()
+                .Include(player => player.League)
+                .Where(player => player.League != null && player.League.SportId == soccerSport.Id);
+
+            if (playerId.HasValue)
+            {
+                playerQuery = playerQuery.Where(player => player.Id == playerId.Value);
+            }
+
+            if (normalizedProviderPlayerId is not null)
+            {
+                var linkedPlayerIds = await dbContext.PlayerExternalRefs
+                    .AsNoTracking()
+                    .Where(reference => reference.Provider == ApiSportsFootballPlayerRefProvider
+                        && reference.ProviderPlayerId == normalizedProviderPlayerId)
+                    .Select(reference => reference.PlayerId)
+                    .ToArrayAsync(cancellationToken);
+                var approvedProviderLinkPlayerIds = await dbContext.ProviderEntityLinks
+                    .AsNoTracking()
+                    .Where(link => link.ProviderKey == ApiSportsFootballPlayerRefProvider
+                        && link.EntityType == "Player"
+                        && link.LinkStatus == "Approved"
+                        && link.CanonicalEntityId.HasValue
+                        && link.ProviderEntityId == normalizedProviderPlayerId)
+                    .Select(link => link.CanonicalEntityId!.Value)
+                    .ToArrayAsync(cancellationToken);
+                var resolvedIds = linkedPlayerIds.Concat(approvedProviderLinkPlayerIds).Distinct().ToArray();
+                playerQuery = playerQuery.Where(player => resolvedIds.Contains(player.Id));
+            }
+
+            if (normalizedPlayerName is not null)
+            {
+                var loweredName = normalizedPlayerName.ToLowerInvariant();
+                playerQuery = playerQuery.Where(player => player.DisplayName.ToLower().Contains(loweredName));
+            }
+
+            var matchedPlayers = await playerQuery
+                .OrderBy(player => player.DisplayName)
+                .Take(25)
+                .Select(player => new
+                {
+                    player.Id,
+                    player.DisplayName,
+                    player.Position,
+                    LeagueId = player.LeagueId,
+                    LeagueName = player.League == null ? null : player.League.Name,
+                    LeagueCode = player.League == null ? null : player.League.Code
+                })
+                .ToArrayAsync(cancellationToken);
+            if (matchedPlayers.Length == 0)
+            {
+                return Results.NotFound(new
+                {
+                    generatedAtUtc = DateTimeOffset.UtcNow,
+                    callsExternalApis = false,
+                    readOnly = true,
+                    writesRows = false,
+                    filters = new { playerId, providerPlayerId = normalizedProviderPlayerId, playerName = normalizedPlayerName, propType, fromDate, toDate, competitionKey },
+                    error = "No Soccer player with persisted API-Sports history matched the request."
+                });
+            }
+
+            var matchedPlayerIds = matchedPlayers.Select(player => player.Id).ToArray();
+            var apiSportsRefs = await dbContext.PlayerExternalRefs
+                .AsNoTracking()
+                .Where(reference => matchedPlayerIds.Contains(reference.PlayerId)
+                    && reference.Provider == ApiSportsFootballPlayerRefProvider)
+                .OrderBy(reference => reference.ProviderDisplayName)
+                .Select(reference => new
+                {
+                    reference.PlayerId,
+                    reference.Provider,
+                    reference.ProviderPlayerId,
+                    reference.ProviderDisplayName,
+                    reference.CreatedAt,
+                    reference.UpdatedAt
+                })
+                .ToArrayAsync(cancellationToken);
+            var approvedProviderLinks = await dbContext.ProviderEntityLinks
+                .AsNoTracking()
+                .Where(link => link.ProviderKey == ApiSportsFootballPlayerRefProvider
+                    && link.EntityType == "Player"
+                    && link.LinkStatus == "Approved"
+                    && link.CanonicalEntityId.HasValue
+                    && matchedPlayerIds.Contains(link.CanonicalEntityId.Value))
+                .OrderBy(link => link.ProviderEntityName)
+                .Select(link => new
+                {
+                    link.Id,
+                    PlayerId = link.CanonicalEntityId,
+                    link.ProviderKey,
+                    link.ProviderEntityId,
+                    link.ProviderEntityName,
+                    link.ProviderTeamName,
+                    link.ProviderCompetitionName,
+                    link.Confidence,
+                    link.LinkSource,
+                    link.ApprovedAtUtc,
+                    link.ApprovedBy
+                })
+                .ToArrayAsync(cancellationToken);
+
+            var resultQuery = dbContext.PropResults
+                .AsNoTracking()
+                .Include(result => result.Player)
+                .Include(result => result.League)
+                .Include(result => result.PropType)
+                .Where(result => matchedPlayerIds.Contains(result.PlayerId)
+                    && result.ExternalSource == ApiSportsFootballResultSource
+                    && result.PropType != null
+                    && result.League != null
+                    && result.League.SportId == soccerSport.Id);
+
+            if (fromDate.HasValue)
+            {
+                resultQuery = resultQuery.Where(result => result.EventDate >= fromDate.Value);
+            }
+
+            if (toDate.HasValue)
+            {
+                resultQuery = resultQuery.Where(result => result.EventDate <= toDate.Value);
+            }
+
+            if (normalizedPropType is not null)
+            {
+                resultQuery = resultQuery.Where(result => result.PropType != null
+                    && (result.PropType.StatKey == normalizedPropType || result.PropType.Name.ToUpper() == normalizedPropType));
+            }
+
+            if (normalizedCompetitionKey is not null)
+            {
+                resultQuery = resultQuery.Where(result => result.League != null
+                    && (result.League.Code.ToUpper().Contains(normalizedCompetitionKey)
+                        || result.League.Name.ToUpper().Contains(normalizedCompetitionKey)));
+            }
+
+            var resultRows = await resultQuery
+                .OrderByDescending(result => result.EventDate)
+                .ThenBy(result => result.PropType!.Name)
+                .Select(result => new
+                {
+                    result.Id,
+                    result.PlayerId,
+                    PlayerName = result.Player == null ? null : result.Player.DisplayName,
+                    result.EventDate,
+                    result.ActualResultValue,
+                    PropTypeId = result.PropTypeId,
+                    PropType = result.PropType == null ? null : result.PropType.Name,
+                    StatKey = result.PropType == null ? null : result.PropType.StatKey,
+                    LeagueId = result.LeagueId,
+                    Competition = result.League == null ? null : result.League.Name,
+                    CompetitionCode = result.League == null ? null : result.League.Code,
+                    result.ExternalSourceIdentifier
+                })
+                .ToListAsync(cancellationToken);
+
+            var rowsByStat = resultRows
+                .GroupBy(row => new { row.PropType, row.StatKey })
+                .OrderBy(group => group.Key.PropType)
+                .Select(group => new
+                {
+                    propType = group.Key.PropType,
+                    statKey = group.Key.StatKey,
+                    sampleSize = group.Count(),
+                    average = group.Average(row => row.ActualResultValue),
+                    min = group.Min(row => row.ActualResultValue),
+                    max = group.Max(row => row.ActualResultValue),
+                    latestDate = group.Max(row => row.EventDate)
+                })
+                .ToArray();
+            var perCompetitionBreakdown = resultRows
+                .GroupBy(row => new { row.Competition, row.CompetitionCode })
+                .OrderBy(group => group.Key.Competition)
+                .Select(group => new
+                {
+                    competition = group.Key.Competition,
+                    competitionCode = group.Key.CompetitionCode,
+                    sampleSize = group.Count(),
+                    distinctFixtures = group.Select(row => TryExtractApiSportsFixtureIdFromResultIdentifier(row.ExternalSourceIdentifier)).Where(value => value is not null).Distinct().Count(),
+                    dateFrom = group.Min(row => row.EventDate),
+                    dateTo = group.Max(row => row.EventDate),
+                    averagesByStat = group
+                        .GroupBy(row => new { row.PropType, row.StatKey })
+                        .OrderBy(statGroup => statGroup.Key.PropType)
+                        .Select(statGroup => new
+                        {
+                            propType = statGroup.Key.PropType,
+                            statKey = statGroup.Key.StatKey,
+                            sampleSize = statGroup.Count(),
+                            average = statGroup.Average(row => row.ActualResultValue)
+                        })
+                        .ToArray()
+                })
+                .ToArray();
+            var recentGameLog = resultRows
+                .GroupBy(row => new
+                {
+                    row.EventDate,
+                    row.PlayerId,
+                    row.PlayerName,
+                    row.Competition,
+                    row.CompetitionCode,
+                    FixtureId = TryExtractApiSportsFixtureIdFromResultIdentifier(row.ExternalSourceIdentifier)
+                })
+                .OrderByDescending(group => group.Key.EventDate)
+                .ThenBy(group => group.Key.PlayerName)
+                .Take(rowLimit)
+                .Select(group => new
+                {
+                    group.Key.EventDate,
+                    group.Key.FixtureId,
+                    playerId = group.Key.PlayerId,
+                    playerName = group.Key.PlayerName,
+                    competition = group.Key.Competition,
+                    competitionCode = group.Key.CompetitionCode,
+                    stats = group
+                        .OrderBy(row => row.PropType)
+                        .Select(row => new
+                        {
+                            row.PropType,
+                            row.StatKey,
+                            value = row.ActualResultValue
+                        })
+                        .ToArray()
+                })
+                .ToArray();
+
+            return Results.Ok(new
+            {
+                generatedAtUtc = DateTimeOffset.UtcNow,
+                callsExternalApis = false,
+                readOnly = true,
+                writesRows = false,
+                provider = "API-Sports",
+                product = "API-Sports Football",
+                filters = new { playerId, providerPlayerId = normalizedProviderPlayerId, playerName = normalizedPlayerName, propType, fromDate, toDate, competitionKey, limit = rowLimit },
+                guardrails = BuildSoccerResearchOnlyGuardrails(),
+                matchedPlayerCount = matchedPlayers.Length,
+                matchedPlayers,
+                linkedApiSportsRefs = apiSportsRefs,
+                approvedApiSportsLinks = approvedProviderLinks,
+                sampleSize = new
+                {
+                    resultRows = resultRows.Count,
+                    gameLogRows = recentGameLog.Length,
+                    statTypes = rowsByStat.Length,
+                    competitions = perCompetitionBreakdown.Length
+                },
+                rowsByStat,
+                perStatAverages = rowsByStat,
+                perCompetitionBreakdown,
+                recentGameLog
+            });
+        })
+        .WithName("ApiSportsSoccerPlayerHistoryDebug")
+        .WithSummary("Read-only persisted API-Sports Soccer player history.");
+
+        endpoints.MapGet("/api/debug/soccer/player-history/readiness", async (
+            ApplicationDbContext dbContext,
+            CancellationToken cancellationToken) =>
+        {
+            var soccerSport = await dbContext.Sports
+                .AsNoTracking()
+                .SingleOrDefaultAsync(sport => sport.Code == "SOCCER", cancellationToken);
+            var historicalRows = await dbContext.PropResults
+                .AsNoTracking()
+                .Include(result => result.League)
+                .Where(result => result.ExternalSource == ApiSportsFootballResultSource
+                    && result.League != null
+                    && result.League.Sport != null
+                    && result.League.Sport.Code == "SOCCER")
+                .Select(result => new
+                {
+                    result.PlayerId,
+                    result.ExternalSourceIdentifier,
+                    result.EventDate,
+                    CompetitionCode = result.League == null ? null : result.League.Code
+                })
+                .ToListAsync(cancellationToken);
+            var historicalProviderPlayerIds = historicalRows
+                .Select(row => TryExtractApiSportsPlayerIdFromResultIdentifier(row.ExternalSourceIdentifier))
+                .Where(value => !string.IsNullOrWhiteSpace(value))
+                .Select(value => value!)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+            var externalRefs = await dbContext.PlayerExternalRefs
+                .AsNoTracking()
+                .Where(reference => reference.Provider == ApiSportsFootballPlayerRefProvider)
+                .Select(reference => new { reference.PlayerId, reference.ProviderPlayerId })
+                .ToArrayAsync(cancellationToken);
+            var approvedLinks = await dbContext.ProviderEntityLinks
+                .AsNoTracking()
+                .Where(link => link.ProviderKey == ApiSportsFootballPlayerRefProvider
+                    && link.EntityType == "Player"
+                    && link.LinkStatus == "Approved"
+                    && link.CanonicalEntityId.HasValue)
+                .Select(link => new { PlayerId = link.CanonicalEntityId!.Value, link.ProviderEntityId })
+                .ToArrayAsync(cancellationToken);
+            var soccerPlatformPlayerIds = soccerSport is null
+                ? []
+                : await dbContext.PlatformProps
+                    .AsNoTracking()
+                    .Include(platformProp => platformProp.Prop)
+                    .ThenInclude(prop => prop!.League)
+                    .Where(platformProp => platformProp.Prop != null
+                        && platformProp.Prop.League != null
+                        && platformProp.Prop.League.SportId == soccerSport.Id)
+                    .Select(platformProp => platformProp.Prop!.PlayerId)
+                    .Distinct()
+                    .ToArrayAsync(cancellationToken);
+            var historicalLocalPlayerIds = historicalRows.Select(row => row.PlayerId).Distinct().ToHashSet();
+            var externalRefProviderIds = externalRefs.Select(row => row.ProviderPlayerId).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var approvedLinkProviderIds = approvedLinks.Select(row => row.ProviderEntityId).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var bridgeCandidates = await BuildSoccerApiSportsBridgeCandidatesAsync(
+                dbContext,
+                playerName: null,
+                competition: null,
+                minimumConfidence: 0.98m,
+                cancellationToken);
+            var duplicateBridgeGroups = await BuildSoccerDuplicateBridgeGroupsAsync(
+                dbContext,
+                bridgeCandidates,
+                minimumConfidence: 0.98m,
+                cancellationToken);
+
+            return Results.Ok(new
+            {
+                generatedAtUtc = DateTimeOffset.UtcNow,
+                callsExternalApis = false,
+                readOnly = true,
+                writesRows = false,
+                guardrails = BuildSoccerResearchOnlyGuardrails(),
+                historical = new
+                {
+                    resultRows = historicalRows.Count,
+                    distinctLocalPlayers = historicalLocalPlayerIds.Count,
+                    distinctApiSportsProviderPlayers = historicalProviderPlayerIds.Length,
+                    dateFrom = historicalRows.Count == 0 ? (DateOnly?)null : historicalRows.Min(row => row.EventDate),
+                    dateTo = historicalRows.Count == 0 ? (DateOnly?)null : historicalRows.Max(row => row.EventDate),
+                    competitions = historicalRows
+                        .GroupBy(row => row.CompetitionCode ?? "Unknown")
+                        .OrderBy(group => group.Key)
+                        .Select(group => new
+                        {
+                            competitionCode = group.Key,
+                            resultRows = group.Count(),
+                            distinctPlayers = group.Select(row => row.PlayerId).Distinct().Count()
+                        })
+                        .ToArray()
+                },
+                identityLinks = new
+                {
+                    playerExternalRefs = externalRefs.Length,
+                    approvedProviderEntityLinks = approvedLinks.Length,
+                    historicalProviderPlayersWithExternalRef = historicalProviderPlayerIds.Count(providerId => externalRefProviderIds.Contains(providerId)),
+                    historicalProviderPlayersWithApprovedProviderEntityLink = historicalProviderPlayerIds.Count(providerId => approvedLinkProviderIds.Contains(providerId))
+                },
+                platformBridge = new
+                {
+                    soccerPlatformPlayers = soccerPlatformPlayerIds.Length,
+                    platformPlayersWithHistoricalRowsByLocalPlayerId = soccerPlatformPlayerIds.Count(historicalLocalPlayerIds.Contains),
+                    platformPlayersWithApiSportsExternalRef = soccerPlatformPlayerIds.Count(playerIdValue => externalRefs.Any(reference => reference.PlayerId == playerIdValue)),
+                    platformPlayersWithApprovedApiSportsProviderEntityLink = soccerPlatformPlayerIds.Count(playerIdValue => approvedLinks.Any(link => link.PlayerId == playerIdValue)),
+                    bridgeCandidates = bridgeCandidates.Count,
+                    safeBridgeCandidates = bridgeCandidates.Count(candidate => candidate.Category == "SafeExactName"),
+                    conflicts = bridgeCandidates.Count(candidate => candidate.Category == "Conflict"),
+                    alreadyLinked = bridgeCandidates.Count(candidate => candidate.Category == "AlreadyLinked"),
+                    needsReview = bridgeCandidates.Count(candidate => candidate.Category == "NeedsReview"),
+                    noCandidate = bridgeCandidates.Count(candidate => candidate.Category == "NoCandidate"),
+                    duplicateGroupCount = duplicateBridgeGroups.Count,
+                    resolvableDuplicateGroupCount = duplicateBridgeGroups.Count(group => group.Category == "ResolvableDuplicateSameProvider"),
+                    blockedDuplicateGroupCount = duplicateBridgeGroups.Count(group => group.Category != "ResolvableDuplicateSameProvider"),
+                    duplicatePlayersLinkableCount = duplicateBridgeGroups.Sum(group => group.LinkablePlatformPlayerIds.Count),
+                    duplicatePlayersAlreadyLinkedCount = duplicateBridgeGroups.Sum(group => group.AlreadyLinkedPlatformPlayerIds.Count)
+                },
+                recommendedNextAction = "Use player-history for research/detail views only. Public Soccer grading, predictions, Top Picks, and Entry Builder remain disabled."
+            });
+        })
+        .WithName("ApiSportsSoccerPlayerHistoryReadinessDebug")
+        .WithSummary("Read-only Soccer player-history identity readiness diagnostics.");
+
+        endpoints.MapGet("/api/debug/soccer/player-identity/bridge-preview", async (
+            string? playerName,
+            string? competition,
+            decimal? minConfidence,
+            int? offset,
+            int? limit,
+            string? category,
+            bool? excludeAlreadyLinked,
+            ApplicationDbContext dbContext,
+            CancellationToken cancellationToken) =>
+        {
+            var pageOffset = Math.Max(0, offset ?? 0);
+            var sampleLimit = Math.Clamp(limit ?? 100, 1, 500);
+            var minimumConfidence = Math.Clamp(minConfidence ?? 0.98m, 0m, 1m);
+            var candidates = await BuildSoccerApiSportsBridgeCandidatesAsync(
+                dbContext,
+                playerName,
+                competition,
+                minimumConfidence,
+                cancellationToken);
+            var page = PageSoccerApiSportsBridgeCandidates(
+                candidates,
+                pageOffset,
+                sampleLimit,
+                category,
+                excludeAlreadyLinked == true);
+
+            return Results.Ok(BuildSoccerApiSportsBridgePreviewResponse(
+                page,
+                playerName,
+                competition,
+                minimumConfidence,
+                applied: false,
+                dryRun: true,
+                forceWrite: false,
+                written: []));
+        })
+        .WithName("ApiSportsSoccerPlayerIdentityBridgePreviewDebug")
+        .WithSummary("Read-only Soccer platform-to-API-Sports identity bridge preview.");
+
+        endpoints.MapPost("/api/debug/soccer/player-identity/bridge-apply", async (
+            SoccerApiSportsBridgeApplyRequest request,
+            ApplicationDbContext dbContext,
+            CancellationToken cancellationToken) =>
+        {
+            var dryRun = request.DryRun != false;
+            var forceWrite = request.ForceWrite == true;
+            var pageOffset = Math.Max(0, request.Offset ?? 0);
+            var sampleLimit = Math.Clamp(request.Limit ?? 100, 1, 500);
+            var minimumConfidence = Math.Clamp(request.MinConfidence ?? 0.98m, 0m, 1m);
+            var excludeAlreadyLinked = request.ExcludeAlreadyLinked ?? true;
+            var candidates = await BuildSoccerApiSportsBridgeCandidatesAsync(
+                dbContext,
+                request.PlayerName,
+                request.Competition,
+                minimumConfidence,
+                cancellationToken);
+            var page = PageSoccerApiSportsBridgeCandidates(
+                candidates,
+                pageOffset,
+                sampleLimit,
+                request.Category,
+                excludeAlreadyLinked);
+            var safeCandidates = page.Candidates
+                .Where(candidate => candidate.Category == "SafeExactName"
+                    && candidate.Confidence >= minimumConfidence
+                    && candidate.BlockingConflicts.Count == 0)
+                .ToArray();
+            var blockedCandidates = page.Candidates
+                .Where(candidate => candidate.Category != "SafeExactName"
+                    || candidate.Confidence < minimumConfidence
+                    || candidate.BlockingConflicts.Count > 0)
+                .ToArray();
+
+            if (!dryRun && !forceWrite)
+            {
+                return Results.Conflict(new
+                {
+                    generatedAtUtc = DateTimeOffset.UtcNow,
+                    callsExternalApis = false,
+                    readOnly = true,
+                    writesRows = false,
+                    blocked = true,
+                    blockReason = "ForceWriteRequired",
+                    guardrails = BuildSoccerResearchOnlyGuardrails(),
+                    candidateCount = page.TotalCandidateCount,
+                    filteredCandidateCount = page.FilteredCandidateCount,
+                    returnedCandidateCount = page.Candidates.Count,
+                    safeCandidateCount = safeCandidates.Length,
+                    blockedCandidateCount = blockedCandidates.Length,
+                    message = "bridge-apply requires forceWrite=true when dryRun=false."
+                });
+            }
+
+            var written = new List<object>();
+            if (!dryRun)
+            {
+                var soccerSport = await dbContext.Sports.SingleAsync(sport => sport.Code == "SOCCER", cancellationToken);
+                var now = DateTimeOffset.UtcNow;
+                foreach (var candidate in safeCandidates)
+                {
+                    var historical = candidate.Historical!;
+                    var existingLink = await dbContext.ProviderEntityLinks
+                        .SingleOrDefaultAsync(link => link.ProviderKey == ApiSportsFootballPlayerRefProvider
+                            && link.EntityType == "Player"
+                            && link.ProviderEntityId == historical.ProviderPlayerId
+                            && link.SportId == soccerSport.Id
+                            && link.LinkStatus == "Approved"
+                            && link.CanonicalEntityId == candidate.Platform.PlayerId, cancellationToken);
+                    if (existingLink is not null)
+                    {
+                        written.Add(new
+                        {
+                            action = "AlreadyLinked",
+                            providerPlayerId = historical.ProviderPlayerId,
+                            platformPlayerId = candidate.Platform.PlayerId,
+                            linkId = existingLink.Id
+                        });
+                        continue;
+                    }
+
+                    var link = new ProviderEntityLink
+                    {
+                        Id = Guid.NewGuid(),
+                        SportId = soccerSport.Id,
+                        EntityType = "Player",
+                        CanonicalEntityId = candidate.Platform.PlayerId,
+                        CanonicalEntityKind = "Player",
+                        CanonicalEntityName = candidate.Platform.PlayerName,
+                        ProviderKey = ApiSportsFootballPlayerRefProvider,
+                        ProviderEntityId = historical.ProviderPlayerId,
+                        ProviderEntityName = historical.PlayerName,
+                        ProviderTeamName = historical.TeamName,
+                        ProviderCompetitionName = string.Join(", ", historical.Competitions),
+                        Confidence = candidate.Confidence,
+                        LinkStatus = "Approved",
+                        LinkSource = "BridgeSafeExactName",
+                        MetadataJson = JsonSerializer.SerializeToDocument(new
+                        {
+                            source = "SoccerApiSportsBridgeApply",
+                            category = candidate.Category,
+                            candidate.Reasons,
+                            candidate.BlockingConflicts,
+                            candidate.Platform.NormalizedPlayerName,
+                            historical.ProviderPlayerId,
+                            historical.SampleResultRows,
+                            appliedAtUtc = now
+                        }),
+                        CreatedAtUtc = now,
+                        UpdatedAtUtc = now,
+                        ApprovedAtUtc = now,
+                        ApprovedBy = "debug/soccer-bridge"
+                    };
+                    dbContext.ProviderEntityLinks.Add(link);
+                    written.Add(new
+                    {
+                        action = "Linked",
+                        providerPlayerId = historical.ProviderPlayerId,
+                        platformPlayerId = candidate.Platform.PlayerId,
+                        linkId = link.Id
+                    });
+                }
+
+                await dbContext.SaveChangesAsync(cancellationToken);
+            }
+
+            return Results.Ok(BuildSoccerApiSportsBridgePreviewResponse(
+                page,
+                request.PlayerName,
+                request.Competition,
+                minimumConfidence,
+                applied: true,
+                dryRun,
+                forceWrite,
+                written));
+        })
+        .WithName("ApiSportsSoccerPlayerIdentityBridgeApplyDebug")
+        .WithSummary("Dry-run-first safe Soccer platform-to-API-Sports identity bridge apply.");
+
+        endpoints.MapGet("/api/debug/soccer/player-identity/duplicate-bridge-preview", async (
+            string? playerName,
+            decimal? minConfidence,
+            int? offset,
+            int? limit,
+            bool? onlyResolvable,
+            ApplicationDbContext dbContext,
+            CancellationToken cancellationToken) =>
+        {
+            var pageOffset = Math.Max(0, offset ?? 0);
+            var pageLimit = Math.Clamp(limit ?? 100, 1, 500);
+            var minimumConfidence = Math.Clamp(minConfidence ?? 0.98m, 0m, 1m);
+            var candidates = await BuildSoccerApiSportsBridgeCandidatesAsync(
+                dbContext,
+                playerName,
+                competition: null,
+                minimumConfidence,
+                cancellationToken);
+            var groups = await BuildSoccerDuplicateBridgeGroupsAsync(
+                dbContext,
+                candidates,
+                minimumConfidence,
+                cancellationToken);
+            var page = PageSoccerDuplicateBridgeGroups(
+                groups,
+                pageOffset,
+                pageLimit,
+                onlyResolvable ?? true);
+
+            return Results.Ok(BuildSoccerDuplicateBridgeResponse(
+                page,
+                playerName,
+                minimumConfidence,
+                applied: false,
+                dryRun: true,
+                forceWrite: false,
+                written: []));
+        })
+        .WithName("ApiSportsSoccerDuplicatePlayerBridgePreviewDebug")
+        .WithSummary("Read-only grouped Soccer duplicate platform-player bridge preview.");
+
+        endpoints.MapPost("/api/debug/soccer/player-identity/duplicate-bridge-apply", async (
+            SoccerApiSportsDuplicateBridgeApplyRequest request,
+            ApplicationDbContext dbContext,
+            CancellationToken cancellationToken) =>
+        {
+            var dryRun = request.DryRun != false;
+            var forceWrite = request.ForceWrite == true;
+            var pageOffset = Math.Max(0, request.Offset ?? 0);
+            var pageLimit = Math.Clamp(request.Limit ?? 100, 1, 500);
+            var minimumConfidence = Math.Clamp(request.MinConfidence ?? 0.98m, 0m, 1m);
+            var candidates = await BuildSoccerApiSportsBridgeCandidatesAsync(
+                dbContext,
+                request.PlayerName,
+                competition: null,
+                minimumConfidence,
+                cancellationToken);
+            var groups = await BuildSoccerDuplicateBridgeGroupsAsync(
+                dbContext,
+                candidates,
+                minimumConfidence,
+                cancellationToken);
+            var page = PageSoccerDuplicateBridgeGroups(
+                groups,
+                pageOffset,
+                pageLimit,
+                request.OnlyResolvable ?? true);
+            var resolvableGroups = page.Groups
+                .Where(group => group.Category == "ResolvableDuplicateSameProvider"
+                    && group.SelectedProviderPlayerId is not null
+                    && group.BlockingConflicts.Count == 0
+                    && group.Confidence >= minimumConfidence)
+                .ToArray();
+
+            if (!dryRun && !forceWrite)
+            {
+                return Results.Conflict(new
+                {
+                    generatedAtUtc = DateTimeOffset.UtcNow,
+                    callsExternalApis = false,
+                    readOnly = true,
+                    writesRows = false,
+                    blocked = true,
+                    blockReason = "ForceWriteRequired",
+                    guardrails = BuildSoccerResearchOnlyGuardrails(),
+                    duplicateGroupCount = page.TotalGroupCount,
+                    filteredGroupCount = page.FilteredGroupCount,
+                    returnedGroupCount = page.Groups.Count,
+                    resolvableGroupCount = resolvableGroups.Length,
+                    message = "duplicate-bridge-apply requires forceWrite=true when dryRun=false."
+                });
+            }
+
+            var written = new List<object>();
+            if (!dryRun)
+            {
+                var soccerSport = await dbContext.Sports.SingleAsync(sport => sport.Code == "SOCCER", cancellationToken);
+                var now = DateTimeOffset.UtcNow;
+                foreach (var group in resolvableGroups)
+                {
+                    var historical = group.HistoricalCandidates.Single();
+                    foreach (var platformPlayer in group.PlatformPlayers.Where(player => group.LinkablePlatformPlayerIds.Contains(player.PlayerId)))
+                    {
+                        var existingExactLink = await dbContext.ProviderEntityLinks
+                            .SingleOrDefaultAsync(link => link.ProviderKey == ApiSportsFootballPlayerRefProvider
+                                && link.EntityType == "Player"
+                                && link.ProviderEntityId == historical.ProviderPlayerId
+                                && link.SportId == soccerSport.Id
+                                && link.LinkStatus == "Approved"
+                                && link.CanonicalEntityId == platformPlayer.PlayerId, cancellationToken);
+                        if (existingExactLink is not null)
+                        {
+                            written.Add(new
+                            {
+                                action = "AlreadyLinked",
+                                providerPlayerId = historical.ProviderPlayerId,
+                                platformPlayerId = platformPlayer.PlayerId,
+                                normalizedPlayerName = group.NormalizedPlayerName,
+                                linkId = existingExactLink.Id
+                            });
+                            continue;
+                        }
+
+                        var link = new ProviderEntityLink
+                        {
+                            Id = Guid.NewGuid(),
+                            SportId = soccerSport.Id,
+                            EntityType = "Player",
+                            CanonicalEntityId = platformPlayer.PlayerId,
+                            CanonicalEntityKind = "Player",
+                            CanonicalEntityName = platformPlayer.PlayerName,
+                            ProviderKey = ApiSportsFootballPlayerRefProvider,
+                            ProviderEntityId = historical.ProviderPlayerId,
+                            ProviderEntityName = historical.PlayerName,
+                            ProviderTeamName = historical.TeamName,
+                            ProviderCompetitionName = string.Join(", ", historical.Competitions),
+                            Confidence = group.Confidence,
+                            LinkStatus = "Approved",
+                            LinkSource = "DuplicateBridgeSameProvider",
+                            MetadataJson = JsonSerializer.SerializeToDocument(new
+                            {
+                                source = "SoccerApiSportsDuplicateBridgeApply",
+                                category = group.Category,
+                                group.NormalizedPlayerName,
+                                displayNames = group.DisplayNames,
+                                group.Reasons,
+                                group.BlockingConflicts,
+                                historical.ProviderPlayerId,
+                                historical.SampleResultRows,
+                                appliedAtUtc = now
+                            }),
+                            CreatedAtUtc = now,
+                            UpdatedAtUtc = now,
+                            ApprovedAtUtc = now,
+                            ApprovedBy = "debug/soccer-duplicate-bridge"
+                        };
+                        dbContext.ProviderEntityLinks.Add(link);
+                        written.Add(new
+                        {
+                            action = "Linked",
+                            providerPlayerId = historical.ProviderPlayerId,
+                            platformPlayerId = platformPlayer.PlayerId,
+                            normalizedPlayerName = group.NormalizedPlayerName,
+                            linkId = link.Id
+                        });
+                    }
+                }
+
+                await dbContext.SaveChangesAsync(cancellationToken);
+            }
+
+            return Results.Ok(BuildSoccerDuplicateBridgeResponse(
+                page,
+                request.PlayerName,
+                minimumConfidence,
+                applied: true,
+                dryRun,
+                forceWrite,
+                written));
+        })
+        .WithName("ApiSportsSoccerDuplicatePlayerBridgeApplyDebug")
+        .WithSummary("Dry-run-first grouped Soccer duplicate platform-player bridge apply.");
+
         endpoints.MapGet("/api/debug/soccer/results/api-sports/world-cup/import-status", async (
             DateOnly? fromDate,
             DateOnly? toDate,
@@ -4638,6 +5427,695 @@ public static class ResultsDebugEndpoints
             fixture.HomeTeamName,
             null,
             fixture.AwayTeamName);
+    }
+
+    private static string NormalizeSoccerHistoryToken(string value)
+    {
+        return Regex.Replace(value.Trim().ToUpperInvariant(), @"[^A-Z0-9]+", "_").Trim('_');
+    }
+
+    private static string? TryExtractApiSportsFixtureIdFromResultIdentifier(string? externalSourceIdentifier)
+    {
+        if (string.IsNullOrWhiteSpace(externalSourceIdentifier))
+        {
+            return null;
+        }
+
+        var parts = externalSourceIdentifier.Split(':', StringSplitOptions.TrimEntries);
+        return parts.Length >= 4 && string.Equals(parts[0], ApiSportsFootballResultSource, StringComparison.OrdinalIgnoreCase)
+            ? parts[1]
+            : null;
+    }
+
+    private static string? TryExtractApiSportsPlayerIdFromResultIdentifier(string? externalSourceIdentifier)
+    {
+        if (string.IsNullOrWhiteSpace(externalSourceIdentifier))
+        {
+            return null;
+        }
+
+        var parts = externalSourceIdentifier.Split(':', StringSplitOptions.TrimEntries);
+        return parts.Length >= 4 && string.Equals(parts[0], ApiSportsFootballResultSource, StringComparison.OrdinalIgnoreCase)
+            ? parts[2]
+            : null;
+    }
+
+    private static object BuildSoccerResearchOnlyGuardrails()
+    {
+        return new
+        {
+            publicSoccerGradingEnabled = false,
+            soccerPredictionsEnabled = false,
+            soccerTopPicksEnabled = false,
+            soccerEntryBuilderEnabled = false,
+            researchOnly = true
+        };
+    }
+
+    private static async Task<IReadOnlyList<SoccerApiSportsBridgeCandidate>> BuildSoccerApiSportsBridgeCandidatesAsync(
+        ApplicationDbContext dbContext,
+        string? playerName,
+        string? competition,
+        decimal minimumConfidence,
+        CancellationToken cancellationToken)
+    {
+        var normalizedPlayerNameFilter = string.IsNullOrWhiteSpace(playerName) ? null : NormalizeResultPlayerName(playerName);
+        var normalizedCompetitionFilter = string.IsNullOrWhiteSpace(competition) ? null : NormalizeSoccerHistoryToken(competition);
+        var soccerSport = await dbContext.Sports
+            .AsNoTracking()
+            .SingleOrDefaultAsync(sport => sport.Code == "SOCCER", cancellationToken);
+        if (soccerSport is null)
+        {
+            return [];
+        }
+
+        var platformRows = await dbContext.PlatformProps
+            .AsNoTracking()
+            .Include(platformProp => platformProp.Platform)
+            .Include(platformProp => platformProp.Prop)
+            .ThenInclude(prop => prop!.Player)
+            .ThenInclude(player => player!.Team)
+            .Include(platformProp => platformProp.Prop)
+            .ThenInclude(prop => prop!.League)
+            .Where(platformProp => platformProp.Prop != null
+                && platformProp.Prop.Player != null
+                && platformProp.Prop.League != null
+                && platformProp.Prop.League.SportId == soccerSport.Id)
+            .Select(platformProp => new
+            {
+                PlayerId = platformProp.Prop!.PlayerId,
+                PlayerName = platformProp.Prop.Player!.DisplayName,
+                TeamName = platformProp.Prop.Player.Team == null ? null : platformProp.Prop.Player.Team.Name,
+                LeagueName = platformProp.Prop.League!.Name,
+                LeagueCode = platformProp.Prop.League.Code,
+                PlatformName = platformProp.Platform == null ? null : platformProp.Platform.Name
+            })
+            .ToListAsync(cancellationToken);
+        var platformPlayers = platformRows
+            .GroupBy(row => row.PlayerId)
+            .Select(group =>
+            {
+                var first = group.First();
+                return new SoccerApiSportsBridgePlatformPlayer(
+                    first.PlayerId,
+                    first.PlayerName,
+                    NormalizeResultPlayerName(first.PlayerName),
+                    first.TeamName,
+                    group.Select(row => row.LeagueName).Where(value => !string.IsNullOrWhiteSpace(value)).Distinct(StringComparer.OrdinalIgnoreCase).Order().ToArray()!,
+                    group.Select(row => row.PlatformName).Where(value => !string.IsNullOrWhiteSpace(value)).Distinct(StringComparer.OrdinalIgnoreCase).Order().ToArray()!,
+                    group.Count());
+            })
+            .Where(row => !string.IsNullOrWhiteSpace(row.NormalizedPlayerName))
+            .Where(row => normalizedPlayerNameFilter is null || row.NormalizedPlayerName.Contains(normalizedPlayerNameFilter, StringComparison.OrdinalIgnoreCase))
+            .Where(row => normalizedCompetitionFilter is null || row.Competitions.Any(value => NormalizeSoccerHistoryToken(value).Contains(normalizedCompetitionFilter, StringComparison.OrdinalIgnoreCase)))
+            .ToArray();
+
+        var historicalRows = await dbContext.PropResults
+            .AsNoTracking()
+            .Include(result => result.Player)
+            .ThenInclude(player => player!.Team)
+            .Include(result => result.League)
+            .Include(result => result.PropType)
+            .Where(result => result.ExternalSource == ApiSportsFootballResultSource
+                && result.ExternalSourceIdentifier.StartsWith($"{ApiSportsFootballResultSource}:")
+                && result.Player != null
+                && result.League != null
+                && result.League.SportId == soccerSport.Id
+                && result.PropType != null)
+            .Select(result => new
+            {
+                result.PlayerId,
+                PlayerName = result.Player!.DisplayName,
+                TeamName = result.Player.Team == null ? null : result.Player.Team.Name,
+                LeagueName = result.League!.Name,
+                LeagueCode = result.League.Code,
+                result.EventDate,
+                result.PropType!.Name,
+                result.PropType.StatKey,
+                result.ExternalSourceIdentifier
+            })
+            .ToListAsync(cancellationToken);
+        var historicalPlayers = historicalRows
+            .Select(row => new
+            {
+                Row = row,
+                ProviderPlayerId = TryExtractApiSportsPlayerIdFromResultIdentifier(row.ExternalSourceIdentifier)
+            })
+            .Where(row => !string.IsNullOrWhiteSpace(row.ProviderPlayerId))
+            .GroupBy(row => row.ProviderPlayerId!, StringComparer.OrdinalIgnoreCase)
+            .Select(group =>
+            {
+                var first = group.First().Row;
+                return new SoccerApiSportsBridgeHistoricalPlayer(
+                    group.Key,
+                    first.PlayerId,
+                    first.PlayerName,
+                    NormalizeResultPlayerName(first.PlayerName),
+                    first.TeamName,
+                    group.Select(row => row.Row.LeagueName).Where(value => !string.IsNullOrWhiteSpace(value)).Distinct(StringComparer.OrdinalIgnoreCase).Order().ToArray()!,
+                    group.Select(row => row.Row.StatKey).Where(value => !string.IsNullOrWhiteSpace(value)).Distinct(StringComparer.OrdinalIgnoreCase).Order().ToArray()!,
+                    group.Count(),
+                    group.Max(row => row.Row.EventDate));
+            })
+            .Where(row => !string.IsNullOrWhiteSpace(row.NormalizedPlayerName))
+            .Where(row => normalizedPlayerNameFilter is null || row.NormalizedPlayerName.Contains(normalizedPlayerNameFilter, StringComparison.OrdinalIgnoreCase))
+            .Where(row => normalizedCompetitionFilter is null || row.Competitions.Any(value => NormalizeSoccerHistoryToken(value).Contains(normalizedCompetitionFilter, StringComparison.OrdinalIgnoreCase)))
+            .ToArray();
+
+        var platformByName = platformPlayers
+            .GroupBy(row => row.NormalizedPlayerName, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(group => group.Key, group => group.ToArray(), StringComparer.OrdinalIgnoreCase);
+        var historicalByName = historicalPlayers
+            .GroupBy(row => row.NormalizedPlayerName, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(group => group.Key, group => group.ToArray(), StringComparer.OrdinalIgnoreCase);
+        var existingExternalRefs = await dbContext.PlayerExternalRefs
+            .AsNoTracking()
+            .Where(reference => reference.Provider == ApiSportsFootballPlayerRefProvider)
+            .Select(reference => new { reference.PlayerId, reference.ProviderPlayerId })
+            .ToArrayAsync(cancellationToken);
+        var existingLinks = await dbContext.ProviderEntityLinks
+            .AsNoTracking()
+            .Where(link => link.ProviderKey == ApiSportsFootballPlayerRefProvider
+                && link.EntityType == "Player"
+                && link.LinkStatus == "Approved")
+            .Select(link => new { link.ProviderEntityId, link.CanonicalEntityId })
+            .ToArrayAsync(cancellationToken);
+
+        var candidates = new List<SoccerApiSportsBridgeCandidate>();
+        foreach (var platform in platformPlayers)
+        {
+            historicalByName.TryGetValue(platform.NormalizedPlayerName, out var historicalMatches);
+            historicalMatches ??= [];
+            var duplicatePlatformCount = platformByName.TryGetValue(platform.NormalizedPlayerName, out var duplicatePlatforms)
+                ? duplicatePlatforms.Length
+                : 0;
+            var historical = historicalMatches.Length == 1 ? historicalMatches[0] : historicalMatches.FirstOrDefault();
+            var reasons = new List<string>();
+            var blockers = new List<string>();
+            decimal confidence = 0m;
+            var category = "NeedsReview";
+
+            if (historical is null)
+            {
+                blockers.Add("NoHistoricalApiSportsPlayerNameMatch");
+                category = "NoCandidate";
+            }
+            else
+            {
+                reasons.Add("NormalizedDisplayNameExactMatch");
+                confidence = 0.98m;
+                if (platform.Competitions.Any() && historical.Competitions.Any())
+                {
+                    reasons.Add("CompetitionContextAvailable");
+                }
+
+                if (duplicatePlatformCount > 1)
+                {
+                    blockers.Add("DuplicatePlatformPlayersWithSameNormalizedName");
+                }
+
+                if (historicalMatches.Length > 1)
+                {
+                    blockers.Add("MultipleApiSportsProviderPlayersWithSameNormalizedName");
+                }
+
+                var externalRefForProvider = existingExternalRefs.FirstOrDefault(reference => reference.ProviderPlayerId == historical.ProviderPlayerId);
+                if (externalRefForProvider is not null)
+                {
+                    if (externalRefForProvider.PlayerId == platform.PlayerId)
+                    {
+                        reasons.Add("ExistingPlayerExternalRef");
+                        category = "AlreadyLinked";
+                    }
+                    else
+                    {
+                        reasons.Add("ExistingHistoricalPlayerExternalRef");
+                    }
+                }
+
+                var approvedLinkForProvider = existingLinks.FirstOrDefault(link => link.ProviderEntityId == historical.ProviderPlayerId);
+                if (approvedLinkForProvider is not null)
+                {
+                    if (approvedLinkForProvider.CanonicalEntityId == platform.PlayerId)
+                    {
+                        reasons.Add("ExistingApprovedProviderEntityLink");
+                        category = "AlreadyLinked";
+                    }
+                    else
+                    {
+                        blockers.Add("ApiSportsProviderEntityLinkAlreadyPointsToDifferentLocalPlayer");
+                        category = "Conflict";
+                    }
+                }
+
+                if (category is not "AlreadyLinked" and not "Conflict")
+                {
+                    category = blockers.Count == 0 && confidence >= minimumConfidence
+                        ? "SafeExactName"
+                        : "NeedsReview";
+                }
+            }
+
+            candidates.Add(new SoccerApiSportsBridgeCandidate(
+                platform,
+                historical,
+                historical?.ProviderPlayerId,
+                confidence,
+                category,
+                reasons.Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
+                blockers.Distinct(StringComparer.OrdinalIgnoreCase).ToArray()));
+        }
+
+        return candidates
+            .OrderBy(row => row.Category switch
+            {
+                "SafeExactName" => 0,
+                "AlreadyLinked" => 1,
+                "NeedsReview" => 2,
+                "Conflict" => 3,
+                _ => 4
+            })
+            .ThenByDescending(row => row.Confidence)
+            .ThenBy(row => row.Platform.PlayerName)
+            .ToArray();
+    }
+
+    private static SoccerApiSportsBridgeCandidatePage PageSoccerApiSportsBridgeCandidates(
+        IReadOnlyList<SoccerApiSportsBridgeCandidate> candidates,
+        int offset,
+        int limit,
+        string? category,
+        bool excludeAlreadyLinked)
+    {
+        var normalizedCategory = string.IsNullOrWhiteSpace(category) ? null : category.Trim();
+        var filtered = candidates.AsEnumerable();
+        if (!string.IsNullOrWhiteSpace(normalizedCategory))
+        {
+            filtered = filtered.Where(candidate => string.Equals(candidate.Category, normalizedCategory, StringComparison.OrdinalIgnoreCase));
+        }
+
+        if (excludeAlreadyLinked)
+        {
+            filtered = filtered.Where(candidate => candidate.Category != "AlreadyLinked");
+        }
+
+        var filteredCandidates = filtered.ToArray();
+        var pageCandidates = filteredCandidates
+            .Skip(offset)
+            .Take(limit)
+            .ToArray();
+
+        return new SoccerApiSportsBridgeCandidatePage(
+            pageCandidates,
+            candidates.Count,
+            filteredCandidates.Length,
+            offset,
+            limit,
+            normalizedCategory,
+            excludeAlreadyLinked,
+            candidates.Count(candidate => candidate.Category == "SafeExactName"),
+            candidates.Count(candidate => candidate.Category == "NeedsReview"),
+            candidates.Count(candidate => candidate.Category == "Conflict"),
+            candidates.Count(candidate => candidate.Category == "AlreadyLinked"),
+            candidates.Count(candidate => candidate.Category == "NoCandidate"));
+    }
+
+    private static async Task<IReadOnlyList<SoccerDuplicateBridgeGroup>> BuildSoccerDuplicateBridgeGroupsAsync(
+        ApplicationDbContext dbContext,
+        IReadOnlyList<SoccerApiSportsBridgeCandidate> candidates,
+        decimal minimumConfidence,
+        CancellationToken cancellationToken)
+    {
+        var soccerSport = await dbContext.Sports
+            .AsNoTracking()
+            .SingleOrDefaultAsync(sport => sport.Code == "SOCCER", cancellationToken);
+        if (soccerSport is null)
+        {
+            return [];
+        }
+
+        var approvedLinks = await dbContext.ProviderEntityLinks
+            .AsNoTracking()
+            .Where(link => link.ProviderKey == ApiSportsFootballPlayerRefProvider
+                && link.EntityType == "Player"
+                && link.SportId == soccerSport.Id
+                && link.LinkStatus == "Approved")
+            .Select(link => new { link.Id, link.ProviderEntityId, link.CanonicalEntityId })
+            .ToArrayAsync(cancellationToken);
+
+        var groups = new List<SoccerDuplicateBridgeGroup>();
+        foreach (var duplicateGroup in candidates
+            .GroupBy(candidate => candidate.Platform.NormalizedPlayerName, StringComparer.OrdinalIgnoreCase)
+            .Where(group => group.Count() > 1))
+        {
+            var groupCandidates = duplicateGroup.ToArray();
+            var platformPlayers = groupCandidates
+                .Select(candidate => candidate.Platform)
+                .OrderBy(player => player.PlayerName)
+                .ThenBy(player => player.PlayerId)
+                .ToArray();
+            var platformPlayerIds = platformPlayers.Select(player => player.PlayerId).ToHashSet();
+            var providerPlayerIds = groupCandidates
+                .Select(candidate => candidate.ProviderPlayerId)
+                .Where(value => !string.IsNullOrWhiteSpace(value))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToArray()!;
+            var historicalCandidates = groupCandidates
+                .Where(candidate => candidate.Historical is not null)
+                .Select(candidate => candidate.Historical!)
+                .GroupBy(historical => historical.ProviderPlayerId, StringComparer.OrdinalIgnoreCase)
+                .Select(group => group.First())
+                .OrderBy(historical => historical.ProviderPlayerId)
+                .ToArray();
+
+            var reasons = groupCandidates
+                .SelectMany(candidate => candidate.Reasons)
+                .Append("DuplicatePlatformPlayersGroupedByNormalizedName")
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .Order()
+                .ToList();
+            var blockers = new List<string>();
+            var category = "ResolvableDuplicateSameProvider";
+            string? selectedProviderPlayerId = null;
+            var confidence = groupCandidates.Max(candidate => candidate.Confidence);
+
+            if (providerPlayerIds.Length == 0)
+            {
+                category = "MissingHistoricalCandidate";
+                blockers.Add("NoHistoricalApiSportsPlayerNameMatch");
+            }
+            else if (providerPlayerIds.Length > 1)
+            {
+                category = "MultipleHistoricalCandidates";
+                blockers.Add("MultipleApiSportsProviderPlayersWithSameNormalizedName");
+            }
+            else
+            {
+                selectedProviderPlayerId = providerPlayerIds[0];
+                var approvedLinksForSelectedProvider = approvedLinks
+                    .Where(link => string.Equals(link.ProviderEntityId, selectedProviderPlayerId, StringComparison.OrdinalIgnoreCase)
+                        && link.CanonicalEntityId.HasValue)
+                    .ToArray();
+                var approvedLinksForGroupPlayers = approvedLinks
+                    .Where(link => link.CanonicalEntityId.HasValue && platformPlayerIds.Contains(link.CanonicalEntityId.Value))
+                    .ToArray();
+                var mixedGroupPlayerLinks = approvedLinksForGroupPlayers
+                    .Where(link => !string.Equals(link.ProviderEntityId, selectedProviderPlayerId, StringComparison.OrdinalIgnoreCase))
+                    .ToArray();
+                var selectedProviderLinksOutsideGroup = approvedLinksForSelectedProvider
+                    .Where(link => !platformPlayerIds.Contains(link.CanonicalEntityId!.Value))
+                    .ToArray();
+
+                if (mixedGroupPlayerLinks.Length > 0)
+                {
+                    category = "ExistingMixedLinks";
+                    blockers.Add("DuplicatePlatformPlayerAlreadyLinkedToDifferentApiSportsProviderPlayer");
+                }
+
+                if (selectedProviderLinksOutsideGroup.Length > 0)
+                {
+                    category = "ExistingMixedLinks";
+                    blockers.Add("ApiSportsProviderPlayerAlreadyLinkedOutsideDuplicateGroup");
+                }
+
+                if (confidence < minimumConfidence)
+                {
+                    category = "Conflict";
+                    blockers.Add("ConfidenceBelowMinimum");
+                }
+
+                var candidateBlockers = groupCandidates
+                    .SelectMany(candidate => candidate.BlockingConflicts)
+                    .Where(blocker => blocker is not "DuplicatePlatformPlayersWithSameNormalizedName"
+                        && blocker is not "ApiSportsProviderEntityLinkAlreadyPointsToDifferentLocalPlayer")
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .ToArray();
+                if (candidateBlockers.Length > 0)
+                {
+                    category = "Conflict";
+                    blockers.AddRange(candidateBlockers);
+                }
+            }
+
+            var exactLinkedPlayerIds = selectedProviderPlayerId is null
+                ? []
+                : approvedLinks
+                    .Where(link => string.Equals(link.ProviderEntityId, selectedProviderPlayerId, StringComparison.OrdinalIgnoreCase)
+                        && link.CanonicalEntityId.HasValue
+                        && platformPlayerIds.Contains(link.CanonicalEntityId.Value))
+                    .Select(link => link.CanonicalEntityId!.Value)
+                    .Distinct()
+                    .ToArray();
+            var exactLinkedPlayerIdSet = exactLinkedPlayerIds.ToHashSet();
+            var linkablePlayerIds = category == "ResolvableDuplicateSameProvider" && selectedProviderPlayerId is not null
+                ? platformPlayers.Select(player => player.PlayerId).Where(playerId => !exactLinkedPlayerIdSet.Contains(playerId)).ToArray()
+                : [];
+
+            if (exactLinkedPlayerIds.Length > 0)
+            {
+                reasons.Add("ExistingApprovedProviderEntityLinksInsideDuplicateGroup");
+            }
+
+            groups.Add(new SoccerDuplicateBridgeGroup(
+                duplicateGroup.Key,
+                platformPlayers.Select(player => player.PlayerName).Distinct(StringComparer.OrdinalIgnoreCase).Order().ToArray(),
+                platformPlayers,
+                platformPlayers.SelectMany(player => player.Platforms).Distinct(StringComparer.OrdinalIgnoreCase).Order().ToArray(),
+                platformPlayers.SelectMany(player => player.Competitions).Distinct(StringComparer.OrdinalIgnoreCase).Order().ToArray(),
+                platformPlayers.Sum(player => player.PlatformRowCount),
+                historicalCandidates,
+                selectedProviderPlayerId,
+                confidence,
+                category,
+                reasons.Distinct(StringComparer.OrdinalIgnoreCase).Order().ToArray(),
+                blockers.Distinct(StringComparer.OrdinalIgnoreCase).Order().ToArray(),
+                exactLinkedPlayerIds,
+                linkablePlayerIds));
+        }
+
+        return groups
+            .OrderBy(group => group.Category switch
+            {
+                "ResolvableDuplicateSameProvider" => 0,
+                "ExistingMixedLinks" => 1,
+                "MultipleHistoricalCandidates" => 2,
+                "Conflict" => 3,
+                "MissingHistoricalCandidate" => 4,
+                _ => 5
+            })
+            .ThenByDescending(group => group.Confidence)
+            .ThenBy(group => group.DisplayNames.FirstOrDefault() ?? group.NormalizedPlayerName)
+            .ToArray();
+    }
+
+    private static SoccerDuplicateBridgeGroupPage PageSoccerDuplicateBridgeGroups(
+        IReadOnlyList<SoccerDuplicateBridgeGroup> groups,
+        int offset,
+        int limit,
+        bool onlyResolvable)
+    {
+        var filteredGroups = onlyResolvable
+            ? groups.Where(group => group.Category == "ResolvableDuplicateSameProvider").ToArray()
+            : groups.ToArray();
+        var pageGroups = filteredGroups
+            .Skip(offset)
+            .Take(limit)
+            .ToArray();
+
+        return new SoccerDuplicateBridgeGroupPage(
+            pageGroups,
+            groups.Count,
+            filteredGroups.Length,
+            offset,
+            limit,
+            onlyResolvable,
+            groups.Count(group => group.Category == "ResolvableDuplicateSameProvider"),
+            groups.Count(group => group.Category != "ResolvableDuplicateSameProvider"),
+            groups.Sum(group => group.LinkablePlatformPlayerIds.Count),
+            groups.Sum(group => group.AlreadyLinkedPlatformPlayerIds.Count));
+    }
+
+    private static object BuildSoccerDuplicateBridgeResponse(
+        SoccerDuplicateBridgeGroupPage page,
+        string? playerName,
+        decimal minimumConfidence,
+        bool applied,
+        bool dryRun,
+        bool forceWrite,
+        IReadOnlyList<object> written)
+    {
+        return new
+        {
+            generatedAtUtc = DateTimeOffset.UtcNow,
+            callsExternalApis = false,
+            readOnly = dryRun || !applied,
+            writesRows = applied && !dryRun,
+            applied,
+            dryRun,
+            forceWrite,
+            filters = new
+            {
+                playerName,
+                minConfidence = minimumConfidence,
+                offset = page.Offset,
+                limit = page.Limit,
+                onlyResolvable = page.OnlyResolvable
+            },
+            pagination = new
+            {
+                offset = page.Offset,
+                limit = page.Limit,
+                returned = page.Groups.Count,
+                totalGroupCount = page.TotalGroupCount,
+                filteredGroupCount = page.FilteredGroupCount,
+                hasMore = page.Offset + page.Groups.Count < page.FilteredGroupCount
+            },
+            guardrails = BuildSoccerResearchOnlyGuardrails(),
+            summary = new
+            {
+                duplicateGroupCount = page.TotalGroupCount,
+                filteredGroupCount = page.FilteredGroupCount,
+                returnedGroupCount = page.Groups.Count,
+                resolvableDuplicateGroupCount = page.ResolvableDuplicateGroupCount,
+                blockedDuplicateGroupCount = page.BlockedDuplicateGroupCount,
+                duplicatePlayersLinkableCount = page.DuplicatePlayersLinkableCount,
+                duplicatePlayersAlreadyLinkedCount = page.DuplicatePlayersAlreadyLinkedCount,
+                writtenCount = written.Count
+            },
+            written,
+            groups = page.Groups.Select(group => new
+            {
+                group.NormalizedPlayerName,
+                displayNames = group.DisplayNames,
+                platformPlayerRecords = group.PlatformPlayers.Select(player => new
+                {
+                    playerId = player.PlayerId,
+                    playerName = player.PlayerName,
+                    normalizedPlayerName = player.NormalizedPlayerName,
+                    teamName = player.TeamName,
+                    competitions = player.Competitions,
+                    platforms = player.Platforms,
+                    platformRowCount = player.PlatformRowCount,
+                    alreadyLinkedToSelectedProvider = group.AlreadyLinkedPlatformPlayerIds.Contains(player.PlayerId),
+                    linkable = group.LinkablePlatformPlayerIds.Contains(player.PlayerId)
+                }).ToArray(),
+                platforms = group.Platforms,
+                competitions = group.Competitions,
+                platformRowCount = group.PlatformRowCount,
+                candidateHistoricalApiSportsProviderPlayerIds = group.HistoricalCandidates.Select(historical => historical.ProviderPlayerId).ToArray(),
+                selectedProviderPlayerId = group.SelectedProviderPlayerId,
+                confidence = group.Confidence,
+                category = group.Category,
+                reasons = group.Reasons,
+                blockingConflicts = group.BlockingConflicts,
+                alreadyLinkedPlatformPlayerIds = group.AlreadyLinkedPlatformPlayerIds,
+                linkablePlatformPlayerIds = group.LinkablePlatformPlayerIds,
+                sampleHistoricalStatAvailability = group.HistoricalCandidates.Select(historical => new
+                {
+                    historical.ProviderPlayerId,
+                    localHistoryPlayerId = historical.LocalHistoryPlayerId,
+                    playerName = historical.PlayerName,
+                    teamName = historical.TeamName,
+                    competitions = historical.Competitions,
+                    statAvailability = historical.StatAvailability,
+                    sampleHistoricalRows = historical.SampleResultRows,
+                    latestResultDate = historical.LatestResultDate
+                }).ToArray()
+            }).ToArray(),
+            recommendation = page.ResolvableDuplicateGroupCount > 0
+                ? "Review ResolvableDuplicateSameProvider groups, dry-run duplicate-bridge-apply, then rerun with dryRun=false and forceWrite=true."
+                : "No resolvable duplicate groups found. Review blocked groups for mixed links, missing historical candidates, or multiple historical candidates."
+        };
+    }
+
+    private static object BuildSoccerApiSportsBridgePreviewResponse(
+        SoccerApiSportsBridgeCandidatePage page,
+        string? playerName,
+        string? competition,
+        decimal minimumConfidence,
+        bool applied,
+        bool dryRun,
+        bool forceWrite,
+        IReadOnlyList<object> written)
+    {
+        return new
+        {
+            generatedAtUtc = DateTimeOffset.UtcNow,
+            callsExternalApis = false,
+            readOnly = dryRun || !applied,
+            writesRows = applied && !dryRun,
+            applied,
+            dryRun,
+            forceWrite,
+            filters = new
+            {
+                playerName,
+                competition,
+                minConfidence = minimumConfidence,
+                offset = page.Offset,
+                limit = page.Limit,
+                category = page.Category,
+                excludeAlreadyLinked = page.ExcludeAlreadyLinked
+            },
+            pagination = new
+            {
+                offset = page.Offset,
+                limit = page.Limit,
+                returned = page.Candidates.Count,
+                totalCandidateCount = page.TotalCandidateCount,
+                filteredCandidateCount = page.FilteredCandidateCount,
+                hasMore = page.Offset + page.Candidates.Count < page.FilteredCandidateCount
+            },
+            guardrails = BuildSoccerResearchOnlyGuardrails(),
+            summary = new
+            {
+                candidateCount = page.TotalCandidateCount,
+                filteredCandidateCount = page.FilteredCandidateCount,
+                returnedCandidateCount = page.Candidates.Count,
+                safeBridgeCandidates = page.SafeBridgeCandidates,
+                needsReview = page.NeedsReview,
+                conflicts = page.Conflicts,
+                alreadyLinked = page.AlreadyLinked,
+                noCandidate = page.NoCandidate,
+                writtenCount = written.Count
+            },
+            written,
+            candidates = page.Candidates.Select(candidate => new
+            {
+                platformPlayer = new
+                {
+                    playerId = candidate.Platform.PlayerId,
+                    playerName = candidate.Platform.PlayerName,
+                    normalizedPlayerName = candidate.Platform.NormalizedPlayerName,
+                    teamName = candidate.Platform.TeamName,
+                    competitions = candidate.Platform.Competitions,
+                    platforms = candidate.Platform.Platforms,
+                    platformRowCount = candidate.Platform.PlatformRowCount
+                },
+                historicalApiSportsPlayer = candidate.Historical is null
+                    ? null
+                    : new
+                    {
+                        providerPlayerId = candidate.Historical.ProviderPlayerId,
+                        localHistoryPlayerId = candidate.Historical.LocalHistoryPlayerId,
+                        playerName = candidate.Historical.PlayerName,
+                        normalizedPlayerName = candidate.Historical.NormalizedPlayerName,
+                        teamName = candidate.Historical.TeamName,
+                        competitions = candidate.Historical.Competitions,
+                        statAvailability = candidate.Historical.StatAvailability,
+                        sampleHistoricalRows = candidate.Historical.SampleResultRows,
+                        latestResultDate = candidate.Historical.LatestResultDate
+                    },
+                providerPlayerId = candidate.ProviderPlayerId,
+                confidence = candidate.Confidence,
+                category = candidate.Category,
+                reasons = candidate.Reasons,
+                blockingConflicts = candidate.BlockingConflicts
+            }).ToArray(),
+            recommendation = page.SafeBridgeCandidates > 0
+                ? "Review SafeExactName rows, then run bridge-apply with dryRun=false and forceWrite=true to approve provider_entity_links only."
+                : "No safe exact-name bridge candidates found. Review NeedsReview/Conflict rows or improve team/competition context before linking."
+        };
     }
 
     private static string ToApiSportsHistoricalStatDisplayName(string statKey)
@@ -10798,6 +12276,97 @@ public static class ResultsDebugEndpoints
         bool? DryRun,
         bool? ForceLive,
         int? MaxDays);
+
+    private sealed record SoccerApiSportsBridgeApplyRequest(
+        string? PlayerName,
+        string? Competition,
+        decimal? MinConfidence,
+        int? Offset,
+        int? Limit,
+        string? Category,
+        bool? ExcludeAlreadyLinked,
+        bool? DryRun,
+        bool? ForceWrite);
+
+    private sealed record SoccerApiSportsDuplicateBridgeApplyRequest(
+        string? PlayerName,
+        decimal? MinConfidence,
+        int? Offset,
+        int? Limit,
+        bool? OnlyResolvable,
+        bool? DryRun,
+        bool? ForceWrite);
+
+    private sealed record SoccerApiSportsBridgePlatformPlayer(
+        Guid PlayerId,
+        string PlayerName,
+        string NormalizedPlayerName,
+        string? TeamName,
+        IReadOnlyList<string> Competitions,
+        IReadOnlyList<string> Platforms,
+        int PlatformRowCount);
+
+    private sealed record SoccerApiSportsBridgeHistoricalPlayer(
+        string ProviderPlayerId,
+        Guid LocalHistoryPlayerId,
+        string PlayerName,
+        string NormalizedPlayerName,
+        string? TeamName,
+        IReadOnlyList<string> Competitions,
+        IReadOnlyList<string> StatAvailability,
+        int SampleResultRows,
+        DateOnly LatestResultDate);
+
+    private sealed record SoccerApiSportsBridgeCandidate(
+        SoccerApiSportsBridgePlatformPlayer Platform,
+        SoccerApiSportsBridgeHistoricalPlayer? Historical,
+        string? ProviderPlayerId,
+        decimal Confidence,
+        string Category,
+        IReadOnlyList<string> Reasons,
+        IReadOnlyList<string> BlockingConflicts);
+
+    private sealed record SoccerApiSportsBridgeCandidatePage(
+        IReadOnlyList<SoccerApiSportsBridgeCandidate> Candidates,
+        int TotalCandidateCount,
+        int FilteredCandidateCount,
+        int Offset,
+        int Limit,
+        string? Category,
+        bool ExcludeAlreadyLinked,
+        int SafeBridgeCandidates,
+        int NeedsReview,
+        int Conflicts,
+        int AlreadyLinked,
+        int NoCandidate);
+
+    private sealed record SoccerDuplicateBridgeGroup(
+        string NormalizedPlayerName,
+        IReadOnlyList<string> DisplayNames,
+        IReadOnlyList<SoccerApiSportsBridgePlatformPlayer> PlatformPlayers,
+        IReadOnlyList<string> Platforms,
+        IReadOnlyList<string> Competitions,
+        int PlatformRowCount,
+        IReadOnlyList<SoccerApiSportsBridgeHistoricalPlayer> HistoricalCandidates,
+        string? SelectedProviderPlayerId,
+        decimal Confidence,
+        string Category,
+        IReadOnlyList<string> Reasons,
+        IReadOnlyList<string> BlockingConflicts,
+        IReadOnlyList<Guid> AlreadyLinkedPlatformPlayerIds,
+        IReadOnlyList<Guid> LinkablePlatformPlayerIds);
+
+    private sealed record SoccerDuplicateBridgeGroupPage(
+        IReadOnlyList<SoccerDuplicateBridgeGroup> Groups,
+        int TotalGroupCount,
+        int FilteredGroupCount,
+        int Offset,
+        int Limit,
+        bool OnlyResolvable,
+        int ResolvableDuplicateGroupCount,
+        int BlockedDuplicateGroupCount,
+        int DuplicatePlayersLinkableCount,
+        int DuplicatePlayersAlreadyLinkedCount);
 
     private sealed record ApiSportsConfigDiagnostics(
         bool configured,

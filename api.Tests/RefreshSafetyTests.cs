@@ -2146,6 +2146,356 @@ public sealed class RefreshSafetyTests
     }
 
     [Fact]
+    public async Task ApiSportsSoccerPlayerHistory_ReturnsPersistedHistoryReadOnly()
+    {
+        await using var factory = new SafetyTestApplicationFactory(ApiSportsLiveConfig());
+        using var client = factory.CreateClient();
+        await factory.EnsureDatabaseAsync();
+        await AddApiSportsHistoricalSoccerResultAsync(factory, "EPL", "EPL", 2025, "hist-1", new DateOnly(2026, 1, 1), "GOALS", "Goals");
+        await AddApiSportsHistoricalSoccerResultAsync(factory, "EPL", "EPL", 2025, "hist-1", new DateOnly(2026, 1, 1), "SHOTS", "Shots");
+        await AddApiSportsHistoricalSoccerResultAsync(factory, "EPL", "EPL", 2025, "hist-2", new DateOnly(2026, 1, 2), "SHOTS_ON_TARGET", "Shots On Target");
+        var fixtureCallsBefore = factory.ApiSportsFootballClient.FixturesCallCount;
+        var statsCallsBefore = factory.ApiSportsFootballClient.FixturePlayerStatsCallCount;
+
+        var response = await client.GetAsync("/api/debug/soccer/player-history?providerPlayerId=50001&competitionKey=EPL&fromDate=2026-01-01&toDate=2026-01-31&limit=10");
+
+        await EnsureSuccessWithBodyAsync(response);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.False(json.GetProperty("callsExternalApis").GetBoolean());
+        Assert.True(json.GetProperty("readOnly").GetBoolean());
+        Assert.False(json.GetProperty("writesRows").GetBoolean());
+        var guardrails = json.GetProperty("guardrails");
+        Assert.False(guardrails.GetProperty("publicSoccerGradingEnabled").GetBoolean());
+        Assert.False(guardrails.GetProperty("soccerPredictionsEnabled").GetBoolean());
+        Assert.False(guardrails.GetProperty("soccerEntryBuilderEnabled").GetBoolean());
+        Assert.True(guardrails.GetProperty("researchOnly").GetBoolean());
+        Assert.Equal(1, json.GetProperty("matchedPlayerCount").GetInt32());
+        Assert.Equal(3, json.GetProperty("sampleSize").GetProperty("resultRows").GetInt32());
+        Assert.True(json.GetProperty("linkedApiSportsRefs").GetArrayLength() > 0);
+        var rowsByStat = json.GetProperty("rowsByStat").EnumerateArray().ToArray();
+        Assert.Contains(rowsByStat, row => row.GetProperty("statKey").GetString() == "GOALS" && row.GetProperty("sampleSize").GetInt32() == 1);
+        Assert.Contains(rowsByStat, row => row.GetProperty("statKey").GetString() == "SHOTS" && row.GetProperty("sampleSize").GetInt32() == 1);
+        Assert.Contains(rowsByStat, row => row.GetProperty("statKey").GetString() == "SHOTS_ON_TARGET" && row.GetProperty("sampleSize").GetInt32() == 1);
+        var recentLog = json.GetProperty("recentGameLog").EnumerateArray().ToArray();
+        Assert.Equal(2, recentLog.Length);
+        Assert.Equal(fixtureCallsBefore, factory.ApiSportsFootballClient.FixturesCallCount);
+        Assert.Equal(statsCallsBefore, factory.ApiSportsFootballClient.FixturePlayerStatsCallCount);
+    }
+
+    [Fact]
+    public async Task ApiSportsSoccerPlayerHistoryReadiness_ReturnsIdentityCoverageReadOnly()
+    {
+        await using var factory = new SafetyTestApplicationFactory(ApiSportsLiveConfig());
+        using var client = factory.CreateClient();
+        await factory.EnsureDatabaseAsync();
+        await AddApiSportsHistoricalSoccerResultAsync(factory, "EPL", "EPL", 2025, "hist-1", new DateOnly(2026, 1, 1), "GOALS", "Goals");
+        await AddApiSportsHistoricalSoccerResultAsync(factory, "LA_LIGA", "La Liga", 2025, "hist-2", new DateOnly(2026, 1, 2), "ASSISTS", "Assists");
+        var fixtureCallsBefore = factory.ApiSportsFootballClient.FixturesCallCount;
+        var statsCallsBefore = factory.ApiSportsFootballClient.FixturePlayerStatsCallCount;
+
+        var response = await client.GetAsync("/api/debug/soccer/player-history/readiness");
+
+        await EnsureSuccessWithBodyAsync(response);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.False(json.GetProperty("callsExternalApis").GetBoolean());
+        Assert.True(json.GetProperty("readOnly").GetBoolean());
+        Assert.False(json.GetProperty("writesRows").GetBoolean());
+        Assert.True(json.GetProperty("guardrails").GetProperty("researchOnly").GetBoolean());
+        Assert.Equal(2, json.GetProperty("historical").GetProperty("resultRows").GetInt32());
+        Assert.Equal(1, json.GetProperty("historical").GetProperty("distinctLocalPlayers").GetInt32());
+        Assert.Equal(1, json.GetProperty("historical").GetProperty("distinctApiSportsProviderPlayers").GetInt32());
+        Assert.Equal(1, json.GetProperty("identityLinks").GetProperty("historicalProviderPlayersWithExternalRef").GetInt32());
+        Assert.Equal(fixtureCallsBefore, factory.ApiSportsFootballClient.FixturesCallCount);
+        Assert.Equal(statsCallsBefore, factory.ApiSportsFootballClient.FixturePlayerStatsCallCount);
+    }
+
+    [Fact]
+    public async Task SoccerApiSportsBridgePreview_ReturnsSafeExactNameCandidateReadOnly()
+    {
+        await using var factory = new SafetyTestApplicationFactory(ApiSportsLiveConfig());
+        using var client = factory.CreateClient();
+        await factory.EnsureDatabaseAsync();
+        await factory.AddSoccerPlatformIdentityCandidateAsync("Historical Test Forward", "Home FC");
+        await AddApiSportsHistoricalSoccerResultAsync(factory, "EPL", "EPL", 2025, "hist-1", new DateOnly(2026, 1, 1), "GOALS", "Goals");
+        var linksBefore = await CountApiSportsSoccerProviderPlayerLinksAsync(factory);
+
+        var response = await client.GetAsync("/api/debug/soccer/player-identity/bridge-preview?playerName=Historical%20Test%20Forward&minConfidence=0.98&limit=10");
+
+        await EnsureSuccessWithBodyAsync(response);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.False(json.GetProperty("callsExternalApis").GetBoolean());
+        Assert.True(json.GetProperty("readOnly").GetBoolean());
+        Assert.False(json.GetProperty("writesRows").GetBoolean());
+        Assert.True(json.GetProperty("guardrails").GetProperty("researchOnly").GetBoolean());
+        Assert.Equal(1, json.GetProperty("summary").GetProperty("safeBridgeCandidates").GetInt32());
+        var candidate = Assert.Single(json.GetProperty("candidates").EnumerateArray());
+        Assert.Equal("SafeExactName", candidate.GetProperty("category").GetString());
+        Assert.Equal("50001", candidate.GetProperty("providerPlayerId").GetString());
+        Assert.Equal(linksBefore, await CountApiSportsSoccerProviderPlayerLinksAsync(factory));
+    }
+
+    [Fact]
+    public async Task SoccerApiSportsBridgeApply_DryRunThenWritesSafeLinkIdempotently()
+    {
+        await using var factory = new SafetyTestApplicationFactory(ApiSportsLiveConfig());
+        using var client = factory.CreateClient();
+        await factory.EnsureDatabaseAsync();
+        var platformPlayerId = await factory.AddSoccerPlatformIdentityCandidateAsync("Historical Test Forward", "Home FC");
+        await AddApiSportsHistoricalSoccerResultAsync(factory, "EPL", "EPL", 2025, "hist-1", new DateOnly(2026, 1, 1), "GOALS", "Goals");
+        var before = await CountApiSportsSoccerProviderPlayerLinksAsync(factory);
+
+        var dryRunResponse = await client.PostAsJsonAsync("/api/debug/soccer/player-identity/bridge-apply", new
+        {
+            playerName = "Historical Test Forward",
+            dryRun = true,
+            forceWrite = false
+        });
+        await EnsureSuccessWithBodyAsync(dryRunResponse);
+        var dryRunJson = await dryRunResponse.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.True(dryRunJson.GetProperty("dryRun").GetBoolean());
+        Assert.False(dryRunJson.GetProperty("writesRows").GetBoolean());
+        Assert.Equal(1, dryRunJson.GetProperty("summary").GetProperty("safeBridgeCandidates").GetInt32());
+        Assert.Equal(before, await CountApiSportsSoccerProviderPlayerLinksAsync(factory));
+
+        var writeResponse = await client.PostAsJsonAsync("/api/debug/soccer/player-identity/bridge-apply", new
+        {
+            playerName = "Historical Test Forward",
+            dryRun = false,
+            forceWrite = true
+        });
+        await EnsureSuccessWithBodyAsync(writeResponse);
+        var writeJson = await writeResponse.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.True(writeJson.GetProperty("writesRows").GetBoolean());
+        Assert.Equal(1, writeJson.GetProperty("summary").GetProperty("writtenCount").GetInt32());
+        Assert.Equal(before + 1, await CountApiSportsSoccerProviderPlayerLinksAsync(factory));
+
+        using (var scope = factory.Services.CreateScope())
+        {
+            var dbContext = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+            var link = await dbContext.ProviderEntityLinks.SingleAsync(row =>
+                row.ProviderKey == "api-sports-football"
+                && row.ProviderEntityId == "50001"
+                && row.LinkStatus == "Approved");
+            Assert.Equal(platformPlayerId, link.CanonicalEntityId);
+            Assert.Equal("BridgeSafeExactName", link.LinkSource);
+        }
+
+        var secondResponse = await client.PostAsJsonAsync("/api/debug/soccer/player-identity/bridge-apply", new
+        {
+            playerName = "Historical Test Forward",
+            dryRun = false,
+            forceWrite = true
+        });
+        await EnsureSuccessWithBodyAsync(secondResponse);
+        Assert.Equal(before + 1, await CountApiSportsSoccerProviderPlayerLinksAsync(factory));
+    }
+
+    [Fact]
+    public async Task SoccerApiSportsBridgePreviewAndApply_SupportPagingAndExcludeAlreadyLinked()
+    {
+        await using var factory = new SafetyTestApplicationFactory(ApiSportsLiveConfig());
+        using var client = factory.CreateClient();
+        await factory.EnsureDatabaseAsync();
+        await factory.AddSoccerPlatformIdentityCandidateAsync("Bridge Alpha", "Home FC");
+        await factory.AddSoccerPlatformIdentityCandidateAsync("Bridge Beta", "Home FC");
+        await factory.AddSoccerPlatformIdentityCandidateAsync("Bridge Gamma", "Home FC");
+        await AddApiSportsHistoricalSoccerResultAsync(
+            factory,
+            "EPL",
+            "EPL",
+            2025,
+            "fixture-alpha",
+            new DateOnly(2026, 1, 1),
+            "GOALS",
+            "Goals",
+            providerPlayerId: "60001",
+            playerDisplayName: "Bridge Alpha");
+        await AddApiSportsHistoricalSoccerResultAsync(
+            factory,
+            "EPL",
+            "EPL",
+            2025,
+            "fixture-beta",
+            new DateOnly(2026, 1, 2),
+            "GOALS",
+            "Goals",
+            providerPlayerId: "60002",
+            playerDisplayName: "Bridge Beta");
+        await AddApiSportsHistoricalSoccerResultAsync(
+            factory,
+            "EPL",
+            "EPL",
+            2025,
+            "fixture-gamma",
+            new DateOnly(2026, 1, 3),
+            "GOALS",
+            "Goals",
+            providerPlayerId: "60003",
+            playerDisplayName: "Bridge Gamma");
+
+        var pageResponse = await client.GetAsync("/api/debug/soccer/player-identity/bridge-preview?category=SafeExactName&excludeAlreadyLinked=true&offset=1&limit=1");
+
+        await EnsureSuccessWithBodyAsync(pageResponse);
+        var pageJson = await pageResponse.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal(3, pageJson.GetProperty("summary").GetProperty("safeBridgeCandidates").GetInt32());
+        Assert.Equal(3, pageJson.GetProperty("pagination").GetProperty("filteredCandidateCount").GetInt32());
+        Assert.Equal(1, pageJson.GetProperty("pagination").GetProperty("returned").GetInt32());
+        Assert.True(pageJson.GetProperty("pagination").GetProperty("hasMore").GetBoolean());
+        var pagedCandidate = Assert.Single(pageJson.GetProperty("candidates").EnumerateArray());
+        Assert.Equal("Bridge Beta", pagedCandidate.GetProperty("platformPlayer").GetProperty("playerName").GetString());
+
+        var firstApplyResponse = await client.PostAsJsonAsync("/api/debug/soccer/player-identity/bridge-apply", new
+        {
+            category = "SafeExactName",
+            excludeAlreadyLinked = true,
+            limit = 2,
+            dryRun = false,
+            forceWrite = true
+        });
+        await EnsureSuccessWithBodyAsync(firstApplyResponse);
+        var firstApplyJson = await firstApplyResponse.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal(2, firstApplyJson.GetProperty("summary").GetProperty("writtenCount").GetInt32());
+
+        var secondApplyResponse = await client.PostAsJsonAsync("/api/debug/soccer/player-identity/bridge-apply", new
+        {
+            category = "SafeExactName",
+            excludeAlreadyLinked = true,
+            limit = 2,
+            dryRun = false,
+            forceWrite = true
+        });
+        await EnsureSuccessWithBodyAsync(secondApplyResponse);
+        var secondApplyJson = await secondApplyResponse.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal(1, secondApplyJson.GetProperty("summary").GetProperty("writtenCount").GetInt32());
+        Assert.Equal(3, await CountApiSportsSoccerProviderPlayerLinksAsync(factory));
+    }
+
+    [Fact]
+    public async Task SoccerApiSportsBridgePreview_BlocksDuplicatePlatformNameFromSafeLinking()
+    {
+        await using var factory = new SafetyTestApplicationFactory(ApiSportsLiveConfig());
+        using var client = factory.CreateClient();
+        await factory.EnsureDatabaseAsync();
+        await factory.AddSoccerPlatformIdentityCandidateAsync("Historical Test Forward", "Home FC");
+        await factory.AddSoccerPlatformIdentityCandidateAsync("Historical Test Forward", "Away FC", providerName: "Underdog");
+        await AddApiSportsHistoricalSoccerResultAsync(factory, "EPL", "EPL", 2025, "hist-1", new DateOnly(2026, 1, 1), "GOALS", "Goals");
+
+        var response = await client.GetAsync("/api/debug/soccer/player-identity/bridge-preview?playerName=Historical%20Test%20Forward&minConfidence=0.98&limit=10");
+
+        await EnsureSuccessWithBodyAsync(response);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal(0, json.GetProperty("summary").GetProperty("safeBridgeCandidates").GetInt32());
+        Assert.True(json.GetProperty("summary").GetProperty("needsReview").GetInt32() >= 1);
+        Assert.All(json.GetProperty("candidates").EnumerateArray(), candidate =>
+            Assert.Contains(candidate.GetProperty("blockingConflicts").EnumerateArray(), blocker => blocker.GetString() == "DuplicatePlatformPlayersWithSameNormalizedName"));
+    }
+
+    [Fact]
+    public async Task SoccerDuplicateBridgePreviewAndApply_LinksResolvableDuplicatePlatformPlayers()
+    {
+        await using var factory = new SafetyTestApplicationFactory(ApiSportsLiveConfig());
+        using var client = factory.CreateClient();
+        await factory.EnsureDatabaseAsync();
+        var prizePicksPlayerId = await factory.AddSoccerPlatformIdentityCandidateAsync("Duplicate Test Forward", "Home FC", providerName: "PrizePicks");
+        var underdogPlayerId = await factory.AddSoccerPlatformIdentityCandidateAsync("Duplicate Test Forward", "Home FC", providerName: "Underdog");
+        await AddApiSportsHistoricalSoccerResultAsync(
+            factory,
+            "EPL",
+            "EPL",
+            2025,
+            "fixture-duplicate",
+            new DateOnly(2026, 1, 1),
+            "GOALS",
+            "Goals",
+            providerPlayerId: "61001",
+            playerDisplayName: "Duplicate Test Forward");
+        var before = await CountApiSportsSoccerProviderPlayerLinksAsync(factory);
+
+        var previewResponse = await client.GetAsync("/api/debug/soccer/player-identity/duplicate-bridge-preview?playerName=Duplicate%20Test%20Forward&onlyResolvable=true&limit=10");
+
+        await EnsureSuccessWithBodyAsync(previewResponse);
+        var previewJson = await previewResponse.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.False(previewJson.GetProperty("callsExternalApis").GetBoolean());
+        Assert.True(previewJson.GetProperty("readOnly").GetBoolean());
+        Assert.False(previewJson.GetProperty("writesRows").GetBoolean());
+        Assert.Equal(1, previewJson.GetProperty("summary").GetProperty("resolvableDuplicateGroupCount").GetInt32());
+        Assert.Equal(2, previewJson.GetProperty("summary").GetProperty("duplicatePlayersLinkableCount").GetInt32());
+        var group = Assert.Single(previewJson.GetProperty("groups").EnumerateArray());
+        Assert.Equal("ResolvableDuplicateSameProvider", group.GetProperty("category").GetString());
+        Assert.Equal("61001", group.GetProperty("selectedProviderPlayerId").GetString());
+
+        var dryRunResponse = await client.PostAsJsonAsync("/api/debug/soccer/player-identity/duplicate-bridge-apply", new
+        {
+            playerName = "Duplicate Test Forward",
+            dryRun = true,
+            forceWrite = false,
+            limit = 10
+        });
+        await EnsureSuccessWithBodyAsync(dryRunResponse);
+        var dryRunJson = await dryRunResponse.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.True(dryRunJson.GetProperty("dryRun").GetBoolean());
+        Assert.False(dryRunJson.GetProperty("writesRows").GetBoolean());
+        Assert.Equal(before, await CountApiSportsSoccerProviderPlayerLinksAsync(factory));
+
+        var writeResponse = await client.PostAsJsonAsync("/api/debug/soccer/player-identity/duplicate-bridge-apply", new
+        {
+            playerName = "Duplicate Test Forward",
+            dryRun = false,
+            forceWrite = true,
+            limit = 10
+        });
+        await EnsureSuccessWithBodyAsync(writeResponse);
+        var writeJson = await writeResponse.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.True(writeJson.GetProperty("writesRows").GetBoolean());
+        Assert.Equal(2, writeJson.GetProperty("summary").GetProperty("writtenCount").GetInt32());
+        Assert.Equal(before + 2, await CountApiSportsSoccerProviderPlayerLinksAsync(factory));
+
+        using (var scope = factory.Services.CreateScope())
+        {
+            var dbContext = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+            var linkedPlayerIds = await dbContext.ProviderEntityLinks
+                .Where(link => link.ProviderKey == "api-sports-football"
+                    && link.ProviderEntityId == "61001"
+                    && link.LinkStatus == "Approved")
+                .Select(link => link.CanonicalEntityId)
+                .ToArrayAsync();
+            Assert.Contains(prizePicksPlayerId, linkedPlayerIds);
+            Assert.Contains(underdogPlayerId, linkedPlayerIds);
+        }
+    }
+
+    [Fact]
+    public async Task SoccerDuplicateBridgePreview_BlocksExistingMixedLinks()
+    {
+        await using var factory = new SafetyTestApplicationFactory(ApiSportsLiveConfig());
+        using var client = factory.CreateClient();
+        await factory.EnsureDatabaseAsync();
+        var platformPlayerId = await factory.AddSoccerPlatformIdentityCandidateAsync("Mixed Link Forward", "Home FC", providerName: "PrizePicks");
+        await factory.AddSoccerPlatformIdentityCandidateAsync("Mixed Link Forward", "Home FC", providerName: "Underdog");
+        await AddApiSportsHistoricalSoccerResultAsync(
+            factory,
+            "EPL",
+            "EPL",
+            2025,
+            "fixture-mixed",
+            new DateOnly(2026, 1, 1),
+            "GOALS",
+            "Goals",
+            providerPlayerId: "62001",
+            playerDisplayName: "Mixed Link Forward");
+        await AddApiSportsProviderEntityLinkAsync(factory, platformPlayerId, "different-provider-player", "Mixed Link Forward", "TestMixedLink");
+
+        var response = await client.GetAsync("/api/debug/soccer/player-identity/duplicate-bridge-preview?playerName=Mixed%20Link%20Forward&onlyResolvable=false&limit=10");
+
+        await EnsureSuccessWithBodyAsync(response);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal(0, json.GetProperty("summary").GetProperty("resolvableDuplicateGroupCount").GetInt32());
+        var group = Assert.Single(json.GetProperty("groups").EnumerateArray());
+        Assert.Equal("ExistingMixedLinks", group.GetProperty("category").GetString());
+        Assert.Contains(group.GetProperty("blockingConflicts").EnumerateArray(), blocker => blocker.GetString() == "DuplicatePlatformPlayerAlreadyLinkedToDifferentApiSportsProviderPlayer");
+    }
+
+    [Fact]
     public async Task ApiSportsWorldCupCoverage_ReturnsPersistedResultCountsReadOnly()
     {
         await using var factory = new SafetyTestApplicationFactory(ApiSportsLiveConfig());
@@ -4677,6 +5027,39 @@ public sealed class RefreshSafetyTests
             && link.EntityType == "Player");
     }
 
+    private static async Task AddApiSportsProviderEntityLinkAsync(
+        SafetyTestApplicationFactory factory,
+        Guid platformPlayerId,
+        string providerPlayerId,
+        string providerPlayerName,
+        string linkSource)
+    {
+        using var scope = factory.Services.CreateScope();
+        var dbContext = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+        var sport = await dbContext.Sports.SingleAsync(row => row.Code == "SOCCER");
+        var player = await dbContext.Players.SingleAsync(row => row.Id == platformPlayerId);
+        dbContext.ProviderEntityLinks.Add(new ProviderEntityLink
+        {
+            Id = Guid.NewGuid(),
+            SportId = sport.Id,
+            EntityType = "Player",
+            CanonicalEntityId = player.Id,
+            CanonicalEntityKind = "Player",
+            CanonicalEntityName = player.DisplayName,
+            ProviderKey = "api-sports-football",
+            ProviderEntityId = providerPlayerId,
+            ProviderEntityName = providerPlayerName,
+            Confidence = 1m,
+            LinkStatus = "Approved",
+            LinkSource = linkSource,
+            CreatedAtUtc = DateTimeOffset.UtcNow,
+            UpdatedAtUtc = DateTimeOffset.UtcNow,
+            ApprovedAtUtc = DateTimeOffset.UtcNow,
+            ApprovedBy = "test"
+        });
+        await dbContext.SaveChangesAsync();
+    }
+
     private static async Task<int> CountTheOddsSoccerAliasLinksAsync(SafetyTestApplicationFactory factory)
     {
         using var scope = factory.Services.CreateScope();
@@ -4903,7 +5286,9 @@ public sealed class RefreshSafetyTests
         string fixtureId,
         DateOnly eventDate,
         string statKey,
-        string propTypeName)
+        string propTypeName,
+        string providerPlayerId = "50001",
+        string playerDisplayName = "Historical Test Forward")
     {
         using var scope = factory.Services.CreateScope();
         var dbContext = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
@@ -4957,7 +5342,6 @@ public sealed class RefreshSafetyTests
             dbContext.PropTypes.Add(propType);
         }
 
-        var providerPlayerId = "50001";
         var player = await dbContext.PlayerExternalRefs
             .Include(reference => reference.Player)
             .Where(reference => reference.Provider == "api-sports-football"
@@ -4969,7 +5353,7 @@ public sealed class RefreshSafetyTests
             player = new Player
             {
                 Id = Guid.NewGuid(),
-                DisplayName = "Historical Test Forward",
+                DisplayName = playerDisplayName,
                 TeamId = team.Id,
                 LeagueId = league.Id,
                 Position = "F"

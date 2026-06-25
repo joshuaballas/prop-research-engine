@@ -438,6 +438,73 @@ Invoke-RestMethod -Method Post "$base/api/debug/soccer/results/api-sports/histor
 
 Configured competitions live under `ApiSports:Football:HistoricalCompetitions` and default to EPL, La Liga, Bundesliga, Serie A, Ligue 1, MLS, and Champions League. Coverage status reads only local `prop_results` for Goals, Assists, Shots, and Shots On Target. Historical backfill defaults to `dryRun=true`, requires `forceLive=true` for API-Sports fixture/stat discovery, and is limited to `maxDays` default `7` per request. With `dryRun=false&forceLive=true`, it writes only Goals, Assists, Shots, and Shots On Target idempotently by `external_source_identifier=api-sports-football:{fixtureId}:{playerId}:{statKey}` and reports inserted/updated/unchanged rows plus `coverageByDate`. It does not enable Soccer grading, Soccer predictions, or Soccer Entry Builder.
 
+Persisted historical rows can be inspected without provider calls:
+
+```powershell
+Invoke-RestMethod "$base/api/debug/soccer/player-history?providerPlayerId=<apiSportsPlayerId>&propType=Shots&competitionKey=EPL&fromDate=2026-01-01&toDate=2026-12-31&limit=50" |
+  ConvertTo-Json -Depth 80
+
+Invoke-RestMethod "$base/api/debug/soccer/player-history?playerName=Erling%20Haaland&fromDate=2026-01-01&toDate=2026-12-31&limit=25" |
+  ConvertTo-Json -Depth 80
+
+Invoke-RestMethod "$base/api/debug/soccer/player-history/readiness" |
+  ConvertTo-Json -Depth 80
+
+Invoke-RestMethod "$base/api/debug/soccer/player-identity/bridge-preview?playerName=Erling%20Haaland&minConfidence=0.98&limit=25" |
+  ConvertTo-Json -Depth 80
+
+# Continue through safe unlinked candidates in pages.
+Invoke-RestMethod "$base/api/debug/soccer/player-identity/bridge-preview?category=SafeExactName&excludeAlreadyLinked=true&offset=0&limit=500" |
+  ConvertTo-Json -Depth 80
+
+# Dry-run safe bridge apply first:
+Invoke-RestMethod -Method Post "$base/api/debug/soccer/player-identity/bridge-apply" `
+  -ContentType "application/json" `
+  -Body '{"playerName":"Erling Haaland","dryRun":true,"minConfidence":0.98,"limit":25}' |
+  ConvertTo-Json -Depth 80
+
+# Dry-run the next safe unlinked page:
+Invoke-RestMethod -Method Post "$base/api/debug/soccer/player-identity/bridge-apply" `
+  -ContentType "application/json" `
+  -Body '{"category":"SafeExactName","excludeAlreadyLinked":true,"offset":0,"limit":500,"dryRun":true,"minConfidence":0.98}' |
+  ConvertTo-Json -Depth 80
+
+# Only after reviewing dry-run:
+Invoke-RestMethod -Method Post "$base/api/debug/soccer/player-identity/bridge-apply" `
+  -ContentType "application/json" `
+  -Body '{"category":"SafeExactName","excludeAlreadyLinked":true,"offset":0,"limit":500,"dryRun":false,"forceWrite":true,"minConfidence":0.98}' |
+  ConvertTo-Json -Depth 80
+
+# Duplicate platform-player grouped review. Saves full output, prints only summary/pagination.
+$stamp = Get-Date -Format "yyyyMMdd-HHmmss"
+$previewPath = "tmp-soccer-duplicate-bridge-preview-$stamp.json"
+$preview = Invoke-RestMethod "$base/api/debug/soccer/player-identity/duplicate-bridge-preview?onlyResolvable=true&offset=0&limit=500&minConfidence=0.98"
+$preview | ConvertTo-Json -Depth 100 | Set-Content $previewPath
+$preview | Select-Object summary,pagination | ConvertTo-Json -Depth 20
+
+# Dry-run grouped apply. Saves full output, prints only summary/pagination.
+$dryRunPath = "tmp-soccer-duplicate-bridge-apply-dryrun-$stamp.json"
+$dryRun = Invoke-RestMethod -Method Post "$base/api/debug/soccer/player-identity/duplicate-bridge-apply" `
+  -ContentType "application/json" `
+  -Body '{"onlyResolvable":true,"offset":0,"limit":500,"dryRun":true,"minConfidence":0.98}'
+$dryRun | ConvertTo-Json -Depth 100 | Set-Content $dryRunPath
+$dryRun | Select-Object summary,pagination | ConvertTo-Json -Depth 20
+
+# Only after reviewing the saved dry-run JSON.
+$writePath = "tmp-soccer-duplicate-bridge-apply-write-$stamp.json"
+$write = Invoke-RestMethod -Method Post "$base/api/debug/soccer/player-identity/duplicate-bridge-apply" `
+  -ContentType "application/json" `
+  -Body '{"onlyResolvable":true,"offset":0,"limit":500,"dryRun":false,"forceWrite":true,"minConfidence":0.98}'
+$write | ConvertTo-Json -Depth 100 | Set-Content $writePath
+$write | Select-Object summary,pagination | ConvertTo-Json -Depth 20
+```
+
+`player-history` matches by local `playerId`, API-Sports `player_external_refs`, approved API-Sports `provider_entity_links`, or local Soccer player name. It returns matched player info, linked API-Sports refs, rows grouped by stat, recent game-log rows, per-stat averages, per-competition breakdowns, and sample sizes. It is research-only: public Soccer grading, predictions, Top Picks, and Entry Builder remain disabled.
+
+`bridge-preview` and `bridge-apply` are the safe identity bridge workflow for platform/sportsbook Soccer players. Preview is read-only and returns `SafeExactName`, `NeedsReview`, `Conflict`, `AlreadyLinked`, and `NoCandidate` rows with reasons, blocking conflicts, total category counts, and pagination. Both endpoints support `offset`, `limit`, `category`, and `excludeAlreadyLinked`; preview defaults `excludeAlreadyLinked=false`, while apply defaults it to `true` so repeated safe applies can continue past already-approved rows. Apply is dry-run-first; real writes require `forceWrite=true` and only persist conflict-free `SafeExactName` rows as approved `provider_entity_links`. It never merges players, rewrites `prop_results`, calls providers, or enables public Soccer grading.
+
+`duplicate-bridge-preview` and `duplicate-bridge-apply` handle the next review tier: duplicate local platform player records sharing the same normalized name. A group is writable only when every duplicate platform player resolves to exactly one API-Sports provider player id and there are no mixed approved links. Writable groups are categorized `ResolvableDuplicateSameProvider`; blocked categories include `MultipleHistoricalCandidates`, `ExistingMixedLinks`, `MissingHistoricalCandidate`, and `Conflict`. Apply remains dry-run-first, requires `forceWrite=true` for writes, writes approved `provider_entity_links` for unlinked local duplicate players only, and never merges players or rewrites historical results.
+
 ```powershell
 Invoke-RestMethod "$base/api/debug/soccer/results/api-sports/world-cup/coverage?fromDate=2026-06-11&toDate=2026-06-21" |
   ConvertTo-Json -Depth 60

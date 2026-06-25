@@ -232,6 +232,40 @@ The World Cup backfill endpoint is intentionally narrow: API-Sports Football onl
 
 Broader current-year Soccer history is guarded debug-only. `GET /api/debug/soccer/results/api-sports/historical/coverage-status` reports configured API-Sports Football historical competitions and local imported coverage for Goals, Assists, Shots, and Shots On Target. `POST /api/debug/soccer/results/api-sports/historical/backfill-completed` can dry-run one configured competition with `forceLive=true` to discover completed fixtures and preview player-stat rows for those same four stats. `dryRun=false&forceLive=true` writes rows idempotently by `external_source_identifier=api-sports-football:{fixtureId}:{playerId}:{statKey}`. Requests are limited to `maxDays` default `7`; larger ranges are blocked before API calls. The default configured set is EPL, La Liga, Bundesliga, Serie A, Ligue 1, MLS, and Champions League. Public Soccer grading, Soccer predictions, and Soccer Entry Builder remain disabled.
 
+`GET /api/debug/soccer/player-history` exposes that persisted API-Sports Football history for research/detail diagnostics only. It accepts `playerId`, `providerPlayerId`, or `playerName`, plus optional `propType`, `fromDate`, `toDate`, `competitionKey`, and `limit`. Matching uses local `players.id`, `player_external_refs` with `provider=api-sports-football`, and approved API-Sports `provider_entity_links`; it never calls API-Sports. The response includes matched player info, API-Sports refs/links, rows grouped by stat, recent game logs, per-stat averages, per-competition breakdowns, sample sizes, and hard guardrails showing public Soccer grading, predictions, Top Picks, and Entry Builder remain disabled. `GET /api/debug/soccer/player-history/readiness` summarizes how many historical API-Sports result players and Soccer platform players can already bridge through those identity links.
+
+`GET /api/debug/soccer/player-identity/bridge-preview` is the read-only review queue for linking local platform/sportsbook Soccer players to historical API-Sports player ids. It compares normalized display names, existing API-Sports refs, existing approved provider links, duplicate local player names, and available competition context. Categories are `SafeExactName`, `NeedsReview`, `Conflict`, `AlreadyLinked`, and `NoCandidate`. Preview supports `offset`, `limit`, `category`, and `excludeAlreadyLinked=false` by default so reviewers can inspect linked and unlinked rows. `POST /api/debug/soccer/player-identity/bridge-apply` supports the same paging/filtering fields, defaults `excludeAlreadyLinked=true`, and defaults to `dryRun=true`; real writes require `dryRun=false` and `forceWrite=true`, and only conflict-free `SafeExactName` rows are approved. The apply step writes `provider_entity_links` with `provider_key=api-sports-football`; it does not merge duplicate local players, move historical `prop_results`, call API-Sports, or enable public Soccer grading.
+
+To continue safe linking after a first page has been approved, use `category=SafeExactName&excludeAlreadyLinked=true` with `limit=500`. Repeating apply at `offset=0` will keep selecting the next safe unlinked candidates because already-linked rows are filtered before pagination.
+
+Duplicate platform-player rows have a separate grouped workflow. `GET /api/debug/soccer/player-identity/duplicate-bridge-preview` groups local Soccer platform player records by normalized name and reports whether the duplicate group is safely resolvable to one API-Sports provider player id. `POST /api/debug/soccer/player-identity/duplicate-bridge-apply` defaults to `dryRun=true`; real writes require `dryRun=false` and `forceWrite=true`, and only `ResolvableDuplicateSameProvider` groups are approved. Blocked groups include `MultipleHistoricalCandidates`, `ExistingMixedLinks`, `MissingHistoricalCandidate`, and `Conflict`. The workflow writes approved `provider_entity_links` for unlinked local duplicate players, does not merge player rows, does not rewrite `prop_results`, and keeps public Soccer grading, predictions, Top Picks, and Entry Builder disabled.
+
+Useful review pattern:
+
+```powershell
+$base = "http://localhost:5299"
+$stamp = Get-Date -Format "yyyyMMdd-HHmmss"
+
+$previewPath = "tmp-soccer-duplicate-bridge-preview-$stamp.json"
+$preview = Invoke-RestMethod "$base/api/debug/soccer/player-identity/duplicate-bridge-preview?onlyResolvable=true&offset=0&limit=500&minConfidence=0.98"
+$preview | ConvertTo-Json -Depth 100 | Set-Content $previewPath
+$preview | Select-Object summary,pagination | ConvertTo-Json -Depth 20
+
+$dryRunPath = "tmp-soccer-duplicate-bridge-apply-dryrun-$stamp.json"
+$dryRun = Invoke-RestMethod -Method Post "$base/api/debug/soccer/player-identity/duplicate-bridge-apply" `
+  -ContentType "application/json" `
+  -Body '{"onlyResolvable":true,"offset":0,"limit":500,"dryRun":true,"minConfidence":0.98}'
+$dryRun | ConvertTo-Json -Depth 100 | Set-Content $dryRunPath
+$dryRun | Select-Object summary,pagination | ConvertTo-Json -Depth 20
+
+$writePath = "tmp-soccer-duplicate-bridge-apply-write-$stamp.json"
+$write = Invoke-RestMethod -Method Post "$base/api/debug/soccer/player-identity/duplicate-bridge-apply" `
+  -ContentType "application/json" `
+  -Body '{"onlyResolvable":true,"offset":0,"limit":500,"dryRun":false,"forceWrite":true,"minConfidence":0.98}'
+$write | ConvertTo-Json -Depth 100 | Set-Content $writePath
+$write | Select-Object summary,pagination | ConvertTo-Json -Depth 20
+```
+
 Supported mappings include goals, assists, shots, shots on target, passes attempted, tackles, fouls, fouls drawn, offsides, goalie saves for goalkeepers, and attempted dribbles. Conservative mappings such as Goal + Assist, Cards, Goals Allowed, and Shots Assisted are flagged as `NeedsConfirmation` in import diagnostics.
 
 Soccer prop type display names are not unique because period-specific and combo markets can share customer-facing names. API-Sports result imports resolve prop types by Sport + canonical `statKey`, not display name.
@@ -280,7 +314,7 @@ The spike-status alias summary intentionally separates `aliasPlatformPlayerNames
 
 ## Public History Still Disabled
 
-Soccer result grading and public player prop history are intentionally unavailable until the Soccer import workflow is promoted beyond debug-only and grading semantics are explicitly enabled.
+Soccer result grading and public player prop history are intentionally unavailable until the Soccer import workflow is promoted beyond debug-only and grading semantics are explicitly enabled. The debug player-history endpoint above is research-only and does not change public `/api/markets/*` behavior.
 
 - `/api/markets/prop-history?sport=SOCCER...` returns `Soccer history is not available yet.`
 - Model Performance should not include Soccer as graded performance.

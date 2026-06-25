@@ -248,7 +248,7 @@ public sealed class ApplicationDbContext(DbContextOptions<ApplicationDbContext> 
             entity.HasIndex(x => x.CanonicalEntityId).HasDatabaseName("ix_provider_entity_links_canonical_entity_id");
             entity.HasIndex(x => new { x.ProviderKey, x.EntityType, x.ProviderEntityId }).HasDatabaseName("ix_provider_entity_links_provider_identity");
             entity.HasIndex(x => new { x.SportId, x.EntityType, x.LinkStatus }).HasDatabaseName("ix_provider_entity_links_sport_entity_status");
-            entity.HasIndex(x => new { x.ProviderKey, x.EntityType, x.ProviderEntityId, x.SportId, x.LinkStatus })
+            entity.HasIndex(x => new { x.ProviderKey, x.EntityType, x.ProviderEntityId, x.SportId, x.LinkStatus, x.CanonicalEntityId })
                 .IsUnique()
                 .HasDatabaseName("ix_provider_entity_links_provider_identity_status");
         });
