@@ -255,6 +255,8 @@ function TopPickControls({
         <Stack spacing={1}>
           <Stack direction="row" spacing={1} alignItems="center">
             <TextField
+              id="top-picks-mobile-search"
+              name="top-picks-mobile-search"
               label="Search player"
               size="small"
               fullWidth
@@ -271,7 +273,7 @@ function TopPickControls({
               Filters
             </Button>
           </Stack>
-          <TextField label="Sort by" size="small" select value={filters.sort} onChange={(event) => updateFilter('sort', event.target.value)} fullWidth>
+          <TextField id="top-picks-mobile-sort" name="top-picks-mobile-sort" label="Sort by" size="small" select value={filters.sort} onChange={(event) => updateFilter('sort', event.target.value)} fullWidth>
             {sortOptions.map((item) => (
               <MenuItem key={item} value={item}>
                 {item}
@@ -280,21 +282,21 @@ function TopPickControls({
           </TextField>
           <Collapse in={filtersOpen} timeout="auto" unmountOnExit>
             <Stack spacing={1} sx={{ pt: 0.25 }}>
-              <TextField label="Sport" size="small" select value={filters.sport} onChange={(event) => updateFilter('sport', event.target.value)} fullWidth>
+              <TextField id="top-picks-mobile-sport" name="top-picks-mobile-sport" label="Sport" size="small" select value={filters.sport} onChange={(event) => updateFilter('sport', event.target.value)} fullWidth>
                 {sportOptions.map((item) => (
                   <MenuItem key={item} value={item}>
                     {item}
                   </MenuItem>
                 ))}
               </TextField>
-              <TextField label="Provider" size="small" select value={filters.provider} onChange={(event) => updateFilter('provider', event.target.value)} fullWidth>
+              <TextField id="top-picks-mobile-provider" name="top-picks-mobile-provider" label="Provider" size="small" select value={filters.provider} onChange={(event) => updateFilter('provider', event.target.value)} fullWidth>
                 {providerOptions.map((item) => (
                   <MenuItem key={item} value={item}>
                     {item}
                   </MenuItem>
                 ))}
               </TextField>
-              <TextField label="Category" size="small" select value={filters.providerCategory} onChange={(event) => updateFilter('providerCategory', event.target.value)} fullWidth>
+              <TextField id="top-picks-mobile-provider-category" name="top-picks-mobile-provider-category" label="Category" size="small" select value={filters.providerCategory} onChange={(event) => updateFilter('providerCategory', event.target.value)} fullWidth>
                 {providerCategoryOptions.map((item) => (
                   <MenuItem key={item} value={item}>
                     {item}
@@ -302,7 +304,7 @@ function TopPickControls({
                 ))}
               </TextField>
               {showOpportunityFilter ? (
-                <TextField label="Opportunity" size="small" select value={filters.opportunity} onChange={(event) => updateFilter('opportunity', event.target.value)} fullWidth>
+                <TextField id="top-picks-mobile-opportunity" name="top-picks-mobile-opportunity" label="Opportunity" size="small" select value={filters.opportunity} onChange={(event) => updateFilter('opportunity', event.target.value)} fullWidth>
                   {opportunityOptions.map((item) => (
                     <MenuItem key={item} value={item}>
                       {item}
@@ -310,7 +312,7 @@ function TopPickControls({
                   ))}
                 </TextField>
               ) : null}
-              <TextField label="Trust" size="small" select value={filters.trust} onChange={(event) => updateFilter('trust', event.target.value)} fullWidth>
+              <TextField id="top-picks-mobile-trust" name="top-picks-mobile-trust" label="Trust" size="small" select value={filters.trust} onChange={(event) => updateFilter('trust', event.target.value)} fullWidth>
                 {['All', 'High', 'Medium', 'Low'].map((item) => (
                   <MenuItem key={item} value={item}>
                     {item}
@@ -336,6 +338,8 @@ function TopPickControls({
     >
       <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
         <TextField
+          id="top-picks-desktop-search"
+          name="top-picks-desktop-search"
           label="Search player"
           size="small"
           fullWidth
@@ -343,21 +347,21 @@ function TopPickControls({
           onChange={(event) => updateFilter('search', event.target.value)}
           sx={{ maxWidth: 360, minWidth: 300 }}
         />
-        <TextField label="Sport" size="small" select value={filters.sport} onChange={(event) => updateFilter('sport', event.target.value)} sx={{ width: 122 }}>
+        <TextField id="top-picks-desktop-sport" name="top-picks-desktop-sport" label="Sport" size="small" select value={filters.sport} onChange={(event) => updateFilter('sport', event.target.value)} sx={{ width: 122 }}>
           {sportOptions.map((item) => (
             <MenuItem key={item} value={item}>
               {item}
             </MenuItem>
           ))}
         </TextField>
-        <TextField label="Provider" size="small" select value={filters.provider} onChange={(event) => updateFilter('provider', event.target.value)} sx={{ width: 168 }}>
+        <TextField id="top-picks-desktop-provider" name="top-picks-desktop-provider" label="Provider" size="small" select value={filters.provider} onChange={(event) => updateFilter('provider', event.target.value)} sx={{ width: 168 }}>
           {providerOptions.map((item) => (
             <MenuItem key={item} value={item}>
               {item}
             </MenuItem>
           ))}
         </TextField>
-        <TextField label="Category" size="small" select value={filters.providerCategory} onChange={(event) => updateFilter('providerCategory', event.target.value)} sx={{ width: 132 }}>
+        <TextField id="top-picks-desktop-provider-category" name="top-picks-desktop-provider-category" label="Category" size="small" select value={filters.providerCategory} onChange={(event) => updateFilter('providerCategory', event.target.value)} sx={{ width: 132 }}>
           {providerCategoryOptions.map((item) => (
             <MenuItem key={item} value={item}>
               {item}
@@ -365,7 +369,7 @@ function TopPickControls({
           ))}
         </TextField>
         {showOpportunityFilter ? (
-          <TextField label="Opportunity" size="small" select value={filters.opportunity} onChange={(event) => updateFilter('opportunity', event.target.value)} sx={{ width: 138 }}>
+          <TextField id="top-picks-desktop-opportunity" name="top-picks-desktop-opportunity" label="Opportunity" size="small" select value={filters.opportunity} onChange={(event) => updateFilter('opportunity', event.target.value)} sx={{ width: 138 }}>
             {opportunityOptions.map((item) => (
               <MenuItem key={item} value={item}>
                 {item}
@@ -373,14 +377,14 @@ function TopPickControls({
             ))}
           </TextField>
         ) : null}
-        <TextField label="Trust" size="small" select value={filters.trust} onChange={(event) => updateFilter('trust', event.target.value)} sx={{ width: 132 }}>
+        <TextField id="top-picks-desktop-trust" name="top-picks-desktop-trust" label="Trust" size="small" select value={filters.trust} onChange={(event) => updateFilter('trust', event.target.value)} sx={{ width: 132 }}>
           {['All', 'High', 'Medium', 'Low'].map((item) => (
             <MenuItem key={item} value={item}>
               {item}
             </MenuItem>
           ))}
         </TextField>
-        <TextField label="Sort by" size="small" select value={filters.sort} onChange={(event) => updateFilter('sort', event.target.value)} sx={{ width: 126 }}>
+        <TextField id="top-picks-desktop-sort" name="top-picks-desktop-sort" label="Sort by" size="small" select value={filters.sort} onChange={(event) => updateFilter('sort', event.target.value)} sx={{ width: 126 }}>
           {sortOptions.map((item) => (
             <MenuItem key={item} value={item}>
               {item}

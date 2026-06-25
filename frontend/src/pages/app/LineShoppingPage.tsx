@@ -102,6 +102,7 @@ export function LineShoppingPage() {
       </Grid>
 
       <MarketFilters
+        idPrefix="line-shopping-filters"
         values={filters}
         onValuesChange={setFilters}
         scannerFields

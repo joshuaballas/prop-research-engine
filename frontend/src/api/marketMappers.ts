@@ -54,12 +54,7 @@ function mapMarketGroupToOpportunity(group: MarketGroupDto, index: number, sourc
       : showExpectedValue
         ? undefined
         : 'Sportsbook EV requires odds/break-even pricing.');
-  const provider = cleanProvider(
-    readString(group, 'entryProvider', 'EntryProvider') ??
-      readString(group, 'bestBookmaker', 'BestBookmaker') ??
-      readString(group, 'providerCategory', 'ProviderCategory') ??
-      'Unknown'
-  );
+  const provider = resolveDisplayProvider(group, providerCategory);
   const entryCompatibilityGroup = readString(group, 'entryCompatibilityGroup', 'EntryCompatibilityGroup') ?? provider.replace(/\s+/g, '');
   const propType = readString(group, 'normalizedPropType', 'NormalizedPropType') ?? 'Market';
   const event = formatEvent(readString(group, 'awayTeam', 'AwayTeam'), readString(group, 'homeTeam', 'HomeTeam'));
@@ -212,6 +207,20 @@ function mapPlayerHistorySummary(group: MarketGroupDto): PlayerHistorySummary | 
       stats: mapNumericHistoryStats(readField<Record<string, number | undefined>>(row, 'stats', 'Stats') ?? {})
     }))
   };
+}
+
+function resolveDisplayProvider(group: MarketGroupDto, providerCategory: ProviderCategory) {
+  const entryProvider = readString(group, 'entryProvider', 'EntryProvider');
+  const bestBookmaker = readString(group, 'bestBookmaker', 'BestBookmaker');
+  const bestOverBookmaker = readString(group, 'bestOverBookmaker', 'BestOverBookmaker');
+  const bestUnderBookmaker = readString(group, 'bestUnderBookmaker', 'BestUnderBookmaker');
+  const provider = readString(group, 'provider', 'Provider');
+
+  if (providerCategory === 'Sportsbook') {
+    return cleanProvider(bestBookmaker ?? bestOverBookmaker ?? bestUnderBookmaker ?? provider ?? entryProvider ?? 'Sportsbook');
+  }
+
+  return cleanProvider(entryProvider ?? bestBookmaker ?? provider ?? 'Unknown');
 }
 
 function mapPlayerHistoryStats(source: Record<string, PlayerHistoryStatSummaryDto | undefined>): PlayerHistorySummary['stats'] {

@@ -90,21 +90,9 @@ export function MarketCard({ market }: { market: MarketOpportunity }) {
         }
         market={<OpportunityPickText side={market.side} propType={market.propType} line={market.line} />}
         provider={
-          market.providerCategory === 'Sportsbook' ? (
-            <Stack direction="row" justifyContent="space-between" alignItems="center" gap={1} flexWrap="wrap" useFlexGap sx={{ minHeight: 28 }}>
-              <Stack spacing={0}>
-                <Typography fontWeight={900}>{market.recommendationActionableForUser ? 'Sportsbook pick' : 'Sportsbook line'}</Typography>
-                <Typography variant="caption" color="text.secondary">
-                  Sportsbook line
-                </Typography>
-              </Stack>
-              <StatusRow market={market} />
-            </Stack>
-          ) : (
-            <OpportunityProviderRow provider={market.provider} category={market.providerCategory} sx={{ minHeight: 28 }}>
-              <StatusRow market={market} />
-            </OpportunityProviderRow>
-          )
+          <OpportunityProviderRow provider={market.provider || (market.providerCategory === 'Sportsbook' ? 'Sportsbook' : 'Unknown')} category={market.providerCategory} sx={{ minHeight: 28 }}>
+            <StatusRow market={market} />
+          </OpportunityProviderRow>
         }
         metrics={
           <Box>
@@ -127,6 +115,7 @@ export function MarketCard({ market }: { market: MarketOpportunity }) {
 function StatusRow({ market }: { market: MarketOpportunity }) {
   return (
     <Stack direction="row" gap={0.6} flexWrap="wrap" useFlexGap justifyContent="flex-end">
+      {market.providerCategory === 'Sportsbook' ? <StatusPill label={market.recommendationActionableForUser ? 'Sportsbook pick' : 'Sportsbook line'} /> : null}
       <StatusPill label={marketTagLabel(market.strategyClassification)} />
       {market.projectionModifier === 'Unknown Promo' ? null : <ProjectionModifierBadge modifier={market.projectionModifier} />}
     </Stack>

@@ -104,6 +104,7 @@ export function MarketsPage() {
       </Grid>
 
       <MarketFilters
+        idPrefix="prop-scanner-filters"
         scannerFields
         compactMobile
         classificationLabel="Trust"

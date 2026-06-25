@@ -30,6 +30,7 @@ interface MarketFiltersProps {
   showClassificationFilter?: boolean;
   scannerFields?: boolean;
   compactMobile?: boolean;
+  idPrefix?: string;
   values?: MarketFilterValues;
   onValuesChange?: (values: MarketFilterValues) => void;
   sportOptions?: MarketFilterOption[];
@@ -54,6 +55,7 @@ export function MarketFilters({
   showClassificationFilter = true,
   scannerFields = false,
   compactMobile = false,
+  idPrefix = 'market-filters',
   values,
   onValuesChange,
   sportOptions,
@@ -82,10 +84,16 @@ export function MarketFilters({
         }
       : { defaultValue };
 
-  const selectControls = (
+  const accessibilityProps = (key: keyof MarketFilterValues, variant: 'mobile' | 'desktop') => ({
+    id: `${idPrefix}-${variant}-${key}`,
+    name: `${idPrefix}-${variant}-${key}`
+  });
+
+  const renderSelectControls = (variant: 'mobile' | 'desktop') => (
     <>
       {scannerFields ? (
         <TextField
+          {...accessibilityProps('sport', variant)}
           label="Sport"
           size="small"
           select
@@ -101,6 +109,7 @@ export function MarketFilters({
       ) : null}
       {scannerFields ? (
         <TextField
+          {...accessibilityProps('provider', variant)}
           label="Provider"
           size="small"
           select
@@ -116,6 +125,7 @@ export function MarketFilters({
       ) : null}
       {(providerCategoryOptions?.length ?? 0) > 2 || !controlled ? (
         <TextField
+          {...accessibilityProps('providerCategory', variant)}
           label="Provider category"
           size="small"
           select
@@ -131,6 +141,7 @@ export function MarketFilters({
       ) : null}
       {showClassificationFilter ? (
         <TextField
+          {...accessibilityProps('trust', variant)}
           label={classificationLabel}
           size="small"
           select
@@ -148,6 +159,7 @@ export function MarketFilters({
         <>
           {(opportunityOptions?.length ?? 0) > 1 || !controlled ? (
             <TextField
+              {...accessibilityProps('opportunity', variant)}
               label="Opportunity"
               size="small"
               select
@@ -162,6 +174,7 @@ export function MarketFilters({
             </TextField>
           ) : null}
           <TextField
+            {...accessibilityProps('sort', variant)}
             label="Sort"
             size="small"
             select
@@ -225,6 +238,7 @@ export function MarketFilters({
       {compactMobile ? (
         <Stack direction="row" spacing={1} sx={{ display: { xs: 'flex', md: 'none' } }}>
           <TextField
+            {...accessibilityProps('search', 'mobile')}
             label="Search player"
             size="small"
             fullWidth
@@ -249,7 +263,7 @@ export function MarketFilters({
       {compactMobile ? (
         <Collapse in={mobileFiltersOpen} sx={{ display: { xs: 'block', md: 'none' } }}>
           <Stack spacing={1.25} sx={{ pt: 1.25 }}>
-            {selectControls}
+            {renderSelectControls('mobile')}
             {toggleControls}
           </Stack>
         </Collapse>
@@ -266,6 +280,7 @@ export function MarketFilters({
         }}
       >
         <TextField
+          {...accessibilityProps('search', 'desktop')}
           label="Search player"
           size="small"
           fullWidth
@@ -281,7 +296,7 @@ export function MarketFilters({
             minWidth: { md: 220 }
           }}
         />
-        {selectControls}
+        {renderSelectControls('desktop')}
         {toggleControls}
       </Stack>
     </Box>
@@ -396,12 +411,12 @@ function CheckboxGroup() {
   return (
     <Stack direction="row" spacing={0.35} flexWrap="wrap" useFlexGap sx={{ flexShrink: 0 }}>
       <FormControlLabel
-        control={<Checkbox defaultChecked size="small" />}
+        control={<Checkbox id="market-filters-uncontrolled-candidate-only" name="market-filters-uncontrolled-candidate-only" defaultChecked size="small" />}
         label="Candidate only"
         sx={{ mr: 0, whiteSpace: 'nowrap', '& .MuiFormControlLabel-label': { fontSize: 13, fontWeight: 800 } }}
       />
       <FormControlLabel
-        control={<Checkbox defaultChecked size="small" />}
+        control={<Checkbox id="market-filters-uncontrolled-dfs-actionable" name="market-filters-uncontrolled-dfs-actionable" defaultChecked size="small" />}
         label="DFS actionable"
         sx={{ mr: 0, whiteSpace: 'nowrap', '& .MuiFormControlLabel-label': { fontSize: 13, fontWeight: 800 } }}
       />

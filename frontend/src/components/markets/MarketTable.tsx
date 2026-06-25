@@ -101,16 +101,9 @@ export function MarketTable({ markets }: { markets: MarketOpportunity[] }) {
                   </TableCell>
                 ) : null}
                 <TableCell sx={{ overflow: 'hidden', py: 1.05 }}>
-                  {market.providerCategory === 'Sportsbook' ? (
-                    <Stack spacing={0.2}>
-                      <AppTableMetricValue>{market.recommendationActionableForUser ? 'Sportsbook pick' : 'Sportsbook line'}</AppTableMetricValue>
-                      <AppTableSecondaryText>
-                        Sportsbook line
-                      </AppTableSecondaryText>
-                    </Stack>
-                  ) : (
-                    <ProviderLabel provider={market.provider} category={market.providerCategory} compact />
-                  )}
+                  <Stack spacing={0.45} alignItems="flex-start">
+                    <ProviderLabel provider={market.provider || (market.providerCategory === 'Sportsbook' ? 'Sportsbook' : 'Unknown')} category={market.providerCategory} compact />
+                  </Stack>
                 </TableCell>
                 {showEvColumn ? (
                   <TableCell align="right" sx={{ py: 1.05 }}>
