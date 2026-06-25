@@ -181,6 +181,8 @@ Approved provider links are used by `/api/debug/soccer/results/api-sports/world-
 
 `/api/debug/soccer/results/api-sports/world-cup/prop-mapping-gap` is the read-only follow-up when grading coverage is blocked by `propTypeMappingMissing`. It uses only persisted API-Sports `prop_results`, persisted The Odds Soccer sportsbook `platform_props`, resolved fixture/provider-event pairs, approved The Odds alias links, and DB-backed API-Sports stat mappings. It separates missing The Odds market canonical mappings, API-Sports stats without provider mappings, canonical key mismatches, non-gradeable mappings, imported stat noise, and player-matched/stat-missing rows. It recommends review or mapping work but does not write mappings, grades, aliases, imports, or provider refreshes.
 
+`/api/debug/soccer/world-cup/spike-status` summarizes the spike without writing or calling providers. It combines The Odds ingestion coverage, fixture mapping, alias/link coverage, debug grading coverage, and prop/stat mapping gaps into a single `ResearchOnly` status. The response includes production guardrails showing public Soccer grading disabled, Soccer Entry Builder usage disabled, sportsbook context research-only, and automatic alias/stat-mapping approval disabled.
+
 `/api/debug/soccer/the-odds/api-sports/fixture-mapping-coverage` reports whether persisted real The Odds Soccer World Cup sportsbook provider events can be resolved to API-Sports fixtures. It uses only local context-v2 platform rows and imported API-Sports result rows, excludes synthetic provider event ids, applies date/team matching plus World Cup team aliases, and returns resolved, no-candidate, ambiguous, date-mismatch, team-mismatch, and missing-result statuses. Use this before expanding grading previews beyond the known working Uruguay vs Cape Verde event pair.
 
 `/api/debug/soccer/the-odds/world-cup/ingestion-coverage` audits persisted The Odds Soccer World Cup provider-event ingestion. It counts real context-v2 sportsbook provider events, buckets synthetic or legacy Soccer platform rows, summarizes imported API-Sports fixture/result coverage, surfaces the latest persisted Soccer The Odds refresh run when present, and reports gap analysis for API-Sports fixtures with results but no real The Odds event. It is read-only, does not refresh odds, does not import results, and does not enable public Soccer grading.
@@ -196,6 +198,8 @@ Approved provider links are used by `/api/debug/soccer/results/api-sports/world-
 See `docs/PROVIDER_IDENTITY_LINKING.md` for the durable provider identity model. `player_external_refs` remains supported for existing player-only compatibility, while `provider_entity_links` is the reusable identity inventory and review layer going forward.
 
 Public Soccer grading remains disabled while these diagnostics are reviewed.
+
+Public Soccer market reads are persisted-only and must remain research context. They should not call API-Sports or The Odds, should not write public Soccer performance rows, and should not make Soccer rows Entry Builder actionable. Response payloads force Soccer rows to `sportsbookContextResearchOnly=true` and `entryActionableForUser=false` as a production guardrail.
 
 ## Request-Limit Strategy
 
@@ -426,6 +430,9 @@ Invoke-RestMethod "$base/api/debug/soccer/results/api-sports/world-cup/grading-c
 
 Invoke-RestMethod "$base/api/debug/soccer/results/api-sports/world-cup/prop-mapping-gap?fromDate=2026-06-21&toDate=2026-06-24&includeSamples=true&maxSamples=100" |
   ConvertTo-Json -Depth 80
+
+Invoke-RestMethod "$base/api/debug/soccer/world-cup/spike-status?fromDate=2026-06-21&toDate=2026-06-24&includeDetails=true" |
+  ConvertTo-Json -Depth 100
 
 Invoke-RestMethod "$base/api/debug/soccer/the-odds/api-sports/fixture-mapping-coverage?fromDate=2026-06-11&toDate=2026-06-24&includeResolved=true&includeUnresolved=true&includeSamples=true&maxSamples=100" |
   ConvertTo-Json -Depth 80

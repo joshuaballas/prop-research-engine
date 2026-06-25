@@ -1013,7 +1013,7 @@ public static class PublicMarketsEndpoints
             summary = new
             {
                 activeCandidateCount = rows.Length,
-                actionableCandidateCount = rows.Count(row => row.EntryActionableForUser),
+                actionableCandidateCount = IsSoccerSport(effectiveSport) ? 0 : rows.Count(row => row.EntryActionableForUser),
                 returnedTopPicks = rows.Length,
                 totalActiveComparisonGroups = rows.Length
             },
@@ -1158,7 +1158,8 @@ public static class PublicMarketsEndpoints
             summary = new
             {
                 totalComparisonGroups = rows.Length,
-                totalActiveComparisonGroups = rows.Length
+                totalActiveComparisonGroups = rows.Length,
+                actionableComparisonGroups = IsSoccerSport(effectiveSport) ? 0 : rows.Count(row => row.EntryActionableForUser)
             },
             strategyClassificationSummary = rows
                 .GroupBy(row => string.IsNullOrWhiteSpace(row.StrategyClassification) ? "Unclassified" : row.StrategyClassification)
@@ -1264,6 +1265,18 @@ public static class PublicMarketsEndpoints
         if (eventStartTime.HasValue && details["eventStartTimeUtc"] is null)
         {
             details["eventStartTimeUtc"] = eventStartTime.Value;
+        }
+
+        if (IsSoccerSport(sport))
+        {
+            details["providerCategory"] = "Sportsbook";
+            details["entryProviderCategory"] = "Sportsbook";
+            details["entryActionableForUser"] = false;
+            details["sportsbookContextResearchOnly"] = true;
+            details["isResearchOnly"] = true;
+            details["supportedEntryTypes"] = new JsonArray();
+            details["entryRuleWarning"] = "Soccer World Cup sportsbook context is research-only and not Entry Builder playable.";
+            details["resultGradingSupported"] = false;
         }
 
         using var document = JsonSerializer.SerializeToDocument(details);

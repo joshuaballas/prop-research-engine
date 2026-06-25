@@ -245,6 +245,8 @@ The Soccer market refresh also creates normalized `games` / `teams` from The Odd
 
 `/api/debug/soccer/results/api-sports/world-cup/prop-mapping-gap` explains remaining Soccer prop/stat mapping blockers after event and player alias joins are resolved. It compares ungraded The Odds sportsbook context rows against API-Sports fixture result stats, reports missing The Odds market canonical mappings, missing API-Sports stat mappings, mapping-exists-but-not-gradeable rows, canonical mismatches, and imported-stat noise. It is diagnostic only: it does not create provider stat mappings, write grades, import results, refresh odds, or enable public Soccer grading.
 
+`/api/debug/soccer/world-cup/spike-status` is the roll-up status endpoint for the Soccer World Cup spike. It is read-only, never calls providers, and reports `productionReadiness.status=ResearchOnly`. It aggregates persisted ingestion, fixture mapping, alias, grading coverage, and prop/stat mapping diagnostics, then restates the hard guardrails: public Soccer grading is disabled, Soccer rows are not Entry Builder playable, sportsbook context is research-only, and alias/stat mapping approval remains manual.
+
 `/api/debug/soccer/the-odds/api-sports/fixture-mapping-coverage` is the read-only event bridge diagnostic for scaling beyond known single-event pairs. It lists persisted real The Odds Soccer World Cup sportsbook provider events, excludes synthetic ids such as `|balanced`, `|alternate`, and `SCR_game`, and reports whether each provider event resolves to exactly one API-Sports fixture using event date, kickoff tolerance, normalized team names, and known World Cup team aliases such as Cape Verde / Cape Verde Islands and USA / United States. It returns resolved, unresolved, ambiguous, no-candidate, date-mismatch, team-mismatch, and missing-result counts without importing results, refreshing odds, writing mappings, or enabling public Soccer grading.
 
 `/api/debug/soccer/the-odds/world-cup/ingestion-coverage` explains why fixture mapping coverage may only have one real provider event. It audits persisted The Odds Soccer World Cup sportsbook platform rows, buckets legacy/synthetic Soccer rows with exclusion reasons, compares against imported API-Sports fixture/result coverage, and surfaces the latest persisted Soccer The Odds refresh-run diagnostics when available. Use this before rerunning Soccer refreshes so the blocker is clear: missing context schema, event targeting, region/bookmaker filters, no sportsbook rows returned, or skipped ingestion. The endpoint is read-only and does not call providers.
@@ -285,6 +287,7 @@ Safety behavior:
 - `dryRun=true&forceLive=true` calls only event discovery, writes nothing, and returns `eventsDiscovered`, `eventsEligible`, `eventsToFetch`, `estimatedApiCalls`, skip reasons, and per-event request plans.
 - `dryRun=false&forceLive=true` writes provider context rows for the selected events.
 - Soccer sportsbook rows remain research-only and non-entry-actionable. Public Soccer grading remains disabled.
+- Public Soccer market reads may expose persisted market context, but response rows are forced to `entryActionableForUser=false`, `sportsbookContextResearchOnly=true`, and `entryProviderCategory=Sportsbook` as a backstop. Entry Builder must not treat Soccer sportsbook context as playable legs.
 
 ## Verification
 
@@ -338,6 +341,9 @@ Invoke-RestMethod "$base/api/debug/soccer/results/api-sports/world-cup/grading-c
 
 Invoke-RestMethod "$base/api/debug/soccer/results/api-sports/world-cup/prop-mapping-gap?fromDate=2026-06-21&toDate=2026-06-24&includeSamples=true&maxSamples=100" |
   ConvertTo-Json -Depth 80
+
+Invoke-RestMethod "$base/api/debug/soccer/world-cup/spike-status?fromDate=2026-06-21&toDate=2026-06-24&includeDetails=true" |
+  ConvertTo-Json -Depth 100
 
 Invoke-RestMethod "$base/api/debug/soccer/the-odds/api-sports/fixture-mapping-coverage?fromDate=2026-06-11&toDate=2026-06-24&includeResolved=true&includeUnresolved=true&includeSamples=true&maxSamples=100" |
   ConvertTo-Json -Depth 80

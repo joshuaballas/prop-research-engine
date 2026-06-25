@@ -79,3 +79,5 @@ Invoke-RestMethod -Method Post "$base/api/debug/soccer/results/api-sports/import
 Soccer public grading remains disabled until identity linking, provider event/team context, mapping confidence, and grading rules are explicitly approved. The Odds Soccer market refresh now persists event-level context for new rows, but The Odds does not currently provide stable provider player ids or player team fields in the player prop payload.
 
 `/api/debug/soccer/results/api-sports/world-cup/grading-preview` can use these canonical stat keys for a read-only preview once API-Sports result rows and The Odds Soccer platform rows join by event, normalized player name, and prop/stat key. That preview compares actual values to sportsbook context side/line only after the result row is joined. It does not write grades and does not change the `public_grading_enabled=false` Soccer gate.
+
+`NeedsConfirmation` mappings remain non-public-gradeable until explicitly reviewed. The Soccer spike status endpoint, `/api/debug/soccer/world-cup/spike-status`, reports these guardrails alongside prop/stat mapping blockers so public Soccer grading cannot be promoted accidentally.

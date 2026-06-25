@@ -1744,6 +1744,159 @@ public static class ResultsDebugEndpoints
         .WithName("TheOddsSoccerWorldCupIngestionCoverageDebug")
         .WithSummary("Read-only diagnostic for persisted The Odds Soccer World Cup provider event ingestion coverage.");
 
+        endpoints.MapGet("/api/debug/soccer/world-cup/spike-status", async (
+            DateOnly? fromDate,
+            DateOnly? toDate,
+            bool? includeDetails,
+            ApplicationDbContext dbContext,
+            CancellationToken cancellationToken) =>
+        {
+            var range = NormalizeApiSportsWorldCupDateRange(fromDate, toDate);
+            var resultRows = await LoadApiSportsMarketJoinResultRowsAsync(dbContext, range, null, cancellationToken);
+            var platformRows = await LoadApiSportsMarketJoinPlatformRowsAsync(dbContext, range, null, cancellationToken);
+            var mappingCoverage = BuildApiSportsSoccerFixtureMappingCoverage(
+                resultRows,
+                platformRows,
+                includeResolved: true,
+                includeUnresolved: true,
+                includeSamples: includeDetails != false,
+                maxSamples: 25);
+            var ingestionCoverage = await BuildTheOddsSoccerWorldCupIngestionCoverageAsync(
+                dbContext,
+                range,
+                resultRows,
+                platformRows,
+                mappingCoverage,
+                includeDetails != false,
+                sampleLimit: 25,
+                cancellationToken);
+            var gradingCoverage = BuildApiSportsSoccerGradingCoverageSummary(
+                resultRows,
+                platformRows,
+                includeFixtureDetails: includeDetails != false,
+                includeSamples: includeDetails != false,
+                maxFixtures: 50,
+                maxSamplesPerFixture: includeDetails != false ? 3 : 0);
+            var apiSportsMappings = await LoadApiSportsSoccerProviderStatMappingRowsAsync(dbContext, cancellationToken);
+            var propGap = BuildApiSportsSoccerPropMappingGapDiagnostic(
+                resultRows,
+                platformRows,
+                apiSportsMappings,
+                includeSamples: includeDetails != false,
+                sampleLimit: 25);
+            var aliasBatch = await BuildTheOddsApiSportsAliasBatchAsync(
+                dbContext,
+                range,
+                maxFixtures: 50,
+                sampleLimit: 5,
+                minimumConfidence: 0.94m,
+                includeExactNormalizedMatches: true,
+                includeTokenSubsetMatches: true,
+                maxLinks: 100,
+                includePlan: true,
+                cancellationToken);
+            var aliasLinksApproved = await CountApprovedTheOddsSoccerAliasLinksAsync(dbContext, cancellationToken);
+            var unresolvedAliasCandidates = aliasBatch.CandidateGroups.Sum(group =>
+                group.SafeCandidateCount + group.NeedsReviewCount + group.AmbiguousCount + group.NoCandidateCount);
+            var nonGradeableMappingRows = propGap.ApiSportsStatGaps
+                .Where(row => row.Category == "MappingExistsButNotGradeable")
+                .Sum(row => row.RowCount);
+            var importedStatNoiseRows = propGap.IgnoredNoise.Sum(row => row.RowCount);
+            var blockers = BuildSoccerWorldCupSpikeStatusBlockers(
+                gradingCoverage.Summary,
+                propGap.Summary,
+                unresolvedAliasCandidates,
+                nonGradeableMappingRows);
+            var readinessReasons = new[]
+            {
+                "Soccer World Cup is still a debug/research spike.",
+                "Public Soccer grading is disabled.",
+                "Soccer sportsbook context rows are research-only and not Entry Builder playable.",
+                "Alias and provider stat mapping approvals remain manual.",
+                "Needs-confirmation provider stat mappings are not public-gradeable."
+            };
+
+            return Results.Ok(new
+            {
+                generatedAtUtc = DateTimeOffset.UtcNow,
+                callsExternalApis = false,
+                readOnly = true,
+                writesRows = false,
+                sport = "SOCCER",
+                competition = "World Cup",
+                publicSoccerGradingEnabled = false,
+                entryBuilderEnabled = false,
+                scope = new
+                {
+                    range.FromDate,
+                    range.ToDate
+                },
+                productionReadiness = new
+                {
+                    status = "ResearchOnly",
+                    canShowPublicMarketContext = true,
+                    publicMarketContextCaution = "Persisted Soccer sportsbook context may be shown only as research-only market context.",
+                    canShowPublicGradedPerformance = false,
+                    canUseForEntryBuilder = false,
+                    reasons = readinessReasons
+                },
+                summary = new
+                {
+                    ingestionCoverage.Summary.RealTheOddsProviderEvents,
+                    ingestionCoverage.Summary.RealTheOddsPlatformRows,
+                    ingestionCoverage.Summary.ApiSportsFixturesWithResults,
+                    ingestionCoverage.Summary.ResolvedProviderEvents,
+                    ingestionCoverage.Summary.UnresolvedProviderEvents,
+                    aliasLinksApproved,
+                    unresolvedAliasCandidates,
+                    gradingCoverage.Summary.TotalCandidatePlatformRows,
+                    gradingCoverage.Summary.TotalImportedResultRows,
+                    gradingCoverage.Summary.TotalFullyJoinableRows,
+                    gradingCoverage.Summary.TotalGradedPreviewRows,
+                    gradingCoverage.Summary.TotalNoLineRows,
+                    gradingCoverage.Summary.OverallGradeCoverageRate,
+                    propMappingMissingRows = propGap.Summary.PropTypeMappingMissingRows,
+                    importedStatNoiseRows,
+                    nonGradeableMappingRows
+                },
+                guardrails = new
+                {
+                    publicEndpointsReadOnly = true,
+                    publicSoccerGradingDisabled = true,
+                    soccerEntryBuilderDisabled = true,
+                    sportsbookContextResearchOnly = true,
+                    autoAliasApprovalDisabled = true,
+                    autoStatMappingApprovalDisabled = true,
+                    needsConfirmationMappingsNotPublicGradeable = true
+                },
+                blockers,
+                recommendedNextAction = BuildSoccerWorldCupSpikeStatusRecommendation(blockers, propGap.RecommendedNextAction, gradingCoverage.RecommendedNextAction),
+                details = includeDetails != false
+                    ? new
+                    {
+                        ingestion = ingestionCoverage.Summary,
+                        fixtureMapping = mappingCoverage.Summary,
+                        alias = new
+                        {
+                            aliasBatch.ResolvedPairsEvaluated,
+                            aliasBatch.CandidatesEvaluated,
+                            aliasBatch.SafeCandidates,
+                            aliasLinksApproved,
+                            unresolvedAliasCandidates,
+                            candidateGroups = aliasBatch.CandidateGroups
+                        },
+                        grading = gradingCoverage.Summary,
+                        propMapping = propGap.Summary,
+                        propMappingGapsByCategory = propGap.GapsByCategory,
+                        propMappingGapsByApiSportsStatKey = propGap.GapsByApiSportsStatKey,
+                        propMappingGapsByProviderMarketKey = propGap.GapsByProviderMarketKey
+                    }
+                    : null
+            });
+        })
+        .WithName("SoccerWorldCupSpikeStatusDebug")
+        .WithSummary("Read-only Soccer World Cup spike status and production guardrail summary.");
+
         endpoints.MapGet("/api/debug/soccer/player-identity/the-odds/api-sports/alias-candidates", async (
             string? fixtureId,
             string? providerEventId,
@@ -5307,6 +5460,18 @@ public static class ResultsDebugEndpoints
             .ToArrayAsync(cancellationToken);
     }
 
+    private static async Task<int> CountApprovedTheOddsSoccerAliasLinksAsync(
+        ApplicationDbContext dbContext,
+        CancellationToken cancellationToken)
+    {
+        return await dbContext.ProviderEntityLinks
+            .AsNoTracking()
+            .CountAsync(link => link.ProviderKey == TheOddsSoccerAliasProviderKey
+                && link.EntityType == "Player"
+                && link.LinkStatus == "Approved",
+                cancellationToken);
+    }
+
     private static ApiSportsMarketJoinPreview BuildApiSportsMarketJoinPreview(
         IReadOnlyList<ApiSportsMarketJoinResultRow> resultRows,
         IReadOnlyList<ApiSportsMarketJoinPlatformRow> platformRows,
@@ -6078,6 +6243,81 @@ public static class ResultsDebugEndpoints
         return propTypeMappingMissingRows == 0
             ? "No prop/stat mapping gaps were detected for resolved Soccer fixture pairs."
             : "Mapping gaps remain but require manual review before any Soccer grading expansion.";
+    }
+
+    private static IReadOnlyList<object> BuildSoccerWorldCupSpikeStatusBlockers(
+        ApiSportsSoccerGradingCoverageTopLevelSummary gradingSummary,
+        ApiSportsSoccerPropMappingGapSummary propGapSummary,
+        int unresolvedAliasCandidates,
+        int nonGradeableMappingRows)
+    {
+        var blockers = new List<object>
+        {
+            new
+            {
+                area = "ProductionGate",
+                severity = "High",
+                description = "Public Soccer grading is disabled and must remain off until explicitly promoted.",
+                requiredBeforePublicGrading = true
+            },
+            new
+            {
+                area = "EntryBuilder",
+                severity = "High",
+                description = "Soccer sportsbook context is research-only and cannot be used as Entry Builder legs.",
+                requiredBeforePublicGrading = false
+            }
+        };
+
+        if (propGapSummary.PropTypeMappingMissingRows > 0 || nonGradeableMappingRows > 0)
+        {
+            blockers.Add(new
+            {
+                area = "ProviderStatMapping",
+                severity = "Medium",
+                description = $"{propGapSummary.PropTypeMappingMissingRows} rows still require prop/stat mapping review; {nonGradeableMappingRows} rows use mappings that exist but are not gradeable.",
+                requiredBeforePublicGrading = true
+            });
+        }
+
+        if (unresolvedAliasCandidates > 0)
+        {
+            blockers.Add(new
+            {
+                area = "ProviderIdentity",
+                severity = "Medium",
+                description = $"{unresolvedAliasCandidates} Soccer alias candidates remain unresolved or require manual review.",
+                requiredBeforePublicGrading = true
+            });
+        }
+
+        if (gradingSummary.OverallGradeCoverageRate < 0.95m)
+        {
+            blockers.Add(new
+            {
+                area = "Coverage",
+                severity = "Medium",
+                description = $"Debug grading preview coverage is {gradingSummary.OverallGradeCoverageRate:P2}; public grading needs broader reviewed coverage.",
+                requiredBeforePublicGrading = true
+            });
+        }
+
+        return blockers;
+    }
+
+    private static string BuildSoccerWorldCupSpikeStatusRecommendation(
+        IReadOnlyList<object> blockers,
+        string propMappingRecommendation,
+        string gradingRecommendation)
+    {
+        if (blockers.Count > 0 && !string.IsNullOrWhiteSpace(propMappingRecommendation))
+        {
+            return propMappingRecommendation;
+        }
+
+        return !string.IsNullOrWhiteSpace(gradingRecommendation)
+            ? gradingRecommendation
+            : "Keep Soccer World Cup research-only until public grading, entry actionability, aliases, and provider stat mappings are explicitly approved.";
     }
 
     private static bool IsRealTheOddsSoccerWorldCupProviderEvent(IReadOnlyList<ApiSportsMarketJoinPlatformRow> rows)

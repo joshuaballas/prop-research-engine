@@ -959,8 +959,38 @@ public sealed class RefreshSafetyTests
         Assert.True(topPicks.GetProperty("snapshotBacked").GetBoolean());
         Assert.Equal("SOCCER", topPicks.GetProperty("topPicks")[0].GetProperty("sport").GetString());
         Assert.Equal("World Cup", topPicks.GetProperty("topPicks")[0].GetProperty("competition").GetString());
+        Assert.False(topPicks.GetProperty("topPicks")[0].GetProperty("entryActionableForUser").GetBoolean());
+        Assert.True(topPicks.GetProperty("topPicks")[0].GetProperty("sportsbookContextResearchOnly").GetBoolean());
+        Assert.Equal("Sportsbook", topPicks.GetProperty("topPicks")[0].GetProperty("entryProviderCategory").GetString());
+        Assert.Equal(0, topPicks.GetProperty("summary").GetProperty("actionableCandidateCount").GetInt32());
         Assert.True(lineShopping.GetProperty("snapshotBacked").GetBoolean());
         Assert.Equal("SOCCER", lineShopping.GetProperty("comparisonGroups")[0].GetProperty("sport").GetString());
+        Assert.False(lineShopping.GetProperty("comparisonGroups")[0].GetProperty("entryActionableForUser").GetBoolean());
+        Assert.True(lineShopping.GetProperty("comparisonGroups")[0].GetProperty("sportsbookContextResearchOnly").GetBoolean());
+        Assert.Equal("Sportsbook", lineShopping.GetProperty("comparisonGroups")[0].GetProperty("entryProviderCategory").GetString());
+        Assert.Equal(0, lineShopping.GetProperty("summary").GetProperty("actionableComparisonGroups").GetInt32());
+        Assert.Equal(0, factory.TheOddsAdapter.CallCount);
+        Assert.Equal(before, await factory.CountArtifactsAsync());
+    }
+
+    [Fact]
+    public async Task SoccerPerformanceSummary_RemainsUnavailable_WithoutCallingProviders()
+    {
+        await using var factory = new SafetyTestApplicationFactory();
+        using var client = factory.CreateClient();
+        await factory.SeedSoccerWorldCupSnapshotsAsync();
+        var before = await factory.CountArtifactsAsync();
+
+        var response = await client.GetAsync("/api/markets/performance-summary?sport=SOCCER&fromDate=2026-06-21&toDate=2026-06-24");
+
+        await EnsureSuccessWithBodyAsync(response);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal("SOCCER", json.GetProperty("sport").GetString());
+        Assert.False(json.GetProperty("callsExternalApis").GetBoolean());
+        Assert.True(json.GetProperty("readOnly").GetBoolean());
+        Assert.False(json.GetProperty("resultGradingSupported").GetBoolean());
+        Assert.Equal(0, json.GetProperty("summary").GetProperty("gradedPicks").GetInt32());
+        Assert.Equal("Soccer history is not available yet.", json.GetProperty("unavailableReason").GetString());
         Assert.Equal(0, factory.TheOddsAdapter.CallCount);
         Assert.Equal(before, await factory.CountArtifactsAsync());
     }
@@ -1759,6 +1789,51 @@ public sealed class RefreshSafetyTests
             row => row.GetProperty("apiSportsStatKey").GetString() == "GOAL_ASSIST"
                 && row.GetProperty("category").GetString() == "MappingExistsButNotGradeable"
                 && row.GetProperty("isGradeable").GetBoolean() == false);
+    }
+
+    [Fact]
+    public async Task SoccerWorldCupSpikeStatus_IsResearchOnlyReadOnlyAndNoExternalApis()
+    {
+        await using var factory = new SafetyTestApplicationFactory(ApiSportsLiveConfig());
+        using var client = factory.CreateClient();
+        await factory.SeedApiSportsSoccerMarketJoinRowsAsync();
+        await factory.SeedApiSportsSoccerProviderStatMappingsAsync();
+        await AddSoccerTheOddsRefreshRunAsync(factory);
+        var before = await factory.CountArtifactsAsync();
+        var apiSportsCallsBefore = factory.ApiSportsFootballClient.FixturePlayerStatsCallCount;
+        var theOddsCallsBefore = factory.TheOddsAdapter.CallCount;
+
+        var response = await client.GetAsync("/api/debug/soccer/world-cup/spike-status?fromDate=2026-06-21&toDate=2026-06-24&includeDetails=true");
+
+        await EnsureSuccessWithBodyAsync(response);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.False(json.GetProperty("callsExternalApis").GetBoolean());
+        Assert.True(json.GetProperty("readOnly").GetBoolean());
+        Assert.False(json.GetProperty("writesRows").GetBoolean());
+        Assert.Equal("SOCCER", json.GetProperty("sport").GetString());
+        Assert.Equal("World Cup", json.GetProperty("competition").GetString());
+        Assert.False(json.GetProperty("publicSoccerGradingEnabled").GetBoolean());
+        Assert.False(json.GetProperty("entryBuilderEnabled").GetBoolean());
+
+        var readiness = json.GetProperty("productionReadiness");
+        Assert.Equal("ResearchOnly", readiness.GetProperty("status").GetString());
+        Assert.False(readiness.GetProperty("canShowPublicGradedPerformance").GetBoolean());
+        Assert.False(readiness.GetProperty("canUseForEntryBuilder").GetBoolean());
+
+        var guardrails = json.GetProperty("guardrails");
+        Assert.True(guardrails.GetProperty("publicEndpointsReadOnly").GetBoolean());
+        Assert.True(guardrails.GetProperty("publicSoccerGradingDisabled").GetBoolean());
+        Assert.True(guardrails.GetProperty("soccerEntryBuilderDisabled").GetBoolean());
+        Assert.True(guardrails.GetProperty("sportsbookContextResearchOnly").GetBoolean());
+        Assert.True(guardrails.GetProperty("autoAliasApprovalDisabled").GetBoolean());
+        Assert.True(guardrails.GetProperty("autoStatMappingApprovalDisabled").GetBoolean());
+        Assert.True(guardrails.GetProperty("needsConfirmationMappingsNotPublicGradeable").GetBoolean());
+
+        Assert.True(json.GetProperty("summary").GetProperty("totalCandidatePlatformRows").GetInt32() >= 1);
+        Assert.NotEmpty(json.GetProperty("blockers").EnumerateArray());
+        Assert.Equal(before, await factory.CountArtifactsAsync());
+        Assert.Equal(apiSportsCallsBefore, factory.ApiSportsFootballClient.FixturePlayerStatsCallCount);
+        Assert.Equal(theOddsCallsBefore, factory.TheOddsAdapter.CallCount);
     }
 
     [Theory]
