@@ -4307,6 +4307,88 @@ public sealed class RefreshSafetyTests
     }
 
     [Fact]
+    public void MlbResultImportWorkerSelection_DefaultPolicySkipsOldHistoricalNonCompleteDates()
+    {
+        var latestCompletedDate = new DateOnly(2026, 6, 24);
+        var options = new MlbResultImportWorkerOptions
+        {
+            RecentWindowDays = 14,
+            HistoricalBackfillEnabled = false,
+            HistoricalNonCompleteAttemptCap = 3
+        };
+        var rows = MlbResultImportWorker.BuildSelectionRows(
+            new[]
+            {
+                new MlbResultImportDateState
+                {
+                    EventDate = new DateOnly(2024, 8, 1),
+                    CoverageStatus = "Partial",
+                    Status = "partial",
+                    Attempts = 0
+                },
+                new MlbResultImportDateState
+                {
+                    EventDate = new DateOnly(2026, 6, 23),
+                    CoverageStatus = "NotStarted",
+                    Status = "pending",
+                    Attempts = 0
+                }
+            },
+            latestCompletedDate,
+            options);
+
+        var oldRow = Assert.Single(rows, row => row.EventDate == new DateOnly(2024, 8, 1));
+        Assert.False(oldRow.IsEligible);
+        Assert.Equal("HistoricalBackfillDisabled", oldRow.SkippedReason);
+        Assert.StartsWith("HistoricalBackfill:", oldRow.SelectedReason, StringComparison.Ordinal);
+
+        var recentRow = Assert.Single(rows, row => row.EventDate == new DateOnly(2026, 6, 23));
+        Assert.True(recentRow.IsEligible);
+        Assert.Null(recentRow.SkippedReason);
+        Assert.Equal("RecentWindow:CoverageNotStarted", recentRow.SelectedReason);
+    }
+
+    [Fact]
+    public void MlbResultImportWorkerSelection_HistoricalBackfillUsesAttemptCap()
+    {
+        var latestCompletedDate = new DateOnly(2026, 6, 24);
+        var options = new MlbResultImportWorkerOptions
+        {
+            RecentWindowDays = 14,
+            HistoricalBackfillEnabled = true,
+            HistoricalNonCompleteAttemptCap = 3
+        };
+        var rows = MlbResultImportWorker.BuildSelectionRows(
+            new[]
+            {
+                new MlbResultImportDateState
+                {
+                    EventDate = new DateOnly(2024, 8, 1),
+                    CoverageStatus = "Partial",
+                    Status = "partial",
+                    Attempts = 3
+                },
+                new MlbResultImportDateState
+                {
+                    EventDate = new DateOnly(2024, 8, 2),
+                    CoverageStatus = "Partial",
+                    Status = "partial",
+                    Attempts = 2
+                }
+            },
+            latestCompletedDate,
+            options);
+
+        var cappedRow = Assert.Single(rows, row => row.EventDate == new DateOnly(2024, 8, 1));
+        Assert.False(cappedRow.IsEligible);
+        Assert.Equal("HistoricalAttemptCapReached", cappedRow.SkippedReason);
+
+        var retryRow = Assert.Single(rows, row => row.EventDate == new DateOnly(2024, 8, 2));
+        Assert.True(retryRow.IsEligible);
+        Assert.Equal("HistoricalBackfill:CoveragePartial", retryRow.SelectedReason);
+    }
+
+    [Fact]
     public async Task MlbImportStatus_IncludesLatestWorkerCycleDateOutcomes()
     {
         await using var factory = new SafetyTestApplicationFactory();
@@ -4407,6 +4489,58 @@ public sealed class RefreshSafetyTests
             && row.GetProperty("outcomeCategory").GetString() == "Partial");
         Assert.Contains(outcomes, row => row.GetProperty("eventDate").GetString() == noGamesDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)
             && row.GetProperty("outcomeCategory").GetString() == "NoGames");
+    }
+
+    [Fact]
+    public async Task MlbImportRangeStatus_ReportsSelectionPolicyAndSkipsOldHistoricalDates()
+    {
+        await using var factory = new SafetyTestApplicationFactory();
+        using var client = factory.CreateClient();
+        await factory.EnsureDatabaseAsync();
+        var latestCompletedDate = DateOnly.FromDateTime(DateTime.UtcNow.AddDays(-1));
+        var recentDate = latestCompletedDate;
+        var oldDate = latestCompletedDate.AddDays(-30);
+        var observedAt = DateTimeOffset.UtcNow;
+
+        using (var scope = factory.Services.CreateScope())
+        {
+            var dbContext = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+            dbContext.MlbResultImportDateStates.AddRange(
+                new MlbResultImportDateState
+                {
+                    Id = Guid.NewGuid(),
+                    EventDate = oldDate,
+                    Status = "partial",
+                    CoverageStatus = "Partial",
+                    Attempts = 0,
+                    CreatedAt = observedAt,
+                    UpdatedAt = observedAt
+                },
+                new MlbResultImportDateState
+                {
+                    Id = Guid.NewGuid(),
+                    EventDate = recentDate,
+                    Status = "pending",
+                    CoverageStatus = "NotStarted",
+                    Attempts = 0,
+                    CreatedAt = observedAt,
+                    UpdatedAt = observedAt
+                });
+            await dbContext.SaveChangesAsync();
+        }
+
+        var response = await client.GetAsync("/api/debug/results/import/mlb-range/status");
+
+        await EnsureSuccessWithBodyAsync(response);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        var policy = json.GetProperty("workerSelectionPolicy");
+        Assert.False(policy.GetProperty("historicalBackfillEnabled").GetBoolean());
+        Assert.Equal(14, policy.GetProperty("recentWindowDays").GetInt32());
+        Assert.Equal(1, policy.GetProperty("skippedOldHistoricalBackfillDisabledCount").GetInt32());
+        Assert.Equal(1, json.GetProperty("pendingBackfillDateCount").GetInt32());
+        var selected = Assert.Single(json.GetProperty("pendingBackfillDates").EnumerateArray());
+        Assert.Equal(recentDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture), selected.GetProperty("eventDate").GetString());
+        Assert.Equal("RecentWindow:CoverageNotStarted", selected.GetProperty("selectedReason").GetString());
     }
 
     [Fact]

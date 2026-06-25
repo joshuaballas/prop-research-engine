@@ -550,8 +550,10 @@ public static class ResultsDebugEndpoints
             ApplicationDbContext dbContext,
             IMlbResultImportService importService,
             IMlbResultCoverageService coverageService,
+            IOptions<MlbResultImportWorkerOptions> workerOptionsAccessor,
             CancellationToken cancellationToken) =>
         {
+            var workerOptions = workerOptionsAccessor.Value;
             var state = await dbContext.MlbResultImportStates
                 .AsNoTracking()
                 .SingleOrDefaultAsync(importState => importState.Source == "mlb", cancellationToken);
@@ -566,15 +568,25 @@ public static class ResultsDebugEndpoints
                 })
                 .SingleOrDefaultAsync(cancellationToken);
             var latestCompletedDate = DateOnly.FromDateTime(DateTime.UtcNow.AddDays(-1));
-            var pendingBackfillDates = await dbContext.MlbResultImportDateStates
+            var recentWindowStartDate = MlbResultImportWorker.GetRecentWindowStartDate(latestCompletedDate, workerOptions);
+            var candidateDateStates = await dbContext.MlbResultImportDateStates
                 .AsNoTracking()
                 .Where(dateState => dateState.EventDate <= latestCompletedDate
                     && dateState.CoverageStatus != "Complete"
                     && dateState.CoverageStatus != "NoGames")
-                .OrderBy(dateState => dateState.EventDate)
-                .Select(dateState => dateState.EventDate)
-                .Take(100)
                 .ToArrayAsync(cancellationToken);
+            var selectionRows = MlbResultImportWorker.BuildSelectionRows(candidateDateStates, latestCompletedDate, workerOptions);
+            var selectedWorkerRows = selectionRows
+                .Where(row => row.IsEligible)
+                .OrderBy(row => row.IsHistorical)
+                .ThenByDescending(row => row.EventDate)
+                .ThenBy(row => row.Attempts)
+                .Take(Math.Max(1, workerOptions.MaxBackfillDatesPerRun))
+                .ToArray();
+            var pendingBackfillDates = selectedWorkerRows
+                .Select(row => row.EventDate)
+                .Take(100)
+                .ToArray();
             var latestCycleDates = Array.Empty<MlbLatestWorkerCycleDateOutcome>();
             if (state?.LastStartedAt is not null)
             {
@@ -640,6 +652,32 @@ public static class ResultsDebugEndpoints
                 lastErrorMessage = state?.LastErrorMessage,
                 missingDates,
                 pendingBackfillDates,
+                workerSelectionPolicy = new
+                {
+                    historicalBackfillEnabled = workerOptions.HistoricalBackfillEnabled,
+                    recentWindowDays = Math.Max(1, workerOptions.RecentWindowDays),
+                    recentWindowStartDate,
+                    maxBackfillDatesPerRun = Math.Max(1, workerOptions.MaxBackfillDatesPerRun),
+                    historicalNonCompleteAttemptCap = Math.Max(0, workerOptions.HistoricalNonCompleteAttemptCap),
+                    candidateDateCount = selectionRows.Count,
+                    selectedDateCount = selectedWorkerRows.Length,
+                    datesSelected = selectedWorkerRows.Select(row => new
+                    {
+                        row.EventDate,
+                        row.CoverageStatus,
+                        row.Status,
+                        row.Attempts,
+                        row.SelectedReason
+                    }).ToArray(),
+                    skippedOldHistoricalBackfillDisabledCount = selectionRows.Count(row => row.SkippedReason == "HistoricalBackfillDisabled"),
+                    skippedOldHistoricalAttemptCapCount = selectionRows.Count(row => row.SkippedReason == "HistoricalAttemptCapReached"),
+                    skippedCountsByReason = selectionRows
+                        .Where(row => row.SkippedReason is not null)
+                        .GroupBy(row => row.SkippedReason)
+                        .OrderBy(group => group.Key)
+                        .Select(group => new { reason = group.Key, count = group.Count() })
+                        .ToArray()
+                },
                 historicalCoverageStart = coverage?.Start,
                 historicalCoverageEnd = coverage?.End,
                 latestScheduledImportRun = state is null
@@ -693,28 +731,39 @@ public static class ResultsDebugEndpoints
 
         endpoints.MapGet("/api/debug/results/import/mlb-range/status", async (
             ApplicationDbContext dbContext,
+            IOptions<MlbResultImportWorkerOptions> workerOptionsAccessor,
             CancellationToken cancellationToken) =>
         {
+            var workerOptions = workerOptionsAccessor.Value;
             var state = await dbContext.MlbResultImportStates
                 .AsNoTracking()
                 .SingleOrDefaultAsync(importState => importState.Source == "mlb", cancellationToken);
             var latestCompletedDate = DateOnly.FromDateTime(DateTime.UtcNow.AddDays(-1));
-            var pendingBackfillDates = await dbContext.MlbResultImportDateStates
+            var recentWindowStartDate = MlbResultImportWorker.GetRecentWindowStartDate(latestCompletedDate, workerOptions);
+            var candidateDateStates = await dbContext.MlbResultImportDateStates
                 .AsNoTracking()
                 .Where(dateState => dateState.EventDate <= latestCompletedDate
                     && dateState.CoverageStatus != "Complete"
                     && dateState.CoverageStatus != "NoGames")
-                .OrderBy(dateState => dateState.EventDate)
-                .Select(dateState => new
-                {
-                    dateState.EventDate,
-                    dateState.CoverageStatus,
-                    dateState.CoverageReason,
-                    dateState.Attempts,
-                    dateState.LastAttemptedAt
-                })
-                .Take(100)
                 .ToArrayAsync(cancellationToken);
+            var selectionRows = MlbResultImportWorker.BuildSelectionRows(candidateDateStates, latestCompletedDate, workerOptions);
+            var selectedWorkerRows = selectionRows
+                .Where(row => row.IsEligible)
+                .OrderBy(row => row.IsHistorical)
+                .ThenByDescending(row => row.EventDate)
+                .ThenBy(row => row.Attempts)
+                .Take(Math.Max(1, workerOptions.MaxBackfillDatesPerRun))
+                .ToArray();
+            var pendingBackfillDates = selectedWorkerRows
+                .Select(row => new
+                {
+                    row.EventDate,
+                    row.CoverageStatus,
+                    row.Status,
+                    row.Attempts,
+                    row.SelectedReason
+                })
+                .ToArray();
             var latestCycleDates = Array.Empty<MlbLatestWorkerCycleDateOutcome>();
             if (state?.LastStartedAt is not null)
             {
@@ -767,6 +816,24 @@ public static class ResultsDebugEndpoints
                 callsExternalApis = false,
                 readOnly = true,
                 latestCompletedDate,
+                workerSelectionPolicy = new
+                {
+                    historicalBackfillEnabled = workerOptions.HistoricalBackfillEnabled,
+                    recentWindowDays = Math.Max(1, workerOptions.RecentWindowDays),
+                    recentWindowStartDate,
+                    maxBackfillDatesPerRun = Math.Max(1, workerOptions.MaxBackfillDatesPerRun),
+                    historicalNonCompleteAttemptCap = Math.Max(0, workerOptions.HistoricalNonCompleteAttemptCap),
+                    candidateDateCount = selectionRows.Count,
+                    selectedDateCount = selectedWorkerRows.Length,
+                    skippedOldHistoricalBackfillDisabledCount = selectionRows.Count(row => row.SkippedReason == "HistoricalBackfillDisabled"),
+                    skippedOldHistoricalAttemptCapCount = selectionRows.Count(row => row.SkippedReason == "HistoricalAttemptCapReached"),
+                    skippedCountsByReason = selectionRows
+                        .Where(row => row.SkippedReason is not null)
+                        .GroupBy(row => row.SkippedReason)
+                        .OrderBy(group => group.Key)
+                        .Select(group => new { reason = group.Key, count = group.Count() })
+                        .ToArray()
+                },
                 pendingBackfillDateCount = pendingBackfillDates.Length,
                 pendingBackfillDates,
                 latestWorkerCycle = state is null

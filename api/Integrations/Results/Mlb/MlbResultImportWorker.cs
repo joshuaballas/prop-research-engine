@@ -53,26 +53,49 @@ public sealed class MlbResultImportWorker(
 
             await SeedSucceededDatesFromExistingResultsAsync(dbContext, options.Value, cancellationToken);
 
+            var workerOptions = options.Value;
             var latestCompletedDate = DateOnly.FromDateTime(DateTime.UtcNow.AddDays(-1));
-            var coverageStart = await GetHistoricalCoverageStartAsync(dbContext, cancellationToken) ?? latestCompletedDate;
+            var recentWindowStartDate = GetRecentWindowStartDate(latestCompletedDate, workerOptions);
+            var coverageStart = workerOptions.HistoricalBackfillEnabled
+                ? await GetHistoricalCoverageStartAsync(dbContext, cancellationToken) ?? recentWindowStartDate
+                : recentWindowStartDate;
             await DetectMissingDatesAsync(dbContext, coverageStart, latestCompletedDate, cancellationToken);
 
-            var maxBackfillDates = Math.Max(1, options.Value.MaxBackfillDatesPerRun);
-            var datesToProcess = await dbContext.MlbResultImportDateStates
+            var maxBackfillDates = Math.Max(1, workerOptions.MaxBackfillDatesPerRun);
+            var candidateDateStates = await dbContext.MlbResultImportDateStates
                 .Where(dateState => dateState.EventDate <= latestCompletedDate
                     && dateState.CoverageStatus != "Complete"
                     && dateState.CoverageStatus != "NoGames")
-                .OrderBy(dateState => dateState.EventDate)
-                .ThenBy(dateState => dateState.Attempts)
-                .Take(maxBackfillDates)
                 .ToListAsync(cancellationToken);
+            var selectionRows = BuildSelectionRows(candidateDateStates, latestCompletedDate, workerOptions);
+            var selectedDates = selectionRows
+                .Where(row => row.IsEligible)
+                .OrderBy(row => row.IsHistorical)
+                .ThenByDescending(row => row.EventDate)
+                .ThenBy(row => row.Attempts)
+                .Take(maxBackfillDates)
+                .ToArray();
+            var selectedDateKeys = selectedDates.Select(row => row.EventDate).ToHashSet();
+            var selectedReasonByDate = selectedDates.ToDictionary(row => row.EventDate, row => row.SelectedReason);
+            var datesToProcess = candidateDateStates
+                .Where(dateState => selectedDateKeys.Contains(dateState.EventDate))
+                .OrderBy(dateState => dateState.EventDate < recentWindowStartDate)
+                .ThenByDescending(dateState => dateState.EventDate)
+                .ThenBy(dateState => dateState.Attempts)
+                .ToArray();
 
             var outcomes = new List<MlbResultImportWorkerDateOutcome>();
 
             foreach (var dateState in datesToProcess)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                outcomes.Add(await ProcessDateAsync(importService, dbContext, state, dateState, cancellationToken));
+                outcomes.Add(await ProcessDateAsync(
+                    importService,
+                    dbContext,
+                    state,
+                    dateState,
+                    selectedReasonByDate.GetValueOrDefault(dateState.EventDate) ?? BuildSelectedReason(dateState, latestCompletedDate, workerOptions),
+                    cancellationToken));
             }
 
             var datesComplete = outcomes.Count(outcome => outcome.OutcomeCategory == MlbResultImportWorkerOutcomeCategory.Complete);
@@ -99,14 +122,19 @@ public sealed class MlbResultImportWorker(
             await dbContext.SaveChangesAsync(cancellationToken);
 
             logger.LogInformation(
-                "MLB result import worker cycle completed. Dates processed: {DatesProcessed}; complete: {DatesComplete}; partial: {DatesPartial}; pending: {DatesPending}; noGames: {DatesNoGames}; skipped: {DatesSkipped}; failed: {DatesFailed}.",
-                datesToProcess.Count,
+                "MLB result import worker cycle completed. Dates processed: {DatesProcessed}; complete: {DatesComplete}; partial: {DatesPartial}; pending: {DatesPending}; noGames: {DatesNoGames}; skipped: {DatesSkipped}; failed: {DatesFailed}; historicalBackfillEnabled: {HistoricalBackfillEnabled}; recentWindowDays: {RecentWindowDays}; skippedOldHistoricalDisabled: {SkippedOldHistoricalDisabled}; skippedOldAttemptCap: {SkippedOldAttemptCap}; selectedDates: {SelectedDates}.",
+                datesToProcess.Length,
                 datesComplete,
                 datesPartial,
                 datesPending,
                 datesNoGames,
                 datesSkipped,
-                datesFailed);
+                datesFailed,
+                workerOptions.HistoricalBackfillEnabled,
+                Math.Max(1, workerOptions.RecentWindowDays),
+                selectionRows.Count(row => string.Equals(row.SkippedReason, "HistoricalBackfillDisabled", StringComparison.OrdinalIgnoreCase)),
+                selectionRows.Count(row => string.Equals(row.SkippedReason, "HistoricalAttemptCapReached", StringComparison.OrdinalIgnoreCase)),
+                string.Join(",", datesToProcess.Select(row => row.EventDate.ToString("yyyy-MM-dd"))));
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
@@ -145,11 +173,11 @@ public sealed class MlbResultImportWorker(
         ApplicationDbContext dbContext,
         MlbResultImportState state,
         MlbResultImportDateState dateState,
+        string selectedReason,
         CancellationToken cancellationToken)
     {
         var beforeCoverageStatus = dateState.CoverageStatus;
         var beforeStatus = dateState.Status;
-        var selectedReason = BuildSelectedReason(dateState, DateOnly.FromDateTime(DateTime.UtcNow.AddDays(-1)));
 
         try
         {
@@ -420,14 +448,66 @@ public sealed class MlbResultImportWorker(
         await dbContext.SaveChangesAsync(cancellationToken);
     }
 
-    private static string BuildSelectedReason(MlbResultImportDateState dateState, DateOnly latestCompletedDate)
+    internal static DateOnly GetRecentWindowStartDate(DateOnly latestCompletedDate, MlbResultImportWorkerOptions workerOptions)
+    {
+        var recentWindowDays = Math.Max(1, workerOptions.RecentWindowDays);
+        return latestCompletedDate.AddDays(-(recentWindowDays - 1));
+    }
+
+    internal static IReadOnlyList<MlbResultImportWorkerSelectionRow> BuildSelectionRows(
+        IEnumerable<MlbResultImportDateState> dateStates,
+        DateOnly latestCompletedDate,
+        MlbResultImportWorkerOptions workerOptions)
+    {
+        var recentWindowStartDate = GetRecentWindowStartDate(latestCompletedDate, workerOptions);
+        var attemptCap = Math.Max(0, workerOptions.HistoricalNonCompleteAttemptCap);
+
+        return dateStates
+            .Select(dateState =>
+            {
+                var isHistorical = dateState.EventDate < recentWindowStartDate;
+                var selectedReason = BuildSelectedReason(dateState, latestCompletedDate, workerOptions);
+                string? skippedReason = null;
+                if (dateState.EventDate > latestCompletedDate)
+                {
+                    skippedReason = "FutureOrCurrentDateExcluded";
+                }
+                else if (isHistorical && !workerOptions.HistoricalBackfillEnabled)
+                {
+                    skippedReason = "HistoricalBackfillDisabled";
+                }
+                else if (isHistorical && attemptCap > 0 && dateState.Attempts >= attemptCap)
+                {
+                    skippedReason = "HistoricalAttemptCapReached";
+                }
+
+                return new MlbResultImportWorkerSelectionRow(
+                    dateState.EventDate,
+                    dateState.CoverageStatus,
+                    dateState.Status,
+                    dateState.Attempts,
+                    isHistorical,
+                    skippedReason is null,
+                    selectedReason,
+                    skippedReason);
+            })
+            .ToArray();
+    }
+
+    internal static string BuildSelectedReason(
+        MlbResultImportDateState dateState,
+        DateOnly latestCompletedDate,
+        MlbResultImportWorkerOptions workerOptions)
     {
         if (dateState.EventDate > latestCompletedDate)
         {
             return "FutureOrCurrentDateExcluded";
         }
 
-        return dateState.CoverageStatus switch
+        var recentWindowStartDate = GetRecentWindowStartDate(latestCompletedDate, workerOptions);
+        var prefix = dateState.EventDate < recentWindowStartDate ? "HistoricalBackfill" : "RecentWindow";
+
+        var reason = dateState.CoverageStatus switch
         {
             "Partial" => "CoveragePartial",
             "NotStarted" => "CoverageNotStarted",
@@ -435,6 +515,8 @@ public sealed class MlbResultImportWorker(
             "Failed" => "PreviousFailureRetry",
             _ => "CoverageNotComplete"
         };
+
+        return $"{prefix}:{reason}";
     }
 
     private static string ResolveFallbackCoverageStatus(
@@ -528,3 +610,13 @@ internal sealed record MlbResultImportWorkerDateOutcome(
     MlbResultImportWorkerOutcomeCategory OutcomeCategory,
     string? ExceptionType,
     string? ErrorMessage);
+
+internal sealed record MlbResultImportWorkerSelectionRow(
+    DateOnly EventDate,
+    string CoverageStatus,
+    string Status,
+    int Attempts,
+    bool IsHistorical,
+    bool IsEligible,
+    string SelectedReason,
+    string? SkippedReason);

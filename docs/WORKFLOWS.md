@@ -451,6 +451,8 @@ Invoke-RestMethod -Uri "http://localhost:5299/api/debug/results/import/mlb/cover
 
 `/api/debug/results/import/mlb/status` includes `latestWorkerCycle` when a worker run has persisted date attempts. Each date outcome reports the selection reason, row/player/prop counts, coverage status, and an `outcomeCategory`. `Complete` is a successful finished date. `Partial`, `PendingGames`, and `NoGames` are coverage outcomes, not hard worker failures. `Failed` is reserved for provider exceptions, rejected/rate-limited API calls, database errors, or other true per-date exceptions.
 
+By default the scheduled worker only selects recent actionable dates. `MlbResultImportWorker:RecentWindowDays` defaults to `14`, `HistoricalBackfillEnabled` defaults to `false`, and old historical `Partial` / `NotStarted` / `Failed` dates are skipped during normal startup so development restarts do not repeatedly spend MLB Stats API calls on stale 2024 coverage gaps. When historical backfill is explicitly enabled, old non-complete dates still honor `HistoricalNonCompleteAttemptCap` default `3`. Use `/api/debug/results/import/mlb-range/status` to see `workerSelectionPolicy`, selected dates, skipped old historical counts/reasons, and the latest worker cycle before enabling historical backfill.
+
 Manual one-day import:
 
 ```powershell
