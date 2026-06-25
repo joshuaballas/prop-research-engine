@@ -1829,7 +1829,18 @@ public sealed class RefreshSafetyTests
         Assert.True(guardrails.GetProperty("autoStatMappingApprovalDisabled").GetBoolean());
         Assert.True(guardrails.GetProperty("needsConfirmationMappingsNotPublicGradeable").GetBoolean());
 
-        Assert.True(json.GetProperty("summary").GetProperty("totalCandidatePlatformRows").GetInt32() >= 1);
+        var summary = json.GetProperty("summary");
+        Assert.True(summary.GetProperty("totalCandidatePlatformRows").GetInt32() >= 1);
+        Assert.True(summary.GetProperty("aliasPlatformPlayerNamesEvaluated").GetInt32() >= 1);
+        Assert.True(summary.GetProperty("aliasCandidateCount").GetInt32() >= 0);
+        Assert.True(summary.GetProperty("aliasLinksApproved").GetInt32() >= 0);
+        Assert.True(summary.GetProperty("aliasSafeCandidatesApproved").GetInt32() >= 0);
+        Assert.True(summary.GetProperty("aliasManualApprovalsApproved").GetInt32() >= 0);
+        Assert.True(summary.GetProperty("aliasNeedsReviewRemaining").GetInt32() >= 0);
+        Assert.True(summary.GetProperty("aliasNoCandidateRemaining").GetInt32() >= 0);
+        Assert.True(summary.GetProperty("aliasAmbiguousRemaining").GetInt32() >= 0);
+        Assert.True(summary.GetProperty("aliasNewSafeCandidatesRemaining").GetInt32() >= 0);
+        Assert.False(summary.TryGetProperty("unresolvedAliasCandidates", out _));
         Assert.NotEmpty(json.GetProperty("blockers").EnumerateArray());
         Assert.Equal(before, await factory.CountArtifactsAsync());
         Assert.Equal(apiSportsCallsBefore, factory.ApiSportsFootballClient.FixturePlayerStatsCallCount);

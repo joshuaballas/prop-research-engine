@@ -1795,9 +1795,7 @@ public static class ResultsDebugEndpoints
                 maxLinks: 100,
                 includePlan: true,
                 cancellationToken);
-            var aliasLinksApproved = await CountApprovedTheOddsSoccerAliasLinksAsync(dbContext, cancellationToken);
-            var unresolvedAliasCandidates = aliasBatch.CandidateGroups.Sum(group =>
-                group.SafeCandidateCount + group.NeedsReviewCount + group.AmbiguousCount + group.NoCandidateCount);
+            var aliasApprovalCounts = await CountApprovedTheOddsSoccerAliasLinksAsync(dbContext, cancellationToken);
             var nonGradeableMappingRows = propGap.ApiSportsStatGaps
                 .Where(row => row.Category == "MappingExistsButNotGradeable")
                 .Sum(row => row.RowCount);
@@ -1805,7 +1803,7 @@ public static class ResultsDebugEndpoints
             var blockers = BuildSoccerWorldCupSpikeStatusBlockers(
                 gradingCoverage.Summary,
                 propGap.Summary,
-                unresolvedAliasCandidates,
+                aliasBatch.NeedsReviewRemaining + aliasBatch.AmbiguousRemaining,
                 nonGradeableMappingRows);
             var readinessReasons = new[]
             {
@@ -1847,8 +1845,15 @@ public static class ResultsDebugEndpoints
                     ingestionCoverage.Summary.ApiSportsFixturesWithResults,
                     ingestionCoverage.Summary.ResolvedProviderEvents,
                     ingestionCoverage.Summary.UnresolvedProviderEvents,
-                    aliasLinksApproved,
-                    unresolvedAliasCandidates,
+                    aliasPlatformPlayerNamesEvaluated = aliasBatch.CandidatesEvaluated,
+                    aliasCandidateCount = aliasBatch.AliasCandidateCount,
+                    aliasLinksApproved = aliasApprovalCounts.TotalApproved,
+                    aliasSafeCandidatesApproved = aliasApprovalCounts.SafeCandidateApproved,
+                    aliasManualApprovalsApproved = aliasApprovalCounts.ManualApproved,
+                    aliasNeedsReviewRemaining = aliasBatch.NeedsReviewRemaining,
+                    aliasNoCandidateRemaining = aliasBatch.NoCandidateRemaining,
+                    aliasAmbiguousRemaining = aliasBatch.AmbiguousRemaining,
+                    aliasNewSafeCandidatesRemaining = aliasBatch.NewSafeCandidatesRemaining,
                     gradingCoverage.Summary.TotalCandidatePlatformRows,
                     gradingCoverage.Summary.TotalImportedResultRows,
                     gradingCoverage.Summary.TotalFullyJoinableRows,
@@ -1881,8 +1886,14 @@ public static class ResultsDebugEndpoints
                             aliasBatch.ResolvedPairsEvaluated,
                             aliasBatch.CandidatesEvaluated,
                             aliasBatch.SafeCandidates,
-                            aliasLinksApproved,
-                            unresolvedAliasCandidates,
+                            aliasCandidateCount = aliasBatch.AliasCandidateCount,
+                            aliasLinksApproved = aliasApprovalCounts.TotalApproved,
+                            aliasSafeCandidatesApproved = aliasApprovalCounts.SafeCandidateApproved,
+                            aliasManualApprovalsApproved = aliasApprovalCounts.ManualApproved,
+                            aliasNeedsReviewRemaining = aliasBatch.NeedsReviewRemaining,
+                            aliasNoCandidateRemaining = aliasBatch.NoCandidateRemaining,
+                            aliasAmbiguousRemaining = aliasBatch.AmbiguousRemaining,
+                            aliasNewSafeCandidatesRemaining = aliasBatch.NewSafeCandidatesRemaining,
                             candidateGroups = aliasBatch.CandidateGroups
                         },
                         grading = gradingCoverage.Summary,
@@ -5460,16 +5471,46 @@ public static class ResultsDebugEndpoints
             .ToArrayAsync(cancellationToken);
     }
 
-    private static async Task<int> CountApprovedTheOddsSoccerAliasLinksAsync(
+    private static async Task<TheOddsSoccerAliasApprovalCounts> CountApprovedTheOddsSoccerAliasLinksAsync(
         ApplicationDbContext dbContext,
         CancellationToken cancellationToken)
     {
-        return await dbContext.ProviderEntityLinks
+        var links = await dbContext.ProviderEntityLinks
             .AsNoTracking()
-            .CountAsync(link => link.ProviderKey == TheOddsSoccerAliasProviderKey
+            .Where(link => link.ProviderKey == TheOddsSoccerAliasProviderKey
                 && link.EntityType == "Player"
-                && link.LinkStatus == "Approved",
-                cancellationToken);
+                && link.LinkStatus == "Approved")
+            .Select(link => new { link.LinkSource })
+            .ToListAsync(cancellationToken);
+        return new TheOddsSoccerAliasApprovalCounts(
+            links.Count,
+            links.Count(link => string.Equals(link.LinkSource, "DebugTheOddsApiSportsAliasLink", StringComparison.OrdinalIgnoreCase)),
+            links.Count(link => string.Equals(link.LinkSource, "DebugTheOddsApiSportsManualAliasApproval", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(link.LinkSource, "Manual", StringComparison.OrdinalIgnoreCase)),
+            links.Count(link => !string.Equals(link.LinkSource, "DebugTheOddsApiSportsAliasLink", StringComparison.OrdinalIgnoreCase)
+                && !string.Equals(link.LinkSource, "DebugTheOddsApiSportsManualAliasApproval", StringComparison.OrdinalIgnoreCase)
+                && !string.Equals(link.LinkSource, "Manual", StringComparison.OrdinalIgnoreCase)));
+    }
+
+    private static async Task<IReadOnlySet<string>> LoadApprovedTheOddsSoccerAliasProviderEntityIdsAsync(
+        ApplicationDbContext dbContext,
+        IReadOnlyCollection<string> providerEntityIds,
+        CancellationToken cancellationToken)
+    {
+        if (providerEntityIds.Count == 0)
+        {
+            return new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        }
+
+        var approved = await dbContext.ProviderEntityLinks
+            .AsNoTracking()
+            .Where(link => link.ProviderKey == TheOddsSoccerAliasProviderKey
+                && link.EntityType == "Player"
+                && link.LinkStatus == "Approved"
+                && providerEntityIds.Contains(link.ProviderEntityId))
+            .Select(link => link.ProviderEntityId)
+            .ToArrayAsync(cancellationToken);
+        return approved.ToHashSet(StringComparer.OrdinalIgnoreCase);
     }
 
     private static ApiSportsMarketJoinPreview BuildApiSportsMarketJoinPreview(
@@ -7739,6 +7780,21 @@ public static class ResultsDebugEndpoints
             .SelectMany(group => group.Plan.ProposedLinks)
             .Take(maxLinks)
             .ToArray();
+        var candidateProviderEntityIds = candidateRowsAll
+            .Where(row => !string.IsNullOrWhiteSpace(row.ProviderEventId))
+            .Select(row => BuildTheOddsSoccerAliasProviderEntityId(row.ProviderEventId!, row.NormalizedPlatformPlayerName))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        var approvedProviderEntityIds = await LoadApprovedTheOddsSoccerAliasProviderEntityIdsAsync(
+            dbContext,
+            candidateProviderEntityIds,
+            cancellationToken);
+        bool IsApproved(TheOddsApiSportsAliasCandidateRow row)
+        {
+            return !string.IsNullOrWhiteSpace(row.ProviderEventId)
+                && approvedProviderEntityIds.Contains(BuildTheOddsSoccerAliasProviderEntityId(row.ProviderEventId!, row.NormalizedPlatformPlayerName));
+        }
+
         var deduplicatedCandidates = BuildTheOddsApiSportsAliasBatchDeduplicatedCandidates(flattenedRows, sampleLimit);
         var currentSummary = coverage.Summary;
         var projectedAdditionalJoinableRows = proposedLinks.Sum(link =>
@@ -7793,7 +7849,12 @@ public static class ResultsDebugEndpoints
             deduplicatedCandidates,
             blockers,
             linkPlans,
-            BuildTheOddsApiSportsAliasBatchRecommendation(candidateRowsAll, proposedLinks.Length));
+            BuildTheOddsApiSportsAliasBatchRecommendation(candidateRowsAll, proposedLinks.Length),
+            candidateRowsAll.Count(row => row.SuggestedAction is "SafeAliasCandidate" or "NeedsReview" or "Ambiguous"),
+            proposedLinks.Length,
+            candidateRowsAll.Count(row => row.SuggestedAction == "NeedsReview" && !IsApproved(row)),
+            candidateRowsAll.Count(row => row.SuggestedAction == "NoCandidate" && !IsApproved(row)),
+            candidateRowsAll.Count(row => row.SuggestedAction == "Ambiguous" && !IsApproved(row)));
     }
 
     private static IReadOnlyList<object> BuildTheOddsApiSportsAliasBatchDeduplicatedCandidates(
@@ -10109,7 +10170,18 @@ public static class ResultsDebugEndpoints
         IReadOnlyList<object> DeduplicatedCandidates,
         object Blockers,
         IReadOnlyList<TheOddsApiSportsAliasBatchLinkPlan> LinkPlans,
-        string CandidateRecommendation);
+        string CandidateRecommendation,
+        int AliasCandidateCount,
+        int NewSafeCandidatesRemaining,
+        int NeedsReviewRemaining,
+        int NoCandidateRemaining,
+        int AmbiguousRemaining);
+
+    private sealed record TheOddsSoccerAliasApprovalCounts(
+        int TotalApproved,
+        int SafeCandidateApproved,
+        int ManualApproved,
+        int OtherApproved);
 
     private sealed record TheOddsApiSportsAliasBatchCandidateGroup(
         string ProviderEventId,
