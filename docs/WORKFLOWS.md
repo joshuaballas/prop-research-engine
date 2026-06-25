@@ -379,6 +379,29 @@ Top Picks and line-shopping rows include `entryCompatibilityGroup` and related e
 
 Soccer / World Cup Phase 1 public support is read-only sportsbook context. Use `sport=SOCCER&competition=World Cup` for persisted Line Shopping context. If no Soccer line-shopping snapshots exist, public Line Shopping may build research-only groups from persisted The Odds `platform_props` context rows; this fallback is read-only and does not create predictions, grades, or snapshots. Soccer rows must remain `sportsbookContextResearchOnly=true`, `entryActionableForUser=false`, and `resultGradingSupported=false`; the customer app should label them research-only, hide Add Leg, and render unavailable model hit chance/EV fields as unavailable rather than zero. Top Picks remains DFS-scoped and should not show Soccer sportsbook rows as model recommendations.
 
+Recent World Cup result coverage is checked with persisted-only status first:
+
+```powershell
+$base = "http://localhost:5299"
+
+Invoke-RestMethod "$base/api/debug/soccer/results/api-sports/world-cup/import-status?fromDate=2026-06-25&toDate=2026-06-25" |
+  ConvertTo-Json -Depth 80
+```
+
+Backfill completed API-Sports Football fixtures with the existing debug-only endpoint. `dryRun=true` is the default, but live discovery still requires `forceLive=true`; review `coverageByDate`, skipped fixtures, failures, and preview row counts before setting `dryRun=false`.
+
+```powershell
+Invoke-RestMethod -Method Post "$base/api/debug/soccer/results/api-sports/world-cup/backfill-completed" `
+  -ContentType "application/json" `
+  -Body '{"fromDate":"2026-06-25","toDate":"2026-06-25","dryRun":true,"forceLive":true}' |
+  ConvertTo-Json -Depth 80
+
+Invoke-RestMethod -Method Post "$base/api/debug/soccer/results/api-sports/world-cup/backfill-completed" `
+  -ContentType "application/json" `
+  -Body '{"fromDate":"2026-06-25","toDate":"2026-06-25","dryRun":false,"forceLive":true}' |
+  ConvertTo-Json -Depth 80
+```
+  
 ### DFS Payout Rule Source Status
 
 Current payout-model classifications:

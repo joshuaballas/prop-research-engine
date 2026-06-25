@@ -391,24 +391,26 @@ Invoke-RestMethod -Method Post "$base/api/debug/soccer/results/api-sports/world-
   -Body '{"fromDate":"2026-06-11","toDate":"2026-06-21","dryRun":true,"forceLive":false}' |
   ConvertTo-Json -Depth 60
 
-# Dry-run live discovery:
+# Dry-run live discovery/import preview. This calls API-Sports but writes nothing.
 Invoke-RestMethod -Method Post "$base/api/debug/soccer/results/api-sports/world-cup/backfill-completed" `
   -ContentType "application/json" `
-  -Body '{"fromDate":"2026-06-11","toDate":"2026-06-21","dryRun":true,"forceLive":true}' |
+  -Body '{"fromDate":"2026-06-25","toDate":"2026-06-25","dryRun":true,"forceLive":true}' |
   ConvertTo-Json -Depth 80
 
 # Write completed fixtures after reviewing dry-run:
 Invoke-RestMethod -Method Post "$base/api/debug/soccer/results/api-sports/world-cup/backfill-completed" `
   -ContentType "application/json" `
-  -Body '{"fromDate":"2026-06-11","toDate":"2026-06-21","dryRun":false,"forceLive":true}' |
+  -Body '{"fromDate":"2026-06-25","toDate":"2026-06-25","dryRun":false,"forceLive":true}' |
   ConvertTo-Json -Depth 80
 
 # Status; forceLive omitted means persisted-only and no external API calls:
-Invoke-RestMethod "$base/api/debug/soccer/results/api-sports/world-cup/import-status?fromDate=2026-06-11&toDate=2026-06-21" |
+Invoke-RestMethod "$base/api/debug/soccer/results/api-sports/world-cup/import-status?fromDate=2026-06-25&toDate=2026-06-25" |
   ConvertTo-Json -Depth 60
 ```
 
-`import-status` in persisted-only mode reports local `importedFixtureCount`, `rowsByFixture`, `totalRows`, `latestImportedEventDate`, and `latestImportedAtUtc` without calling API-Sports. Discovery-dependent counts such as discovered, completed, and missing completed fixtures are only populated when `forceLive=true`.
+`import-status` in persisted-only mode reports local `importedFixtureCount`, `rowsByFixture`, `totalRows`, `latestImportedEventDate`, `latestImportedAtUtc`, and `coverageByDate` without calling API-Sports. Discovery-dependent counts such as discovered, completed, skipped pending, and missing completed fixtures are only populated when `forceLive=true`.
+
+`backfill-completed` is idempotent. It discovers one date at a time, imports only completed fixtures, skips scheduled/live/postponed/canceled fixtures with reasons, and returns `coverageByDate` with fixture count, completed fixture count, imported fixture count, previewed/written result rows, skipped pending fixtures, missing completed fixtures, failed fixtures, and estimated API calls used for that date. Dry runs require `forceLive=true` because API-Sports discovery/player-stat calls are still external calls, but `dryRun=true` writes no rows.
 
 `coverage` is read-only and never calls API-Sports. It inventories imported World Cup `prop_results` by fixture, player, prop type, and rule confidence, then checks whether imported rows have local join candidates in platform props, recommendation snapshots, or market snapshots. The diagnostic is conservative: `prop_results` do not store provider/bookmaker/market keys, and market snapshots do not store API-Sports fixture ids, so unmatched rows are reported by mismatch category instead of being silently ignored.
 

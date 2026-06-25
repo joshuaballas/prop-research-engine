@@ -1804,11 +1804,23 @@ public sealed class RefreshSafetyTests
         Assert.Equal(3, json.GetProperty("discoveredFixtureCount").GetInt32());
         Assert.Equal(1, json.GetProperty("completedFixtureCount").GetInt32());
         Assert.Equal(2, json.GetProperty("skippedFixtureCount").GetInt32());
+        Assert.Equal(4, json.GetProperty("apiCallsUsed").GetInt32());
         Assert.Equal(0, json.GetProperty("resultRowsWritten").GetInt32());
         Assert.Equal(0, await CountApiSportsSoccerResultsAsync(factory));
         var skippedReasons = json.GetProperty("skippedFixtures").EnumerateArray().Select(row => row.GetProperty("reason").GetString()).ToArray();
         Assert.Contains("Scheduled", skippedReasons);
         Assert.Contains("InProgress", skippedReasons);
+        var coverageByDate = json.GetProperty("coverageByDate").EnumerateArray().ToArray();
+        Assert.Equal(3, coverageByDate.Length);
+        var firstDate = coverageByDate[0];
+        Assert.Equal("2026-06-11", firstDate.GetProperty("date").GetString());
+        Assert.Equal(1, firstDate.GetProperty("fixtureCount").GetInt32());
+        Assert.Equal(1, firstDate.GetProperty("completedFixtureCount").GetInt32());
+        Assert.Equal(1, firstDate.GetProperty("importedFixtureCount").GetInt32());
+        Assert.Equal(0, firstDate.GetProperty("importedResultRows").GetInt32());
+        Assert.True(firstDate.GetProperty("previewedResultRows").GetInt32() > 0);
+        Assert.Equal(0, firstDate.GetProperty("missingCompletedFixtureCount").GetInt32());
+        Assert.Equal(2, firstDate.GetProperty("apiCallsUsed").GetInt32());
     }
 
     [Fact]
@@ -1891,6 +1903,7 @@ public sealed class RefreshSafetyTests
         var json = await response.Content.ReadFromJsonAsync<JsonElement>();
         Assert.False(json.GetProperty("callsExternalApis").GetBoolean());
         Assert.False(json.GetProperty("discoveryAvailable").GetBoolean());
+        Assert.Equal(0, json.GetProperty("apiCallsUsed").GetInt32());
         Assert.Equal(JsonValueKind.Null, json.GetProperty("discoveredFixtureCount").ValueKind);
         Assert.Equal(JsonValueKind.Null, json.GetProperty("completedFixtureCount").ValueKind);
         Assert.Equal(JsonValueKind.Null, json.GetProperty("missingCompletedFixtureCount").ValueKind);
@@ -1900,6 +1913,14 @@ public sealed class RefreshSafetyTests
         Assert.Equal("1489393", json.GetProperty("latestImportedFixtureId").GetString());
         Assert.Equal("2026-06-11", json.GetProperty("latestImportedEventDate").GetString());
         Assert.Equal(JsonValueKind.String, json.GetProperty("latestImportedAtUtc").ValueKind);
+        var coverage = Assert.Single(json.GetProperty("coverageByDate").EnumerateArray());
+        Assert.Equal("2026-06-11", coverage.GetProperty("date").GetString());
+        Assert.Equal(JsonValueKind.Null, coverage.GetProperty("fixtureCount").ValueKind);
+        Assert.Equal(JsonValueKind.Null, coverage.GetProperty("completedFixtureCount").ValueKind);
+        Assert.Equal(1, coverage.GetProperty("importedFixtureCount").GetInt32());
+        Assert.True(coverage.GetProperty("importedResultRows").GetInt32() > 0);
+        Assert.Equal(JsonValueKind.Null, coverage.GetProperty("missingCompletedFixtureCount").ValueKind);
+        Assert.Equal(JsonValueKind.Null, coverage.GetProperty("apiCallsUsed").ValueKind);
     }
 
     [Fact]
@@ -1923,12 +1944,21 @@ public sealed class RefreshSafetyTests
         var json = await response.Content.ReadFromJsonAsync<JsonElement>();
         Assert.True(json.GetProperty("callsExternalApis").GetBoolean());
         Assert.True(json.GetProperty("discoveryAvailable").GetBoolean());
+        Assert.Equal(4, json.GetProperty("apiCallsUsed").GetInt32());
         Assert.Equal(4, json.GetProperty("discoveredFixtureCount").GetInt32());
         Assert.Equal(2, json.GetProperty("completedFixtureCount").GetInt32());
         Assert.Equal(1, json.GetProperty("importedFixtureCount").GetInt32());
         Assert.Equal(1, json.GetProperty("missingCompletedFixtureCount").GetInt32());
         var missing = Assert.Single(json.GetProperty("missingCompletedFixtures").EnumerateArray());
         Assert.Equal("99999", missing.GetProperty("fixtureId").GetString());
+        var coverageByDate = json.GetProperty("coverageByDate").EnumerateArray().ToArray();
+        Assert.Equal(4, coverageByDate.Length);
+        var june14 = coverageByDate.Single(row => row.GetProperty("date").GetString() == "2026-06-14");
+        Assert.Equal(1, june14.GetProperty("fixtureCount").GetInt32());
+        Assert.Equal(1, june14.GetProperty("completedFixtureCount").GetInt32());
+        Assert.Equal(0, june14.GetProperty("importedFixtureCount").GetInt32());
+        Assert.Equal(1, june14.GetProperty("missingCompletedFixtureCount").GetInt32());
+        Assert.Equal(1, june14.GetProperty("apiCallsUsed").GetInt32());
     }
 
     [Fact]

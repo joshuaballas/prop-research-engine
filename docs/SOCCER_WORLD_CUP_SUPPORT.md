@@ -226,7 +226,9 @@ API-Sports Football has a debug-only single-fixture result import spike for Worl
 
 The import endpoint is force-live gated, supports `dryRun=true`, and writes only supported mappings for the requested fixture when `dryRun=false`. It reuses `prop_results` with `ExternalSource=api-sports-football`; no Soccer grading is enabled globally.
 
-The World Cup backfill endpoint is intentionally narrow: API-Sports Football only, World Cup only, league `1`, season `2026`, completed fixtures only, and no past seasons. It discovers fixtures by date range and imports only fixtures with API-Sports status `FT` / `Match Finished`; scheduled, live, postponed, and canceled fixtures are skipped with reasons.
+The World Cup backfill endpoint is intentionally narrow: API-Sports Football only, World Cup only, league `1`, season `2026`, completed fixtures only, and no past seasons. It discovers fixtures by date range and imports only fixtures with API-Sports status `FT` / `Match Finished`; scheduled, live, postponed, and canceled fixtures are skipped with reasons. `dryRun=true` remains the default, and `forceLive=true` is required for discovery because API-Sports calls are external even when no rows are written.
+
+`import-status` is persisted-only unless `forceLive=true`. Persisted-only status reports imported fixture/result rows and `coverageByDate` without API-Sports calls. Force-live status adds discovered fixture count, completed fixture count, skipped pending fixture count, missing completed fixture count, and per-date API call estimates. `backfill-completed` returns the same `coverageByDate` shape plus previewed/written result rows, failed fixtures, and per-fixture import diagnostics.
 
 Supported mappings include goals, assists, shots, shots on target, passes attempted, tackles, fouls, fouls drawn, offsides, goalie saves for goalkeepers, and attempted dribbles. Conservative mappings such as Goal + Assist, Cards, Goals Allowed, and Shots Assisted are flagged as `NeedsConfirmation` in import diagnostics.
 
@@ -343,11 +345,16 @@ Invoke-RestMethod -Method Post "$base/api/debug/soccer/results/api-sports/import
 
 Invoke-RestMethod -Method Post "$base/api/debug/soccer/results/api-sports/world-cup/backfill-completed" `
   -ContentType "application/json" `
-  -Body '{"fromDate":"2026-06-11","toDate":"2026-06-21","dryRun":true,"forceLive":false}' |
-  ConvertTo-Json -Depth 60
+  -Body '{"fromDate":"2026-06-25","toDate":"2026-06-25","dryRun":true,"forceLive":true}' |
+  ConvertTo-Json -Depth 80
 
-Invoke-RestMethod "$base/api/debug/soccer/results/api-sports/world-cup/import-status?fromDate=2026-06-11&toDate=2026-06-21" |
-  ConvertTo-Json -Depth 60
+Invoke-RestMethod -Method Post "$base/api/debug/soccer/results/api-sports/world-cup/backfill-completed" `
+  -ContentType "application/json" `
+  -Body '{"fromDate":"2026-06-25","toDate":"2026-06-25","dryRun":false,"forceLive":true}' |
+  ConvertTo-Json -Depth 80
+
+Invoke-RestMethod "$base/api/debug/soccer/results/api-sports/world-cup/import-status?fromDate=2026-06-25&toDate=2026-06-25" |
+  ConvertTo-Json -Depth 80
 
 Invoke-RestMethod "$base/api/debug/soccer/results/api-sports/world-cup/grading-coverage-summary?fromDate=2026-06-11&toDate=2026-06-24&includeFixtureDetails=true&includeSamples=true&maxFixtures=50&maxSamplesPerFixture=3" |
   ConvertTo-Json -Depth 80

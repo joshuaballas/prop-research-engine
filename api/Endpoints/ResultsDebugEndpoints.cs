@@ -1467,6 +1467,13 @@ public static class ResultsDebugEndpoints
                     row.StatusLong
                 })
                 .ToArray();
+            var coverageByDate = BuildApiSportsWorldCupStatusCoverageByDate(
+                range.FromDate,
+                range.ToDate,
+                persisted.RowCountsByFixture,
+                discovered,
+                forceLive == true,
+                forceLive == true ? CountDateRangeDays(range.FromDate, range.ToDate) : null);
 
             return Results.Ok(new
             {
@@ -1490,11 +1497,13 @@ public static class ResultsDebugEndpoints
                     season = options.Value.Football.Season
                 },
                 discoveryAvailable = forceLive == true,
+                apiCallsUsed = forceLive == true ? CountDateRangeDays(range.FromDate, range.ToDate) : 0,
                 discoveredFixtureCount = forceLive == true ? discovered.Count : (int?)null,
                 completedFixtureCount = forceLive == true ? completed.Length : (int?)null,
                 importedFixtureCount = persisted.RowCountsByFixture.Count,
                 missingCompletedFixtureCount = forceLive == true ? missingCompleted.Length : (int?)null,
                 completedFixturesDiscovered = completed,
+                coverageByDate,
                 rowsByFixture = persisted.RowCountsByFixture,
                 importedFixtures = persisted.RowCountsByFixture,
                 missingCompletedFixtures = missingCompleted,
@@ -3304,8 +3313,8 @@ public static class ResultsDebugEndpoints
                 .Where(row => !IsApiSportsFixtureCompleted(row.StatusShort, row.StatusLong))
                 .Select(row => new ApiSportsWorldCupSkippedFixture(row.FixtureId, row.EventDate, row.StatusShort, row.StatusLong, GetApiSportsFixtureSkipReason(row)))
                 .ToList();
-            var results = new List<object>();
-            var failures = new List<object>();
+            var results = new List<ApiSportsWorldCupFixtureImportOutcome>();
+            var failures = new List<ApiSportsWorldCupFixtureImportFailure>();
             var totalPreviewed = 0;
             var totalWritten = 0;
             var totalInserted = 0;
@@ -3326,8 +3335,7 @@ public static class ResultsDebugEndpoints
                     totalWritten += import.ResultRowsWritten;
                     totalInserted += import.ResultRowsInserted;
                     totalUpdated += import.ResultRowsUpdated;
-                    results.Add(new
-                    {
+                    results.Add(new ApiSportsWorldCupFixtureImportOutcome(
                         fixture.FixtureId,
                         fixture.EventDate,
                         fixture.KickoffUtc,
@@ -3339,24 +3347,28 @@ public static class ResultsDebugEndpoints
                         import.ResultRowsWritten,
                         import.ResultRowsInserted,
                         import.ResultRowsUpdated,
-                        import.UnsupportedSkipped,
+                        import.Preview.UnsupportedSkipped,
                         import.MappingDiagnostics,
-                        import.RuleConfidenceCounts
-                    });
+                        import.RuleConfidenceCounts));
                 }
                 catch (Exception exception) when (exception is not OperationCanceledException)
                 {
-                    failures.Add(new
-                    {
+                    failures.Add(new ApiSportsWorldCupFixtureImportFailure(
                         fixture.FixtureId,
                         fixture.EventDate,
                         fixture.StatusShort,
                         fixture.StatusLong,
-                        exceptionType = exception.GetType().Name,
-                        exception.Message
-                    });
+                        exception.GetType().Name,
+                        exception.Message));
                 }
             }
+            var coverageByDate = BuildApiSportsWorldCupBackfillCoverageByDate(
+                range.FromDate,
+                range.ToDate,
+                discovered,
+                skipped,
+                results,
+                failures);
 
             return Results.Ok(new
             {
@@ -3385,6 +3397,8 @@ public static class ResultsDebugEndpoints
                 resultRowsWritten = totalWritten,
                 resultRowsInserted = totalInserted,
                 resultRowsUpdated = totalUpdated,
+                apiCallsUsed = CountDateRangeDays(range.FromDate, range.ToDate) + completed.Length,
+                coverageByDate,
                 completedFixtures = completed,
                 skippedFixtures = skipped,
                 imports = results,
@@ -4123,6 +4137,119 @@ public static class ResultsDebugEndpoints
             latest?.FixtureId,
             latest?.EventDate,
             latestImportedAtUtc);
+    }
+
+    private static IReadOnlyList<ApiSportsWorldCupDateCoverageRow> BuildApiSportsWorldCupStatusCoverageByDate(
+        DateOnly fromDate,
+        DateOnly toDate,
+        IReadOnlyList<ApiSportsWorldCupFixtureRowCount> persistedRows,
+        IReadOnlyList<ApiSportsFixtureDiscoveryRow> discovered,
+        bool discoveryAvailable,
+        int? discoveryApiCallsUsed)
+    {
+        var completedFixtureIds = discovered
+            .Where(row => IsApiSportsFixtureCompleted(row.StatusShort, row.StatusLong))
+            .Select(row => row.FixtureId)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var importedFixtureIds = persistedRows
+            .Select(row => row.FixtureId)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        return EnumerateDateRange(fromDate, toDate)
+            .Select(date =>
+            {
+                var discoveredForDate = discovered.Where(row => row.EventDate == date).ToArray();
+                var importedForDate = persistedRows.Where(row => row.EventDate == date).ToArray();
+                var completedForDate = discoveredForDate
+                    .Where(row => completedFixtureIds.Contains(row.FixtureId))
+                    .ToArray();
+                var skippedForDate = discoveredForDate.Length == 0
+                    ? []
+                    : discoveredForDate.Where(row => !completedFixtureIds.Contains(row.FixtureId)).ToArray();
+                var missingCompletedForDate = completedForDate
+                    .Where(row => !importedFixtureIds.Contains(row.FixtureId))
+                    .ToArray();
+
+                return new ApiSportsWorldCupDateCoverageRow(
+                    date,
+                    discoveryAvailable ? discoveredForDate.Length : null,
+                    discoveryAvailable ? completedForDate.Length : null,
+                    importedForDate.Length,
+                    importedForDate.Sum(row => row.RowCount),
+                    null,
+                    discoveryAvailable ? skippedForDate.Length : null,
+                    discoveryAvailable ? missingCompletedForDate.Length : null,
+                    0,
+                    discoveryAvailable ? 1 : null);
+            })
+            .ToArray();
+    }
+
+    private static IReadOnlyList<ApiSportsWorldCupDateCoverageRow> BuildApiSportsWorldCupBackfillCoverageByDate(
+        DateOnly fromDate,
+        DateOnly toDate,
+        IReadOnlyList<ApiSportsFixtureDiscoveryRow> discovered,
+        IReadOnlyList<ApiSportsWorldCupSkippedFixture> skipped,
+        IReadOnlyList<ApiSportsWorldCupFixtureImportOutcome> imports,
+        IReadOnlyList<ApiSportsWorldCupFixtureImportFailure> failures)
+    {
+        var completedFixtureIds = discovered
+            .Where(row => IsApiSportsFixtureCompleted(row.StatusShort, row.StatusLong))
+            .Select(row => row.FixtureId)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var skippedFixtureIds = skipped
+            .Select(row => row.FixtureId)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var successfulImportFixtureIds = imports
+            .Select(row => row.FixtureId)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var failedFixtureIds = failures
+            .Select(row => row.FixtureId)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        return EnumerateDateRange(fromDate, toDate)
+            .Select(date =>
+            {
+                var discoveredForDate = discovered.Where(row => row.EventDate == date).ToArray();
+                var completedForDate = discoveredForDate
+                    .Where(row => completedFixtureIds.Contains(row.FixtureId))
+                    .ToArray();
+                var skippedForDate = discoveredForDate
+                    .Where(row => skippedFixtureIds.Contains(row.FixtureId))
+                    .ToArray();
+                var importsForDate = imports.Where(row => row.EventDate == date).ToArray();
+                var failuresForDate = failures.Where(row => row.EventDate == date).ToArray();
+                var missingCompletedForDate = completedForDate
+                    .Where(row => !successfulImportFixtureIds.Contains(row.FixtureId)
+                        && !failedFixtureIds.Contains(row.FixtureId))
+                    .ToArray();
+
+                return new ApiSportsWorldCupDateCoverageRow(
+                    date,
+                    discoveredForDate.Length,
+                    completedForDate.Length,
+                    importsForDate.Length,
+                    importsForDate.Sum(row => row.ResultRowsWritten),
+                    importsForDate.Sum(row => row.ResultRowsPreviewed),
+                    skippedForDate.Length,
+                    missingCompletedForDate.Length,
+                    failuresForDate.Length,
+                    1 + completedForDate.Length);
+            })
+            .ToArray();
+    }
+
+    private static IEnumerable<DateOnly> EnumerateDateRange(DateOnly fromDate, DateOnly toDate)
+    {
+        for (var date = fromDate; date <= toDate; date = date.AddDays(1))
+        {
+            yield return date;
+        }
+    }
+
+    private static int CountDateRangeDays(DateOnly fromDate, DateOnly toDate)
+    {
+        return toDate.DayNumber - fromDate.DayNumber + 1;
     }
 
     private static string? ExtractApiSportsFixtureId(string externalSourceIdentifier)
@@ -10081,6 +10208,42 @@ public static class ResultsDebugEndpoints
         string? StatusShort,
         string? StatusLong,
         string Reason);
+
+    private sealed record ApiSportsWorldCupFixtureImportOutcome(
+        string FixtureId,
+        DateOnly? EventDate,
+        DateTimeOffset? KickoffUtc,
+        string? HomeTeamName,
+        string? AwayTeamName,
+        string? StatusShort,
+        string? StatusLong,
+        int ResultRowsPreviewed,
+        int ResultRowsWritten,
+        int ResultRowsInserted,
+        int ResultRowsUpdated,
+        IReadOnlyList<ApiSportsSoccerUnsupportedSkippedRow> UnsupportedSkipped,
+        object MappingDiagnostics,
+        object RuleConfidenceCounts);
+
+    private sealed record ApiSportsWorldCupFixtureImportFailure(
+        string FixtureId,
+        DateOnly? EventDate,
+        string? StatusShort,
+        string? StatusLong,
+        string ExceptionType,
+        string Message);
+
+    private sealed record ApiSportsWorldCupDateCoverageRow(
+        DateOnly Date,
+        int? FixtureCount,
+        int? CompletedFixtureCount,
+        int ImportedFixtureCount,
+        int ImportedResultRows,
+        int? PreviewedResultRows,
+        int? SkippedPendingFixtureCount,
+        int? MissingCompletedFixtureCount,
+        int FailedFixtureCount,
+        int? ApiCallsUsed);
 
     private sealed record ApiSportsWorldCupFixtureRowCount(
         string FixtureId,
