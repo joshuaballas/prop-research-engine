@@ -23,6 +23,7 @@ Phase 1 public app behavior is intentionally narrow:
 
 - Line Shopping may surface persisted World Cup sportsbook context with `sport=SOCCER&competition=World Cup`.
 - If Soccer line-shopping snapshots do not exist because no Soccer prediction-backed groups were generated, public Line Shopping builds read-only research groups directly from persisted The Odds `platform_props` context rows.
+- Public Line Shopping fallback rows include compact `playerHistorySummary` when an approved `api-sports-football` bridge link resolves the platform player to persisted API-Sports `prop_results`. Unlinked rows return an unavailable summary.
 - Top Picks remains DFS-scoped in the customer app and must not present Soccer sportsbook context as model recommendations.
 - Soccer rows are always returned as research-only sportsbook context: `providerCategory=Sportsbook`, `entryActionableForUser=false`, `sportsbookContextResearchOnly=true`, `resultGradingSupported=false`, and `publicSoccerGradingEnabled=false`.
 - Soccer rows include unavailable reasons for grading and entry actionability. Model hit chance and EV should render as unavailable when prediction inputs are not present; do not show fake zeros.
@@ -316,7 +317,7 @@ The spike-status alias summary intentionally separates `aliasPlatformPlayerNames
 
 Soccer result grading and public player prop history are intentionally unavailable until the Soccer import workflow is promoted beyond debug-only and grading semantics are explicitly enabled. The debug player-history endpoint above is research-only and does not change public `/api/markets/*` behavior.
 
-- `/api/markets/prop-history?sport=SOCCER...` returns `Soccer history is not available yet.`
+- `/api/markets/prop-history?sport=SOCCER...` returns `Soccer grading and model hit chance are not available yet.`
 - Model Performance should not include Soccer as graded performance.
 - Soccer fantasy score and combo props must not be graded from fake or inferred data.
 - API-Sports Football is the current result-provider spike candidate. See `docs/SOCCER_RESULTS_PROVIDER_SPIKE.md`.

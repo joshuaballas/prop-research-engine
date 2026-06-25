@@ -10,6 +10,9 @@ namespace SportsBetting.Api.Endpoints;
 
 public static partial class TheOddsApiDebugEndpoints
 {
+    private const string ApiSportsFootballResultSource = "api-sports-football";
+    private const string ApiSportsFootballPlayerRefProvider = "api-sports-football";
+
     internal sealed record MlbRefreshFreshnessResponse(
         DateTimeOffset GeneratedAtUtc,
         bool CallsExternalApis,
@@ -411,8 +414,15 @@ public static partial class TheOddsApiDebugEndpoints
             .ThenBy(group => group.Line)
             .Take(requestedTake)
             .ToArray();
+        var playerHistoryEnrichment = await BuildSoccerWorldCupPlayerHistoryEnrichmentAsync(
+            dbContext,
+            groups,
+            cancellationToken);
         var comparisonGroups = groups
-            .Select(group => ToSoccerWorldCupResearchOnlyResponseGroup(group, includeBookmakerPrices))
+            .Select(group => ToSoccerWorldCupResearchOnlyResponseGroup(
+                group,
+                includeBookmakerPrices,
+                playerHistoryEnrichment.SummariesByPlayerId.GetValueOrDefault(group.PlayerId)))
             .ToArray();
         var strategyClassificationSummary = BuildTheOddsStrategyClassificationSummary(groups);
         totalStopwatch.Stop();
@@ -439,6 +449,10 @@ public static partial class TheOddsApiDebugEndpoints
                 snapshotBacked = false,
                 providerContextRowCount = platformProps.Count,
                 researchOnlyComparisonGroupCount = groups.Length,
+                rowsWithPlayerHistory = playerHistoryEnrichment.RowsWithPlayerHistory,
+                rowsWithoutPlayerHistory = playerHistoryEnrichment.RowsWithoutPlayerHistory,
+                uniqueLinkedProviderPlayers = playerHistoryEnrichment.UniqueLinkedProviderPlayers,
+                historyStatsIncluded = playerHistoryEnrichment.HistoryStatsIncluded,
                 totalDurationMs = totalStopwatch.ElapsedMilliseconds,
                 lifecycleFreshnessMinutes,
                 take = requestedTake,
@@ -1559,11 +1573,292 @@ public static partial class TheOddsApiDebugEndpoints
             .ToList();
     }
 
+    private static async Task<SoccerWorldCupPlayerHistoryEnrichment> BuildSoccerWorldCupPlayerHistoryEnrichmentAsync(
+        ApplicationDbContext dbContext,
+        IReadOnlyCollection<TheOddsLineShoppingGroup> groups,
+        CancellationToken cancellationToken)
+    {
+        var playerIds = groups
+            .Select(group => group.PlayerId)
+            .Where(playerId => playerId != Guid.Empty)
+            .Distinct()
+            .ToArray();
+        var summaries = playerIds.ToDictionary(
+            playerId => playerId,
+            _ => BuildUnavailableSoccerPlayerHistorySummary("No approved API-Sports player link found for this Soccer platform player."));
+        if (playerIds.Length == 0)
+        {
+            return new SoccerWorldCupPlayerHistoryEnrichment(
+                summaries,
+                RowsWithPlayerHistory: 0,
+                RowsWithoutPlayerHistory: groups.Count,
+                UniqueLinkedProviderPlayers: 0,
+                HistoryStatsIncluded: []);
+        }
+
+        var approvedLinks = await dbContext.ProviderEntityLinks
+            .AsNoTracking()
+            .Where(link => link.ProviderKey == ApiSportsFootballPlayerRefProvider
+                && link.EntityType == "Player"
+                && link.LinkStatus == "Approved"
+                && link.CanonicalEntityId.HasValue
+                && playerIds.Contains(link.CanonicalEntityId.Value))
+            .Select(link => new
+            {
+                PlatformPlayerId = link.CanonicalEntityId!.Value,
+                ProviderPlayerId = link.ProviderEntityId,
+                link.ProviderEntityName,
+                link.ProviderTeamName,
+                link.ProviderCompetitionName,
+                link.Confidence
+            })
+            .ToArrayAsync(cancellationToken);
+        var providerIdsByPlatformPlayerId = approvedLinks
+            .GroupBy(link => link.PlatformPlayerId)
+            .ToDictionary(
+                group => group.Key,
+                group => group
+                    .Select(link => link.ProviderPlayerId)
+                    .Where(value => !string.IsNullOrWhiteSpace(value))
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .Order()
+                    .ToArray());
+        var providerPlayerIds = approvedLinks
+            .Select(link => link.ProviderPlayerId)
+            .Where(value => !string.IsNullOrWhiteSpace(value))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        if (providerPlayerIds.Length == 0)
+        {
+            return BuildSoccerWorldCupPlayerHistoryEnrichmentResult(groups, summaries, [], []);
+        }
+
+        var refs = await dbContext.PlayerExternalRefs
+            .AsNoTracking()
+            .Where(reference => reference.Provider == ApiSportsFootballPlayerRefProvider
+                && providerPlayerIds.Contains(reference.ProviderPlayerId))
+            .Select(reference => new
+            {
+                reference.PlayerId,
+                reference.ProviderPlayerId
+            })
+            .ToArrayAsync(cancellationToken);
+        var providerIdByHistoricalPlayerId = refs
+            .GroupBy(reference => reference.PlayerId)
+            .ToDictionary(
+                group => group.Key,
+                group => group.First().ProviderPlayerId);
+        var historicalPlayerIds = providerIdByHistoricalPlayerId.Keys.ToArray();
+        if (historicalPlayerIds.Length == 0)
+        {
+            foreach (var link in approvedLinks)
+            {
+                summaries[link.PlatformPlayerId] = BuildUnavailableSoccerPlayerHistorySummary(
+                    "Approved API-Sports player link exists, but no persisted historical player ref was found.",
+                    link.ProviderPlayerId);
+            }
+
+            return BuildSoccerWorldCupPlayerHistoryEnrichmentResult(groups, summaries, providerPlayerIds, []);
+        }
+
+        var statKeysOfInterest = new[] { "GOALS", "ASSISTS", "SHOTS", "SHOTS_ON_TARGET" };
+        var resultRows = await dbContext.PropResults
+            .AsNoTracking()
+            .Include(result => result.League)
+            .Include(result => result.PropType)
+            .Where(result => historicalPlayerIds.Contains(result.PlayerId)
+                && result.ExternalSource == ApiSportsFootballResultSource
+                && result.PropType != null
+                && statKeysOfInterest.Contains(result.PropType.StatKey))
+            .Select(result => new SoccerWorldCupHistoryResultRow(
+                result.PlayerId,
+                result.EventDate,
+                result.ActualResultValue,
+                result.PropType!.Name,
+                result.PropType.StatKey,
+                result.League == null ? null : result.League.Name,
+                result.League == null ? null : result.League.Code,
+                result.ExternalSourceIdentifier))
+            .ToArrayAsync(cancellationToken);
+        var rowsByProviderPlayerId = resultRows
+            .Where(row => providerIdByHistoricalPlayerId.ContainsKey(row.PlayerId))
+            .GroupBy(row => providerIdByHistoricalPlayerId[row.PlayerId], StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(group => group.Key, group => group.ToArray(), StringComparer.OrdinalIgnoreCase);
+
+        foreach (var playerId in playerIds)
+        {
+            if (!providerIdsByPlatformPlayerId.TryGetValue(playerId, out var linkedProviderPlayerIds) ||
+                linkedProviderPlayerIds.Length == 0)
+            {
+                continue;
+            }
+
+            var linkedRows = linkedProviderPlayerIds
+                .SelectMany(providerId => rowsByProviderPlayerId.GetValueOrDefault(providerId) ?? [])
+                .ToArray();
+            if (linkedRows.Length == 0)
+            {
+                summaries[playerId] = BuildUnavailableSoccerPlayerHistorySummary(
+                    "Approved API-Sports player link exists, but no persisted historical rows were found.",
+                    linkedProviderPlayerIds[0]);
+                continue;
+            }
+
+            summaries[playerId] = BuildAvailableSoccerPlayerHistorySummary(linkedProviderPlayerIds[0], linkedRows);
+        }
+
+        return BuildSoccerWorldCupPlayerHistoryEnrichmentResult(
+            groups,
+            summaries,
+            providerPlayerIds,
+            resultRows
+                .Select(row => row.StatKey)
+                .Where(statKey => !string.IsNullOrWhiteSpace(statKey))
+                .Select(statKey => statKey!)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .Order()
+                .ToArray());
+    }
+
+    private static SoccerWorldCupPlayerHistoryEnrichment BuildSoccerWorldCupPlayerHistoryEnrichmentResult(
+        IReadOnlyCollection<TheOddsLineShoppingGroup> groups,
+        IReadOnlyDictionary<Guid, JsonObject> summaries,
+        IReadOnlyCollection<string> providerPlayerIds,
+        IReadOnlyCollection<string> statKeys)
+    {
+        var rowsWithHistory = groups.Count(group =>
+            summaries.TryGetValue(group.PlayerId, out var summary) &&
+            summary.TryGetPropertyValue("available", out var availableNode) &&
+            availableNode?.GetValue<bool>() == true);
+
+        return new SoccerWorldCupPlayerHistoryEnrichment(
+            summaries,
+            rowsWithHistory,
+            Math.Max(0, groups.Count - rowsWithHistory),
+            providerPlayerIds.Count,
+            statKeys.Select(ToSoccerWorldCupHistoryStatResponseKey).Distinct(StringComparer.OrdinalIgnoreCase).Order().ToArray());
+    }
+
+    private static JsonObject BuildUnavailableSoccerPlayerHistorySummary(string reason, string? providerPlayerId = null)
+    {
+        var summary = new JsonObject
+        {
+            ["available"] = false,
+            ["unavailableReason"] = reason,
+            ["provider"] = ApiSportsFootballPlayerRefProvider,
+            ["providerPlayerId"] = providerPlayerId
+        };
+        return summary;
+    }
+
+    private static JsonObject BuildAvailableSoccerPlayerHistorySummary(
+        string providerPlayerId,
+        IReadOnlyCollection<SoccerWorldCupHistoryResultRow> rows)
+    {
+        var orderedRows = rows
+            .OrderByDescending(row => row.EventDate)
+            .ToArray();
+        var stats = new JsonObject();
+        foreach (var statGroup in rows.GroupBy(row => row.StatKey).OrderBy(group => ToSoccerWorldCupHistoryStatResponseKey(group.Key)))
+        {
+            var statRows = statGroup.OrderByDescending(row => row.EventDate).ToArray();
+            stats[ToSoccerWorldCupHistoryStatResponseKey(statGroup.Key)] = new JsonObject
+            {
+                ["count"] = statRows.Length,
+                ["average"] = decimal.Round(statRows.Average(row => row.Value), 3),
+                ["last5Average"] = decimal.Round(statRows.Take(5).Average(row => row.Value), 3),
+                ["last10Average"] = decimal.Round(statRows.Take(10).Average(row => row.Value), 3)
+            };
+        }
+
+        var competitionBreakdown = new JsonArray();
+        foreach (var competitionGroup in rows
+            .GroupBy(row => new { row.Competition, row.CompetitionCode })
+            .OrderBy(group => group.Key.Competition ?? group.Key.CompetitionCode))
+        {
+            competitionBreakdown.Add(new JsonObject
+            {
+                ["competitionKey"] = competitionGroup.Key.CompetitionCode,
+                ["competitionName"] = competitionGroup.Key.Competition,
+                ["sampleSize"] = competitionGroup.Count(),
+                ["latestResultDate"] = competitionGroup.Max(row => row.EventDate).ToString("O")
+            });
+        }
+
+        var recentGameLog = new JsonArray();
+        foreach (var gameGroup in orderedRows
+            .GroupBy(row => new
+            {
+                row.EventDate,
+                row.Competition,
+                row.CompetitionCode,
+                FixtureId = TryExtractApiSportsFixtureId(row.ExternalSourceIdentifier)
+            })
+            .OrderByDescending(group => group.Key.EventDate)
+            .Take(5))
+        {
+            var gameStats = new JsonObject();
+            foreach (var statRow in gameGroup.OrderBy(row => ToSoccerWorldCupHistoryStatResponseKey(row.StatKey)))
+            {
+                gameStats[ToSoccerWorldCupHistoryStatResponseKey(statRow.StatKey)] = statRow.Value;
+            }
+
+            recentGameLog.Add(new JsonObject
+            {
+                ["eventDate"] = gameGroup.Key.EventDate.ToString("O"),
+                ["competition"] = gameGroup.Key.Competition,
+                ["competitionKey"] = gameGroup.Key.CompetitionCode,
+                ["fixtureId"] = gameGroup.Key.FixtureId,
+                ["stats"] = gameStats
+            });
+        }
+
+        return new JsonObject
+        {
+            ["available"] = true,
+            ["unavailableReason"] = null,
+            ["provider"] = ApiSportsFootballPlayerRefProvider,
+            ["providerPlayerId"] = providerPlayerId,
+            ["sampleSize"] = rows.Count,
+            ["latestResultDate"] = rows.Max(row => row.EventDate).ToString("O"),
+            ["stats"] = stats,
+            ["competitionBreakdown"] = competitionBreakdown,
+            ["recentGameLog"] = recentGameLog
+        };
+    }
+
+    private static string ToSoccerWorldCupHistoryStatResponseKey(string? statKey)
+    {
+        return statKey?.ToUpperInvariant() switch
+        {
+            "GOALS" => "Goals",
+            "ASSISTS" => "Assists",
+            "SHOTS" => "Shots",
+            "SHOTS_ON_TARGET" => "ShotsOnTarget",
+            _ => string.IsNullOrWhiteSpace(statKey) ? "Unknown" : statKey
+        };
+    }
+
+    private static string? TryExtractApiSportsFixtureId(string? externalSourceIdentifier)
+    {
+        if (string.IsNullOrWhiteSpace(externalSourceIdentifier))
+        {
+            return null;
+        }
+
+        var parts = externalSourceIdentifier.Split(':', StringSplitOptions.TrimEntries);
+        return parts.Length >= 2 && string.Equals(parts[0], ApiSportsFootballResultSource, StringComparison.OrdinalIgnoreCase)
+            ? parts[1]
+            : null;
+    }
+
     private static object ToSoccerWorldCupResearchOnlyResponseGroup(
         TheOddsLineShoppingGroup group,
-        bool includeBookmakerPrices)
+        bool includeBookmakerPrices,
+        JsonObject? playerHistorySummary)
     {
-        var node = JsonSerializer.SerializeToNode(ToLineShoppingResponseGroup(group, includeBookmakerPrices)) as JsonObject ?? [];
+        var node = NormalizeJsonObjectPropertyCasing(
+            JsonSerializer.SerializeToNode(ToLineShoppingResponseGroup(group, includeBookmakerPrices)) as JsonObject ?? []);
         node["sport"] = "SOCCER";
         node["competition"] = "World Cup";
         node["providerCategory"] = "Sportsbook";
@@ -1573,7 +1868,7 @@ public static partial class TheOddsApiDebugEndpoints
         node["sportsbookContextResearchOnly"] = true;
         node["isResearchOnly"] = true;
         node["resultGradingSupported"] = false;
-        node["resultGradingUnavailableReason"] = "Soccer history is not available yet.";
+        node["resultGradingUnavailableReason"] = "Soccer grading and model hit chance are not available yet.";
         node["publicSoccerGradingEnabled"] = false;
         node["entryUnavailableReason"] = "Soccer World Cup sportsbook context is research-only and not Entry Builder playable.";
         node["entryRuleWarning"] = "Soccer World Cup sportsbook context is research-only and not Entry Builder playable.";
@@ -1590,15 +1885,71 @@ public static partial class TheOddsApiDebugEndpoints
         node["modelProjection"] = null;
         node["projectionEdge"] = null;
         node["probabilitySource"] = null;
-        node["hitChanceUnavailableReason"] = "World Cup model hit chance is not available yet.";
+        node["hitChanceUnavailableReason"] = "Soccer grading and model hit chance are not available yet.";
         node["strategyClassification"] = "ResearchOnly";
         node["strategyTier"] = "ResearchOnly";
         node["isCandidate"] = false;
         node["isWatchlist"] = false;
         node["isAvoid"] = false;
+        node["playerHistorySummary"] = playerHistorySummary?.DeepClone();
 
         return node;
     }
+
+    private static JsonObject NormalizeJsonObjectPropertyCasing(JsonObject source)
+    {
+        var result = new JsonObject();
+        var keysByInsensitiveName = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var property in source)
+        {
+            var normalizedName = ToCamelCaseJsonPropertyName(property.Key);
+            if (!keysByInsensitiveName.Add(normalizedName))
+            {
+                continue;
+            }
+
+            result[normalizedName] = NormalizeJsonNodePropertyCasing(property.Value);
+        }
+
+        return result;
+    }
+
+    private static JsonNode? NormalizeJsonNodePropertyCasing(JsonNode? node)
+    {
+        return node switch
+        {
+            JsonObject obj => NormalizeJsonObjectPropertyCasing(obj),
+            JsonArray array => new JsonArray(array.Select(item => NormalizeJsonNodePropertyCasing(item)).ToArray()),
+            _ => node?.DeepClone()
+        };
+    }
+
+    private static string ToCamelCaseJsonPropertyName(string propertyName)
+    {
+        if (string.IsNullOrWhiteSpace(propertyName) || char.IsLower(propertyName[0]))
+        {
+            return propertyName;
+        }
+
+        return char.ToLowerInvariant(propertyName[0]) + propertyName[1..];
+    }
+
+    private sealed record SoccerWorldCupPlayerHistoryEnrichment(
+        IReadOnlyDictionary<Guid, JsonObject> SummariesByPlayerId,
+        int RowsWithPlayerHistory,
+        int RowsWithoutPlayerHistory,
+        int UniqueLinkedProviderPlayers,
+        IReadOnlyList<string> HistoryStatsIncluded);
+
+    private sealed record SoccerWorldCupHistoryResultRow(
+        Guid PlayerId,
+        DateOnly EventDate,
+        decimal Value,
+        string? PropType,
+        string? StatKey,
+        string? Competition,
+        string? CompetitionCode,
+        string? ExternalSourceIdentifier);
 
     internal sealed record SoccerWorldCupProviderContextCounts(
         int PlatformRowCount,

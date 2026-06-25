@@ -46,8 +46,8 @@ public static class PublicMarketsEndpoints
         "PITCHEREARNEDRUNS",
         "EARNEDRUNSALLOWED"
     ];
-    private const string MarketReadLimitation = "MLB result grading is supported. Soccer / World Cup provider-line reads are supported from persisted snapshots when available; soccer history and performance grading are not available yet.";
-    private const string SoccerHistoryUnavailableMessage = "Soccer history is not available yet.";
+    private const string MarketReadLimitation = "MLB result grading is supported. Soccer / World Cup provider-line reads and player history context are supported from persisted data; soccer grading, model hit chance, and performance grading are not available yet.";
+    private const string SoccerHistoryUnavailableMessage = "Soccer grading and model hit chance are not available yet.";
 
     public static IEndpointRouteBuilder MapPublicMarketsEndpoints(this IEndpointRouteBuilder endpoints)
     {
@@ -1373,7 +1373,7 @@ public static class PublicMarketsEndpoints
             details["selectedSideProbability"] = null;
             details["modelProbabilityAvailable"] = false;
             details["probabilitySource"] = null;
-            details["hitChanceUnavailableReason"] = "World Cup model hit chance is not available yet.";
+            details["hitChanceUnavailableReason"] = SoccerHistoryUnavailableMessage;
         }
 
         using var document = JsonSerializer.SerializeToDocument(details);

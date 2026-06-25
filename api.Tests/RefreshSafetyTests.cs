@@ -1176,6 +1176,8 @@ public sealed class RefreshSafetyTests
 
         await EnsureSuccessWithBodyAsync(dfsResponse);
         await EnsureSuccessWithBodyAsync(sportsbookResponse);
+        AssertNoCaseInsensitiveDuplicatePropertiesInComparisonGroups(await dfsResponse.Content.ReadAsStringAsync());
+        AssertNoCaseInsensitiveDuplicatePropertiesInComparisonGroups(await sportsbookResponse.Content.ReadAsStringAsync());
         var dfsJson = await dfsResponse.Content.ReadFromJsonAsync<JsonElement>();
         var sportsbookJson = await sportsbookResponse.Content.ReadFromJsonAsync<JsonElement>();
 
@@ -1269,7 +1271,7 @@ public sealed class RefreshSafetyTests
         Assert.Equal("Sportsbook", topPicks.GetProperty("topPicks")[0].GetProperty("entryProviderCategory").GetString());
         Assert.Equal("Sportsbook", topPicks.GetProperty("topPicks")[0].GetProperty("providerCategory").GetString());
         Assert.False(topPicks.GetProperty("topPicks")[0].GetProperty("resultGradingSupported").GetBoolean());
-        Assert.Equal("Soccer history is not available yet.", topPicks.GetProperty("topPicks")[0].GetProperty("resultGradingUnavailableReason").GetString());
+        Assert.Equal("Soccer grading and model hit chance are not available yet.", topPicks.GetProperty("topPicks")[0].GetProperty("resultGradingUnavailableReason").GetString());
         Assert.Equal("Soccer World Cup sportsbook context is research-only and not Entry Builder playable.", topPicks.GetProperty("topPicks")[0].GetProperty("entryUnavailableReason").GetString());
         Assert.False(topPicks.GetProperty("topPicks")[0].GetProperty("showExpectedValue").GetBoolean());
         Assert.Equal(JsonValueKind.Null, topPicks.GetProperty("topPicks")[0].GetProperty("displayExpectedValue").ValueKind);
@@ -1283,7 +1285,7 @@ public sealed class RefreshSafetyTests
         Assert.True(lineShopping.GetProperty("comparisonGroups")[0].GetProperty("sportsbookContextResearchOnly").GetBoolean());
         Assert.Equal("Sportsbook", lineShopping.GetProperty("comparisonGroups")[0].GetProperty("entryProviderCategory").GetString());
         Assert.False(lineShopping.GetProperty("comparisonGroups")[0].GetProperty("resultGradingSupported").GetBoolean());
-        Assert.Equal("World Cup model hit chance is not available yet.", lineShopping.GetProperty("comparisonGroups")[0].GetProperty("hitChanceUnavailableReason").GetString());
+        Assert.Equal("Soccer grading and model hit chance are not available yet.", lineShopping.GetProperty("comparisonGroups")[0].GetProperty("hitChanceUnavailableReason").GetString());
         Assert.Equal(0, lineShopping.GetProperty("summary").GetProperty("actionableComparisonGroups").GetInt32());
         Assert.Equal(0, factory.TheOddsAdapter.CallCount);
         Assert.Equal(before, await factory.CountArtifactsAsync());
@@ -1295,6 +1297,38 @@ public sealed class RefreshSafetyTests
         await using var factory = new SafetyTestApplicationFactory();
         using var client = factory.CreateClient();
         await factory.SeedSoccerWorldCupProviderContextRowsWithoutSnapshotsAsync();
+        await AddApiSportsHistoricalSoccerResultAsync(
+            factory,
+            "EPL",
+            "EPL",
+            2025,
+            "soccer-history-fixture-1",
+            new DateOnly(2026, 1, 1),
+            "SHOTS",
+            "Shots",
+            providerPlayerId: "70001",
+            playerDisplayName: "Test Forward");
+        await AddApiSportsHistoricalSoccerResultAsync(
+            factory,
+            "EPL",
+            "EPL",
+            2025,
+            "soccer-history-fixture-2",
+            new DateOnly(2026, 1, 2),
+            "GOALS",
+            "Goals",
+            providerPlayerId: "70001",
+            playerDisplayName: "Test Forward");
+        Guid testForwardPlayerId;
+        using (var scope = factory.Services.CreateScope())
+        {
+            var dbContext = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+            testForwardPlayerId = await dbContext.Players
+                .Where(player => player.DisplayName == "Test Forward" && player.League != null && player.League.Code == "WC2026")
+                .Select(player => player.Id)
+                .SingleAsync();
+        }
+        await AddApiSportsProviderEntityLinkAsync(factory, testForwardPlayerId, "70001", "Test Forward", "TestPublicHistoryEnrichment");
         var before = await factory.CountArtifactsAsync();
 
         var freshnessResponse = await client.GetAsync("/api/markets/freshness?sport=SOCCER&competition=World%20Cup");
@@ -1304,6 +1338,7 @@ public sealed class RefreshSafetyTests
         await EnsureSuccessWithBodyAsync(freshnessResponse);
         await EnsureSuccessWithBodyAsync(lineShoppingResponse);
         await EnsureSuccessWithBodyAsync(topPicksResponse);
+        AssertNoCaseInsensitiveDuplicatePropertiesInComparisonGroups(await lineShoppingResponse.Content.ReadAsStringAsync());
         var freshness = await freshnessResponse.Content.ReadFromJsonAsync<JsonElement>();
         var lineShopping = await lineShoppingResponse.Content.ReadFromJsonAsync<JsonElement>();
         var topPicks = await topPicksResponse.Content.ReadFromJsonAsync<JsonElement>();
@@ -1318,9 +1353,14 @@ public sealed class RefreshSafetyTests
         Assert.Equal("World Cup", lineShopping.GetProperty("competition").GetString());
         Assert.False(lineShopping.GetProperty("resultGradingSupported").GetBoolean());
         Assert.Equal(2, lineShopping.GetProperty("summary").GetProperty("providerContextRowCount").GetInt32());
+        Assert.Equal(1, lineShopping.GetProperty("diagnostics").GetProperty("rowsWithPlayerHistory").GetInt32());
+        Assert.Equal(1, lineShopping.GetProperty("diagnostics").GetProperty("rowsWithoutPlayerHistory").GetInt32());
+        Assert.Equal(1, lineShopping.GetProperty("diagnostics").GetProperty("uniqueLinkedProviderPlayers").GetInt32());
+        Assert.Contains(lineShopping.GetProperty("diagnostics").GetProperty("historyStatsIncluded").EnumerateArray(), stat => stat.GetString() == "Goals");
+        Assert.Contains(lineShopping.GetProperty("diagnostics").GetProperty("historyStatsIncluded").EnumerateArray(), stat => stat.GetString() == "Shots");
         Assert.NotEmpty(lineShopping.GetProperty("comparisonGroups").EnumerateArray());
 
-        var group = lineShopping.GetProperty("comparisonGroups").EnumerateArray().First();
+        var group = lineShopping.GetProperty("comparisonGroups").EnumerateArray().First(row => row.GetProperty("player").GetString() == "Test Forward");
         Assert.Equal("SOCCER", group.GetProperty("sport").GetString());
         Assert.Equal("World Cup", group.GetProperty("competition").GetString());
         Assert.Equal("Sportsbook", group.GetProperty("providerCategory").GetString());
@@ -1329,10 +1369,22 @@ public sealed class RefreshSafetyTests
         Assert.False(group.GetProperty("resultGradingSupported").GetBoolean());
         Assert.Equal(JsonValueKind.Null, group.GetProperty("selectedSideProbability").ValueKind);
         Assert.False(group.GetProperty("modelProbabilityAvailable").GetBoolean());
-        Assert.Equal("World Cup model hit chance is not available yet.", group.GetProperty("hitChanceUnavailableReason").GetString());
+        Assert.Equal("Soccer grading and model hit chance are not available yet.", group.GetProperty("hitChanceUnavailableReason").GetString());
         Assert.False(group.GetProperty("showExpectedValue").GetBoolean());
         Assert.Equal(JsonValueKind.Null, group.GetProperty("displayExpectedValue").ValueKind);
         Assert.Equal("ResearchOnly", group.GetProperty("strategyClassification").GetString());
+        var historySummary = group.GetProperty("playerHistorySummary");
+        Assert.True(historySummary.GetProperty("available").GetBoolean());
+        Assert.Equal("api-sports-football", historySummary.GetProperty("provider").GetString());
+        Assert.Equal("70001", historySummary.GetProperty("providerPlayerId").GetString());
+        Assert.Equal(2, historySummary.GetProperty("sampleSize").GetInt32());
+        Assert.True(historySummary.GetProperty("stats").TryGetProperty("Shots", out _));
+        Assert.True(historySummary.GetProperty("stats").TryGetProperty("Goals", out _));
+        Assert.NotEmpty(historySummary.GetProperty("recentGameLog").EnumerateArray());
+        var unlinkedGroup = lineShopping.GetProperty("comparisonGroups").EnumerateArray().First(row => row.GetProperty("player").GetString() == "Second Forward");
+        var unavailableSummary = unlinkedGroup.GetProperty("playerHistorySummary");
+        Assert.False(unavailableSummary.GetProperty("available").GetBoolean());
+        Assert.Equal("No approved API-Sports player link found for this Soccer platform player.", unavailableSummary.GetProperty("unavailableReason").GetString());
         Assert.Empty(topPicks.GetProperty("topPicks").EnumerateArray());
         Assert.Equal(0, factory.TheOddsAdapter.CallCount);
         Assert.Equal(before, await factory.CountArtifactsAsync());
@@ -1355,7 +1407,7 @@ public sealed class RefreshSafetyTests
         Assert.True(json.GetProperty("readOnly").GetBoolean());
         Assert.False(json.GetProperty("resultGradingSupported").GetBoolean());
         Assert.Equal(0, json.GetProperty("summary").GetProperty("gradedPicks").GetInt32());
-        Assert.Equal("Soccer history is not available yet.", json.GetProperty("unavailableReason").GetString());
+        Assert.Equal("Soccer grading and model hit chance are not available yet.", json.GetProperty("unavailableReason").GetString());
         Assert.Equal(0, factory.TheOddsAdapter.CallCount);
         Assert.Equal(before, await factory.CountArtifactsAsync());
     }
@@ -1372,7 +1424,7 @@ public sealed class RefreshSafetyTests
         await EnsureSuccessWithBodyAsync(response);
         var json = await response.Content.ReadFromJsonAsync<JsonElement>();
         Assert.Equal("SOCCER", json.GetProperty("sport").GetString());
-        Assert.Equal("Soccer history is not available yet.", json.GetProperty("emptyReason").GetString());
+        Assert.Equal("Soccer grading and model hit chance are not available yet.", json.GetProperty("emptyReason").GetString());
         Assert.Empty(json.GetProperty("games").EnumerateArray());
         Assert.Equal(0, factory.TheOddsAdapter.CallCount);
     }
@@ -5025,6 +5077,43 @@ public sealed class RefreshSafetyTests
         return await dbContext.ProviderEntityLinks.CountAsync(link =>
             link.ProviderKey == "api-sports-football"
             && link.EntityType == "Player");
+    }
+
+    private static void AssertNoCaseInsensitiveDuplicatePropertiesInComparisonGroups(string responseJson)
+    {
+        using var document = JsonDocument.Parse(responseJson);
+        Assert.Equal(JsonValueKind.Object, document.RootElement.ValueKind);
+        Assert.True(document.RootElement.TryGetProperty("comparisonGroups", out var comparisonGroups));
+        Assert.Equal(JsonValueKind.Array, comparisonGroups.ValueKind);
+        var index = 0;
+        foreach (var group in comparisonGroups.EnumerateArray())
+        {
+            AssertNoCaseInsensitiveDuplicateProperties(group, $"$.comparisonGroups[{index}]");
+            index++;
+        }
+    }
+
+    private static void AssertNoCaseInsensitiveDuplicateProperties(JsonElement element, string path)
+    {
+        switch (element.ValueKind)
+        {
+            case JsonValueKind.Object:
+                var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                foreach (var property in element.EnumerateObject())
+                {
+                    Assert.True(names.Add(property.Name), $"Duplicate JSON property by case-insensitive name at {path}: {property.Name}");
+                    AssertNoCaseInsensitiveDuplicateProperties(property.Value, $"{path}.{property.Name}");
+                }
+                break;
+            case JsonValueKind.Array:
+                var index = 0;
+                foreach (var item in element.EnumerateArray())
+                {
+                    AssertNoCaseInsensitiveDuplicateProperties(item, $"{path}[{index}]");
+                    index++;
+                }
+                break;
+        }
     }
 
     private static async Task AddApiSportsProviderEntityLinkAsync(

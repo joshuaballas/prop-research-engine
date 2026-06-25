@@ -123,7 +123,7 @@ export function LineShoppingPage() {
         onClearFilters={clearFilters}
       />
       <Typography variant="body2" color="text.secondary" sx={{ mt: -1.25 }}>
-        Soccer / World Cup sportsbook rows are research-only market context. They are not graded yet and cannot be added to entries.
+        Sportsbook lines are for comparison only. Provider lines are the picks you can add to an entry.
       </Typography>
       {lineShoppingQuery.loading ? (
         <ApiStateCard message="Loading latest line-shopping rows..." />
