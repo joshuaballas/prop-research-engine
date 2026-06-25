@@ -2005,6 +2005,95 @@ public sealed class RefreshSafetyTests
     }
 
     [Fact]
+    public async Task ApiSportsHistoricalBackfill_BlocksWithoutForceLive()
+    {
+        await using var factory = new SafetyTestApplicationFactory(ApiSportsLiveConfig());
+        using var client = factory.CreateClient();
+
+        var response = await client.PostAsJsonAsync("/api/debug/soccer/results/api-sports/historical/backfill-completed", new
+        {
+            competitionKey = "EPL",
+            fromDate = "2026-06-11",
+            toDate = "2026-06-11",
+            dryRun = true,
+            forceLive = false
+        });
+
+        await AssertStatusWithBodyAsync(response, HttpStatusCode.Conflict);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.False(json.GetProperty("callsExternalApis").GetBoolean());
+        Assert.Equal(0, factory.ApiSportsFootballClient.FixturesCallCount);
+        Assert.Equal(0, factory.ApiSportsFootballClient.FixturePlayerStatsCallCount);
+    }
+
+    [Fact]
+    public async Task ApiSportsHistoricalBackfill_RejectsDryRunFalse()
+    {
+        await using var factory = new SafetyTestApplicationFactory(ApiSportsLiveConfig());
+        using var client = factory.CreateClient();
+
+        var response = await client.PostAsJsonAsync("/api/debug/soccer/results/api-sports/historical/backfill-completed", new
+        {
+            competitionKey = "EPL",
+            fromDate = "2026-06-11",
+            toDate = "2026-06-11",
+            dryRun = false,
+            forceLive = true
+        });
+
+        await AssertStatusWithBodyAsync(response, HttpStatusCode.Conflict);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal("DryRunOnly", json.GetProperty("blockReason").GetString());
+        Assert.False(json.GetProperty("callsExternalApis").GetBoolean());
+        Assert.Equal(0, factory.ApiSportsFootballClient.FixturesCallCount);
+        Assert.Equal(0, factory.ApiSportsFootballClient.FixturePlayerStatsCallCount);
+    }
+
+    [Fact]
+    public async Task ApiSportsHistoricalBackfill_DryRunPreviewsCompletedFixtureStatsWithoutWriting()
+    {
+        await using var factory = new SafetyTestApplicationFactory(ApiSportsLiveConfig());
+        using var client = factory.CreateClient();
+        await factory.EnsureDatabaseAsync();
+        var before = await CountApiSportsSoccerResultsAsync(factory);
+
+        var response = await client.PostAsJsonAsync("/api/debug/soccer/results/api-sports/historical/backfill-completed", new
+        {
+            competitionKey = "EPL",
+            fromDate = "2026-06-11",
+            toDate = "2026-06-13",
+            dryRun = true,
+            forceLive = true
+        });
+
+        await EnsureSuccessWithBodyAsync(response);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.True(json.GetProperty("callsExternalApis").GetBoolean());
+        Assert.True(json.GetProperty("readOnly").GetBoolean());
+        Assert.False(json.GetProperty("writesRows").GetBoolean());
+        Assert.False(json.GetProperty("guardrails").GetProperty("publicSoccerGradingEnabled").GetBoolean());
+        Assert.True(json.GetProperty("guardrails").GetProperty("dryRunOnly").GetBoolean());
+        Assert.Equal("EPL", json.GetProperty("scope").GetProperty("key").GetString());
+        Assert.Equal(39, json.GetProperty("scope").GetProperty("leagueId").GetInt32());
+        Assert.Equal(2025, json.GetProperty("scope").GetProperty("season").GetInt32());
+        Assert.Equal(3, json.GetProperty("discoveredFixtureCount").GetInt32());
+        Assert.Equal(1, json.GetProperty("completedFixtureCount").GetInt32());
+        Assert.Equal(2, json.GetProperty("skippedFixtureCount").GetInt32());
+        Assert.Equal(1, json.GetProperty("previewedFixtureCount").GetInt32());
+        Assert.Equal(0, json.GetProperty("failedFixtureCount").GetInt32());
+        Assert.True(json.GetProperty("previewResultRows").GetInt32() > 0);
+        Assert.True(json.GetProperty("distinctPlayers").GetInt32() > 0);
+        Assert.Equal(4, json.GetProperty("apiCallsUsed").GetInt32());
+        var preview = Assert.Single(json.GetProperty("previews").EnumerateArray());
+        var rowsByStat = preview.GetProperty("rowsByStat").EnumerateArray().ToArray();
+        Assert.Contains(rowsByStat, row => row.GetProperty("statKey").GetString() == "GOALS" && row.GetProperty("resultRows").GetInt32() > 0);
+        Assert.Contains(rowsByStat, row => row.GetProperty("statKey").GetString() == "ASSISTS" && row.GetProperty("resultRows").GetInt32() > 0);
+        Assert.Contains(rowsByStat, row => row.GetProperty("statKey").GetString() == "SHOTS" && row.GetProperty("resultRows").GetInt32() > 0);
+        Assert.Contains(rowsByStat, row => row.GetProperty("statKey").GetString() == "SHOTS_ON_TARGET" && row.GetProperty("resultRows").GetInt32() > 0);
+        Assert.Equal(before, await CountApiSportsSoccerResultsAsync(factory));
+    }
+
+    [Fact]
     public async Task ApiSportsWorldCupCoverage_ReturnsPersistedResultCountsReadOnly()
     {
         await using var factory = new SafetyTestApplicationFactory(ApiSportsLiveConfig());

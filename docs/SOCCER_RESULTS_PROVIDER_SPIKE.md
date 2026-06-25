@@ -423,9 +423,14 @@ Historical Soccer player-stat coverage starts with a config/status-only endpoint
 ```powershell
 Invoke-RestMethod "$base/api/debug/soccer/results/api-sports/historical/coverage-status?fromDate=2026-01-01&toDate=2026-12-31" |
   ConvertTo-Json -Depth 80
+
+Invoke-RestMethod -Method Post "$base/api/debug/soccer/results/api-sports/historical/backfill-completed" `
+  -ContentType "application/json" `
+  -Body '{"competitionKey":"EPL","fromDate":"2026-01-01","toDate":"2026-01-07","dryRun":true,"forceLive":true}' |
+  ConvertTo-Json -Depth 80
 ```
 
-Configured competitions live under `ApiSports:Football:HistoricalCompetitions` and default to EPL, La Liga, Bundesliga, Serie A, Ligue 1, MLS, and Champions League. The endpoint reads only local `prop_results` for Goals, Assists, Shots, and Shots On Target. It does not call API-Sports, discover fixtures, import rows, enable Soccer grading, enable Soccer predictions, or make Soccer Entry Builder playable.
+Configured competitions live under `ApiSports:Football:HistoricalCompetitions` and default to EPL, La Liga, Bundesliga, Serie A, Ligue 1, MLS, and Champions League. Coverage status reads only local `prop_results` for Goals, Assists, Shots, and Shots On Target. The historical backfill endpoint is preview-only in this pass: `dryRun=false` is rejected, `forceLive=true` is required for fixture/stat discovery, and no rows are written. It does not enable Soccer grading, Soccer predictions, or Soccer Entry Builder.
 
 ```powershell
 Invoke-RestMethod "$base/api/debug/soccer/results/api-sports/world-cup/coverage?fromDate=2026-06-11&toDate=2026-06-21" |
