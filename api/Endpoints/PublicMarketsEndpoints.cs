@@ -6,6 +6,7 @@ using SportsBetting.Api.Models;
 using SportsBetting.Api.Predictions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
+using System.Diagnostics;
 using System.Globalization;
 using System.Text;
 using System.Text.Json;
@@ -1022,7 +1023,9 @@ public static class PublicMarketsEndpoints
                 soccerGradingOptions,
                 soccerTopPicksOptions,
                 dbContext,
-                cancellationToken);
+                cancellationToken,
+                includePlayerHistory: false);
+            var soccerTopPickFilteringStopwatch = Stopwatch.StartNew();
             var soccerTopPickCandidates = soccerLineShopping.ComparisonGroups
                 .Select(group => JsonSerializer.SerializeToNode(group) as JsonObject)
                 .Where(group => group is not null
@@ -1058,6 +1061,7 @@ public static class PublicMarketsEndpoints
                 .Where(group => IsActiveSoccerTopPickGroup(group) && IsSoccerRecommendationGroup(group))
                 .Take(Math.Clamp(take ?? 25, 1, 250))
                 .ToArray();
+            soccerTopPickFilteringStopwatch.Stop();
             var soccerTopPicksFallbackReason = soccerTopPicks.Length == 0
                 ? soccerTopPickCandidates.Length > 0 && staleOrExpiredSoccerCandidates == soccerTopPickCandidates.Length
                     ? "Soccer Top Picks found model-eligible rows, but all were stale, expired, or already started."
@@ -1080,6 +1084,18 @@ public static class PublicMarketsEndpoints
                 snapshotBacked = false,
                 refreshRunId = soccerLineShopping.RefreshRunId,
                 fallbackReason = soccerTopPicksFallbackReason,
+                diagnostics = new
+                {
+                    lineShoppingDiagnostics = soccerLineShopping.Diagnostics,
+                    topPickFiltering = new
+                    {
+                        endpointKind = "top-picks",
+                        elapsedMs = soccerTopPickFilteringStopwatch.ElapsedMilliseconds,
+                        inputComparisonGroups = soccerLineShopping.ComparisonGroups.Count,
+                        recommendationEligibleCount = soccerTopPickCandidates.Length,
+                        returnedTopPicks = soccerTopPicks.Length
+                    }
+                },
                 soccerLineShopping.Run,
                 summary = new
                 {

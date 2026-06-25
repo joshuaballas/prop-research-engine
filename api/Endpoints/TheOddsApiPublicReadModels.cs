@@ -397,27 +397,36 @@ public static partial class TheOddsApiDebugEndpoints
         SoccerGradingOptions soccerGradingOptions,
         SoccerTopPicksOptions soccerTopPicksOptions,
         ApplicationDbContext dbContext,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool includePlayerHistory = true)
     {
         var totalStopwatch = Stopwatch.StartNew();
+        var stepStopwatch = Stopwatch.StartNew();
+        var timingStages = new List<PublicMarketReadTimingStage>();
         var generatedAtUtc = DateTimeOffset.UtcNow;
         var lifecycleFreshnessMinutes = Math.Clamp(freshnessMinutes ?? DefaultTheOddsLineShoppingFreshnessMinutes, 1, 1440);
         var requestedTake = Math.Clamp(take ?? 50, 1, 500);
+        AddTimingStage(timingStages, stepStopwatch, "request/filter normalization", rowCount: null);
         var latestSoccerRun = await dbContext.TheOddsRefreshRuns
             .AsNoTracking()
             .Where(row => row.Provider == "The Odds API" && row.Sport == "SOCCER" && row.Succeeded && !row.DryRun)
             .OrderByDescending(row => row.CompletedAtUtc ?? row.StartedAtUtc)
             .FirstOrDefaultAsync(cancellationToken);
+        AddTimingStage(timingStages, stepStopwatch, "freshness/run lookup", latestSoccerRun is null ? 0 : 1);
         var platformProps = await LoadSoccerWorldCupSportsbookPlatformPropsAsync(
             dbContext,
             providerCategory,
             cancellationToken);
+        AddTimingStage(timingStages, stepStopwatch, "Soccer provider-context query/materialization", platformProps.Count);
         var rows = BuildTheOddsResearchOnlyLineShoppingRows(platformProps);
+        AddTimingStage(timingStages, stepStopwatch, "row projection from provider context", rows.Count);
         var predictionBatch = await soccerPredictionService.BuildPredictionsAsync(
             rows.Select(ToSoccerWorldCupPredictionInput).ToArray(),
             requireEnabled: true,
             cancellationToken);
+        AddTimingStage(timingStages, stepStopwatch, "prediction/grading enrichment", predictionBatch.InputsEvaluated);
         rows = ApplySoccerWorldCupPredictions(rows, predictionBatch);
+        AddTimingStage(timingStages, stepStopwatch, "prediction projection merge", rows.Count);
         var groups = BuildTheOddsLineShoppingGroups(rows, generatedAtUtc, lifecycleFreshnessMinutes)
             .OrderByDescending(group => group.EventStartTime ?? group.LastObservedAt)
             .ThenBy(group => group.Player)
@@ -425,10 +434,14 @@ public static partial class TheOddsApiDebugEndpoints
             .ThenBy(group => group.Line)
             .Take(requestedTake)
             .ToArray();
-        var playerHistoryEnrichment = await BuildSoccerWorldCupPlayerHistoryEnrichmentAsync(
-            dbContext,
-            groups,
-            cancellationToken);
+        AddTimingStage(timingStages, stepStopwatch, "line-shopping grouping", groups.Length);
+        var playerHistoryEnrichment = includePlayerHistory
+            ? await BuildSoccerWorldCupPlayerHistoryEnrichmentAsync(
+                dbContext,
+                groups,
+                cancellationToken)
+            : SoccerWorldCupPlayerHistoryEnrichment.Empty(groups.Length);
+        AddTimingStage(timingStages, stepStopwatch, "player history lookup", includePlayerHistory ? groups.Length : 0);
         var predictionUnavailableReasonsByKey = predictionBatch.PredictionsByKey
             .ToDictionary(row => row.Key, row => row.Value.UnavailableReason, EqualityComparer<SoccerWorldCupPredictionKey>.Default);
         var comparisonGroups = groups
@@ -441,7 +454,9 @@ public static partial class TheOddsApiDebugEndpoints
                 predictionUnavailableReasonsByKey.GetValueOrDefault(new SoccerWorldCupPredictionKey(group.PlayerId, group.PropTypeId, group.Line)),
                 playerHistoryEnrichment.SummariesByPlayerId.GetValueOrDefault(group.PlayerId)))
             .ToArray();
+        AddTimingStage(timingStages, stepStopwatch, "final projection/serialization prep", comparisonGroups.Length);
         var strategyClassificationSummary = BuildTheOddsStrategyClassificationSummary(groups);
+        AddTimingStage(timingStages, stepStopwatch, "strategy summary", groups.Length);
         totalStopwatch.Stop();
 
         return new MlbLineShoppingReadResponse(
@@ -460,6 +475,7 @@ public static partial class TheOddsApiDebugEndpoints
                 sport = "SOCCER",
                 competition = "World Cup",
                 providerCategory = "Sportsbook",
+                endpointKind = includePlayerHistory ? "line-shopping" : "top-picks",
                 publicSoccerGradingEnabled = soccerGradingOptions.Enabled,
                 soccerPredictionsEnabled = soccerPredictionOptions.Enabled,
                 entryActionableForUser = false,
@@ -475,9 +491,12 @@ public static partial class TheOddsApiDebugEndpoints
                 uniqueLinkedProviderPlayers = playerHistoryEnrichment.UniqueLinkedProviderPlayers,
                 historyStatsIncluded = playerHistoryEnrichment.HistoryStatsIncluded,
                 totalDurationMs = totalStopwatch.ElapsedMilliseconds,
+                timingStages,
                 lifecycleFreshnessMinutes,
                 take = requestedTake,
-                includeBookmakerPrices
+                topOnly = false,
+                includeBookmakerPrices,
+                includePlayerHistory
             },
             Run: new
             {
@@ -1649,6 +1668,16 @@ public static partial class TheOddsApiDebugEndpoints
         };
     }
 
+    private static void AddTimingStage(
+        ICollection<PublicMarketReadTimingStage> stages,
+        Stopwatch stopwatch,
+        string name,
+        int? rowCount)
+    {
+        stages.Add(new PublicMarketReadTimingStage(name, stopwatch.ElapsedMilliseconds, rowCount));
+        stopwatch.Restart();
+    }
+
     private sealed record RefreshDiagnosticsSummary(
         int ActiveGroupCount,
         int StaleOrExpiredGroupCount,
@@ -1701,14 +1730,74 @@ public static partial class TheOddsApiDebugEndpoints
         string? providerCategory,
         CancellationToken cancellationToken)
     {
-        var rows = await LoadTheOddsPlatformPropDataRowsAsync(dbContext, cancellationToken);
+        if (!string.IsNullOrWhiteSpace(providerCategory)
+            && !string.Equals(providerCategory, "All", StringComparison.OrdinalIgnoreCase)
+            && !string.Equals(providerCategory, "Sportsbook", StringComparison.OrdinalIgnoreCase))
+        {
+            return [];
+        }
+
+        var rows = await LoadSoccerWorldCupSportsbookPlatformPropDataRowsAsync(dbContext, cancellationToken);
         var platformProps = ParseTheOddsPlatformProps(rows);
 
         return platformProps
             .Where(IsRealSoccerWorldCupSportsbookContextRow)
-            .Where(row => string.IsNullOrWhiteSpace(providerCategory) ||
-                string.Equals(row.ProviderCategory, providerCategory, StringComparison.OrdinalIgnoreCase))
             .ToList();
+    }
+
+    private static async Task<List<TheOddsPlatformPropDataRow>> LoadSoccerWorldCupSportsbookPlatformPropDataRowsAsync(
+        ApplicationDbContext dbContext,
+        CancellationToken cancellationToken)
+    {
+        if (!IsNpgsqlProvider(dbContext))
+        {
+            var rows = await LoadTheOddsPlatformPropDataRowsAsync(dbContext, cancellationToken);
+            return rows
+                .Where(row =>
+                {
+                    var parsed = ParseTheOddsPlatformProps([row]).FirstOrDefault();
+                    return parsed is not null && IsRealSoccerWorldCupSportsbookContextRow(parsed);
+                })
+                .ToList();
+        }
+
+        using var filter = JsonSerializer.SerializeToDocument(new
+        {
+            dataProvider = "The Odds API",
+            contextSchemaVersion = "the-odds-provider-context-v2",
+            providerCategory = "Sportsbook",
+            sport = new
+            {
+                code = "SOCCER",
+                competition = "World Cup",
+                providerSportKey = "soccer_fifa_world_cup"
+            }
+        });
+
+        return await dbContext.PlatformProps
+            .AsNoTracking()
+            .Where(platformProp => platformProp.Metadata != null
+                && EF.Functions.JsonContains(platformProp.Metadata, filter))
+            .Select(platformProp => new TheOddsPlatformPropDataRow(
+                platformProp.Id,
+                platformProp.PropId,
+                platformProp.PlatformPropId,
+                platformProp.Label,
+                platformProp.CurrentLine,
+                platformProp.OverAvailable,
+                platformProp.UnderAvailable,
+                platformProp.PayoutType,
+                platformProp.Status,
+                platformProp.ObservedAt,
+                platformProp.RawPayloadId,
+                platformProp.Platform == null ? "Unknown" : platformProp.Platform.Name,
+                platformProp.Platform == null ? "unknown" : platformProp.Platform.Slug,
+                platformProp.Prop == null ? Guid.Empty : platformProp.Prop.PlayerId,
+                platformProp.Prop == null ? Guid.Empty : platformProp.Prop.PropTypeId,
+                platformProp.Prop == null || platformProp.Prop.Player == null ? "Unknown" : platformProp.Prop.Player.DisplayName,
+                platformProp.Prop == null || platformProp.Prop.PropType == null ? "Unknown" : platformProp.Prop.PropType.Name,
+                platformProp.Metadata))
+            .ToListAsync(cancellationToken);
     }
 
     private static bool IsRealSoccerWorldCupSportsbookContextRow(TheOddsPersistedPlatformPropRow row)
@@ -2370,7 +2459,23 @@ public static partial class TheOddsApiDebugEndpoints
         int RowsWithPlayerHistory,
         int RowsWithoutPlayerHistory,
         int UniqueLinkedProviderPlayers,
-        IReadOnlyList<string> HistoryStatsIncluded);
+        IReadOnlyList<string> HistoryStatsIncluded)
+    {
+        public static SoccerWorldCupPlayerHistoryEnrichment Empty(int rowCount)
+        {
+            return new SoccerWorldCupPlayerHistoryEnrichment(
+                new Dictionary<Guid, JsonObject>(),
+                RowsWithPlayerHistory: 0,
+                RowsWithoutPlayerHistory: rowCount,
+                UniqueLinkedProviderPlayers: 0,
+                HistoryStatsIncluded: []);
+        }
+    }
+
+    private sealed record PublicMarketReadTimingStage(
+        string Name,
+        long ElapsedMs,
+        int? RowCount);
 
     private sealed record SoccerWorldCupHistoryResultRow(
         Guid PlayerId,
