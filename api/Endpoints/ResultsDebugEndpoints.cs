@@ -486,11 +486,26 @@ public static class ResultsDebugEndpoints
         endpoints.MapPost("/api/debug/results/import/mlb", async (
             MlbResultImportRequest request,
             IMlbResultImportService importService,
+            IMlbResultCoverageService coverageService,
             CancellationToken cancellationToken) =>
         {
+            if (request.DryRun)
+            {
+                var audit = await coverageService.AuditDateAsync(request.Date, persist: false, cancellationToken);
+                return Results.Ok(new
+                {
+                    request.Date,
+                    dryRun = true,
+                    writesRows = false,
+                    wouldImport = request.Force || audit.NeedsRepair,
+                    beforeCoverage = audit
+                });
+            }
+
             try
             {
                 var result = await importService.ImportAsync(request.Date, cancellationToken);
+                var coverage = await coverageService.AuditDateAsync(request.Date, persist: true, cancellationToken);
 
                 return Results.Ok(new
                 {
@@ -499,7 +514,8 @@ public static class ResultsDebugEndpoints
                     recordsMapped = result.RecordsMapped,
                     recordsInserted = result.RecordsInserted,
                     recordsUpdated = result.RecordsUpdated,
-                    importDuration = result.ImportDuration
+                    importDuration = result.ImportDuration,
+                    coverage
                 });
             }
             catch (HttpRequestException exception)
@@ -514,6 +530,7 @@ public static class ResultsDebugEndpoints
             DateOnly? date,
             ApplicationDbContext dbContext,
             IMlbResultImportService importService,
+            IMlbResultCoverageService coverageService,
             CancellationToken cancellationToken) =>
         {
             var state = await dbContext.MlbResultImportStates
@@ -532,7 +549,7 @@ public static class ResultsDebugEndpoints
             var latestCompletedDate = DateOnly.FromDateTime(DateTime.UtcNow.AddDays(-1));
             var pendingBackfillDates = await dbContext.MlbResultImportDateStates
                 .AsNoTracking()
-                .Where(dateState => dateState.EventDate <= latestCompletedDate && dateState.Status != "succeeded")
+                .Where(dateState => dateState.EventDate <= latestCompletedDate && dateState.CoverageStatus != "Complete")
                 .OrderBy(dateState => dateState.EventDate)
                 .Select(dateState => dateState.EventDate)
                 .Take(100)
@@ -542,6 +559,9 @@ public static class ResultsDebugEndpoints
                 : await BuildMissingMlbImportDatesAsync(dbContext, coverage.Start, latestCompletedDate, cancellationToken);
             var dateStatus = date.HasValue
                 ? await importService.GetStatusAsync(date.Value, cancellationToken)
+                : null;
+            var dateCoverage = date.HasValue
+                ? await coverageService.AuditDateAsync(date.Value, persist: true, cancellationToken)
                 : null;
 
             return Results.Ok(new
@@ -556,6 +576,18 @@ public static class ResultsDebugEndpoints
                 pendingBackfillDates,
                 historicalCoverageStart = coverage?.Start,
                 historicalCoverageEnd = coverage?.End,
+                latestScheduledImportRun = state is null
+                    ? null
+                    : new
+                    {
+                        state.LastStartedAt,
+                        state.LastCompletedAt,
+                        state.LastStatus,
+                        state.LastSuccessfulRunAt,
+                        state.LastErrorMessage
+                    },
+                latestSuccessfulImportAttemptForRequestedDate = dateCoverage?.LatestImportAttemptUtc,
+                latestRepairRunForRequestedDate = dateCoverage?.LatestSuccessfulRepairUtc,
                 dateStatus = dateStatus is null
                     ? null
                     : new
@@ -563,7 +595,14 @@ public static class ResultsDebugEndpoints
                         date = dateStatus.Date,
                         importedResults = dateStatus.ImportedResults,
                         distinctPlayers = dateStatus.DistinctPlayers,
-                        distinctPropTypes = dateStatus.DistinctPropTypes
+                        distinctPropTypes = dateStatus.DistinctPropTypes,
+                        coverageStatus = dateCoverage?.CoverageStatus,
+                        coverageReason = dateCoverage?.CoverageReason,
+                        completedGamesExpected = dateCoverage?.CompletedGamesExpected,
+                        completedGamesImported = dateCoverage?.CompletedGamesImported,
+                        latestImportAttemptUtc = dateCoverage?.LatestImportAttemptUtc,
+                        latestSuccessfulRepairUtc = dateCoverage?.LatestSuccessfulRepairUtc,
+                        latestErrorMessage = dateCoverage?.LatestErrorMessage
                     }
             });
         })
@@ -638,6 +677,131 @@ public static class ResultsDebugEndpoints
         })
         .WithName("MlbResultsImportRangeDebug")
         .WithSummary("Imports mapped MLB result records across an inclusive date range.");
+
+        endpoints.MapGet("/api/debug/results/import/mlb/coverage-audit", async (
+            DateOnly? fromDate,
+            DateOnly? toDate,
+            bool? includeDetails,
+            IMlbResultCoverageService coverageService,
+            CancellationToken cancellationToken) =>
+        {
+            var effectiveToDate = toDate ?? DateOnly.FromDateTime(DateTime.UtcNow.AddDays(-1));
+            var effectiveFromDate = fromDate ?? effectiveToDate.AddDays(-7);
+            if (effectiveToDate < effectiveFromDate)
+            {
+                return Results.BadRequest(new { error = "toDate must be greater than or equal to fromDate." });
+            }
+
+            var audit = await coverageService.AuditAsync(
+                effectiveFromDate,
+                effectiveToDate,
+                includeDetails ?? true,
+                persist: false,
+                cancellationToken);
+            return Results.Ok(audit);
+        })
+        .WithName("MlbResultsImportCoverageAuditDebug")
+        .WithSummary("Read-only MLB result import coverage audit for complete, partial, missing, and pending dates.");
+
+        endpoints.MapPost("/api/debug/results/import/mlb/repair-missing", async (
+            MlbResultImportRepairRequest request,
+            IMlbResultImportService importService,
+            IMlbResultCoverageService coverageService,
+            ApplicationDbContext dbContext,
+            CancellationToken cancellationToken) =>
+        {
+            if (request.ToDate < request.FromDate)
+            {
+                return Results.BadRequest(new { error = "toDate must be greater than or equal to fromDate." });
+            }
+
+            var dryRun = request.DryRun ?? true;
+            var repairPartial = request.RepairPartial ?? true;
+            var repairMissing = request.RepairMissing ?? true;
+            var before = await coverageService.AuditAsync(
+                request.FromDate,
+                request.ToDate,
+                includeDetails: true,
+                persist: !dryRun,
+                cancellationToken);
+            var candidates = before.Details
+                .Where(row => request.Force == true
+                    || (repairPartial && row.CoverageStatus == "Partial")
+                    || (repairMissing && row.CoverageStatus == "NotStarted"))
+                .OrderBy(row => row.Date)
+                .ToArray();
+
+            var repaired = new List<object>();
+            var failures = new List<object>();
+
+            if (!dryRun)
+            {
+                foreach (var candidate in candidates)
+                {
+                    try
+                    {
+                        var importResult = await importService.ImportAsync(candidate.Date, cancellationToken);
+                        var afterDate = await coverageService.AuditDateAsync(candidate.Date, persist: true, cancellationToken);
+                        var dateState = await dbContext.MlbResultImportDateStates
+                            .SingleOrDefaultAsync(row => row.EventDate == candidate.Date, cancellationToken);
+                        if (dateState is not null)
+                        {
+                            dateState.LatestSuccessfulRepairUtc = DateTimeOffset.UtcNow;
+                            dateState.UpdatedAt = DateTimeOffset.UtcNow;
+                            await dbContext.SaveChangesAsync(cancellationToken);
+                            afterDate = await coverageService.AuditDateAsync(candidate.Date, persist: true, cancellationToken);
+                        }
+                        repaired.Add(new
+                        {
+                            date = candidate.Date,
+                            before = candidate,
+                            importResult,
+                            after = afterDate
+                        });
+                    }
+                    catch (Exception exception) when (exception is not OperationCanceledException)
+                    {
+                        failures.Add(new
+                        {
+                            date = candidate.Date,
+                            exceptionType = exception.GetType().Name,
+                            exception.Message
+                        });
+                    }
+                }
+            }
+
+            var after = dryRun
+                ? null
+                : await coverageService.AuditAsync(
+                    request.FromDate,
+                    request.ToDate,
+                    includeDetails: true,
+                    persist: true,
+                    cancellationToken);
+
+            return Results.Ok(new
+            {
+                generatedAtUtc = DateTimeOffset.UtcNow,
+                callsExternalApis = !dryRun && candidates.Length > 0,
+                dryRun,
+                writesRows = !dryRun,
+                request.FromDate,
+                request.ToDate,
+                request.Force,
+                repairPartial,
+                repairMissing,
+                datesAudited = before.DatesAudited,
+                datesSelectedForRepair = candidates.Length,
+                selectedDates = candidates.Select(row => row.Date).ToArray(),
+                before,
+                repaired,
+                failures,
+                after
+            });
+        })
+        .WithName("MlbResultsImportRepairMissingDebug")
+        .WithSummary("Audits and repairs missing or partial MLB result imports. Dry run is the default.");
 
         endpoints.MapGet("/api/debug/results/import/mlb/coverage", async (
             ApplicationDbContext dbContext,
@@ -9666,9 +9830,17 @@ public static class ResultsDebugEndpoints
         DateTimeOffset CreatedAt,
         DateTimeOffset UpdatedAt);
 
-    private sealed record MlbResultImportRequest(DateOnly Date);
+    private sealed record MlbResultImportRequest(DateOnly Date, bool DryRun = false, bool Force = false);
 
     private sealed record MlbResultImportRangeRequest(DateOnly StartDate, DateOnly EndDate);
+
+    private sealed record MlbResultImportRepairRequest(
+        DateOnly FromDate,
+        DateOnly ToDate,
+        bool? DryRun,
+        bool? Force,
+        bool? RepairPartial,
+        bool? RepairMissing);
 
     private sealed record ApiSportsSoccerImportFixtureRequest(
         string FixtureId,

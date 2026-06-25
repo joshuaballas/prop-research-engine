@@ -211,7 +211,15 @@ Overall MLB result importer state: last successful date/run and source-level pro
 
 ### `mlb_result_import_date_states`
 
-Date-level MLB import/backfill state. Used by the worker to detect missing dates and continue after restarts.
+Date-level MLB import/backfill state. Used by the worker to detect missing dates and continue after restarts. It also stores result coverage status so partial imports are not treated as complete slates:
+
+- `completed_games_expected` / `completed_games_imported`: reserved for game-level coverage when available.
+- `imported_results`, `distinct_players`, `distinct_prop_types`: persisted fallback coverage counts.
+- `coverage_status`: `NotStarted`, `PendingGames`, `Partial`, `Complete`, or `Failed`.
+- `coverage_reason`: human-readable explanation of the coverage decision.
+- `latest_import_attempt_utc`, `latest_successful_repair_utc`, `last_error_message`: operational metadata for manual/worker repair.
+
+Performance summary skips dates whose coverage status is not `Complete` when coverage state rows exist.
 
 ## Predictions
 

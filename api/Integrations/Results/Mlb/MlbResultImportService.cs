@@ -8,6 +8,7 @@ namespace SportsBetting.Api.Integrations.Results.Mlb;
 public sealed class MlbResultImportService(
     ApplicationDbContext dbContext,
     IMlbResultsProvider mlbResultsProvider,
+    IMlbResultCoverageService coverageService,
     ILogger<MlbResultImportService> logger) : IMlbResultImportService
 {
     private const string ExternalSource = "mlb";
@@ -15,6 +16,16 @@ public sealed class MlbResultImportService(
     public async Task<MlbResultImportResult> ImportAsync(DateOnly eventDate, CancellationToken cancellationToken)
     {
         var stopwatch = Stopwatch.StartNew();
+        var attemptedAt = DateTimeOffset.UtcNow;
+        var dateState = await GetOrCreateDateStateAsync(eventDate, attemptedAt, cancellationToken);
+        dateState.Status = "running";
+        dateState.Attempts++;
+        dateState.LastAttemptedAt = attemptedAt;
+        dateState.LatestImportAttemptUtc = attemptedAt;
+        dateState.LastErrorMessage = null;
+        dateState.UpdatedAt = attemptedAt;
+        await dbContext.SaveChangesAsync(cancellationToken);
+
         var providerRecords = await mlbResultsProvider.GetMlbResultsAsync(eventDate, cancellationToken);
         var mappedRecords = providerRecords
             .Where(record => record.IsMapped)
@@ -106,6 +117,23 @@ public sealed class MlbResultImportService(
         await transaction.CommitAsync(cancellationToken);
 
         stopwatch.Stop();
+        var completedAt = DateTimeOffset.UtcNow;
+        var coverage = await coverageService.AuditDateAsync(eventDate, persist: true, cancellationToken);
+
+        dateState = await GetOrCreateDateStateAsync(eventDate, completedAt, cancellationToken);
+        dateState.Status = coverage.CoverageStatus == "Complete" ? "succeeded" : coverage.CoverageStatus == "Partial" ? "partial" : "pending";
+        dateState.LastSuccessfulAt = completedAt;
+        dateState.RecordsFound = providerRecords.Count;
+        dateState.RecordsMapped = mappedRecords.Length;
+        dateState.RecordsInserted = recordsInserted;
+        dateState.RecordsUpdated = recordsUpdated;
+        dateState.ImportedResults = coverage.ImportedResults;
+        dateState.DistinctPlayers = coverage.DistinctPlayers;
+        dateState.DistinctPropTypes = coverage.DistinctPropTypes;
+        dateState.CoverageStatus = coverage.CoverageStatus;
+        dateState.CoverageReason = coverage.CoverageReason;
+        dateState.UpdatedAt = completedAt;
+        await dbContext.SaveChangesAsync(cancellationToken);
 
         logger.LogInformation(
             "Imported MLB results for {Date} in {DurationMs}ms. Records found: {RecordsFound}; mapped: {RecordsMapped}; inserted: {Inserted}; updated: {Updated}.",
@@ -147,6 +175,31 @@ public sealed class MlbResultImportService(
     private static string BuildExternalSourceIdentifier(ResultKey key)
     {
         return $"mlb:{key.EventDate:yyyyMMdd}:{key.PlayerId:N}:{key.PropTypeId:N}";
+    }
+
+    private async Task<MlbResultImportDateState> GetOrCreateDateStateAsync(
+        DateOnly eventDate,
+        DateTimeOffset observedAt,
+        CancellationToken cancellationToken)
+    {
+        var dateState = await dbContext.MlbResultImportDateStates
+            .SingleOrDefaultAsync(row => row.EventDate == eventDate, cancellationToken);
+        if (dateState is not null)
+        {
+            return dateState;
+        }
+
+        dateState = new MlbResultImportDateState
+        {
+            Id = Guid.NewGuid(),
+            EventDate = eventDate,
+            Status = "pending",
+            CoverageStatus = "NotStarted",
+            CreatedAt = observedAt,
+            UpdatedAt = observedAt
+        };
+        dbContext.MlbResultImportDateStates.Add(dateState);
+        return dateState;
     }
 
     private sealed record ResultKey(

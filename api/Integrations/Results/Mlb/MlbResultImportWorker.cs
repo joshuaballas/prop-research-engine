@@ -51,7 +51,7 @@ public sealed class MlbResultImportWorker(
             state.UpdatedAt = startedAt;
             await dbContext.SaveChangesAsync(cancellationToken);
 
-            await SeedSucceededDatesFromExistingResultsAsync(dbContext, cancellationToken);
+            await SeedSucceededDatesFromExistingResultsAsync(dbContext, options.Value, cancellationToken);
 
             var latestCompletedDate = DateOnly.FromDateTime(DateTime.UtcNow.AddDays(-1));
             var coverageStart = await GetHistoricalCoverageStartAsync(dbContext, cancellationToken) ?? latestCompletedDate;
@@ -59,7 +59,7 @@ public sealed class MlbResultImportWorker(
 
             var maxBackfillDates = Math.Max(1, options.Value.MaxBackfillDatesPerRun);
             var datesToProcess = await dbContext.MlbResultImportDateStates
-                .Where(dateState => dateState.EventDate <= latestCompletedDate && dateState.Status != "succeeded")
+                .Where(dateState => dateState.EventDate <= latestCompletedDate && dateState.CoverageStatus != "Complete")
                 .OrderBy(dateState => dateState.EventDate)
                 .ThenBy(dateState => dateState.Attempts)
                 .Take(maxBackfillDates)
@@ -73,7 +73,7 @@ public sealed class MlbResultImportWorker(
                 cancellationToken.ThrowIfCancellationRequested();
                 await ProcessDateAsync(importService, dbContext, state, dateState, cancellationToken);
 
-                if (dateState.Status == "succeeded")
+                if (dateState.CoverageStatus == "Complete")
                 {
                     datesSucceeded++;
                 }
@@ -140,28 +140,18 @@ public sealed class MlbResultImportWorker(
         MlbResultImportDateState dateState,
         CancellationToken cancellationToken)
     {
-        var attemptedAt = DateTimeOffset.UtcNow;
-        dateState.Status = "running";
-        dateState.Attempts++;
-        dateState.LastAttemptedAt = attemptedAt;
-        dateState.LastErrorMessage = null;
-        dateState.UpdatedAt = attemptedAt;
-        await dbContext.SaveChangesAsync(cancellationToken);
-
         try
         {
             var result = await importService.ImportAsync(dateState.EventDate, cancellationToken);
             var completedAt = DateTimeOffset.UtcNow;
 
-            dateState.Status = "succeeded";
-            dateState.LastSuccessfulAt = completedAt;
             dateState.RecordsFound = result.RecordsFound;
             dateState.RecordsMapped = result.RecordsMapped;
             dateState.RecordsInserted = result.RecordsInserted;
             dateState.RecordsUpdated = result.RecordsUpdated;
             dateState.UpdatedAt = completedAt;
 
-            if (!state.LastSuccessfulImportDate.HasValue || result.Date > state.LastSuccessfulImportDate.Value)
+            if (dateState.CoverageStatus == "Complete" && (!state.LastSuccessfulImportDate.HasValue || result.Date > state.LastSuccessfulImportDate.Value))
             {
                 state.LastSuccessfulImportDate = result.Date;
             }
@@ -175,9 +165,11 @@ public sealed class MlbResultImportWorker(
             {
                 dateState.EventDate,
                 dateState.Attempts,
-                attemptedAt
+                attemptedAt = DateTimeOffset.UtcNow
             });
             dateState.Status = "failed";
+            dateState.CoverageStatus = "Failed";
+            dateState.CoverageReason = "Latest import attempt failed.";
             dateState.LastErrorMessage = exception.Message;
             dateState.UpdatedAt = DateTimeOffset.UtcNow;
             await dbContext.SaveChangesAsync(cancellationToken);
@@ -213,6 +205,7 @@ public sealed class MlbResultImportWorker(
 
     private static async Task SeedSucceededDatesFromExistingResultsAsync(
         ApplicationDbContext dbContext,
+        MlbResultImportWorkerOptions workerOptions,
         CancellationToken cancellationToken)
     {
         var existingDateStates = await dbContext.MlbResultImportDateStates
@@ -224,7 +217,9 @@ public sealed class MlbResultImportWorker(
             .Select(group => new
             {
                 EventDate = group.Key,
-                RecordsFound = group.Count()
+                RecordsFound = group.Count(),
+                DistinctPlayers = group.Select(result => result.PlayerId).Distinct().Count(),
+                DistinctPropTypes = group.Select(result => result.PropTypeId).Distinct().Count()
             })
             .ToListAsync(cancellationToken);
         var observedAt = DateTimeOffset.UtcNow;
@@ -233,15 +228,17 @@ public sealed class MlbResultImportWorker(
         {
             if (existingDateStates.TryGetValue(resultDate.EventDate, out var existingDateState))
             {
-                if (existingDateState.Status != "succeeded")
-                {
-                    existingDateState.Status = "succeeded";
-                    existingDateState.LastSuccessfulAt = observedAt;
-                    existingDateState.RecordsFound = resultDate.RecordsFound;
-                    existingDateState.RecordsMapped = resultDate.RecordsFound;
-                    existingDateState.LastErrorMessage = null;
-                    existingDateState.UpdatedAt = observedAt;
-                }
+                existingDateState.ImportedResults = resultDate.RecordsFound;
+                existingDateState.CoverageStatus = ResolveFallbackCoverageStatus(resultDate.RecordsFound, resultDate.DistinctPlayers, resultDate.DistinctPropTypes, workerOptions);
+                existingDateState.CoverageReason = BuildFallbackCoverageReason(existingDateState.CoverageStatus, resultDate.RecordsFound, resultDate.DistinctPlayers, resultDate.DistinctPropTypes, workerOptions);
+                existingDateState.DistinctPlayers = resultDate.DistinctPlayers;
+                existingDateState.DistinctPropTypes = resultDate.DistinctPropTypes;
+                existingDateState.Status = existingDateState.CoverageStatus == "Complete" ? "succeeded" : "partial";
+                existingDateState.LastSuccessfulAt ??= observedAt;
+                existingDateState.RecordsFound = Math.Max(existingDateState.RecordsFound, resultDate.RecordsFound);
+                existingDateState.RecordsMapped = Math.Max(existingDateState.RecordsMapped, resultDate.RecordsFound);
+                existingDateState.LastErrorMessage = null;
+                existingDateState.UpdatedAt = observedAt;
 
                 continue;
             }
@@ -250,11 +247,16 @@ public sealed class MlbResultImportWorker(
             {
                 Id = Guid.NewGuid(),
                 EventDate = resultDate.EventDate,
-                Status = "succeeded",
+                Status = ResolveFallbackCoverageStatus(resultDate.RecordsFound, resultDate.DistinctPlayers, resultDate.DistinctPropTypes, workerOptions) == "Complete" ? "succeeded" : "partial",
                 Attempts = 0,
                 LastSuccessfulAt = observedAt,
                 RecordsFound = resultDate.RecordsFound,
                 RecordsMapped = resultDate.RecordsFound,
+                ImportedResults = resultDate.RecordsFound,
+                DistinctPlayers = resultDate.DistinctPlayers,
+                DistinctPropTypes = resultDate.DistinctPropTypes,
+                CoverageStatus = ResolveFallbackCoverageStatus(resultDate.RecordsFound, resultDate.DistinctPlayers, resultDate.DistinctPropTypes, workerOptions),
+                CoverageReason = BuildFallbackCoverageReason(ResolveFallbackCoverageStatus(resultDate.RecordsFound, resultDate.DistinctPlayers, resultDate.DistinctPropTypes, workerOptions), resultDate.RecordsFound, resultDate.DistinctPlayers, resultDate.DistinctPropTypes, workerOptions),
                 CreatedAt = observedAt,
                 UpdatedAt = observedAt
             };
@@ -293,6 +295,8 @@ public sealed class MlbResultImportWorker(
                     Id = Guid.NewGuid(),
                     EventDate = currentDate,
                     Status = "pending",
+                    CoverageStatus = "NotStarted",
+                    CoverageReason = "No persisted MLB prop_results exist for this completed date.",
                     CreatedAt = observedAt,
                     UpdatedAt = observedAt
                 });
@@ -302,6 +306,36 @@ public sealed class MlbResultImportWorker(
         }
 
         await dbContext.SaveChangesAsync(cancellationToken);
+    }
+
+    private static string ResolveFallbackCoverageStatus(
+        int importedResults,
+        int distinctPlayers,
+        int distinctPropTypes,
+        MlbResultImportWorkerOptions options)
+    {
+        if (importedResults == 0)
+        {
+            return "NotStarted";
+        }
+
+        return importedResults >= options.MinimumCompleteImportedResults
+            && distinctPlayers >= options.MinimumCompleteDistinctPlayers
+            && distinctPropTypes >= options.MinimumCompleteDistinctPropTypes
+                ? "Complete"
+                : "Partial";
+    }
+
+    private static string BuildFallbackCoverageReason(
+        string status,
+        int importedResults,
+        int distinctPlayers,
+        int distinctPropTypes,
+        MlbResultImportWorkerOptions options)
+    {
+        return status == "Complete"
+            ? $"Fallback coverage thresholds met: importedResults={importedResults}, distinctPlayers={distinctPlayers}, distinctPropTypes={distinctPropTypes}."
+            : $"Fallback coverage thresholds not met: importedResults={importedResults}/{options.MinimumCompleteImportedResults}, distinctPlayers={distinctPlayers}/{options.MinimumCompleteDistinctPlayers}, distinctPropTypes={distinctPropTypes}/{options.MinimumCompleteDistinctPropTypes}.";
     }
 
     private static async Task<DateOnly?> GetHistoricalCoverageStartAsync(

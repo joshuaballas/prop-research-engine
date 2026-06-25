@@ -1030,6 +1030,54 @@ public sealed class PerformanceGradingTests
     }
 
     [Fact]
+    public async Task PerformanceSummary_LatestGradedSkipsPartialLatestResultCoverage()
+    {
+        await using var factory = new SafetyTestApplicationFactory();
+        using var client = factory.CreateClient();
+        var completeDate = new DateOnly(2026, 6, 22);
+        var partialDate = new DateOnly(2026, 6, 23);
+        await SeedPerformanceScenarioAsync(
+            factory,
+            completeDate,
+            "Pitcher Strikeouts",
+            "Over",
+            6.5m,
+            7m,
+            provider: "PrizePicks");
+        await SeedPerformanceScenarioAsync(
+            factory,
+            partialDate,
+            "Pitcher Strikeouts",
+            "Over",
+            6.5m,
+            7m,
+            provider: "Underdog",
+            resetDatabase: false);
+        await SeedMlbCoverageStateAsync(factory, completeDate, "Complete", importedResults: 2930, distinctPlayers: 274, distinctPropTypes: 16);
+        await SeedMlbCoverageStateAsync(factory, partialDate, "Partial", importedResults: 220, distinctPlayers: 20, distinctPropTypes: 11);
+
+        var response = await client.GetAsync("/api/markets/performance-summary?sport=MLB&gradingMode=latestGraded");
+
+        await EnsureSuccessWithBodyAsync(response);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        var dataAvailability = json.GetProperty("dataAvailability");
+        var resultCoverage = json.GetProperty("diagnostics").GetProperty("resultCoverage");
+        Assert.False(json.GetProperty("callsExternalApis").GetBoolean());
+        Assert.Equal(1, json.GetProperty("summary").GetProperty("gradedPicks").GetInt32());
+        Assert.Equal(completeDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture), dataAvailability.GetProperty("latestGradedDate").GetString());
+        Assert.Equal(partialDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture), dataAvailability.GetProperty("latestResultsImportDate").GetString());
+        Assert.Equal("Partial", dataAvailability.GetProperty("latestCoverageStatus").GetString());
+        Assert.Contains(dataAvailability.GetProperty("skippedDates").EnumerateArray(), row => row.GetString() == partialDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture));
+        Assert.False(dataAvailability.GetProperty("resultCoverageComplete").GetBoolean());
+        Assert.Equal("Partial", resultCoverage.GetProperty("latestCoverageStatus").GetString());
+        Assert.Equal(completeDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture), resultCoverage.GetProperty("selectedGradedDate").GetString());
+        Assert.Equal("Complete", resultCoverage.GetProperty("selectedGradedDateCoverageStatus").GetString());
+        Assert.True(resultCoverage.GetProperty("resultCoverageCompleteForSelectedDate").GetBoolean());
+        Assert.True(resultCoverage.GetProperty("latestDateWasSkipped").GetBoolean());
+        Assert.Contains(resultCoverage.GetProperty("skippedDates").EnumerateArray(), row => row.GetString() == partialDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture));
+    }
+
+    [Fact]
     public async Task PerformanceResultMatchAudit_ReportsNormalizedNameFallbackEvidence()
     {
         await using var factory = new SafetyTestApplicationFactory();
@@ -1057,6 +1105,39 @@ public sealed class PerformanceGradingTests
         Assert.Equal("Won", row.GetProperty("currentMatcherOutcome").GetString());
         Assert.Equal(1, row.GetProperty("importedResultChecks").GetProperty("normalizedNameOnlyDateStatRows").GetInt32());
         Assert.True(row.GetProperty("closestCandidateResultRows")[0].GetProperty("whyItDidOrDidNotMatch").GetProperty("wouldMatchCurrentFallback").GetBoolean());
+    }
+
+    private static async Task SeedMlbCoverageStateAsync(
+        SafetyTestApplicationFactory factory,
+        DateOnly date,
+        string coverageStatus,
+        int importedResults,
+        int distinctPlayers,
+        int distinctPropTypes)
+    {
+        using var scope = factory.Services.CreateScope();
+        var dbContext = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+        var existing = await dbContext.MlbResultImportDateStates.SingleOrDefaultAsync(row => row.EventDate == date);
+        if (existing is null)
+        {
+            existing = new MlbResultImportDateState
+            {
+                Id = Guid.NewGuid(),
+                EventDate = date,
+                CreatedAt = DateTimeOffset.UtcNow
+            };
+            dbContext.MlbResultImportDateStates.Add(existing);
+        }
+
+        existing.Status = coverageStatus == "Complete" ? "succeeded" : "partial";
+        existing.ImportedResults = importedResults;
+        existing.DistinctPlayers = distinctPlayers;
+        existing.DistinctPropTypes = distinctPropTypes;
+        existing.CoverageStatus = coverageStatus;
+        existing.CoverageReason = "Seeded performance coverage state.";
+        existing.LastSuccessfulAt = DateTimeOffset.UtcNow;
+        existing.UpdatedAt = DateTimeOffset.UtcNow;
+        await dbContext.SaveChangesAsync();
     }
 
     private static async Task<SeededPerformanceScenario> SeedPerformanceScenarioAsync(

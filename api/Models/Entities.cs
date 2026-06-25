@@ -331,6 +331,15 @@ public sealed class MlbResultImportDateState
     public Guid Id { get; set; }
     public DateOnly EventDate { get; set; }
     public string Status { get; set; } = "pending";
+    public int? CompletedGamesExpected { get; set; }
+    public int? CompletedGamesImported { get; set; }
+    public int ImportedResults { get; set; }
+    public int DistinctPlayers { get; set; }
+    public int DistinctPropTypes { get; set; }
+    public string CoverageStatus { get; set; } = "NotStarted";
+    public string? CoverageReason { get; set; }
+    public DateTimeOffset? LatestImportAttemptUtc { get; set; }
+    public DateTimeOffset? LatestSuccessfulRepairUtc { get; set; }
     public int Attempts { get; set; }
     public DateTimeOffset? LastAttemptedAt { get; set; }
     public DateTimeOffset? LastSuccessfulAt { get; set; }

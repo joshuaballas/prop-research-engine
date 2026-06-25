@@ -479,9 +479,12 @@ public sealed class ApplicationDbContext(DbContextOptions<ApplicationDbContext> 
             entity.ToTable("mlb_result_import_date_states");
             entity.HasKey(x => x.Id);
             entity.Property(x => x.Status).HasMaxLength(50).IsRequired();
+            entity.Property(x => x.CoverageStatus).HasMaxLength(50).IsRequired();
+            entity.Property(x => x.CoverageReason).HasMaxLength(1000);
             entity.Property(x => x.LastErrorMessage);
             entity.HasIndex(x => x.EventDate).IsUnique();
             entity.HasIndex(x => new { x.Status, x.EventDate });
+            entity.HasIndex(x => new { x.CoverageStatus, x.EventDate });
         });
     }
 

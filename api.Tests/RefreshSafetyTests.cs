@@ -1,5 +1,6 @@
 using System.Net;
 using System.Net.Http.Json;
+using System.Globalization;
 using System.Text.Json;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
@@ -11,6 +12,8 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
+using SportsBetting.Api.Integrations.Results;
+using SportsBetting.Api.Integrations.Results.Mlb;
 using SportsBetting.Api.Integrations.Results.Soccer;
 using SportsBetting.Api.Data;
 using SportsBetting.Api.Integrations.TheOddsApi;
@@ -3680,6 +3683,82 @@ public sealed class RefreshSafetyTests
     }
 
     [Fact]
+    public async Task MlbCoverageAudit_ClassifiesPartialAndCompleteDates()
+    {
+        await using var factory = new SafetyTestApplicationFactory();
+        using var client = factory.CreateClient();
+        var partialDate = new DateOnly(2026, 6, 23);
+        var completeDate = new DateOnly(2026, 6, 22);
+        await SeedMlbCoverageRowsAsync(factory, partialDate, playerCount: 20, propTypeCount: 11, rowsPerPlayerProp: 1);
+        await SeedMlbCoverageRowsAsync(factory, completeDate, playerCount: 110, propTypeCount: 12, rowsPerPlayerProp: 1, resetDatabase: false);
+
+        var response = await client.GetAsync($"/api/debug/results/import/mlb/coverage-audit?fromDate={completeDate:yyyy-MM-dd}&toDate={partialDate:yyyy-MM-dd}&includeDetails=true");
+
+        await EnsureSuccessWithBodyAsync(response);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal(1, json.GetProperty("datesComplete").GetInt32());
+        Assert.Equal(1, json.GetProperty("datesPartial").GetInt32());
+        var details = json.GetProperty("details").EnumerateArray().ToArray();
+        Assert.Contains(details, row =>
+            row.GetProperty("date").GetString() == partialDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)
+            && row.GetProperty("coverageStatus").GetString() == "Partial");
+        Assert.Contains(details, row =>
+            row.GetProperty("date").GetString() == completeDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)
+            && row.GetProperty("coverageStatus").GetString() == "Complete");
+    }
+
+    [Fact]
+    public async Task MlbRepairMissing_DryRunDoesNotWriteAndRealRepairIsIdempotent()
+    {
+        await using var factory = new SafetyTestApplicationFactory();
+        using var client = factory.CreateClient();
+        var date = new DateOnly(2026, 6, 23);
+        await SeedMlbCoverageRowsAsync(factory, date, playerCount: 20, propTypeCount: 11, rowsPerPlayerProp: 1);
+        var repairRecords = await BuildMlbImportRecordsAsync(factory, date, playerCount: 110, propTypeCount: 12);
+        factory.MlbResultsProvider.SetRecords(date, repairRecords);
+
+        var dryRunResponse = await client.PostAsJsonAsync("/api/debug/results/import/mlb/repair-missing", new
+        {
+            fromDate = date,
+            toDate = date,
+            dryRun = true,
+            repairPartial = true,
+            repairMissing = true
+        });
+        await EnsureSuccessWithBodyAsync(dryRunResponse);
+        Assert.Equal(0, factory.MlbResultsProvider.CallCount);
+
+        var realResponse = await client.PostAsJsonAsync("/api/debug/results/import/mlb/repair-missing", new
+        {
+            fromDate = date,
+            toDate = date,
+            dryRun = false,
+            repairPartial = true,
+            repairMissing = true
+        });
+        await EnsureSuccessWithBodyAsync(realResponse);
+        var realJson = await realResponse.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal(1, realJson.GetProperty("datesSelectedForRepair").GetInt32());
+
+        var secondResponse = await client.PostAsJsonAsync("/api/debug/results/import/mlb/repair-missing", new
+        {
+            fromDate = date,
+            toDate = date,
+            dryRun = false,
+            repairPartial = true,
+            repairMissing = true
+        });
+        await EnsureSuccessWithBodyAsync(secondResponse);
+        var secondJson = await secondResponse.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal(0, secondJson.GetProperty("datesSelectedForRepair").GetInt32());
+
+        var statusResponse = await client.GetAsync($"/api/debug/results/import/mlb/status?date={date:yyyy-MM-dd}");
+        await EnsureSuccessWithBodyAsync(statusResponse);
+        var statusJson = await statusResponse.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal("Complete", statusJson.GetProperty("dateStatus").GetProperty("coverageStatus").GetString());
+    }
+
+    [Fact]
     public async Task RefreshPlanHistory_ReadOnly_DoesNotCallProviders()
     {
         await using var factory = new SafetyTestApplicationFactory();
@@ -4279,6 +4358,175 @@ public sealed class RefreshSafetyTests
         await dbContext.SaveChangesAsync();
     }
 
+    private static async Task SeedMlbCoverageRowsAsync(
+        SafetyTestApplicationFactory factory,
+        DateOnly eventDate,
+        int playerCount,
+        int propTypeCount,
+        int rowsPerPlayerProp,
+        bool resetDatabase = true)
+    {
+        using var scope = factory.Services.CreateScope();
+        var dbContext = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+        if (resetDatabase)
+        {
+            await dbContext.Database.EnsureDeletedAsync();
+            await dbContext.Database.EnsureCreatedAsync();
+        }
+
+        var (sport, league) = await GetOrCreateMlbSportLeagueAsync(dbContext);
+        var propTypes = await GetOrCreateMlbPropTypesAsync(dbContext, sport.Id, propTypeCount);
+        var players = Enumerable.Range(1, playerCount)
+            .Select(index => new Player
+            {
+                Id = Guid.NewGuid(),
+                DisplayName = $"MLB Coverage Player {eventDate:yyyyMMdd}-{index}",
+                LeagueId = league.Id
+            })
+            .ToArray();
+        dbContext.Players.AddRange(players);
+
+        var rows = 0;
+        foreach (var player in players)
+        {
+            foreach (var propType in propTypes)
+            {
+                for (var copy = 0; copy < rowsPerPlayerProp; copy++)
+                {
+                    rows++;
+                    dbContext.PropResults.Add(new PropResult
+                    {
+                        Id = Guid.NewGuid(),
+                        PlayerId = player.Id,
+                        LeagueId = league.Id,
+                        PropTypeId = propType.Id,
+                        EventDate = eventDate,
+                        ActualResultValue = rows % 7,
+                        ExternalSource = "mlb",
+                        ExternalSourceIdentifier = $"mlb:test:{eventDate:yyyyMMdd}:{player.Id:N}:{propType.Id:N}:{copy}"
+                    });
+                }
+            }
+        }
+
+        dbContext.MlbResultImportDateStates.Add(new MlbResultImportDateState
+        {
+            Id = Guid.NewGuid(),
+            EventDate = eventDate,
+            Status = "succeeded",
+            LastSuccessfulAt = DateTimeOffset.UtcNow,
+            RecordsFound = rows,
+            RecordsMapped = rows,
+            ImportedResults = rows,
+            DistinctPlayers = playerCount,
+            DistinctPropTypes = propTypeCount,
+            CoverageStatus = rows >= 1000 && playerCount >= 100 && propTypeCount >= 12 ? "Complete" : "Partial",
+            CoverageReason = "Seeded test coverage state."
+        });
+
+        await dbContext.SaveChangesAsync();
+    }
+
+    private static async Task<IReadOnlyCollection<MlbResultRecord>> BuildMlbImportRecordsAsync(
+        SafetyTestApplicationFactory factory,
+        DateOnly eventDate,
+        int playerCount,
+        int propTypeCount)
+    {
+        using var scope = factory.Services.CreateScope();
+        var dbContext = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+        var (sport, league) = await GetOrCreateMlbSportLeagueAsync(dbContext);
+        var propTypes = await GetOrCreateMlbPropTypesAsync(dbContext, sport.Id, propTypeCount);
+        var existingPlayers = await dbContext.Players
+            .Where(row => row.LeagueId == league.Id)
+            .Take(playerCount)
+            .ToArrayAsync();
+        var players = existingPlayers.ToList();
+        while (players.Count < playerCount)
+        {
+            var player = new Player
+            {
+                Id = Guid.NewGuid(),
+                DisplayName = $"MLB Repair Player {players.Count + 1}",
+                LeagueId = league.Id
+            };
+            players.Add(player);
+            dbContext.Players.Add(player);
+        }
+
+        await dbContext.SaveChangesAsync();
+
+        return players
+            .Take(playerCount)
+            .SelectMany(player => propTypes.Select(propType => new MlbResultRecord(
+                new ResultRecord(
+                    player.Id,
+                    league.Id,
+                    propType.Id,
+                    eventDate,
+                    1,
+                    $"mlb:test-provider:{eventDate:yyyyMMdd}:{player.Id:N}:{propType.Id:N}"),
+                player.DisplayName,
+                player.Id.ToString("N"),
+                $"game-{eventDate:yyyyMMdd}",
+                propType.Name,
+                1,
+                IsMapped: true)))
+            .ToArray();
+    }
+
+    private static async Task<(Sport Sport, League League)> GetOrCreateMlbSportLeagueAsync(ApplicationDbContext dbContext)
+    {
+        var sport = await dbContext.Sports.SingleOrDefaultAsync(row => row.Code == "MLB");
+        if (sport is null)
+        {
+            sport = new Sport { Id = Guid.NewGuid(), Code = "MLB", Name = "Major League Baseball" };
+            dbContext.Sports.Add(sport);
+            await dbContext.SaveChangesAsync();
+        }
+
+        var league = await dbContext.Leagues.SingleOrDefaultAsync(row => row.SportId == sport.Id && row.Code == "MLB");
+        if (league is null)
+        {
+            league = new League
+            {
+                Id = Guid.NewGuid(),
+                SportId = sport.Id,
+                Name = "Major League Baseball",
+                Code = "MLB"
+            };
+            dbContext.Leagues.Add(league);
+            await dbContext.SaveChangesAsync();
+        }
+
+        return (sport, league);
+    }
+
+    private static async Task<PropType[]> GetOrCreateMlbPropTypesAsync(ApplicationDbContext dbContext, Guid sportId, int count)
+    {
+        var existing = await dbContext.PropTypes
+            .Where(row => row.SportId == sportId)
+            .OrderBy(row => row.Name)
+            .ToListAsync();
+        while (existing.Count < count)
+        {
+            var index = existing.Count + 1;
+            var propType = new PropType
+            {
+                Id = Guid.NewGuid(),
+                SportId = sportId,
+                Name = $"Coverage Prop {index}",
+                StatKey = $"COVERAGE_PROP_{index}",
+                ValueType = "numeric"
+            };
+            dbContext.PropTypes.Add(propType);
+            existing.Add(propType);
+        }
+
+        await dbContext.SaveChangesAsync();
+        return existing.Take(count).ToArray();
+    }
+
     private sealed record ApiSportsProviderLinkTestState(
         Guid Id,
         string LinkStatus,
@@ -4297,6 +4545,7 @@ public sealed class SafetyTestApplicationFactory : WebApplicationFactory<Program
     public CountingTheOddsAdapter TheOddsAdapter { get; } = new();
     public CountingUnderdogAdapter UnderdogAdapter { get; } = new();
     public StubApiSportsFootballClient ApiSportsFootballClient { get; } = new();
+    public StubMlbResultsProvider MlbResultsProvider { get; } = new();
 
     public SafetyTestApplicationFactory(IReadOnlyDictionary<string, string?>? configOverrides = null)
     {
@@ -4345,10 +4594,12 @@ public sealed class SafetyTestApplicationFactory : WebApplicationFactory<Program
             services.RemoveAll<ITheOddsApiMlbPlayerPropsAdapter>();
             services.RemoveAll<IUnderdogAdapter>();
             services.RemoveAll<IApiSportsFootballClient>();
+            services.RemoveAll<IMlbResultsProvider>();
             services.AddDbContext<ApplicationDbContext>(options => options.UseSqlite(databaseConnection));
             services.AddSingleton<ITheOddsApiMlbPlayerPropsAdapter>(TheOddsAdapter);
             services.AddSingleton<IUnderdogAdapter>(UnderdogAdapter);
             services.AddSingleton<IApiSportsFootballClient>(ApiSportsFootballClient);
+            services.AddSingleton<IMlbResultsProvider>(MlbResultsProvider);
         });
     }
 
@@ -5373,6 +5624,40 @@ public sealed class SafetyTestApplicationFactory : WebApplicationFactory<Program
             await dbContext.MarketTopPickSnapshots.CountAsync(),
             await dbContext.MarketLineShoppingSnapshots.CountAsync(),
             await dbContext.TheOddsRefreshPlannerDecisions.CountAsync());
+    }
+}
+
+public sealed class StubMlbResultsProvider : IMlbResultsProvider
+{
+    private readonly Dictionary<DateOnly, IReadOnlyCollection<MlbResultRecord>> recordsByDate = [];
+
+    public string SourceName => "mlb-test";
+
+    public int CallCount { get; private set; }
+
+    public void SetRecords(DateOnly date, IReadOnlyCollection<MlbResultRecord> records)
+    {
+        recordsByDate[date] = records;
+    }
+
+    public Task<IReadOnlyCollection<MlbResultRecord>> GetMlbResultsAsync(DateOnly date, CancellationToken cancellationToken)
+    {
+        CallCount++;
+        return Task.FromResult(recordsByDate.TryGetValue(date, out var records)
+            ? records
+            : Array.Empty<MlbResultRecord>());
+    }
+
+    public Task<IReadOnlyCollection<ResultRecord>> GetResultsAsync(DateOnly eventDate, CancellationToken cancellationToken)
+    {
+        return Task.FromResult(recordsByDate.TryGetValue(eventDate, out var records)
+            ? (IReadOnlyCollection<ResultRecord>)records.Select(row => row.ResultRecord).ToArray()
+            : Array.Empty<ResultRecord>());
+    }
+
+    public Task<IReadOnlyCollection<MlbPlayerRecord>> GetPlayersAsync(int season, CancellationToken cancellationToken)
+    {
+        return Task.FromResult<IReadOnlyCollection<MlbPlayerRecord>>(Array.Empty<MlbPlayerRecord>());
     }
 }
 

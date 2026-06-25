@@ -74,6 +74,7 @@ builder.Services.AddHttpClient<ITheOddsApiMlbPlayerPropsAdapter, TheOddsApiMlbPl
 });
 builder.Services.AddScoped<IUnderdogIngestionService, UnderdogIngestionService>();
 builder.Services.AddScoped<IMlbResultImportService, MlbResultImportService>();
+builder.Services.AddScoped<IMlbResultCoverageService, MlbResultCoverageService>();
 builder.Services.AddScoped<ITheOddsApiMlbEventIngestionService, TheOddsApiMlbEventIngestionService>();
 builder.Services.AddScoped<ITheOddsMlbIngestionPlanner, TheOddsMlbIngestionPlanner>();
 builder.Services.AddScoped<ITheOddsRefreshPlannerService, TheOddsRefreshPlannerService>();

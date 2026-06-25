@@ -1157,13 +1157,44 @@ namespace SportsBetting.Api.Migrations
                         .HasColumnType("integer")
                         .HasColumnName("attempts");
 
+                    b.Property<int?>("CompletedGamesExpected")
+                        .HasColumnType("integer")
+                        .HasColumnName("completed_games_expected");
+
+                    b.Property<int?>("CompletedGamesImported")
+                        .HasColumnType("integer")
+                        .HasColumnName("completed_games_imported");
+
+                    b.Property<string>("CoverageReason")
+                        .HasMaxLength(1000)
+                        .HasColumnType("character varying(1000)")
+                        .HasColumnName("coverage_reason");
+
+                    b.Property<string>("CoverageStatus")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("character varying(50)")
+                        .HasColumnName("coverage_status");
+
                     b.Property<DateTimeOffset>("CreatedAt")
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("created_at");
 
+                    b.Property<int>("DistinctPlayers")
+                        .HasColumnType("integer")
+                        .HasColumnName("distinct_players");
+
+                    b.Property<int>("DistinctPropTypes")
+                        .HasColumnType("integer")
+                        .HasColumnName("distinct_prop_types");
+
                     b.Property<DateOnly>("EventDate")
                         .HasColumnType("date")
                         .HasColumnName("event_date");
+
+                    b.Property<int>("ImportedResults")
+                        .HasColumnType("integer")
+                        .HasColumnName("imported_results");
 
                     b.Property<DateTimeOffset?>("LastAttemptedAt")
                         .HasColumnType("timestamp with time zone")
@@ -1176,6 +1207,14 @@ namespace SportsBetting.Api.Migrations
                     b.Property<DateTimeOffset?>("LastSuccessfulAt")
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("last_successful_at");
+
+                    b.Property<DateTimeOffset?>("LatestImportAttemptUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("latest_import_attempt_utc");
+
+                    b.Property<DateTimeOffset?>("LatestSuccessfulRepairUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("latest_successful_repair_utc");
 
                     b.Property<int>("RecordsFound")
                         .HasColumnType("integer")
@@ -1212,6 +1251,9 @@ namespace SportsBetting.Api.Migrations
 
                     b.HasIndex("Status", "EventDate")
                         .HasDatabaseName("ix_mlb_result_import_date_states_status_event_date");
+
+                    b.HasIndex("CoverageStatus", "EventDate")
+                        .HasDatabaseName("ix_mlb_result_import_date_states_coverage_status_event_date");
 
                     b.ToTable("mlb_result_import_date_states", (string)null);
                 });

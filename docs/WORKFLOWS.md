@@ -419,6 +419,7 @@ The MLB result import worker should run automatically every configured interval.
 ```powershell
 Invoke-RestMethod -Uri "http://localhost:5299/api/debug/results/import/mlb/status"
 Invoke-RestMethod -Uri "http://localhost:5299/api/debug/results/import/mlb/coverage"
+Invoke-RestMethod -Uri "http://localhost:5299/api/debug/results/import/mlb/coverage-audit?fromDate=2026-06-19&toDate=2026-06-23&includeDetails=true"
 ```
 
 Manual one-day import:
@@ -430,6 +431,24 @@ Invoke-RestMethod `
   -ContentType "application/json" `
   -Body '{"date":"2026-06-15"}'
 ```
+
+Repair partial or missing dates with a dry run first:
+
+```powershell
+Invoke-RestMethod `
+  -Method Post `
+  -Uri "http://localhost:5299/api/debug/results/import/mlb/repair-missing" `
+  -ContentType "application/json" `
+  -Body '{"fromDate":"2026-06-23","toDate":"2026-06-23","dryRun":true,"repairPartial":true,"repairMissing":true}'
+
+Invoke-RestMethod `
+  -Method Post `
+  -Uri "http://localhost:5299/api/debug/results/import/mlb/repair-missing" `
+  -ContentType "application/json" `
+  -Body '{"fromDate":"2026-06-23","toDate":"2026-06-23","dryRun":false,"repairPartial":true,"repairMissing":true}'
+```
+
+Performance summary skips dates whose MLB result coverage is `Partial`, `NotStarted`, `PendingGames`, or `Failed` when complete coverage states exist. Check `diagnostics.resultCoverage` for the clearest read: `latestCoverageStatus` describes the latest available/imported date, while `selectedGradedDateCoverageStatus` and `resultCoverageCompleteForSelectedDate` describe the date actually used for performance. The older `dataAvailability` coverage fields remain for compatibility.
 
 Manual range import:
 
