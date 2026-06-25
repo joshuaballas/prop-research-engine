@@ -65,10 +65,10 @@ export function LineShoppingPage() {
   };
 
   useEffect(() => {
-    if (filters.sport === 'SOCCER' && filters.canAddOnly) {
+    if ((filters.sport === 'SOCCER' || filters.providerCategory === 'Sportsbook') && filters.canAddOnly) {
       setFilters((current) => ({ ...current, canAddOnly: false }));
     }
-  }, [filters.canAddOnly, filters.sport]);
+  }, [filters.canAddOnly, filters.providerCategory, filters.sport]);
 
   useEffect(() => {
     setFilters((current) => normalizeFilterSelection(current, {
@@ -123,7 +123,7 @@ export function LineShoppingPage() {
         onClearFilters={clearFilters}
       />
       <Typography variant="body2" color="text.secondary" sx={{ mt: -1.25 }}>
-        Sportsbook lines are for comparison only. Provider lines are the picks you can add to an entry.
+        Sportsbook recommendations stay separate from DFS entry legs. Only Entry-compatible DFS rows can be added.
       </Typography>
       {lineShoppingQuery.loading ? (
         <ApiStateCard message="Loading latest line-shopping rows..." />
@@ -166,7 +166,7 @@ function buildOptions(values: string[], labelForValue?: (value: string) => strin
 }
 
 function categoryFilterValue(category: string) {
-  return category === 'Sportsbook' ? 'Reference only' : category;
+  return category;
 }
 
 function categoryFilterLabel(value: string) {
@@ -202,7 +202,7 @@ function shallowEqualFilters(left: MarketFilterValues, right: MarketFilterValues
 }
 
 function isLineShoppingDisplayMarket(market: MarketOpportunity) {
-  return market.providerCategory === 'DFS' || (market.sport === 'SOCCER' && market.providerCategory === 'Sportsbook');
+  return market.providerCategory === 'DFS' || market.providerCategory === 'Sportsbook';
 }
 
 function lineShoppingMarketMatchesFilters(

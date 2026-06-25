@@ -244,10 +244,7 @@ public static partial class TheOddsApiDebugEndpoints
             })
             .Where(row => row.Strategy.IsCandidate)
             .ToArray();
-        var preferredCandidateGroups = candidateGroups.Any(row => row.Group.IsActionableForUser)
-            ? candidateGroups.Where(row => row.Group.IsActionableForUser)
-            : candidateGroups;
-        var topPicks = preferredCandidateGroups
+        var topPicks = candidateGroups
             .OrderByDescending(row => row.Group.BestProbability ?? decimal.MinValue)
             .ThenByDescending(row => row.Group.BestProjectionEdge ?? decimal.MinValue)
             .ThenByDescending(row => row.Group.RankingScore)
@@ -279,7 +276,7 @@ public static partial class TheOddsApiDebugEndpoints
                 actionableCandidateCount = candidateGroups.Count(row => row.Group.IsActionableForUser),
                 sportsbookContextCandidateCount = candidateGroups.Count(row => !row.Group.IsActionableForUser),
                 dfsCandidateCount = candidateGroups.Count(row => string.Equals(row.Group.ProviderCategory, "DFS", StringComparison.OrdinalIgnoreCase)),
-                topPicksPreferredProviderCategory = candidateGroups.Any(row => row.Group.IsActionableForUser) ? "DFS actionable" : "Sportsbook context fallback",
+                topPicksProviderCategoryBehavior = "Mixed DFS and Sportsbook recommendations are eligible; providerCategory filters can isolate one category.",
                 activeWatchlistCount = groups.Count(group => ClassifyTheOddsLineShoppingStrategy(group).IsWatchlist),
                 returnedTopPicks = topPicks.Length
             },
@@ -648,8 +645,7 @@ public static partial class TheOddsApiDebugEndpoints
             }
         }
 
-        if (!entryActionableForUser ||
-            !string.Equals(group.LifecycleStatus, "Active", StringComparison.OrdinalIgnoreCase) ||
+        if (!string.Equals(group.LifecycleStatus, "Active", StringComparison.OrdinalIgnoreCase) ||
             group.IsStale ||
             group.IsExpired)
         {
@@ -1136,6 +1132,8 @@ public static partial class TheOddsApiDebugEndpoints
 
         AddExpectedValueDisplayMetadata(obj);
         AddModelProbabilityDisplayMetadata(obj);
+        AddRecommendationDisplayMetadata(obj);
+        NormalizePublicDetailsJsonCasing(obj);
 
         if (playerId.HasValue && playerId.Value != Guid.Empty)
         {
@@ -1144,6 +1142,55 @@ public static partial class TheOddsApiDebugEndpoints
         }
 
         return obj;
+    }
+
+    private static void NormalizePublicDetailsJsonCasing(JsonObject obj)
+    {
+        var pascalKeys = obj
+            .Select(pair => pair.Key)
+            .Where(key => key.Length > 0 && char.IsUpper(key[0]))
+            .ToArray();
+
+        foreach (var pascalKey in pascalKeys)
+        {
+            var camelKey = char.ToLowerInvariant(pascalKey[0]) + pascalKey[1..];
+            if (!obj.ContainsKey(camelKey) && obj.TryGetPropertyValue(pascalKey, out var value))
+            {
+                obj[camelKey] = value?.DeepClone();
+            }
+
+            obj.Remove(pascalKey);
+        }
+    }
+
+    private static void AddRecommendationDisplayMetadata(JsonObject obj)
+    {
+        var providerCategory = GetString(obj, "providerCategory", "ProviderCategory");
+        var isCandidate = GetBool(obj, "isCandidate", "IsCandidate") ?? false;
+
+        if (!obj.ContainsKey("isRecommendation"))
+        {
+            obj["isRecommendation"] = isCandidate;
+        }
+
+        if (!obj.ContainsKey("recommendationActionableForUser"))
+        {
+            obj["recommendationActionableForUser"] = isCandidate;
+        }
+
+        if (!obj.ContainsKey("recommendationType"))
+        {
+            obj["recommendationType"] = isCandidate
+                ? string.Equals(providerCategory, "DFS", StringComparison.OrdinalIgnoreCase) ? "DFS" : "Sportsbook"
+                : null;
+        }
+
+        if (isCandidate
+            && string.Equals(providerCategory, "Sportsbook", StringComparison.OrdinalIgnoreCase)
+            && !obj.ContainsKey("entryRuleWarning"))
+        {
+            obj["entryRuleWarning"] = "MLB sportsbook recommendation. Entry Builder is available only for DFS entries.";
+        }
     }
 
     private static void AddExpectedValueDisplayMetadata(JsonObject obj)
@@ -1196,6 +1243,25 @@ public static partial class TheOddsApiDebugEndpoints
                 value.GetValueKind() == JsonValueKind.String)
             {
                 return value.GetValue<string>();
+            }
+        }
+
+        return null;
+    }
+
+    private static bool? GetBool(JsonObject obj, params string[] keys)
+    {
+        foreach (var key in keys)
+        {
+            if (!obj.TryGetPropertyValue(key, out var value) || value is null)
+            {
+                continue;
+            }
+
+            if (value.GetValueKind() is JsonValueKind.True or JsonValueKind.False &&
+                value.AsValue().TryGetValue<bool>(out var boolean))
+            {
+                return boolean;
             }
         }
 

@@ -306,10 +306,7 @@ public static partial class TheOddsApiDebugEndpoints
                 })
                 .Where(row => row.Strategy.IsCandidate)
                 .ToArray();
-            var preferredCandidateGroups = candidateGroups.Any(row => row.Group.IsActionableForUser)
-                ? candidateGroups.Where(row => row.Group.IsActionableForUser)
-                : candidateGroups;
-            var topPicks = preferredCandidateGroups
+            var topPicks = candidateGroups
                 .OrderByDescending(row => row.Group.BestProbability ?? decimal.MinValue)
                 .ThenByDescending(row => row.Group.BestProjectionEdge ?? decimal.MinValue)
                 .ThenByDescending(row => row.Group.RankingScore)
@@ -356,7 +353,7 @@ public static partial class TheOddsApiDebugEndpoints
                     actionableCandidateCount = candidateGroups.Count(row => row.Group.IsActionableForUser),
                     sportsbookContextCandidateCount = candidateGroups.Count(row => !row.Group.IsActionableForUser),
                     dfsCandidateCount = candidateGroups.Count(row => string.Equals(row.Group.ProviderCategory, "DFS", StringComparison.OrdinalIgnoreCase)),
-                    topPicksPreferredProviderCategory = candidateGroups.Any(row => row.Group.IsActionableForUser) ? "DFS actionable" : "Sportsbook context fallback",
+                    topPicksProviderCategoryBehavior = "Mixed DFS and Sportsbook recommendations are eligible; providerCategory filters can isolate one category.",
                     activeWatchlistCount = groups.Count(group => ClassifyTheOddsLineShoppingStrategy(group).IsWatchlist),
                     returnedTopPicks = topPicks.Length
                 },
@@ -3082,6 +3079,56 @@ public static partial class TheOddsApiDebugEndpoints
         .WithName("TheOddsApiSoccerWorldCupProviderAvailabilityDebug")
         .WithSummary("Debug-only read-only Soccer / World Cup provider availability probe for The Odds regions, bookmakers, and market keys.");
 
+        endpoints.MapGet("/api/debug/the-odds/mlb/provider-availability", async (
+            DateOnly? slateDate,
+            string? providerCategory,
+            string? regions,
+            string? markets,
+            string? bookmakers,
+            int? maxEvents,
+            bool? forceLive,
+            IOptions<TheOddsApiOptions> theOddsApiOptions,
+            IOptions<TheOddsIngestionWorkerOptions> workerOptions,
+            ITheOddsApiMlbPlayerPropsAdapter adapter,
+            CancellationToken cancellationToken) =>
+        {
+            return await BuildMlbProviderAvailabilityResponseAsync(
+                slateDate,
+                providerCategory,
+                regions,
+                markets,
+                bookmakers,
+                maxEvents,
+                forceLive,
+                theOddsApiOptions.Value,
+                workerOptions.Value,
+                adapter,
+                cancellationToken);
+        })
+        .WithName("TheOddsApiMlbProviderAvailabilityDebug")
+        .WithSummary("Debug-only read-only MLB provider availability probe for The Odds regions, bookmakers, and market keys.");
+
+        endpoints.MapGet("/api/debug/mlb/public-row-eligibility", async (
+            string? providerCategory,
+            Guid? runId,
+            int? freshnessMinutes,
+            ApplicationDbContext dbContext,
+            IPredictionProbabilityService probabilityService,
+            IOptions<PredictionGenerationOptions> predictionGenerationOptions,
+            CancellationToken cancellationToken) =>
+        {
+            return Results.Ok(await BuildMlbPublicRowEligibilityResponseAsync(
+                providerCategory,
+                runId,
+                freshnessMinutes,
+                dbContext,
+                probabilityService,
+                predictionGenerationOptions.Value,
+                cancellationToken));
+        })
+        .WithName("MlbPublicRowEligibilityDebug")
+        .WithSummary("Read-only MLB public row eligibility summary by provider category.");
+
         endpoints.MapPost("/api/debug/the-odds/mlb/ingest-event", async (
             TheOddsApiMlbIngestEventRequest request,
             bool? dryRun,
@@ -4003,98 +4050,103 @@ public static partial class TheOddsApiDebugEndpoints
 
         return new
         {
-            group.EventId,
+            eventId = group.EventId,
             eventStartTime = group.EventStartTime,
-            group.EventStartTimeUtc,
-            group.ExpectedResultDate,
-            group.ResultDateSource,
-            group.UtcDate,
-            group.ResolvedMlbDate,
-            group.LastObservedAt,
-            group.MinutesSinceObserved,
-            group.MinutesUntilStart,
-            group.IsFresh,
-            group.IsStale,
-            group.IsExpired,
-            group.LifecycleStatus,
-            group.LifecycleReasons,
-            group.HomeTeam,
-            group.AwayTeam,
+            eventStartTimeUtc = group.EventStartTimeUtc,
+            expectedResultDate = group.ExpectedResultDate,
+            resultDateSource = group.ResultDateSource,
+            utcDate = group.UtcDate,
+            resolvedMlbDate = group.ResolvedMlbDate,
+            lastObservedAt = group.LastObservedAt,
+            minutesSinceObserved = group.MinutesSinceObserved,
+            minutesUntilStart = group.MinutesUntilStart,
+            isFresh = group.IsFresh,
+            isStale = group.IsStale,
+            isExpired = group.IsExpired,
+            lifecycleStatus = group.LifecycleStatus,
+            lifecycleReasons = group.LifecycleReasons,
+            homeTeam = group.HomeTeam,
+            awayTeam = group.AwayTeam,
             player = group.Player,
             playerId = group.PlayerId,
             canonicalPlayerId = group.PlayerId,
             normalizedPropType = group.NormalizedPropType,
             line = group.Line,
-            group.MarketKey,
-            group.MarketClassification,
-            group.ProjectionType,
-            group.ProjectionTypeConfidence,
-            group.IsAlternateMarket,
-            group.PayoutMultiplierMayDiffer,
-            group.SpecialProjectionWarning,
-            group.ProviderCategory,
-            expectedValueDisplay.IsDfs,
-            expectedValueDisplay.IsSportsbook,
-            expectedValueDisplay.ShowExpectedValue,
-            expectedValueDisplay.DisplayExpectedValue,
-            expectedValueDisplay.ExpectedValueUnavailableReason,
-            group.Region,
-            group.IsActionableForUser,
-            group.IsIndicativeOdds,
-            group.IsEligibleAsNormalRecommendation,
+            marketKey = group.MarketKey,
+            marketClassification = group.MarketClassification,
+            projectionType = group.ProjectionType,
+            projectionTypeConfidence = group.ProjectionTypeConfidence,
+            isAlternateMarket = group.IsAlternateMarket,
+            payoutMultiplierMayDiffer = group.PayoutMultiplierMayDiffer,
+            specialProjectionWarning = group.SpecialProjectionWarning,
+            providerCategory = group.ProviderCategory,
+            isDfs = expectedValueDisplay.IsDfs,
+            isSportsbook = expectedValueDisplay.IsSportsbook,
+            showExpectedValue = expectedValueDisplay.ShowExpectedValue,
+            displayExpectedValue = expectedValueDisplay.DisplayExpectedValue,
+            expectedValueUnavailableReason = expectedValueDisplay.ExpectedValueUnavailableReason,
+            region = group.Region,
+            isActionableForUser = group.IsActionableForUser,
+            isIndicativeOdds = group.IsIndicativeOdds,
+            isEligibleAsNormalRecommendation = group.IsEligibleAsNormalRecommendation,
             modelProbabilityOver = group.ModelProbabilityOver,
             modelProbabilityUnder = group.ModelProbabilityUnder,
             modelProbabilityPush = group.ModelProbabilityPush,
             modelProjection = group.ModelProjection,
             projectionEdge = group.ProjectionEdge,
-            group.RankingScore,
-            group.HistoricalSampleSize,
-            group.ProbabilityMethod,
-            group.ConfidenceScore,
-            group.SampleWarning,
-            group.TrustLevel,
-            group.MinimumPickHitProbability,
-            group.StrongPickHitProbability,
-            group.ResearchOnlyBelowHitProbability,
+            rankingScore = group.RankingScore,
+            historicalSampleSize = group.HistoricalSampleSize,
+            probabilityMethod = group.ProbabilityMethod,
+            confidenceScore = group.ConfidenceScore,
+            sampleWarning = group.SampleWarning,
+            trustLevel = group.TrustLevel,
+            minimumPickHitProbability = group.MinimumPickHitProbability,
+            strongPickHitProbability = group.StrongPickHitProbability,
+            researchOnlyBelowHitProbability = group.ResearchOnlyBelowHitProbability,
             bookmakerPrices = includeBookmakerPrices ? group.BookmakerPrices : Array.Empty<TheOddsBookmakerPriceRow>(),
-            group.BestOverBookmaker,
-            group.BestOverAmericanPrice,
-            group.BestOverEstimatedEv,
-            group.BestUnderBookmaker,
-            group.BestUnderAmericanPrice,
-            group.BestUnderEstimatedEv,
-            group.BestEstimatedEv,
-            group.LargestPriceSpread,
-            group.BestSide,
-            group.BestBookmaker,
-            group.BestAmericanPrice,
-            group.BestDecimalPrice,
-            group.BestProbability,
+            bestOverBookmaker = group.BestOverBookmaker,
+            bestOverAmericanPrice = group.BestOverAmericanPrice,
+            bestOverEstimatedEv = group.BestOverEstimatedEv,
+            bestUnderBookmaker = group.BestUnderBookmaker,
+            bestUnderAmericanPrice = group.BestUnderAmericanPrice,
+            bestUnderEstimatedEv = group.BestUnderEstimatedEv,
+            bestEstimatedEv = group.BestEstimatedEv,
+            largestPriceSpread = group.LargestPriceSpread,
+            bestSide = group.BestSide,
+            bestBookmaker = group.BestBookmaker,
+            bestAmericanPrice = group.BestAmericanPrice,
+            bestDecimalPrice = group.BestDecimalPrice,
+            bestProbability = group.BestProbability,
             selectedSideProbability = group.BestProbability,
             modelProbabilityAvailable = group.BestProbability.HasValue,
             hitChanceUnavailableReason = BuildHitChanceUnavailableReason(group),
             probabilitySource = group.BestProbability.HasValue ? group.ProbabilityMethod : null,
-            group.BestImpliedProbability,
-            group.BestProbabilityEdge,
-            group.BestProjectionEdge,
-            strategy.StrategyClassification,
-            strategy.StrategyTier,
-            strategy.StrategyReasons,
-            strategy.StrategyWarnings,
-            strategy.IsCandidate,
-            strategy.IsAvoid,
-            strategy.IsWatchlist,
-            strategy.IsResearchOnly,
-            strategy.CandidateStrategyName,
-            strategy.MarketShape,
-            strategy.RiskTags,
-            entryCompatibility.EntryCompatibilityGroup,
-            entryCompatibility.EntryProvider,
-            entryCompatibility.EntryProviderCategory,
-            entryCompatibility.EntryActionableForUser,
-            entryCompatibility.SupportedEntryTypes,
-            entryCompatibility.AllowedLegCounts,
-            entryCompatibility.EntryRuleWarning
+            bestImpliedProbability = group.BestImpliedProbability,
+            bestProbabilityEdge = group.BestProbabilityEdge,
+            bestProjectionEdge = group.BestProjectionEdge,
+            isRecommendation = strategy.IsCandidate,
+            recommendationActionableForUser = strategy.IsCandidate,
+            recommendationType = strategy.IsCandidate
+                ? (string.Equals(group.ProviderCategory, "DFS", StringComparison.OrdinalIgnoreCase) ? "DFS" : "Sportsbook")
+                : null,
+            strategyClassification = strategy.StrategyClassification,
+            strategyTier = strategy.StrategyTier,
+            strategyReasons = strategy.StrategyReasons,
+            strategyWarnings = strategy.StrategyWarnings,
+            isCandidate = strategy.IsCandidate,
+            isAvoid = strategy.IsAvoid,
+            isWatchlist = strategy.IsWatchlist,
+            isResearchOnly = strategy.IsResearchOnly,
+            candidateStrategyName = strategy.CandidateStrategyName,
+            marketShape = strategy.MarketShape,
+            riskTags = strategy.RiskTags,
+            entryCompatibilityGroup = entryCompatibility.EntryCompatibilityGroup,
+            entryProvider = entryCompatibility.EntryProvider,
+            entryProviderCategory = entryCompatibility.EntryProviderCategory,
+            entryActionableForUser = entryCompatibility.EntryActionableForUser,
+            supportedEntryTypes = entryCompatibility.SupportedEntryTypes,
+            allowedLegCounts = entryCompatibility.AllowedLegCounts,
+            entryRuleWarning = entryCompatibility.EntryRuleWarning
         };
     }
 
@@ -4203,7 +4255,7 @@ public static partial class TheOddsApiDebugEndpoints
                 EntryActionableForUser: false,
                 SupportedEntryTypes: Array.Empty<string>(),
                 AllowedLegCounts: Array.Empty<int>(),
-                EntryRuleWarning: "Sportsbook rows are market context for this DFS-only user. Do not mix sportsbook legs across books.");
+                EntryRuleWarning: "MLB sportsbook recommendation. Entry Builder is available only for DFS entries.");
         }
 
         return bookmakerKey switch
@@ -4411,17 +4463,21 @@ public static partial class TheOddsApiDebugEndpoints
         {
             reasons.Add(isDfs
                 ? "Matches DFS Candidate Strategy: hit chance and projection cushion clear configured gates."
-                : "Matches Conservative Candidate Strategy.");
+                : "Matches MLB sportsbook recommendation gates: positive EV from real sportsbook odds and model probability.");
             return new TheOddsLineShoppingStrategyClassification(
                 "Candidate",
-                isDfs && hasStrongHitProbability ? "StrongCandidate" : "ConservativeCandidate",
+                isDfs
+                    ? hasStrongHitProbability ? "StrongCandidate" : "ConservativeCandidate"
+                    : "MlbSportsbookRecommendation",
                 reasons,
                 warnings,
                 true,
                 false,
                 false,
                 false,
-                isDfs && hasStrongHitProbability ? "Strong DFS Candidate" : "Conservative Candidate Strategy",
+                isDfs
+                    ? hasStrongHitProbability ? "Strong DFS Candidate" : "Conservative Candidate Strategy"
+                    : "MLB Sportsbook Recommendation",
                 marketShape,
                 riskTags);
         }
@@ -4438,14 +4494,18 @@ public static partial class TheOddsApiDebugEndpoints
             reasons.Add("Pitcher Strikeouts with positive estimated EV.");
             return new TheOddsLineShoppingStrategyClassification(
                 "Candidate",
-                isDfs && hasStrongHitProbability ? "StrongCandidate" : "PitcherStrikeoutCandidate",
+                isDfs
+                    ? hasStrongHitProbability ? "StrongCandidate" : "PitcherStrikeoutCandidate"
+                    : "MlbSportsbookRecommendation",
                 reasons,
                 warnings,
                 true,
                 false,
                 false,
                 false,
-                isDfs && hasStrongHitProbability ? "Strong DFS Candidate" : "Pitcher Strikeouts Only",
+                isDfs
+                    ? hasStrongHitProbability ? "Strong DFS Candidate" : "Pitcher Strikeouts Only"
+                    : "MLB Sportsbook Recommendation",
                 marketShape,
                 riskTags);
         }
@@ -11748,6 +11808,406 @@ public static partial class TheOddsApiDebugEndpoints
                 providerRejectedCount),
             events = availabilityRows
         });
+    }
+
+    private static async Task<IResult> BuildMlbProviderAvailabilityResponseAsync(
+        DateOnly? slateDate,
+        string? providerCategory,
+        string? regions,
+        string? markets,
+        string? bookmakers,
+        int? maxEvents,
+        bool? forceLive,
+        TheOddsApiOptions options,
+        TheOddsIngestionWorkerOptions workerOptions,
+        ITheOddsApiMlbPlayerPropsAdapter adapter,
+        CancellationToken cancellationToken)
+    {
+        var effectiveSlateDate = slateDate ?? ResolveCurrentMlbSlateDate();
+        var effectiveProviderCategory = string.Equals(providerCategory, "DFS", StringComparison.OrdinalIgnoreCase)
+            ? "DFS"
+            : "Sportsbook";
+        var isDfs = string.Equals(effectiveProviderCategory, "DFS", StringComparison.OrdinalIgnoreCase);
+        var sportKey = NullIfWhiteSpace(options.SportKey) ?? "baseball_mlb";
+        var effectiveMarkets = NullIfWhiteSpace(markets)
+            ?? NullIfWhiteSpace(workerOptions.Markets)
+            ?? NullIfWhiteSpace(options.Markets);
+        var effectiveRegions = NullIfWhiteSpace(regions)
+            ?? (isDfs ? NullIfWhiteSpace(workerOptions.DfsRegion) ?? "us_dfs" : NullIfWhiteSpace(options.Regions) ?? "us");
+        var effectiveBookmakers = NullIfWhiteSpace(bookmakers)
+            ?? (isDfs ? NullIfWhiteSpace(workerOptions.DfsBookmakers) : NullIfWhiteSpace(workerOptions.Bookmakers));
+        var eventLimit = Math.Clamp(maxEvents ?? 3, 1, 10);
+        var providerConfig = new
+        {
+            configuredSportKey = sportKey,
+            configuredSportsbookRegion = NullIfWhiteSpace(options.Regions) ?? "us",
+            configuredDfsRegion = NullIfWhiteSpace(workerOptions.DfsRegion) ?? "us_dfs",
+            configuredMarkets = effectiveMarkets,
+            configuredSportsbookBookmakers = NullIfWhiteSpace(workerOptions.Bookmakers),
+            configuredDfsBookmakers = NullIfWhiteSpace(workerOptions.DfsBookmakers),
+            effectiveProviderCategory,
+            effectiveRegions,
+            effectiveBookmakers,
+            requiredConfig = new[]
+            {
+                "TheOddsApi:SportKey",
+                "TheOddsIngestionWorker:Markets"
+            }
+        };
+        var missingConfig = new List<string>();
+        if (string.IsNullOrWhiteSpace(sportKey))
+        {
+            missingConfig.Add("TheOddsApi:SportKey");
+        }
+
+        if (string.IsNullOrWhiteSpace(effectiveMarkets))
+        {
+            missingConfig.Add("TheOddsIngestionWorker:Markets or TheOddsApi:Markets");
+        }
+
+        if (missingConfig.Count > 0)
+        {
+            return Results.BadRequest(new
+            {
+                success = false,
+                readOnly = true,
+                callsExternalApis = false,
+                wouldWriteRows = false,
+                sport = "MLB",
+                providerCategory = effectiveProviderCategory,
+                slateDate = effectiveSlateDate,
+                providerConfig,
+                blockReason = "MissingMlbProviderConfig",
+                diagnostics = new
+                {
+                    missingConfig,
+                    message = "Configure The Odds MLB sport key and markets before checking live provider availability."
+                }
+            });
+        }
+
+        var estimatedLiveCalls = 1 + eventLimit;
+        if (forceLive != true)
+        {
+            return Results.Conflict(new
+            {
+                success = false,
+                blocked = true,
+                readOnly = true,
+                callsExternalApis = false,
+                wouldWriteRows = false,
+                requiresForceLive = true,
+                sport = "MLB",
+                providerCategory = effectiveProviderCategory,
+                slateDate = effectiveSlateDate,
+                providerConfig,
+                estimatedLiveCalls,
+                recommendedAction = "Pass forceLive=true only when you are ready to spend The Odds API credits for one event-list call plus one event-odds call per matched MLB event."
+            });
+        }
+
+        var eventFetch = await adapter.FetchSpikeAsync(
+            eventId: null,
+            markets: null,
+            bookmakers: null,
+            regions: null,
+            oddsFormat: null,
+            cancellationToken,
+            sportKey);
+        var matchedEvents = eventFetch.Events
+            .Where(row => !string.IsNullOrWhiteSpace(row.EventId))
+            .Where(row => row.EventStartTime.HasValue && ResolveMlbSlateDate(row.EventStartTime.Value) == effectiveSlateDate)
+            .OrderBy(row => row.EventStartTime)
+            .ThenBy(row => row.EventId)
+            .Take(eventLimit)
+            .ToArray();
+        var availabilityRows = new List<SoccerWorldCupProviderAvailabilityEvent>();
+        var actualLiveCalls = 1;
+
+        foreach (var mlbEvent in matchedEvents)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            try
+            {
+                var oddsFetch = await adapter.FetchSpikeAsync(
+                    mlbEvent.EventId,
+                    effectiveMarkets,
+                    effectiveBookmakers,
+                    effectiveRegions,
+                    oddsFormat: null,
+                    cancellationToken,
+                    sportKey);
+                actualLiveCalls++;
+                availabilityRows.Add(BuildSoccerWorldCupAvailabilityEvent(
+                    mlbEvent,
+                    effectiveRegions,
+                    effectiveBookmakers,
+                    effectiveMarkets,
+                    oddsFetch));
+            }
+            catch (TheOddsApiProviderException exception)
+            {
+                actualLiveCalls++;
+                availabilityRows.Add(BuildSoccerWorldCupProviderRejectedAvailabilityEvent(
+                    mlbEvent,
+                    effectiveRegions,
+                    effectiveBookmakers,
+                    effectiveMarkets,
+                    exception));
+            }
+        }
+
+        var eventsWithBookmakers = availabilityRows.Count(row => row.BookmakerCount > 0);
+        var eventsWithMarkets = availabilityRows.Count(row => row.MarketCount > 0);
+        var providerRejectedCount = availabilityRows.Count(row => row.ProviderRejectedRequest);
+        var rowsThatWouldBePersisted = availabilityRows.Sum(row => row.PlayerOutcomeCount);
+        var configuredMarkets = ParseCommaSeparatedSet(effectiveMarkets);
+        var returnedMarkets = availabilityRows
+            .SelectMany(row => row.MarketKeysReturned)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(row => row, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+        return Results.Ok(new
+        {
+            success = providerRejectedCount == 0,
+            readOnly = true,
+            callsExternalApis = true,
+            wouldWriteRows = false,
+            sport = "MLB",
+            providerCategory = effectiveProviderCategory,
+            slateDate = effectiveSlateDate,
+            providerConfig,
+            estimatedLiveCalls = 1 + matchedEvents.Length,
+            actualLiveCalls,
+            eventsFetched = eventFetch.Events.Count,
+            eventsEligible = matchedEvents.Length,
+            eventsWithBookmakers,
+            eventsWithMarkets,
+            configuredMarketsRequested = configuredMarkets,
+            configuredMarketsReturned = configuredMarkets
+                .Where(configured => returnedMarkets.Contains(configured, StringComparer.OrdinalIgnoreCase))
+                .OrderBy(row => row, StringComparer.OrdinalIgnoreCase)
+                .ToArray(),
+            configuredMarketsMissing = configuredMarkets
+                .Where(configured => !returnedMarkets.Contains(configured, StringComparer.OrdinalIgnoreCase))
+                .OrderBy(row => row, StringComparer.OrdinalIgnoreCase)
+                .ToArray(),
+            rowsThatWouldBePersisted,
+            rowsThatWouldBeEntryActionable = isDfs ? rowsThatWouldBePersisted : 0,
+            existingMlbPredictionCanAttach = true,
+            sportsbookEvCanBeCalculatedFromRealOdds = !isDfs && availabilityRows.Any(row => row.PlayerOutcomeCount > 0),
+            entryBuilderPlayable = isDfs,
+            providerRejectedCount,
+            recommendedAction = BuildMlbAvailabilityRecommendedAction(
+                matchedEvents.Length,
+                effectiveProviderCategory,
+                rowsThatWouldBePersisted,
+                providerRejectedCount),
+            events = availabilityRows
+        });
+    }
+
+    private static string BuildMlbAvailabilityRecommendedAction(
+        int eventsEligible,
+        string providerCategory,
+        int rowsThatWouldBePersisted,
+        int providerRejectedCount)
+    {
+        if (providerRejectedCount > 0)
+        {
+            return "Review providerRejectedRequest entries, sanitized URLs, and raw provider bodies before retrying.";
+        }
+
+        if (eventsEligible == 0)
+        {
+            return "No MLB events matched the requested slate date. Try a different slateDate before checking markets.";
+        }
+
+        if (rowsThatWouldBePersisted == 0)
+        {
+            return $"No {providerCategory} player prop rows were returned for the checked MLB events. Review region, bookmaker, and market keys before enabling writes.";
+        }
+
+        return string.Equals(providerCategory, "Sportsbook", StringComparison.OrdinalIgnoreCase)
+            ? "MLB sportsbook provider lines are available for read/write refresh, but should stay non-Entry-Builder playable. Next step is a separate promotion gate for sportsbook recommendations and sportsbook-specific performance."
+            : "MLB DFS provider lines are available through the checked region/bookmakers and can use existing Entry Builder rules when provider rules are configured.";
+    }
+
+    private static async Task<object> BuildMlbPublicRowEligibilityResponseAsync(
+        string? providerCategory,
+        Guid? runId,
+        int? freshnessMinutes,
+        ApplicationDbContext dbContext,
+        IPredictionProbabilityService probabilityService,
+        PredictionGenerationOptions selectionOptions,
+        CancellationToken cancellationToken)
+    {
+        var generatedAtUtc = DateTimeOffset.UtcNow;
+        var lifecycleFreshnessMinutes = Math.Clamp(freshnessMinutes ?? DefaultTheOddsLineShoppingFreshnessMinutes, 1, 1440);
+        var platformProps = await LoadScopedTheOddsPlatformPropsAsync(dbContext, providerCategory, cancellationToken);
+        var probabilityAnalysis = await LoadProbabilityAnalysisAsync(
+            runId,
+            platformProps.Select(row => row.PropId).Distinct().ToArray(),
+            probabilityService,
+            cancellationToken);
+        var freshnessCutoff = generatedAtUtc.AddHours(-FreshnessWindowHours);
+        var rows = BuildTheOddsLineShoppingRows(platformProps, probabilityAnalysis, freshnessCutoff);
+        var groups = BuildTheOddsLineShoppingGroups(rows, generatedAtUtc, lifecycleFreshnessMinutes, selectionOptions);
+        var grouped = groups
+            .Select(group =>
+            {
+                var strategy = ClassifyTheOddsLineShoppingStrategy(group);
+                var entry = BuildTheOddsEntryCompatibility(group);
+                var gradeability = BuildRecommendationGradeability(group, entry.EntryActionableForUser);
+                var isSportsbook = string.Equals(group.ProviderCategory, "Sportsbook", StringComparison.OrdinalIgnoreCase);
+                var isDfs = string.Equals(group.ProviderCategory, "DFS", StringComparison.OrdinalIgnoreCase);
+                var hasModelProbability = group.BestProbability.HasValue;
+                var hasSportsbookOdds = group.BestAmericanPrice.HasValue || group.BestDecimalPrice.HasValue || group.BestImpliedProbability.HasValue;
+                var blockers = BuildMlbPublicRowEligibilityBlockers(group, strategy, gradeability, isSportsbook, hasModelProbability, hasSportsbookOdds);
+
+                return new
+                {
+                    Group = group,
+                    Strategy = strategy,
+                    Entry = entry,
+                    Gradeability = gradeability,
+                    IsSportsbook = isSportsbook,
+                    IsDfs = isDfs,
+                    HasModelProbability = hasModelProbability,
+                    HasSportsbookOdds = hasSportsbookOdds,
+                    IsSportsbookRecommendationEligible = isSportsbook && strategy.IsCandidate,
+                    IsDfsEntryActionableCandidate = isDfs && strategy.IsCandidate && entry.EntryActionableForUser,
+                    Blockers = blockers
+                };
+            })
+            .ToArray();
+        var byCategory = grouped
+            .GroupBy(row => row.Group.ProviderCategory, StringComparer.OrdinalIgnoreCase)
+            .Select(group => new
+            {
+                providerCategory = group.Key,
+                rows = group.Count(),
+                rowsWithModelProbability = group.Count(row => row.HasModelProbability),
+                rowsGradeable = group.Count(row => row.Gradeability.IsGradeable),
+                sportsbookRecommendationEligible = group.Count(row => row.IsSportsbookRecommendationEligible),
+                dfsEntryActionableCandidates = group.Count(row => row.IsDfsEntryActionableCandidate),
+                rowsBlockedByMissingModel = group.Count(row => row.Blockers.Contains("MissingModelProbability")),
+                rowsBlockedByMissingOdds = group.Count(row => row.Blockers.Contains("MissingSportsbookOdds")),
+                rowsBlockedByLifecycle = group.Count(row => row.Blockers.Contains("InactiveStaleOrExpired")),
+                rowsBlockedByUnsupportedProp = group.Count(row => row.Blockers.Contains("UnsupportedResultProp"))
+            })
+            .OrderBy(row => row.providerCategory)
+            .ToArray();
+
+        return new
+        {
+            generatedAtUtc,
+            callsExternalApis = false,
+            readOnly = true,
+            writesRows = false,
+            sport = "MLB",
+            providerCategory,
+            flags = new
+            {
+                mlbDfsEntryBuilderEnabled = true,
+                mlbSportsbookEntryBuilderEnabled = false,
+                publicEndpointsReadOnly = true
+            },
+            summary = new
+            {
+                totalRows = grouped.Length,
+                sportsbookRows = grouped.Count(row => row.IsSportsbook),
+                dfsRows = grouped.Count(row => row.IsDfs),
+                rowsWithModelProbability = grouped.Count(row => row.HasModelProbability),
+                rowsGradeable = grouped.Count(row => row.Gradeability.IsGradeable),
+                sportsbookRecommendationEligible = grouped.Count(row => row.IsSportsbookRecommendationEligible),
+                recommendationEligibleCount = grouped.Count(row => row.Strategy.IsCandidate),
+                entryActionableCandidateCount = grouped.Count(row => row.IsDfsEntryActionableCandidate),
+                rowsBlockedByMissingModelOrHistory = grouped.Count(row => row.Blockers.Contains("MissingModelProbability")),
+                rowsBlockedByStaleOrExpired = grouped.Count(row => row.Blockers.Contains("InactiveStaleOrExpired")),
+                rowsBlockedByMissingOdds = grouped.Count(row => row.Blockers.Contains("MissingSportsbookOdds"))
+            },
+            byProviderCategory = byCategory,
+            blockedReasonCounts = grouped
+                .SelectMany(row => row.Blockers)
+                .GroupBy(row => row, StringComparer.OrdinalIgnoreCase)
+                .Select(group => new { reason = group.Key, count = group.Count() })
+                .OrderByDescending(row => row.count)
+                .ThenBy(row => row.reason)
+                .ToArray(),
+            samples = grouped
+                .OrderByDescending(row => row.IsSportsbookRecommendationEligible)
+                .ThenByDescending(row => row.Group.BestProbability ?? decimal.MinValue)
+                .Take(25)
+                .Select(row => new
+                {
+                    row.Group.Player,
+                    row.Group.NormalizedPropType,
+                    row.Group.BestSide,
+                    row.Group.Line,
+                    row.Group.ProviderCategory,
+                    row.Group.BestBookmaker,
+                    row.Group.BestProbability,
+                    row.Group.BestEstimatedEv,
+                    row.Group.BestAmericanPrice,
+                    row.Group.LifecycleStatus,
+                    row.Group.IsStale,
+                    row.Group.IsExpired,
+                    row.Strategy.StrategyClassification,
+                    row.Strategy.StrategyTier,
+                    entryActionableForUser = row.Entry.EntryActionableForUser,
+                    recommendationActionableForUser = row.Strategy.IsCandidate,
+                    sportsbookRecommendationEligible = row.IsSportsbookRecommendationEligible,
+                    blockers = row.Blockers
+                })
+                .ToArray()
+        };
+    }
+
+    private static string[] BuildMlbPublicRowEligibilityBlockers(
+        TheOddsLineShoppingGroup group,
+        TheOddsLineShoppingStrategyClassification strategy,
+        RecommendationGradeability gradeability,
+        bool isSportsbook,
+        bool hasModelProbability,
+        bool hasSportsbookOdds)
+    {
+        var blockers = new List<string>();
+        if (!hasModelProbability)
+        {
+            blockers.Add("MissingModelProbability");
+        }
+
+        if (isSportsbook && !hasSportsbookOdds)
+        {
+            blockers.Add("MissingSportsbookOdds");
+        }
+
+        if (!string.Equals(group.LifecycleStatus, "Active", StringComparison.OrdinalIgnoreCase) || group.IsStale || group.IsExpired)
+        {
+            blockers.Add("InactiveStaleOrExpired");
+        }
+
+        if (!IsSupportedMlbPerformancePropType(group.NormalizedPropType))
+        {
+            blockers.Add("UnsupportedResultProp");
+        }
+
+        if (!gradeability.IsGradeable)
+        {
+            blockers.Add("NotGradeable");
+        }
+
+        if (!strategy.IsCandidate)
+        {
+            blockers.Add("NotRecommendationCandidate");
+        }
+
+        return blockers
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(row => row, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
     }
 
     private static SoccerWorldCupProviderAvailabilityEvent BuildSoccerWorldCupAvailabilityEvent(

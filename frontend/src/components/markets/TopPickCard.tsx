@@ -174,7 +174,7 @@ function TopPickActions({
   onAdd?: (market: MarketOpportunity) => void;
   onDetails: () => void;
 }) {
-  const entryDisabled = isSoccerEntryBuilderDisabled(market) && !selected;
+  const entryDisabled = isEntryBuilderDisabled(market) && !selected;
   const locked = incompatible || entryDisabled;
   return (
     <>
@@ -184,7 +184,7 @@ function TopPickActions({
         startIcon={selected ? <RemoveCircleOutlineRoundedIcon /> : locked ? <LockRoundedIcon /> : <AddCircleOutlineRoundedIcon />}
         onClick={() => (locked ? undefined : onAdd?.(market))}
         disabled={locked}
-        title={entryDisabled ? market.entryRuleWarning ?? market.entryUnavailableReason ?? 'Entry Builder disabled for Soccer' : undefined}
+        title={entryDisabled ? entryDisabledReason(market) : undefined}
         sx={entryButtonSx(selected, locked)}
       >
         {selected ? 'Remove' : 'Add leg'}
@@ -209,7 +209,7 @@ function TopPickMobileActions({
   onAdd?: (market: MarketOpportunity) => void;
   onDetails: () => void;
 }) {
-  const entryDisabled = isSoccerEntryBuilderDisabled(market) && !selected;
+  const entryDisabled = isEntryBuilderDisabled(market) && !selected;
   const locked = incompatible || entryDisabled;
   return (
     <>
@@ -219,7 +219,7 @@ function TopPickMobileActions({
         startIcon={selected ? <RemoveCircleOutlineRoundedIcon /> : locked ? <LockRoundedIcon /> : <AddCircleOutlineRoundedIcon />}
         onClick={() => (locked ? undefined : onAdd?.(market))}
         disabled={locked}
-        title={entryDisabled ? market.entryRuleWarning ?? market.entryUnavailableReason ?? 'Entry Builder disabled for Soccer' : undefined}
+        title={entryDisabled ? entryDisabledReason(market) : undefined}
         sx={mobileEntryButtonSx(selected, locked)}
       >
         {selected ? 'Remove' : 'Add leg'}
@@ -258,8 +258,12 @@ function resolveConfidence(market: MarketOpportunity): 'Strong' | 'Medium' | 'We
   return edge > 0 ? 'Medium' : 'Weak';
 }
 
-function isSoccerEntryBuilderDisabled(market: MarketOpportunity) {
-  return market.sport === 'SOCCER' && market.providerCategory === 'Sportsbook' && !market.canAddToEntry;
+function isEntryBuilderDisabled(market: MarketOpportunity) {
+  return !market.canAddToEntry;
+}
+
+function entryDisabledReason(market: MarketOpportunity) {
+  return market.entryRuleWarning ?? market.entryUnavailableReason ?? (market.providerCategory === 'Sportsbook' ? 'Entry Builder is available only for DFS entries.' : 'Entry Builder unavailable for this row.');
 }
 
 function isDisplayableTrustLevel(value: MarketOpportunity['trustLevel']): value is 'Strong' | 'Medium' | 'Weak' {

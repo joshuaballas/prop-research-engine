@@ -31,6 +31,7 @@ import { normalizeTrustLevel } from '../../utils/trustColors';
 type TopPickFilterValues = {
   search: string;
   sport: string;
+  providerCategory: string;
   provider: string;
   opportunity: string;
   trust: string;
@@ -40,6 +41,7 @@ type TopPickFilterValues = {
 const defaultTopPickFilters: TopPickFilterValues = {
   search: '',
   sport: 'All',
+  providerCategory: 'All',
   provider: 'All',
   opportunity: 'All',
   trust: 'All',
@@ -59,6 +61,7 @@ export function TopPicksPage() {
     return labels.length ? labels : ['All'];
   }, [availableSportCodes]);
   const providerOptions = useMemo(() => buildStringOptions(topPicks.map((market) => market.provider)), [topPicks]);
+  const providerCategoryOptions = useMemo(() => buildStringOptions(topPicks.map((market) => market.providerCategory)), [topPicks]);
   const opportunityOptions = useMemo(
     () => buildStringOptions(topPicks.map((market) => marketTagValue(market)), marketTagLabel),
     [topPicks]
@@ -90,6 +93,7 @@ export function TopPicksPage() {
         onFiltersChange={setFilters}
         sportOptions={sportFilterLabels}
         providerOptions={providerOptions}
+        providerCategoryOptions={providerCategoryOptions}
         opportunityOptions={opportunityOptions}
         showOpportunityFilter={showOpportunityFilter}
       />
@@ -178,6 +182,7 @@ function filterTopPicks(markets: MarketOpportunity[], filters: TopPickFilterValu
   return markets.filter((market) => {
     if (query && !market.player.toLowerCase().includes(query)) return false;
     if (filters.sport !== 'All' && market.sport !== filters.sport) return false;
+    if (filters.providerCategory !== 'All' && market.providerCategory !== filters.providerCategory) return false;
     if (filters.provider !== 'All' && market.provider !== filters.provider) return false;
     if (filters.opportunity !== 'All' && marketTagLabel(marketTagValue(market)) !== filters.opportunity) return false;
     if (filters.trust !== 'All' && normalizeTrustLevel(getTopPickConfidence(market)) !== filters.trust) return false;
@@ -217,6 +222,7 @@ function TopPickControls({
   onFiltersChange,
   sportOptions,
   providerOptions,
+  providerCategoryOptions,
   opportunityOptions,
   showOpportunityFilter
 }: {
@@ -225,6 +231,7 @@ function TopPickControls({
   onFiltersChange: (filters: TopPickFilterValues) => void;
   sportOptions: string[];
   providerOptions: string[];
+  providerCategoryOptions: string[];
   opportunityOptions: string[];
   showOpportunityFilter: boolean;
 }) {
@@ -287,6 +294,13 @@ function TopPickControls({
                   </MenuItem>
                 ))}
               </TextField>
+              <TextField label="Category" size="small" select value={filters.providerCategory} onChange={(event) => updateFilter('providerCategory', event.target.value)} fullWidth>
+                {providerCategoryOptions.map((item) => (
+                  <MenuItem key={item} value={item}>
+                    {item}
+                  </MenuItem>
+                ))}
+              </TextField>
               {showOpportunityFilter ? (
                 <TextField label="Opportunity" size="small" select value={filters.opportunity} onChange={(event) => updateFilter('opportunity', event.target.value)} fullWidth>
                   {opportunityOptions.map((item) => (
@@ -338,6 +352,13 @@ function TopPickControls({
         </TextField>
         <TextField label="Provider" size="small" select value={filters.provider} onChange={(event) => updateFilter('provider', event.target.value)} sx={{ width: 168 }}>
           {providerOptions.map((item) => (
+            <MenuItem key={item} value={item}>
+              {item}
+            </MenuItem>
+          ))}
+        </TextField>
+        <TextField label="Category" size="small" select value={filters.providerCategory} onChange={(event) => updateFilter('providerCategory', event.target.value)} sx={{ width: 132 }}>
+          {providerCategoryOptions.map((item) => (
             <MenuItem key={item} value={item}>
               {item}
             </MenuItem>
@@ -408,7 +429,7 @@ function RankedPicksTable({ markets, rankOffset, builder }: { markets: MarketOpp
               const confidence = getTopPickConfidence(market);
               const selected = builder.isSelected(market.id);
               const incompatible = !selected && !builder.isCompatible(market);
-              const entryDisabled = isSoccerEntryBuilderDisabled(market) && !selected;
+              const entryDisabled = isEntryBuilderDisabled(market) && !selected;
               const locked = incompatible || entryDisabled;
               return (
               <TableRow key={market.id} hover sx={appTableRowSx}>
@@ -453,7 +474,7 @@ function RankedPicksTable({ markets, rankOffset, builder }: { markets: MarketOpp
                       variant="contained"
                       disabled={locked || !market.canAddToEntry}
                       onClick={() => (locked || !market.canAddToEntry ? undefined : builder.toggleLeg(market))}
-                      title={entryDisabled ? market.entryRuleWarning ?? market.entryUnavailableReason ?? 'Entry Builder disabled for Soccer' : undefined}
+                      title={entryDisabled ? entryDisabledReason(market) : undefined}
                       sx={entryButtonSx(selected, locked)}
                     >
                       {selected ? 'Remove' : 'Add leg'}
@@ -473,8 +494,12 @@ function RankedPicksTable({ markets, rankOffset, builder }: { markets: MarketOpp
   );
 }
 
-function isSoccerEntryBuilderDisabled(market: MarketOpportunity) {
-  return market.sport === 'SOCCER' && market.providerCategory === 'Sportsbook' && !market.canAddToEntry;
+function isEntryBuilderDisabled(market: MarketOpportunity) {
+  return !market.canAddToEntry;
+}
+
+function entryDisabledReason(market: MarketOpportunity) {
+  return market.entryRuleWarning ?? market.entryUnavailableReason ?? (market.providerCategory === 'Sportsbook' ? 'Entry Builder is available only for DFS entries.' : 'Entry Builder unavailable for this row.');
 }
 
 const actionButtonSx = desktopRowActionButtonSx;

@@ -28,13 +28,13 @@ export function getScheduledRefreshStatus(signal?: AbortSignal) {
   return apiGet<ScheduledRefreshStatusDto>('/api/debug/the-odds/mlb/scheduled-refresh/status', signal);
 }
 
-export function getTopPicks(signal?: AbortSignal, take = 25, sport = 'MLB') {
+export function getTopPicks(signal?: AbortSignal, take = 25, sport = 'MLB', providerCategory?: 'DFS' | 'Sportsbook') {
   return apiGet<PublicTopPicksResponseDto>(
     `/api/markets/top-picks${buildQuery({
       sport,
       competition: competitionForSport(sport),
       take,
-      providerCategory: sport.toUpperCase() === 'SOCCER' ? undefined : 'DFS',
+      providerCategory,
       freshnessMinutes: 30
     })}`,
     signal

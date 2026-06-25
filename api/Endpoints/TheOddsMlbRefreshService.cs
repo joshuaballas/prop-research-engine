@@ -354,9 +354,6 @@ public static partial class TheOddsApiDebugEndpoints
                     .ThenByDescending(row => row.Group.RankingScore)
                     .Select(row => row.Group)
                     .ToArray();
-                var preferredActiveCandidates = activeCandidates.Any(group => group.IsActionableForUser)
-                    ? activeCandidates.Where(group => group.IsActionableForUser).ToArray()
-                    : activeCandidates;
                 var activeWatchlist = classifiedGroups
                     .Where(row => row.Strategy.IsWatchlist)
                     .OrderByDescending(row => row.Group.BestEstimatedEv ?? decimal.MinValue)
@@ -371,7 +368,7 @@ public static partial class TheOddsApiDebugEndpoints
 
                 stepStopwatch.Restart();
                 var topActiveCandidates = shouldIncludeCandidates
-                    ? preferredActiveCandidates.Take(25).Select(group => ToLineShoppingResponseGroup(group, includeBookmakerPrices: false)).ToArray()
+                    ? activeCandidates.Take(25).Select(group => ToLineShoppingResponseGroup(group, includeBookmakerPrices: false)).ToArray()
                     : Array.Empty<object>();
                 var topWatchlist = shouldIncludeCandidates
                     ? activeWatchlist.Take(25).Select(group => ToLineShoppingResponseGroup(group, includeBookmakerPrices: false)).ToArray()
@@ -591,7 +588,7 @@ public static partial class TheOddsApiDebugEndpoints
                     predictionResult?.RunId,
                     generatedAtUtc,
                     lineShopping.Groups,
-                    preferredActiveCandidates.Take(25).ToArray(),
+                    activeCandidates.Take(25).ToArray(),
                     dbContext,
                     cancellationToken);
                 await dbContext.SaveChangesAsync(cancellationToken);

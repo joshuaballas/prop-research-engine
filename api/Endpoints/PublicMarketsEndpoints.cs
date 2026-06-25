@@ -1558,12 +1558,10 @@ public static class PublicMarketsEndpoints
         }
 
         details["sport"] = sport;
-        details["Sport"] = sport;
         var competition = ResolveCompetitionName(sport);
         if (!string.IsNullOrWhiteSpace(competition))
         {
             details["competition"] = competition;
-            details["Competition"] = competition;
         }
 
         if (!string.IsNullOrWhiteSpace(eventName) && details["eventName"] is null)
@@ -1614,8 +1612,28 @@ public static class PublicMarketsEndpoints
             details["hitChanceUnavailableReason"] = SoccerUnavailableMessage;
         }
 
+        NormalizePublicDetailsJsonCasing(details);
         using var document = JsonSerializer.SerializeToDocument(details);
         return document.RootElement.Clone();
+    }
+
+    private static void NormalizePublicDetailsJsonCasing(JsonObject details)
+    {
+        var pascalKeys = details
+            .Select(pair => pair.Key)
+            .Where(key => key.Length > 0 && char.IsUpper(key[0]))
+            .ToArray();
+
+        foreach (var pascalKey in pascalKeys)
+        {
+            var camelKey = char.ToLowerInvariant(pascalKey[0]) + pascalKey[1..];
+            if (!details.ContainsKey(camelKey) && details.TryGetPropertyValue(pascalKey, out var value))
+            {
+                details[camelKey] = value?.DeepClone();
+            }
+
+            details.Remove(pascalKey);
+        }
     }
 
     private static decimal? ReadNullableDecimal(JsonObject details, params string[] propertyNames)
@@ -2429,11 +2447,11 @@ public static class PublicMarketsEndpoints
                         provider = row.Snapshot.EntryProvider,
                         bookmaker = row.Snapshot.Bookmaker,
                         providerCategory = row.Snapshot.ProviderCategory,
-                        expectedValueDisplay.IsDfs,
-                        expectedValueDisplay.IsSportsbook,
-                        expectedValueDisplay.ShowExpectedValue,
-                        expectedValueDisplay.DisplayExpectedValue,
-                        expectedValueDisplay.ExpectedValueUnavailableReason,
+                        isDfs = expectedValueDisplay.IsDfs,
+                        isSportsbook = expectedValueDisplay.IsSportsbook,
+                        showExpectedValue = expectedValueDisplay.ShowExpectedValue,
+                        displayExpectedValue = expectedValueDisplay.DisplayExpectedValue,
+                        expectedValueUnavailableReason = expectedValueDisplay.ExpectedValueUnavailableReason,
                         eventStartTimeUtc = row.Snapshot.EventStartTimeUtc,
                         estimatedEv = row.Snapshot.EstimatedEv,
                         hitChance = row.Snapshot.HitChance,

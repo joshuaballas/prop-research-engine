@@ -1208,6 +1208,82 @@ public sealed class RefreshSafetyTests
     }
 
     [Fact]
+    public async Task MlbSportsbookTopPicks_AreRecommendationsButNotEntryBuilderLegs()
+    {
+        await using var factory = new SafetyTestApplicationFactory();
+        using var client = factory.CreateClient();
+        await factory.SeedMlbDfsHitProbabilitySelectionScenarioAsync();
+
+        var response = await client.GetAsync("/api/markets/top-picks?sport=MLB&providerCategory=Sportsbook&take=10");
+
+        await EnsureSuccessWithBodyAsync(response);
+        AssertNoCaseInsensitiveDuplicatePropertiesInTopPicks(await response.Content.ReadAsStringAsync());
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        var picks = json.GetProperty("topPicks").EnumerateArray().ToArray();
+        var pick = picks.Single(row => row.GetProperty("player").GetString() == "Priced Sportsbook Player");
+        Assert.False(pick.TryGetProperty("IsDfs", out _));
+        Assert.False(pick.TryGetProperty("IsSportsbook", out _));
+        Assert.False(pick.TryGetProperty("ExpectedValueUnavailableReason", out _));
+
+        Assert.Equal("Sportsbook", pick.GetProperty("providerCategory").GetString());
+        Assert.True(pick.GetProperty("isRecommendation").GetBoolean());
+        Assert.True(pick.GetProperty("recommendationActionableForUser").GetBoolean());
+        Assert.Equal("Sportsbook", pick.GetProperty("recommendationType").GetString());
+        Assert.False(pick.GetProperty("entryActionableForUser").GetBoolean());
+        Assert.Equal("Sportsbook", pick.GetProperty("entryProviderCategory").GetString());
+        Assert.Equal("MLB sportsbook recommendation. Entry Builder is available only for DFS entries.", pick.GetProperty("entryRuleWarning").GetString());
+        Assert.True(pick.GetProperty("showExpectedValue").GetBoolean());
+        Assert.True(pick.GetProperty("displayExpectedValue").GetDecimal() > 0);
+        Assert.Equal(0, factory.TheOddsAdapter.CallCount);
+    }
+
+    [Fact]
+    public async Task MlbDfsTopPicks_DoNotEmitDuplicateExpectedValueCasing()
+    {
+        await using var factory = new SafetyTestApplicationFactory();
+        using var client = factory.CreateClient();
+        await factory.SeedExpectedValueDisplaySnapshotsAsync();
+
+        var response = await client.GetAsync("/api/markets/top-picks?sport=MLB&providerCategory=DFS&take=10");
+
+        await EnsureSuccessWithBodyAsync(response);
+        AssertNoCaseInsensitiveDuplicatePropertiesInTopPicks(await response.Content.ReadAsStringAsync());
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        var pick = Assert.Single(json.GetProperty("topPicks").EnumerateArray());
+        Assert.False(pick.TryGetProperty("IsDfs", out _));
+        Assert.False(pick.TryGetProperty("IsSportsbook", out _));
+        Assert.False(pick.TryGetProperty("ExpectedValueUnavailableReason", out _));
+        Assert.True(pick.GetProperty("isDfs").GetBoolean());
+        Assert.False(pick.GetProperty("isSportsbook").GetBoolean());
+        Assert.False(pick.GetProperty("showExpectedValue").GetBoolean());
+        Assert.Equal(0, factory.TheOddsAdapter.CallCount);
+    }
+
+
+    [Fact]
+    public async Task MlbPublicRowEligibility_ReportsSportsbookRecommendationAndDfsEntryCounts()
+    {
+        await using var factory = new SafetyTestApplicationFactory();
+        using var client = factory.CreateClient();
+        await factory.SeedMlbDfsHitProbabilitySelectionScenarioAsync();
+
+        var response = await client.GetAsync("/api/debug/mlb/public-row-eligibility");
+
+        await EnsureSuccessWithBodyAsync(response);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        var summary = json.GetProperty("summary");
+
+        Assert.False(json.GetProperty("callsExternalApis").GetBoolean());
+        Assert.True(json.GetProperty("readOnly").GetBoolean());
+        Assert.False(json.GetProperty("writesRows").GetBoolean());
+        Assert.True(summary.GetProperty("sportsbookRows").GetInt32() >= 1);
+        Assert.True(summary.GetProperty("dfsRows").GetInt32() >= 1);
+        Assert.True(summary.GetProperty("sportsbookRecommendationEligible").GetInt32() >= 1);
+        Assert.True(summary.GetProperty("entryActionableCandidateCount").GetInt32() >= 1);
+        Assert.Equal(0, factory.TheOddsAdapter.CallCount);
+    }
+
+    [Fact]
     public async Task MlbDfsLineShopping_UsesHitProbabilityBeforePromotingCandidates()
     {
         await using var factory = new SafetyTestApplicationFactory();
@@ -1259,6 +1335,8 @@ public sealed class RefreshSafetyTests
         var topPicks = await topPicksResponse.Content.ReadFromJsonAsync<JsonElement>();
         var topPicksDfs = await topPicksDfsResponse.Content.ReadFromJsonAsync<JsonElement>();
         var lineShopping = await lineShoppingResponse.Content.ReadFromJsonAsync<JsonElement>();
+        AssertNoCaseInsensitiveDuplicatePropertiesInTopPicks(await topPicksResponse.Content.ReadAsStringAsync());
+        AssertNoCaseInsensitiveDuplicatePropertiesInComparisonGroups(await lineShoppingResponse.Content.ReadAsStringAsync());
 
         Assert.Equal("SOCCER", freshness.GetProperty("effectiveSport").GetString());
         Assert.Equal("World Cup", freshness.GetProperty("competition").GetString());
@@ -5093,6 +5171,20 @@ public sealed class RefreshSafetyTests
         }
     }
 
+    private static void AssertNoCaseInsensitiveDuplicatePropertiesInTopPicks(string responseJson)
+    {
+        using var document = JsonDocument.Parse(responseJson);
+        Assert.Equal(JsonValueKind.Object, document.RootElement.ValueKind);
+        Assert.True(document.RootElement.TryGetProperty("topPicks", out var topPicks));
+        Assert.Equal(JsonValueKind.Array, topPicks.ValueKind);
+        var index = 0;
+        foreach (var pick in topPicks.EnumerateArray())
+        {
+            AssertNoCaseInsensitiveDuplicateProperties(pick, $"$.topPicks[{index}]");
+            index++;
+        }
+    }
+
     private static void AssertNoCaseInsensitiveDuplicateProperties(JsonElement element, string path)
     {
         switch (element.ValueKind)
@@ -6522,6 +6614,27 @@ public sealed class SafetyTestApplicationFactory : WebApplicationFactory<Program
                 bestDecimalPrice: null,
                 bestAmericanPrice: null,
                 entryActionable: false));
+        dbContext.MarketTopPickSnapshots.AddRange(
+            BuildExpectedValueDisplayTopPickSnapshot(
+                refreshRun,
+                "DFS Player",
+                "DFS",
+                "PrizePicks",
+                bestEstimatedEv: 0.14m,
+                bestImpliedProbability: 0.5m,
+                bestDecimalPrice: 2.0m,
+                bestAmericanPrice: 100,
+                entryActionable: true),
+            BuildExpectedValueDisplayTopPickSnapshot(
+                refreshRun,
+                "Priced Sportsbook Player",
+                "Sportsbook",
+                "DraftKings",
+                bestEstimatedEv: 0.09m,
+                bestImpliedProbability: 0.52381m,
+                bestDecimalPrice: 1.91m,
+                bestAmericanPrice: -110,
+                entryActionable: false));
 
         await dbContext.SaveChangesAsync();
     }
@@ -6602,6 +6715,27 @@ public sealed class SafetyTestApplicationFactory : WebApplicationFactory<Program
             overResults: 32,
             pushResults: 0,
             underResults: 28);
+        await AddMlbDfsSelectionScenarioPlayerAsync(
+            dbContext,
+            league,
+            propType,
+            platform,
+            run,
+            "Priced Sportsbook Player",
+            line: 6.5m,
+            projection: 4.0m,
+            overResults: 10,
+            pushResults: 0,
+            underResults: 50,
+            providerCategory: "Sportsbook",
+            bookmakerKey: "draftkings",
+            bookmakerTitle: "DraftKings",
+            region: "us",
+            entryActionable: false,
+            overAmericanPrice: -110,
+            underAmericanPrice: -110,
+            overDecimalPrice: 1.91m,
+            underDecimalPrice: 1.91m);
 
         await dbContext.SaveChangesAsync();
     }
@@ -6765,7 +6899,16 @@ public sealed class SafetyTestApplicationFactory : WebApplicationFactory<Program
         decimal projection,
         int overResults,
         int pushResults,
-        int underResults)
+        int underResults,
+        string providerCategory = "DFS",
+        string bookmakerKey = "prizepicks",
+        string bookmakerTitle = "PrizePicks",
+        string region = "us_dfs",
+        bool entryActionable = true,
+        int overAmericanPrice = 100,
+        int underAmericanPrice = 100,
+        decimal overDecimalPrice = 2.0m,
+        decimal underDecimalPrice = 2.0m)
     {
         var player = new Player
         {
@@ -6817,15 +6960,15 @@ public sealed class SafetyTestApplicationFactory : WebApplicationFactory<Program
             Metadata = JsonSerializer.SerializeToDocument(new
             {
                 dataProvider = "The Odds API",
-                providerCategory = "DFS",
-                region = "us_dfs",
-                isActionableForUser = true,
+                providerCategory,
+                region,
+                isActionableForUser = entryActionable,
                 isIndicativeOdds = false,
                 projectionType = "Standard",
                 projectionTypeConfidence = "Known",
                 isAlternateMarket = false,
                 payoutMultiplierMayDiffer = false,
-                bookmaker = new { key = "prizepicks", title = "PrizePicks" },
+                bookmaker = new { key = bookmakerKey, title = bookmakerTitle },
                 market = new { key = "pitcher_strikeouts", name = "Pitcher Strikeouts" },
                 eventInfo = new
                 {
@@ -6836,8 +6979,8 @@ public sealed class SafetyTestApplicationFactory : WebApplicationFactory<Program
                 },
                 options = new
                 {
-                    higher = new { americanPrice = 100, decimalPrice = 2.0m },
-                    lower = new { americanPrice = 100, decimalPrice = 2.0m }
+                    higher = new { americanPrice = overAmericanPrice, decimalPrice = overDecimalPrice },
+                    lower = new { americanPrice = underAmericanPrice, decimalPrice = underDecimalPrice }
                 }
             })
         });
@@ -6946,6 +7089,71 @@ public sealed class SafetyTestApplicationFactory : WebApplicationFactory<Program
             EntryProviderCategory = providerCategory,
             EntryActionableForUser = entryActionable,
             DetailsJson = details
+        };
+    }
+
+    private static MarketTopPickSnapshot BuildExpectedValueDisplayTopPickSnapshot(
+        TheOddsRefreshRun refreshRun,
+        string player,
+        string providerCategory,
+        string bookmaker,
+        decimal? bestEstimatedEv,
+        decimal? bestImpliedProbability,
+        decimal? bestDecimalPrice,
+        int? bestAmericanPrice,
+        bool entryActionable)
+    {
+        var lineShoppingSnapshot = BuildExpectedValueDisplaySnapshot(
+            refreshRun,
+            player,
+            providerCategory,
+            bookmaker,
+            bestEstimatedEv,
+            bestImpliedProbability,
+            bestDecimalPrice,
+            bestAmericanPrice,
+            entryActionable);
+
+        return new MarketTopPickSnapshot
+        {
+            Id = Guid.NewGuid(),
+            TheOddsRefreshRunId = refreshRun.Id,
+            PredictionRunId = null,
+            Sport = lineShoppingSnapshot.Sport,
+            SlateDate = lineShoppingSnapshot.SlateDate,
+            GeneratedAtUtc = lineShoppingSnapshot.GeneratedAtUtc,
+            BookmakerPreset = lineShoppingSnapshot.BookmakerPreset,
+            ProviderCategory = lineShoppingSnapshot.ProviderCategory,
+            Provider = lineShoppingSnapshot.Provider,
+            Bookmaker = lineShoppingSnapshot.Bookmaker,
+            Player = lineShoppingSnapshot.Player,
+            EventId = lineShoppingSnapshot.EventId,
+            EventName = lineShoppingSnapshot.EventName,
+            EventStartTime = lineShoppingSnapshot.EventStartTime,
+            LifecycleStatus = lineShoppingSnapshot.LifecycleStatus,
+            IsStale = lineShoppingSnapshot.IsStale,
+            IsExpired = lineShoppingSnapshot.IsExpired,
+            PropType = lineShoppingSnapshot.PropType,
+            Line = lineShoppingSnapshot.Line,
+            BestSide = lineShoppingSnapshot.BestSide,
+            BestBookmaker = lineShoppingSnapshot.BestBookmaker,
+            BestAmericanPrice = lineShoppingSnapshot.BestAmericanPrice,
+            BestDecimalPrice = lineShoppingSnapshot.BestDecimalPrice,
+            BestProbability = lineShoppingSnapshot.BestProbability,
+            BestImpliedProbability = lineShoppingSnapshot.BestImpliedProbability,
+            BestProbabilityEdge = lineShoppingSnapshot.BestProbabilityEdge,
+            BestEstimatedEv = lineShoppingSnapshot.BestEstimatedEv,
+            StrategyClassification = lineShoppingSnapshot.StrategyClassification,
+            StrategyTier = lineShoppingSnapshot.StrategyTier,
+            IsCandidate = lineShoppingSnapshot.IsCandidate,
+            IsWatchlist = lineShoppingSnapshot.IsWatchlist,
+            IsAvoid = lineShoppingSnapshot.IsAvoid,
+            IsResearchOnly = lineShoppingSnapshot.IsResearchOnly,
+            EntryProvider = lineShoppingSnapshot.EntryProvider,
+            EntryCompatibilityGroup = lineShoppingSnapshot.EntryCompatibilityGroup,
+            EntryProviderCategory = lineShoppingSnapshot.EntryProviderCategory,
+            EntryActionableForUser = lineShoppingSnapshot.EntryActionableForUser,
+            DetailsJson = lineShoppingSnapshot.DetailsJson
         };
     }
 
