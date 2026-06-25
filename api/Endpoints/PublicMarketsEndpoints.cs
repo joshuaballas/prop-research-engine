@@ -1,5 +1,6 @@
 using SportsBetting.Api.Data;
 using SportsBetting.Api.Integrations.Results.Mlb;
+using SportsBetting.Api.Integrations.Results.Soccer;
 using SportsBetting.Api.Integrations.TheOddsApi;
 using SportsBetting.Api.Models;
 using SportsBetting.Api.Predictions;
@@ -46,8 +47,8 @@ public static class PublicMarketsEndpoints
         "PITCHEREARNEDRUNS",
         "EARNEDRUNSALLOWED"
     ];
-    private const string MarketReadLimitation = "MLB result grading is supported. Soccer / World Cup provider-line reads and player history context are supported from persisted data; soccer grading, model hit chance, and performance grading are not available yet.";
-    private const string SoccerHistoryUnavailableMessage = "Soccer grading and model hit chance are not available yet.";
+    private const string SoccerUnavailableMessage = "Soccer grading and model hit chance are not available yet.";
+    private const string SoccerEnabledMessage = "Soccer predictions and grading are enabled for supported World Cup prop types only. Entry Builder remains disabled for Soccer.";
 
     public static IEndpointRouteBuilder MapPublicMarketsEndpoints(this IEndpointRouteBuilder endpoints)
     {
@@ -56,6 +57,9 @@ public static class PublicMarketsEndpoints
             DateOnly? slateDate,
             string? bookmakerPreset,
             int? freshnessMinutes,
+            IOptions<SoccerPredictionsOptions> soccerPredictionOptions,
+            IOptions<SoccerGradingOptions> soccerGradingOptions,
+            IOptions<SoccerTopPicksOptions> soccerTopPicksOptions,
             ApplicationDbContext dbContext,
             CancellationToken cancellationToken) =>
         {
@@ -71,6 +75,9 @@ public static class PublicMarketsEndpoints
                 slateDate,
                 bookmakerPreset,
                 freshnessMinutes,
+                soccerPredictionOptions.Value,
+                soccerGradingOptions.Value,
+                soccerTopPicksOptions.Value,
                 dbContext,
                 cancellationToken);
 
@@ -184,6 +191,9 @@ public static class PublicMarketsEndpoints
             DateOnly? slateDate,
             string? bookmakerPreset,
             int? freshnessMinutes,
+            IOptions<SoccerPredictionsOptions> soccerPredictionOptions,
+            IOptions<SoccerGradingOptions> soccerGradingOptions,
+            IOptions<SoccerTopPicksOptions> soccerTopPicksOptions,
             ApplicationDbContext dbContext,
             CancellationToken cancellationToken) =>
         {
@@ -193,6 +203,9 @@ public static class PublicMarketsEndpoints
                 slateDate,
                 bookmakerPreset,
                 freshnessMinutes,
+                soccerPredictionOptions.Value,
+                soccerGradingOptions.Value,
+                soccerTopPicksOptions.Value,
                 dbContext,
                 cancellationToken);
 
@@ -211,6 +224,10 @@ public static class PublicMarketsEndpoints
             ApplicationDbContext dbContext,
             IPredictionProbabilityService probabilityService,
             IOptions<PredictionGenerationOptions> predictionGenerationOptions,
+            ISoccerWorldCupPredictionService soccerPredictionService,
+            IOptions<SoccerPredictionsOptions> soccerPredictionOptions,
+            IOptions<SoccerGradingOptions> soccerGradingOptions,
+            IOptions<SoccerTopPicksOptions> soccerTopPicksOptions,
             CancellationToken cancellationToken) =>
         {
             var marketSport = ResolveMarketSport(sport);
@@ -230,6 +247,10 @@ public static class PublicMarketsEndpoints
                 dbContext,
                 probabilityService,
                 predictionGenerationOptions.Value,
+                soccerPredictionService,
+                soccerPredictionOptions.Value,
+                soccerGradingOptions.Value,
+                soccerTopPicksOptions.Value,
                 cancellationToken));
         })
         .WithName("MarketsTopPicks")
@@ -244,6 +265,10 @@ public static class PublicMarketsEndpoints
             ApplicationDbContext dbContext,
             IPredictionProbabilityService probabilityService,
             IOptions<PredictionGenerationOptions> predictionGenerationOptions,
+            ISoccerWorldCupPredictionService soccerPredictionService,
+            IOptions<SoccerPredictionsOptions> soccerPredictionOptions,
+            IOptions<SoccerGradingOptions> soccerGradingOptions,
+            IOptions<SoccerTopPicksOptions> soccerTopPicksOptions,
             CancellationToken cancellationToken) =>
         {
             return Results.Ok(await BuildMarketTopPicksResponseAsync(
@@ -257,6 +282,10 @@ public static class PublicMarketsEndpoints
                 dbContext,
                 probabilityService,
                 predictionGenerationOptions.Value,
+                soccerPredictionService,
+                soccerPredictionOptions.Value,
+                soccerGradingOptions.Value,
+                soccerTopPicksOptions.Value,
                 cancellationToken));
         })
         .WithName("MlbTopPicks")
@@ -274,6 +303,10 @@ public static class PublicMarketsEndpoints
             ApplicationDbContext dbContext,
             IPredictionProbabilityService probabilityService,
             IOptions<PredictionGenerationOptions> predictionGenerationOptions,
+            ISoccerWorldCupPredictionService soccerPredictionService,
+            IOptions<SoccerPredictionsOptions> soccerPredictionOptions,
+            IOptions<SoccerGradingOptions> soccerGradingOptions,
+            IOptions<SoccerTopPicksOptions> soccerTopPicksOptions,
             CancellationToken cancellationToken) =>
         {
             var marketSport = ResolveMarketSport(sport);
@@ -295,6 +328,10 @@ public static class PublicMarketsEndpoints
                 dbContext,
                 probabilityService,
                 predictionGenerationOptions.Value,
+                soccerPredictionService,
+                soccerPredictionOptions.Value,
+                soccerGradingOptions.Value,
+                soccerTopPicksOptions.Value,
                 cancellationToken));
         })
         .WithName("MarketsLineShopping")
@@ -438,6 +475,10 @@ public static class PublicMarketsEndpoints
             ApplicationDbContext dbContext,
             IPredictionProbabilityService probabilityService,
             IOptions<PredictionGenerationOptions> predictionGenerationOptions,
+            ISoccerWorldCupPredictionService soccerPredictionService,
+            IOptions<SoccerPredictionsOptions> soccerPredictionOptions,
+            IOptions<SoccerGradingOptions> soccerGradingOptions,
+            IOptions<SoccerTopPicksOptions> soccerTopPicksOptions,
             CancellationToken cancellationToken) =>
         {
             return Results.Ok(await BuildMarketLineShoppingResponseAsync(
@@ -453,6 +494,10 @@ public static class PublicMarketsEndpoints
                 dbContext,
                 probabilityService,
                 predictionGenerationOptions.Value,
+                soccerPredictionService,
+                soccerPredictionOptions.Value,
+                soccerGradingOptions.Value,
+                soccerTopPicksOptions.Value,
                 cancellationToken));
         })
         .WithName("MlbLineShopping")
@@ -471,6 +516,9 @@ public static class PublicMarketsEndpoints
         DateOnly? slateDate,
         string? bookmakerPreset,
         int? freshnessMinutes,
+        SoccerPredictionsOptions soccerPredictionOptions,
+        SoccerGradingOptions soccerGradingOptions,
+        SoccerTopPicksOptions soccerTopPicksOptions,
         ApplicationDbContext dbContext,
         CancellationToken cancellationToken)
     {
@@ -482,6 +530,9 @@ public static class PublicMarketsEndpoints
                 slateDate,
                 bookmakerPreset,
                 freshnessMinutes,
+                soccerPredictionOptions,
+                soccerGradingOptions,
+                soccerTopPicksOptions,
                 dbContext,
                 cancellationToken);
         }
@@ -505,7 +556,7 @@ public static class PublicMarketsEndpoints
             supportedSports = SupportedMarketSports,
             requestedSport,
             effectiveSport,
-            limitation = MarketReadLimitation,
+            limitation = BuildMarketReadLimitation(soccerPredictionOptions.Enabled, soccerGradingOptions.Enabled),
             latestSuccessfulRefresh = response.LatestSuccessfulRun,
             response.MinutesSinceLatestSuccessfulRefresh,
             response.IsFresh,
@@ -543,6 +594,9 @@ public static class PublicMarketsEndpoints
         DateOnly? slateDate,
         string? bookmakerPreset,
         int? freshnessMinutes,
+        SoccerPredictionsOptions soccerPredictionOptions,
+        SoccerGradingOptions soccerGradingOptions,
+        SoccerTopPicksOptions soccerTopPicksOptions,
         ApplicationDbContext dbContext,
         CancellationToken cancellationToken)
     {
@@ -610,8 +664,8 @@ public static class PublicMarketsEndpoints
             requestedSport,
             effectiveSport,
             competition = ResolveCompetitionName(effectiveSport),
-            resultGradingSupported = false,
-            limitation = MarketReadLimitation,
+            resultGradingSupported = soccerGradingOptions.Enabled,
+            limitation = BuildMarketReadLimitation(soccerPredictionOptions.Enabled, soccerGradingOptions.Enabled),
             latestSuccessfulRefresh = latestSuccessfulRun is null
                 ? null
                 : new
@@ -641,7 +695,7 @@ public static class PublicMarketsEndpoints
             providerIngestionFailureCount = 0,
             providerIngestionSuccessCount = hasUsableMarketData ? 1 : 0,
             providerRejectedKeyDetected = false,
-            usabilityWarning = IsSoccerSport(effectiveSport) ? SoccerHistoryUnavailableMessage : null,
+            usabilityWarning = IsSoccerSport(effectiveSport) ? BuildSoccerUsabilityWarning(soccerPredictionOptions.Enabled, soccerGradingOptions.Enabled) : null,
             diagnostics = new
             {
                 supportedSports = SupportedMarketSports,
@@ -654,7 +708,9 @@ public static class PublicMarketsEndpoints
                 soccerProviderContextBookmakers = soccerProviderContextCounts?.BookmakerCount ?? 0,
                 soccerPublicReadableContextRows = soccerProviderContextCounts?.PlatformRowCount ?? 0,
                 soccerLineShoppingSnapshotsAvailable = lineShoppingSnapshotCount,
-                soccerResultGradingSupported = false
+                soccerPredictionsEnabled = soccerPredictionOptions.Enabled,
+                soccerTopPicksEnabled = soccerTopPicksOptions.Enabled,
+                soccerResultGradingSupported = soccerGradingOptions.Enabled
             },
             freshnessMinutesThreshold = thresholdMinutes
         };
@@ -931,18 +987,94 @@ public static class PublicMarketsEndpoints
         ApplicationDbContext dbContext,
         IPredictionProbabilityService probabilityService,
         PredictionGenerationOptions predictionGenerationOptions,
+        ISoccerWorldCupPredictionService soccerPredictionService,
+        SoccerPredictionsOptions soccerPredictionOptions,
+        SoccerGradingOptions soccerGradingOptions,
+        SoccerTopPicksOptions soccerTopPicksOptions,
         CancellationToken cancellationToken)
     {
         if (IsSoccerSport(effectiveSport))
         {
-            return await BuildGenericMarketTopPicksResponseAsync(
-                requestedSport,
-                effectiveSport,
-                runId,
+            if (!soccerTopPicksOptions.Enabled)
+            {
+                return await BuildGenericMarketTopPicksResponseAsync(
+                    requestedSport,
+                    effectiveSport,
+                    runId,
+                    take,
+                    providerCategory,
+                    soccerPredictionOptions,
+                    soccerGradingOptions,
+                    soccerTopPicksOptions,
+                    dbContext,
+                    cancellationToken);
+            }
+
+            var soccerLineShopping = await TheOddsApiDebugEndpoints.BuildSoccerWorldCupLineShoppingContextResponseAsync(
                 take,
+                includeBookmakerPrices: false,
+                freshnessMinutes,
                 providerCategory,
+                soccerPredictionService,
+                soccerPredictionOptions,
+                soccerGradingOptions,
                 dbContext,
                 cancellationToken);
+            var soccerTopPickCandidates = soccerLineShopping.ComparisonGroups
+                .Select(group => JsonSerializer.SerializeToNode(group) as JsonObject)
+                .Where(group => group is not null
+                    && group.TryGetPropertyValue("modelProbabilityAvailable", out var available)
+                    && available?.GetValue<bool>() == true
+                    && group.TryGetPropertyValue("selectedSideProbability", out var probability)
+                    && probability is not null
+                    && probability.GetValueKind() == JsonValueKind.Number
+                    && probability.GetValue<decimal>() >= soccerPredictionOptions.MinimumTopPickHitProbability
+                    && group.TryGetPropertyValue("historicalSampleSize", out var sampleSize)
+                    && sampleSize is not null
+                    && sampleSize.GetValueKind() == JsonValueKind.Number
+                    && sampleSize.GetValue<int>() >= soccerPredictionOptions.TopPickMinimumSampleSize)
+                .Select(group => group!)
+                .ToArray();
+            var staleOrExpiredSoccerCandidates = soccerTopPickCandidates.Count(group => !IsActiveSoccerTopPickGroup(group));
+            var soccerTopPicks = soccerTopPickCandidates
+                .Where(IsActiveSoccerTopPickGroup)
+                .Take(Math.Clamp(take ?? 25, 1, 250))
+                .ToArray();
+            var soccerTopPicksFallbackReason = soccerTopPicks.Length == 0
+                ? soccerTopPickCandidates.Length > 0 && staleOrExpiredSoccerCandidates == soccerTopPickCandidates.Length
+                    ? "Soccer Top Picks found model-eligible rows, but all were stale, expired, or already started."
+                    : "No Soccer / World Cup rows currently meet Top Picks probability, sample, and lifecycle gates."
+                : null;
+
+            return new
+            {
+                generatedAtUtc = soccerLineShopping.GeneratedAtUtc,
+                callsExternalApis = false,
+                readOnly = true,
+                supportedSports = SupportedMarketSports,
+                supportedCompetitions = BuildSupportedCompetitionDiagnostics(soccerGradingOptions.Enabled),
+                requestedSport,
+                effectiveSport,
+                competition = ResolveCompetitionName(effectiveSport),
+                resultGradingSupported = soccerGradingOptions.Enabled,
+                publicSoccerGradingEnabled = soccerGradingOptions.Enabled,
+                limitation = BuildMarketReadLimitation(soccerPredictionOptions.Enabled, soccerGradingOptions.Enabled),
+                snapshotBacked = false,
+                refreshRunId = soccerLineShopping.RefreshRunId,
+                fallbackReason = soccerTopPicksFallbackReason,
+                soccerLineShopping.Run,
+                summary = new
+                {
+                    activeCandidateCount = soccerTopPicks.Length,
+                    actionableCandidateCount = 0,
+                    returnedTopPicks = soccerTopPicks.Length,
+                    modelEligibleBeforeLifecycleCount = soccerTopPickCandidates.Length,
+                    staleOrExpiredModelEligibleCount = staleOrExpiredSoccerCandidates,
+                    totalActiveComparisonGroups = soccerLineShopping.ComparisonGroups.Count
+                },
+                soccerLineShopping.StrategyClassificationSummary,
+                topPicks = soccerTopPicks
+            };
         }
 
         var freshness = await TheOddsApiDebugEndpoints.BuildMlbRefreshFreshnessResponseAsync(
@@ -969,7 +1101,7 @@ public static class PublicMarketsEndpoints
             supportedSports = SupportedMarketSports,
             requestedSport,
             effectiveSport,
-            limitation = MarketReadLimitation,
+            limitation = BuildMarketReadLimitation(),
             freshness = ToPublicFreshnessSummary(freshness),
             topPicks.SnapshotBacked,
             refreshRunId = topPicks.RefreshRunId,
@@ -987,6 +1119,9 @@ public static class PublicMarketsEndpoints
         Guid? runId,
         int? take,
         string? providerCategory,
+        SoccerPredictionsOptions soccerPredictionOptions,
+        SoccerGradingOptions soccerGradingOptions,
+        SoccerTopPicksOptions soccerTopPicksOptions,
         ApplicationDbContext dbContext,
         CancellationToken cancellationToken)
     {
@@ -1027,9 +1162,9 @@ public static class PublicMarketsEndpoints
             requestedSport,
             effectiveSport,
             competition = ResolveCompetitionName(effectiveSport),
-            resultGradingSupported = false,
-            limitation = MarketReadLimitation,
-            freshness = await BuildGenericMarketFreshnessResponseAsync(requestedSport, effectiveSport, null, null, null, dbContext, cancellationToken),
+            resultGradingSupported = IsSoccerSport(effectiveSport) ? soccerGradingOptions.Enabled : false,
+            limitation = BuildMarketReadLimitation(soccerPredictionOptions.Enabled, soccerGradingOptions.Enabled),
+            freshness = await BuildGenericMarketFreshnessResponseAsync(requestedSport, effectiveSport, null, null, null, soccerPredictionOptions, soccerGradingOptions, soccerTopPicksOptions, dbContext, cancellationToken),
             snapshotBacked = rows.Length > 0,
             refreshRunId = latestRunId,
             fallbackReason = rows.Length == 0 ? $"No persisted {ResolveSportDisplayName(effectiveSport)} top-pick snapshots are available yet." : null,
@@ -1068,6 +1203,10 @@ public static class PublicMarketsEndpoints
         ApplicationDbContext dbContext,
         IPredictionProbabilityService probabilityService,
         PredictionGenerationOptions predictionGenerationOptions,
+        ISoccerWorldCupPredictionService soccerPredictionService,
+        SoccerPredictionsOptions soccerPredictionOptions,
+        SoccerGradingOptions soccerGradingOptions,
+        SoccerTopPicksOptions soccerTopPicksOptions,
         CancellationToken cancellationToken)
     {
         if (IsSoccerSport(effectiveSport))
@@ -1086,6 +1225,9 @@ public static class PublicMarketsEndpoints
                     take,
                     topOnly,
                     providerCategory,
+                    soccerPredictionOptions,
+                    soccerGradingOptions,
+                    soccerTopPicksOptions,
                     dbContext,
                     cancellationToken);
             }
@@ -1095,6 +1237,9 @@ public static class PublicMarketsEndpoints
                 includeBookmakerPrices ?? false,
                 freshnessMinutes,
                 providerCategory,
+                soccerPredictionService,
+                soccerPredictionOptions,
+                soccerGradingOptions,
                 dbContext,
                 cancellationToken);
 
@@ -1104,15 +1249,17 @@ public static class PublicMarketsEndpoints
                 callsExternalApis = false,
                 readOnly = true,
                 supportedSports = SupportedMarketSports,
-                supportedCompetitions = BuildSupportedCompetitionDiagnostics(),
+                supportedCompetitions = BuildSupportedCompetitionDiagnostics(soccerGradingOptions.Enabled),
                 requestedSport,
                 effectiveSport,
                 competition = ResolveCompetitionName(effectiveSport),
-                resultGradingSupported = false,
-                resultGradingUnavailableReason = SoccerHistoryUnavailableMessage,
-                publicSoccerGradingEnabled = false,
-                limitation = MarketReadLimitation,
-                freshness = await BuildGenericMarketFreshnessResponseAsync(requestedSport, effectiveSport, null, null, freshnessMinutes, dbContext, cancellationToken),
+                resultGradingSupported = soccerGradingOptions.Enabled,
+                resultGradingUnavailableReason = soccerGradingOptions.Enabled ? null : SoccerUnavailableMessage,
+                publicSoccerGradingEnabled = soccerGradingOptions.Enabled,
+                soccerPredictionsEnabled = soccerPredictionOptions.Enabled,
+                soccerTopPicksEnabled = soccerTopPicksOptions.Enabled,
+                limitation = BuildMarketReadLimitation(soccerPredictionOptions.Enabled, soccerGradingOptions.Enabled),
+                freshness = await BuildGenericMarketFreshnessResponseAsync(requestedSport, effectiveSport, null, null, freshnessMinutes, soccerPredictionOptions, soccerGradingOptions, soccerTopPicksOptions, dbContext, cancellationToken),
                 soccerLineShopping.SnapshotBacked,
                 refreshRunId = soccerLineShopping.RefreshRunId,
                 soccerLineShopping.FallbackReason,
@@ -1151,7 +1298,7 @@ public static class PublicMarketsEndpoints
             supportedSports = SupportedMarketSports,
             requestedSport,
             effectiveSport,
-            limitation = MarketReadLimitation,
+            limitation = BuildMarketReadLimitation(),
             freshness = ToPublicFreshnessSummary(freshness),
             lineShopping.SnapshotBacked,
             refreshRunId = lineShopping.RefreshRunId,
@@ -1170,6 +1317,9 @@ public static class PublicMarketsEndpoints
         int? take,
         bool? topOnly,
         string? providerCategory,
+        SoccerPredictionsOptions soccerPredictionOptions,
+        SoccerGradingOptions soccerGradingOptions,
+        SoccerTopPicksOptions soccerTopPicksOptions,
         ApplicationDbContext dbContext,
         CancellationToken cancellationToken)
     {
@@ -1215,9 +1365,9 @@ public static class PublicMarketsEndpoints
             requestedSport,
             effectiveSport,
             competition = ResolveCompetitionName(effectiveSport),
-            resultGradingSupported = false,
-            limitation = MarketReadLimitation,
-            freshness = await BuildGenericMarketFreshnessResponseAsync(requestedSport, effectiveSport, null, null, null, dbContext, cancellationToken),
+            resultGradingSupported = IsSoccerSport(effectiveSport) ? soccerGradingOptions.Enabled : false,
+            limitation = BuildMarketReadLimitation(soccerPredictionOptions.Enabled, soccerGradingOptions.Enabled),
+            freshness = await BuildGenericMarketFreshnessResponseAsync(requestedSport, effectiveSport, null, null, null, soccerPredictionOptions, soccerGradingOptions, soccerTopPicksOptions, dbContext, cancellationToken),
             snapshotBacked = rows.Length > 0,
             refreshRunId = latestRunId,
             fallbackReason = rows.Length == 0 ? $"No persisted {ResolveSportDisplayName(effectiveSport)} line-shopping snapshots are available yet." : null,
@@ -1263,7 +1413,7 @@ public static class PublicMarketsEndpoints
                     requestedSport,
                     effectiveSport = (string?)null,
                     supportedCompetitions = BuildSupportedCompetitionDiagnostics(),
-                    limitation = MarketReadLimitation,
+                    limitation = BuildMarketReadLimitation(),
                     error = $"Sport '{requestedSport}' is not implemented for production market reads yet."
                 }));
         }
@@ -1298,12 +1448,42 @@ public static class PublicMarketsEndpoints
         return IsSoccerSport(sport) ? SoccerCompetitionName : string.Equals(sport, "MLB", StringComparison.OrdinalIgnoreCase) ? "MLB" : null;
     }
 
-    private static object[] BuildSupportedCompetitionDiagnostics()
+    private static string BuildMarketReadLimitation(bool soccerPredictionsEnabled = false, bool soccerGradingEnabled = false)
+    {
+        return soccerPredictionsEnabled && soccerGradingEnabled
+            ? "MLB result grading is supported. Soccer predictions and grading are enabled for supported World Cup prop types only. Soccer / World Cup provider-line reads and player history context are supported from persisted data. Soccer Entry Builder remains disabled."
+            : "MLB result grading is supported. Soccer / World Cup provider-line reads and player history context are supported from persisted data; soccer grading, model hit chance, and performance grading are not available yet.";
+    }
+
+    private static string BuildSoccerUsabilityWarning(bool soccerPredictionsEnabled, bool soccerGradingEnabled)
+    {
+        return soccerPredictionsEnabled && soccerGradingEnabled
+            ? SoccerEnabledMessage
+            : SoccerUnavailableMessage;
+    }
+
+    private static bool IsActiveSoccerTopPickGroup(JsonObject group)
+    {
+        var lifecycleStatus = group.TryGetPropertyValue("lifecycleStatus", out var lifecycleNode)
+            && lifecycleNode?.GetValueKind() == JsonValueKind.String
+            ? lifecycleNode.GetValue<string>()
+            : null;
+        var isStale = group.TryGetPropertyValue("isStale", out var staleNode)
+            && staleNode?.GetValueKind() == JsonValueKind.True;
+        var isExpired = group.TryGetPropertyValue("isExpired", out var expiredNode)
+            && expiredNode?.GetValueKind() == JsonValueKind.True;
+
+        return string.Equals(lifecycleStatus, "Active", StringComparison.OrdinalIgnoreCase)
+            && !isStale
+            && !isExpired;
+    }
+
+    private static object[] BuildSupportedCompetitionDiagnostics(bool soccerResultGradingSupported = false)
     {
         return
         [
             new { sport = "MLB", competition = "MLB", resultGradingSupported = true },
-            new { sport = "SOCCER", competition = SoccerCompetitionName, resultGradingSupported = false }
+            new { sport = "SOCCER", competition = SoccerCompetitionName, resultGradingSupported = soccerResultGradingSupported }
         ];
     }
 
@@ -1365,7 +1545,7 @@ public static class PublicMarketsEndpoints
             details["entryRuleWarning"] = "Soccer World Cup sportsbook context is research-only and not Entry Builder playable.";
             details["entryUnavailableReason"] = "Soccer World Cup sportsbook context is research-only and not Entry Builder playable.";
             details["resultGradingSupported"] = false;
-            details["resultGradingUnavailableReason"] = SoccerHistoryUnavailableMessage;
+            details["resultGradingUnavailableReason"] = SoccerUnavailableMessage;
             details["publicSoccerGradingEnabled"] = false;
             details["showExpectedValue"] = false;
             details["displayExpectedValue"] = null;
@@ -1373,7 +1553,7 @@ public static class PublicMarketsEndpoints
             details["selectedSideProbability"] = null;
             details["modelProbabilityAvailable"] = false;
             details["probabilitySource"] = null;
-            details["hitChanceUnavailableReason"] = SoccerHistoryUnavailableMessage;
+            details["hitChanceUnavailableReason"] = SoccerUnavailableMessage;
         }
 
         using var document = JsonSerializer.SerializeToDocument(details);
@@ -2004,7 +2184,7 @@ public static class PublicMarketsEndpoints
             sport = effectiveSport,
             competition = ResolveCompetitionName(effectiveSport),
             resultGradingSupported = false,
-            unavailableReason = SoccerHistoryUnavailableMessage,
+            unavailableReason = SoccerUnavailableMessage,
             summary = new
             {
                 gradedPicks = 0,
@@ -2024,7 +2204,7 @@ public static class PublicMarketsEndpoints
             },
             diagnostics = new
             {
-                matchingStrategy = SoccerHistoryUnavailableMessage,
+                matchingStrategy = SoccerUnavailableMessage,
                 gradingMode,
                 resultGradingSupported = false,
                 soccerResultGradingSupported = false
@@ -2054,7 +2234,7 @@ public static class PublicMarketsEndpoints
                 sport = effectiveSport,
                 competition = ResolveCompetitionName(effectiveSport),
                 resultGradingSupported = false,
-                unavailableReason = SoccerHistoryUnavailableMessage,
+                unavailableReason = SoccerUnavailableMessage,
                 date = requestedDate,
                 summary = new
                 {
@@ -2074,7 +2254,7 @@ public static class PublicMarketsEndpoints
                         reasonCounts = new Dictionary<string, int>(),
                         examples = Array.Empty<object>(),
                         resultGradingSupported = false,
-                        message = SoccerHistoryUnavailableMessage
+                        message = SoccerUnavailableMessage
                     }
                     : null
             };
@@ -4341,7 +4521,7 @@ public static class PublicMarketsEndpoints
         if (!string.Equals(requestedSport, "MLB", StringComparison.OrdinalIgnoreCase))
         {
             var reason = IsSoccerSport(requestedSport)
-                ? SoccerHistoryUnavailableMessage
+                ? SoccerUnavailableMessage
                 : $"Prop history currently supports MLB only. Requested sport: {requestedSport}.";
             return EmptyPropHistory(requestedSport, playerId, playerName, normalizedPropType ?? propType, displayPropType, normalizedSide, line, provider, season, reason);
         }

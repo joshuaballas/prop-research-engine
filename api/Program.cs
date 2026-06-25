@@ -46,6 +46,9 @@ builder.Services.Configure<TheOddsRefreshPlannerOptions>(builder.Configuration.G
 builder.Services.Configure<ProviderLineLifecycleOptions>(builder.Configuration.GetSection(ProviderLineLifecycleOptions.SectionName));
 builder.Services.Configure<MlbResultImportWorkerOptions>(builder.Configuration.GetSection(MlbResultImportWorkerOptions.SectionName));
 builder.Services.Configure<SoccerIdentityResolutionOptions>(builder.Configuration.GetSection(SoccerIdentityResolutionOptions.SectionName));
+builder.Services.Configure<SoccerPredictionsOptions>(builder.Configuration.GetSection(SoccerPredictionsOptions.SectionName));
+builder.Services.Configure<SoccerGradingOptions>(builder.Configuration.GetSection(SoccerGradingOptions.SectionName));
+builder.Services.Configure<SoccerTopPicksOptions>(builder.Configuration.GetSection(SoccerTopPicksOptions.SectionName));
 builder.Services.Configure<PredictionGenerationOptions>(builder.Configuration.GetSection(PredictionGenerationOptions.LegacySectionName));
 builder.Services.Configure<PredictionGenerationOptions>(builder.Configuration.GetSection(PredictionGenerationOptions.SectionName));
 builder.Services.AddHttpClient<IUnderdogAdapter, UnderdogAdapter>(client =>
@@ -91,6 +94,7 @@ builder.Services.AddScoped<IPlayerResolutionService, PlayerResolutionService>();
 builder.Services.AddScoped<IApplicationErrorLogger, ApplicationErrorLogger>();
 builder.Services.AddScoped<IProviderLineLifecycleService, ProviderLineLifecycleService>();
 builder.Services.AddScoped<ISoccerPlayerIdentityResolutionService, SoccerPlayerIdentityResolutionService>();
+builder.Services.AddScoped<ISoccerWorldCupPredictionService, SoccerWorldCupPredictionService>();
 builder.Services.AddScoped<ITheOddsMlbRefreshService, TheOddsApiDebugEndpoints.TheOddsMlbRefreshService>();
 builder.Services.AddSingleton<IPlayerResolutionStats, PlayerResolutionStats>();
 builder.Services.AddSingleton<IPlayerMergeExecutionState, PlayerMergeExecutionState>();

@@ -2899,6 +2899,160 @@ public static class ResultsDebugEndpoints
         .WithName("ApiSportsSoccerVisibleIdentityReconcileDebug")
         .WithSummary("Dry-run-first automatic Soccer visible player identity reconciliation.");
 
+        endpoints.MapGet("/api/debug/soccer/predictions/readiness", async (
+            string? competition,
+            int? take,
+            ISoccerWorldCupPredictionService predictionService,
+            IOptions<SoccerPredictionsOptions> predictionOptions,
+            IOptions<SoccerGradingOptions> gradingOptions,
+            IOptions<SoccerTopPicksOptions> topPicksOptions,
+            ApplicationDbContext dbContext,
+            CancellationToken cancellationToken) =>
+        {
+            var requestedCompetition = string.IsNullOrWhiteSpace(competition) ? "World Cup" : competition;
+            var visibleRows = await LoadVisibleSoccerWorldCupPlatformRowsAsync(dbContext, requestedCompetition, null, Math.Clamp(take ?? 500, 1, 500), cancellationToken);
+            var batch = await predictionService.BuildPredictionsAsync(visibleRows.Select(ToSoccerPredictionInput).ToArray(), requireEnabled: false, cancellationToken);
+
+            return Results.Ok(new
+            {
+                generatedAtUtc = DateTimeOffset.UtcNow,
+                callsExternalApis = false,
+                readOnly = true,
+                writesRows = false,
+                publicSoccerGradingEnabled = gradingOptions.Value.Enabled,
+                soccerPredictionsEnabled = predictionOptions.Value.Enabled,
+                soccerTopPicksEnabled = topPicksOptions.Value.Enabled,
+                competition = requestedCompetition,
+                batch.InputsEvaluated,
+                batch.SupportedPropInputs,
+                batch.RowsWithApprovedLink,
+                batch.RowsWithHistory,
+                batch.RowsWithModelProbability,
+                batch.RowsGradeable,
+                batch.TopPickEligibleRows,
+                batch.BlockedReasons
+            });
+        })
+        .WithName("SoccerPredictionReadinessDebug")
+        .WithSummary("Read-only Soccer / World Cup prediction readiness from persisted provider context and API-Sports history.");
+
+        endpoints.MapGet("/api/debug/soccer/predictions/run-summary", async (
+            string? competition,
+            int? take,
+            ISoccerWorldCupPredictionService predictionService,
+            ApplicationDbContext dbContext,
+            CancellationToken cancellationToken) =>
+        {
+            var requestedCompetition = string.IsNullOrWhiteSpace(competition) ? "World Cup" : competition;
+            var visibleRows = await LoadVisibleSoccerWorldCupPlatformRowsAsync(dbContext, requestedCompetition, null, Math.Clamp(take ?? 500, 1, 500), cancellationToken);
+            var batch = await predictionService.BuildPredictionsAsync(visibleRows.Select(ToSoccerPredictionInput).ToArray(), requireEnabled: false, cancellationToken);
+
+            return Results.Ok(new
+            {
+                generatedAtUtc = DateTimeOffset.UtcNow,
+                callsExternalApis = false,
+                readOnly = true,
+                writesRows = false,
+                modelName = "SoccerHistoricalEmpiricalHitRate",
+                supportedPropTypes = new[] { "Goals", "Assists", "Shots", "Shots On Target" },
+                summary = new
+                {
+                    batch.InputsEvaluated,
+                    batch.RowsWithModelProbability,
+                    batch.TopPickEligibleRows,
+                    batch.BlockedReasons
+                },
+                samples = batch.PredictionsByKey.Values
+                    .Where(row => row.ModelProbabilityAvailable)
+                    .Take(25)
+                    .Select(row => new
+                    {
+                        row.PlayerName,
+                        row.PropType,
+                        row.Line,
+                        row.SelectedSide,
+                        row.SelectedSideProbability,
+                        row.ModelProbabilityOver,
+                        row.ModelProbabilityUnder,
+                        row.ModelProbabilityPush,
+                        row.ModelProjection,
+                        row.HistoricalSampleSize,
+                        row.SampleWarning,
+                        row.ProbabilityMethod
+                    })
+                    .ToArray()
+            });
+        })
+        .WithName("SoccerPredictionRunSummaryDebug")
+        .WithSummary("Read-only Soccer / World Cup prediction run summary from persisted data.");
+
+        endpoints.MapGet("/api/debug/soccer/grading/coverage", async (
+            string? competition,
+            int? take,
+            ISoccerWorldCupPredictionService predictionService,
+            IOptions<SoccerGradingOptions> gradingOptions,
+            ApplicationDbContext dbContext,
+            CancellationToken cancellationToken) =>
+        {
+            var requestedCompetition = string.IsNullOrWhiteSpace(competition) ? "World Cup" : competition;
+            var visibleRows = await LoadVisibleSoccerWorldCupPlatformRowsAsync(dbContext, requestedCompetition, null, Math.Clamp(take ?? 500, 1, 500), cancellationToken);
+            var coverage = await predictionService.BuildGradingCoverageAsync(visibleRows.Select(ToSoccerPredictionInput).ToArray(), requireEnabled: false, cancellationToken);
+
+            return Results.Ok(new
+            {
+                generatedAtUtc = DateTimeOffset.UtcNow,
+                callsExternalApis = false,
+                readOnly = true,
+                writesRows = false,
+                publicSoccerGradingEnabled = gradingOptions.Value.Enabled,
+                coverage
+            });
+        })
+        .WithName("SoccerGradingCoverageDebug")
+        .WithSummary("Read-only Soccer / World Cup grading coverage for supported prop types.");
+
+        endpoints.MapGet("/api/debug/soccer/public-row-eligibility", async (
+            string? competition,
+            int? take,
+            ISoccerWorldCupPredictionService predictionService,
+            IOptions<SoccerPredictionsOptions> predictionOptions,
+            IOptions<SoccerGradingOptions> gradingOptions,
+            IOptions<SoccerTopPicksOptions> topPicksOptions,
+            ApplicationDbContext dbContext,
+            CancellationToken cancellationToken) =>
+        {
+            var requestedCompetition = string.IsNullOrWhiteSpace(competition) ? "World Cup" : competition;
+            var visibleRows = await LoadVisibleSoccerWorldCupPlatformRowsAsync(dbContext, requestedCompetition, null, Math.Clamp(take ?? 500, 1, 500), cancellationToken);
+            var batch = await predictionService.BuildPredictionsAsync(visibleRows.Select(ToSoccerPredictionInput).ToArray(), requireEnabled: false, cancellationToken);
+
+            return Results.Ok(new
+            {
+                generatedAtUtc = DateTimeOffset.UtcNow,
+                callsExternalApis = false,
+                readOnly = true,
+                writesRows = false,
+                flags = new
+                {
+                    soccerPredictionsEnabled = predictionOptions.Value.Enabled,
+                    publicSoccerGradingEnabled = gradingOptions.Value.Enabled,
+                    soccerTopPicksEnabled = topPicksOptions.Value.Enabled,
+                    soccerEntryBuilderEnabled = false
+                },
+                summary = new
+                {
+                    totalRows = visibleRows.Count,
+                    rowsWithHistory = batch.RowsWithHistory,
+                    rowsWithModelProbability = batch.RowsWithModelProbability,
+                    rowsGradeable = batch.RowsGradeable,
+                    rowsTopPickEligible = batch.TopPickEligibleRows,
+                    rowsBlocked = Math.Max(0, visibleRows.Count - batch.RowsWithModelProbability),
+                    blockedReasons = batch.BlockedReasons
+                }
+            });
+        })
+        .WithName("SoccerPublicRowEligibilityDebug")
+        .WithSummary("Read-only Soccer / World Cup public row eligibility summary.");
+
         endpoints.MapGet("/api/debug/soccer/player-history/readiness", async (
             ApplicationDbContext dbContext,
             CancellationToken cancellationToken) =>
@@ -6283,6 +6437,24 @@ public static class ResultsDebugEndpoints
             .ThenBy(row => row.Bookmaker)
             .Take(take)
             .ToArray();
+    }
+
+    private static SoccerWorldCupPredictionInput ToSoccerPredictionInput(VisibleSoccerWorldCupPlatformRow row)
+    {
+        return new SoccerWorldCupPredictionInput(
+            row.LocalPlayerId,
+            row.PropTypeId,
+            row.PlayerName,
+            row.NormalizedPropType,
+            row.MarketKey,
+            row.Line,
+            row.Side is "Over" or "Both",
+            row.Side is "Under" or "Both",
+            DateOnly.FromDateTime(row.EventStartTimeUtc.UtcDateTime.Date),
+            PriceOver: null,
+            PriceOverDecimal: null,
+            PriceUnder: null,
+            PriceUnderDecimal: null);
     }
 
     private static async Task<IReadOnlyList<VisibleSoccerPlayerHistoryDiagnosticRow>> BuildVisibleSoccerHistoryMissingDiagnosticsAsync(

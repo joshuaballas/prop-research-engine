@@ -1,6 +1,6 @@
 # Soccer / World Cup Provider-Line Support
 
-Phase 1 supports persisted provider-line reads for Soccer / World Cup without adding soccer result grading.
+Phase 1 supports persisted provider-line reads for Soccer / World Cup. The next guarded backend step can compute read-only model probabilities and grading coverage for the safe stat subset, but Entry Builder remains disabled for Soccer.
 
 ## Terminology
 
@@ -24,10 +24,39 @@ Phase 1 public app behavior is intentionally narrow:
 - Line Shopping may surface persisted World Cup sportsbook context with `sport=SOCCER&competition=World Cup`.
 - If Soccer line-shopping snapshots do not exist because no Soccer prediction-backed groups were generated, public Line Shopping builds read-only research groups directly from persisted The Odds `platform_props` context rows.
 - Public Line Shopping fallback rows include compact `playerHistorySummary` when an approved `api-sports-football` bridge link resolves the platform player to persisted API-Sports `prop_results`. Unlinked rows return an unavailable summary.
-- Top Picks remains DFS-scoped in the customer app and must not present Soccer sportsbook context as model recommendations.
-- Soccer rows are always returned as research-only sportsbook context: `providerCategory=Sportsbook`, `entryActionableForUser=false`, `sportsbookContextResearchOnly=true`, `resultGradingSupported=false`, and `publicSoccerGradingEnabled=false`.
-- Soccer rows include unavailable reasons for grading and entry actionability. Model hit chance and EV should render as unavailable when prediction inputs are not present; do not show fake zeros.
+- Top Picks remains disabled unless `SoccerTopPicks:Enabled=true`.
+- Soccer rows remain non-entry-actionable sportsbook context: `providerCategory=Sportsbook` and `entryActionableForUser=false`.
+- With `SoccerPredictions:Enabled=false`, Soccer rows keep null model hit chance fields and unavailable reasons.
+- With `SoccerPredictions:Enabled=true`, the backend may expose model probabilities for Goals, Assists, Shots, and Shots On Target only, using persisted approved API-Sports links and local `prop_results`.
+- With `SoccerGrading:Enabled=false`, rows still return `resultGradingSupported=false`; grading coverage remains diagnostic/read-only.
+- EV is shown only when a sportsbook row has real odds plus model probability. No DFS-style or fake EV is generated.
 - Entry Builder must not treat Soccer sportsbook context as playable DFS legs.
+
+## Prediction And Grading Guardrails
+
+Config flags:
+
+- `SoccerPredictions:Enabled`, default `false` in base config and `true` in Development.
+- `SoccerGrading:Enabled`, default `false` in base config and `true` in Development.
+- `SoccerTopPicks:Enabled`, default `false` in base config and `true` in Development.
+
+Supported prediction/grading stats:
+
+- Goals
+- Assists
+- Shots
+- Shots On Target
+
+Blocked stats include Cards, Tackles, Saves, Goals Allowed, Goal + Assist, fantasy/combo/special props, and any unknown Soccer market key.
+
+The current model is intentionally simple and local-only: empirical over/under hit rate versus the provider line, recent last-5/last-10 averages, full-sample average, and low-sample warnings. It reads persisted The Odds context rows, approved `api-sports-football` provider links, and persisted API-Sports `prop_results`; it does not call providers and does not write prediction rows from public endpoints.
+
+Debug diagnostics:
+
+- `GET /api/debug/soccer/predictions/readiness`
+- `GET /api/debug/soccer/predictions/run-summary`
+- `GET /api/debug/soccer/grading/coverage`
+- `GET /api/debug/soccer/public-row-eligibility`
 
 ## Manual Refresh Workflow
 

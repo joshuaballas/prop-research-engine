@@ -3,6 +3,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using Microsoft.EntityFrameworkCore;
 using SportsBetting.Api.Data;
+using SportsBetting.Api.Integrations.Results.Soccer;
 using SportsBetting.Api.Models;
 using SportsBetting.Api.Predictions;
 
@@ -390,6 +391,9 @@ public static partial class TheOddsApiDebugEndpoints
         bool includeBookmakerPrices,
         int? freshnessMinutes,
         string? providerCategory,
+        ISoccerWorldCupPredictionService soccerPredictionService,
+        SoccerPredictionsOptions soccerPredictionOptions,
+        SoccerGradingOptions soccerGradingOptions,
         ApplicationDbContext dbContext,
         CancellationToken cancellationToken)
     {
@@ -407,6 +411,11 @@ public static partial class TheOddsApiDebugEndpoints
             providerCategory,
             cancellationToken);
         var rows = BuildTheOddsResearchOnlyLineShoppingRows(platformProps);
+        var predictionBatch = await soccerPredictionService.BuildPredictionsAsync(
+            rows.Select(ToSoccerWorldCupPredictionInput).ToArray(),
+            requireEnabled: true,
+            cancellationToken);
+        rows = ApplySoccerWorldCupPredictions(rows, predictionBatch);
         var groups = BuildTheOddsLineShoppingGroups(rows, generatedAtUtc, lifecycleFreshnessMinutes)
             .OrderByDescending(group => group.EventStartTime ?? group.LastObservedAt)
             .ThenBy(group => group.Player)
@@ -422,6 +431,8 @@ public static partial class TheOddsApiDebugEndpoints
             .Select(group => ToSoccerWorldCupResearchOnlyResponseGroup(
                 group,
                 includeBookmakerPrices,
+                soccerPredictionOptions.Enabled,
+                soccerGradingOptions.Enabled,
                 playerHistoryEnrichment.SummariesByPlayerId.GetValueOrDefault(group.PlayerId)))
             .ToArray();
         var strategyClassificationSummary = BuildTheOddsStrategyClassificationSummary(groups);
@@ -443,12 +454,16 @@ public static partial class TheOddsApiDebugEndpoints
                 sport = "SOCCER",
                 competition = "World Cup",
                 providerCategory = "Sportsbook",
-                publicSoccerGradingEnabled = false,
-                soccerPredictionsEnabled = false,
+                publicSoccerGradingEnabled = soccerGradingOptions.Enabled,
+                soccerPredictionsEnabled = soccerPredictionOptions.Enabled,
                 entryActionableForUser = false,
                 snapshotBacked = false,
                 providerContextRowCount = platformProps.Count,
                 researchOnlyComparisonGroupCount = groups.Length,
+                rowsWithModelProbability = predictionBatch.RowsWithModelProbability,
+                rowsGradeable = predictionBatch.RowsGradeable,
+                topPickEligibleRows = predictionBatch.TopPickEligibleRows,
+                predictionBlockedReasons = predictionBatch.BlockedReasons,
                 rowsWithPlayerHistory = playerHistoryEnrichment.RowsWithPlayerHistory,
                 rowsWithoutPlayerHistory = playerHistoryEnrichment.RowsWithoutPlayerHistory,
                 uniqueLinkedProviderPlayers = playerHistoryEnrichment.UniqueLinkedProviderPlayers,
@@ -472,10 +487,10 @@ public static partial class TheOddsApiDebugEndpoints
                 totalBookmakers = rows.Select(row => row.Bookmaker).Distinct(StringComparer.OrdinalIgnoreCase).Count(),
                 groupsWithMultipleBookmakers = groups.Count(group => group.BookmakerPrices.Count > 1),
                 groupsWithSingleBookmaker = groups.Count(group => group.BookmakerPrices.Count == 1),
-                eligibleComparisonGroups = 0,
+                eligibleComparisonGroups = groups.Count(group => group.BestProbability.HasValue),
                 returnedComparisonGroups = comparisonGroups.Length,
                 actionableCandidateCount = 0,
-                sportsbookContextCandidateCount = 0,
+                sportsbookContextCandidateCount = groups.Count(group => group.BestProbability.HasValue),
                 dfsCandidateCount = 0,
                 providerContextRowCount = platformProps.Count,
                 providerCategoryBreakdown = groups
@@ -1573,6 +1588,64 @@ public static partial class TheOddsApiDebugEndpoints
             .ToList();
     }
 
+    private static List<TheOddsLineShoppingSourceRow> ApplySoccerWorldCupPredictions(
+        IReadOnlyCollection<TheOddsLineShoppingSourceRow> rows,
+        SoccerWorldCupPredictionBatch predictionBatch)
+    {
+        if (!predictionBatch.Enabled || predictionBatch.PredictionsByKey.Count == 0)
+        {
+            return rows.ToList();
+        }
+
+        return rows
+            .Select(row =>
+            {
+                var key = new SoccerWorldCupPredictionKey(row.PlayerId, row.PropTypeId, row.Line);
+                if (!predictionBatch.PredictionsByKey.TryGetValue(key, out var prediction) ||
+                    !prediction.ModelProbabilityAvailable)
+                {
+                    return row;
+                }
+
+                return row with
+                {
+                    IsEligibleAsNormalRecommendation = prediction.TopPickEligible,
+                    ModelProbabilityOver = prediction.ModelProbabilityOver,
+                    ModelProbabilityUnder = prediction.ModelProbabilityUnder,
+                    ModelProbabilityPush = prediction.ModelProbabilityPush,
+                    ModelProjection = prediction.ModelProjection,
+                    ProjectionEdge = prediction.ProjectionEdge,
+                    RankingScore = prediction.SelectedSideProbability ?? 0m,
+                    OverProbabilityEdge = prediction.ModelProbabilityOver.HasValue ? prediction.ModelProbabilityOver.Value - 0.5m : null,
+                    UnderProbabilityEdge = prediction.ModelProbabilityUnder.HasValue ? prediction.ModelProbabilityUnder.Value - 0.5m : null,
+                    OverEstimatedEv = prediction.OverEstimatedEv,
+                    UnderEstimatedEv = prediction.UnderEstimatedEv,
+                    HistoricalSampleSize = prediction.HistoricalSampleSize,
+                    ProbabilityMethod = prediction.ProbabilityMethod,
+                    ConfidenceScore = prediction.SelectedSideProbability ?? 0m
+                };
+            })
+            .ToList();
+    }
+
+    private static SoccerWorldCupPredictionInput ToSoccerWorldCupPredictionInput(TheOddsLineShoppingSourceRow row)
+    {
+        return new SoccerWorldCupPredictionInput(
+            row.PlayerId,
+            row.PropTypeId,
+            row.Player,
+            row.PropType,
+            row.MarketKey,
+            row.Line,
+            row.OverAvailable,
+            row.UnderAvailable,
+            row.EventDate,
+            row.OverAmericanPrice,
+            row.OverDecimalPrice,
+            row.UnderAmericanPrice,
+            row.UnderDecimalPrice);
+    }
+
     private static async Task<SoccerWorldCupPlayerHistoryEnrichment> BuildSoccerWorldCupPlayerHistoryEnrichmentAsync(
         ApplicationDbContext dbContext,
         IReadOnlyCollection<TheOddsLineShoppingGroup> groups,
@@ -1855,41 +1928,69 @@ public static partial class TheOddsApiDebugEndpoints
     private static object ToSoccerWorldCupResearchOnlyResponseGroup(
         TheOddsLineShoppingGroup group,
         bool includeBookmakerPrices,
+        bool soccerPredictionsEnabled,
+        bool publicGradingEnabled,
         JsonObject? playerHistorySummary)
     {
         var node = NormalizeJsonObjectPropertyCasing(
             JsonSerializer.SerializeToNode(ToLineShoppingResponseGroup(group, includeBookmakerPrices)) as JsonObject ?? []);
+        var modelProbabilityAvailable = group.BestProbability.HasValue;
+        var lifecycleBlocked = !string.Equals(group.LifecycleStatus, "Active", StringComparison.OrdinalIgnoreCase) ||
+            group.IsStale ||
+            group.IsExpired;
+        var soccerResearchOnly = !modelProbabilityAvailable || lifecycleBlocked;
+        var resultGradingSupported = publicGradingEnabled &&
+            group.BestProbability.HasValue &&
+            SoccerWorldCupPredictionService.ResolveSupportedStatKey(group.NormalizedPropType, group.MarketKey) is not null;
         node["sport"] = "SOCCER";
         node["competition"] = "World Cup";
         node["providerCategory"] = "Sportsbook";
         node["entryProviderCategory"] = "Sportsbook";
         node["entryActionableForUser"] = false;
         node["isActionableForUser"] = false;
-        node["sportsbookContextResearchOnly"] = true;
-        node["isResearchOnly"] = true;
-        node["resultGradingSupported"] = false;
-        node["resultGradingUnavailableReason"] = "Soccer grading and model hit chance are not available yet.";
-        node["publicSoccerGradingEnabled"] = false;
+        node["sportsbookContextResearchOnly"] = soccerResearchOnly;
+        node["isResearchOnly"] = soccerResearchOnly;
+        node["resultGradingSupported"] = resultGradingSupported;
+        node["resultGradingUnavailableReason"] = resultGradingSupported
+            ? null
+            : modelProbabilityAvailable
+                ? "Soccer grading is not available for this row."
+                : soccerPredictionsEnabled
+                    ? "Soccer grading and model hit chance are not available for this row."
+                    : "Soccer grading and model hit chance are not available yet.";
+        node["publicSoccerGradingEnabled"] = publicGradingEnabled;
         node["entryUnavailableReason"] = "Soccer World Cup sportsbook context is research-only and not Entry Builder playable.";
         node["entryRuleWarning"] = "Soccer World Cup sportsbook context is research-only and not Entry Builder playable.";
-        node["showExpectedValue"] = false;
-        node["displayExpectedValue"] = null;
-        node["expectedValueUnavailableReason"] = "World Cup sportsbook context is research-only until Soccer predictions and grading are enabled.";
-        node["bestEstimatedEv"] = null;
-        node["bestProbability"] = null;
-        node["selectedSideProbability"] = null;
-        node["modelProbabilityAvailable"] = false;
-        node["modelProbabilityOver"] = null;
-        node["modelProbabilityUnder"] = null;
-        node["modelProbabilityPush"] = null;
-        node["modelProjection"] = null;
-        node["projectionEdge"] = null;
-        node["probabilitySource"] = null;
-        node["hitChanceUnavailableReason"] = "Soccer grading and model hit chance are not available yet.";
-        node["strategyClassification"] = "ResearchOnly";
-        node["strategyTier"] = "ResearchOnly";
-        node["isCandidate"] = false;
-        node["isWatchlist"] = false;
+        if (!modelProbabilityAvailable)
+        {
+            node["showExpectedValue"] = false;
+            node["displayExpectedValue"] = null;
+            node["expectedValueUnavailableReason"] = "World Cup sportsbook EV requires model probability and real odds.";
+            node["bestEstimatedEv"] = null;
+            node["bestProbability"] = null;
+            node["selectedSideProbability"] = null;
+            node["modelProbabilityAvailable"] = false;
+            node["modelProbabilityOver"] = null;
+            node["modelProbabilityUnder"] = null;
+            node["modelProbabilityPush"] = null;
+            node["modelProjection"] = null;
+            node["projectionEdge"] = null;
+            node["probabilitySource"] = null;
+            node["hitChanceUnavailableReason"] = soccerPredictionsEnabled
+                ? "Soccer model hit chance is not available for this row."
+                : "Soccer grading and model hit chance are not available yet.";
+            node["strategyClassification"] = "ResearchOnly";
+            node["strategyTier"] = "ResearchOnly";
+            node["isCandidate"] = false;
+            node["isWatchlist"] = false;
+        }
+        else if (lifecycleBlocked)
+        {
+            node["isCandidate"] = false;
+            node["isWatchlist"] = false;
+            node["isTopPick"] = false;
+        }
+
         node["isAvoid"] = false;
         node["playerHistorySummary"] = playerHistorySummary?.DeepClone();
 
