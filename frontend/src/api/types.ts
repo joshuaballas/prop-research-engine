@@ -262,6 +262,14 @@ export interface MarketGroupDto {
   DisplayExpectedValue?: number | null;
   expectedValueUnavailableReason?: string | null;
   ExpectedValueUnavailableReason?: string | null;
+  sportsbookContextResearchOnly?: boolean;
+  SportsbookContextResearchOnly?: boolean;
+  resultGradingSupported?: boolean;
+  ResultGradingSupported?: boolean;
+  resultGradingUnavailableReason?: string | null;
+  ResultGradingUnavailableReason?: string | null;
+  entryUnavailableReason?: string | null;
+  EntryUnavailableReason?: string | null;
   isActionableForUser?: boolean;
   IsActionableForUser?: boolean;
   historicalSampleSize?: number;

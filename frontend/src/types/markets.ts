@@ -38,6 +38,11 @@ export interface MarketOpportunity {
   showExpectedValue?: boolean;
   displayExpectedValue?: number | null;
   expectedValueUnavailableReason?: string | null;
+  sportsbookContextResearchOnly?: boolean;
+  isResearchOnly?: boolean;
+  resultGradingSupported?: boolean;
+  resultGradingUnavailableReason?: string | null;
+  entryUnavailableReason?: string | null;
   entryCompatibilityGroup: string;
   entryProvider: string;
   canAddToEntry: boolean;

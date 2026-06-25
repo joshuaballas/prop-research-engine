@@ -19,6 +19,14 @@ The production market endpoints accept `sport=SOCCER` for persisted snapshot rea
 
 These endpoints are read-only and do not call external APIs. They return Soccer / World Cup rows only when persisted snapshots exist.
 
+Phase 1 public app behavior is intentionally narrow:
+
+- Line Shopping may surface persisted World Cup sportsbook context with `sport=SOCCER&competition=World Cup`.
+- Top Picks remains DFS-scoped in the customer app and must not present Soccer sportsbook context as model recommendations.
+- Soccer rows are always returned as research-only sportsbook context: `providerCategory=Sportsbook`, `entryActionableForUser=false`, `sportsbookContextResearchOnly=true`, `resultGradingSupported=false`, and `publicSoccerGradingEnabled=false`.
+- Soccer rows include unavailable reasons for grading and entry actionability. Model hit chance and EV should render as unavailable when prediction inputs are not present; do not show fake zeros.
+- Entry Builder must not treat Soccer sportsbook context as playable DFS legs.
+
 ## Manual Refresh Workflow
 
 A sport-neutral debug/admin endpoint exists for manual refresh planning:

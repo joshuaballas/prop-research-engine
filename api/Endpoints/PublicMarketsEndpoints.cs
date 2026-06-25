@@ -1310,7 +1310,17 @@ public static class PublicMarketsEndpoints
             details["isResearchOnly"] = true;
             details["supportedEntryTypes"] = new JsonArray();
             details["entryRuleWarning"] = "Soccer World Cup sportsbook context is research-only and not Entry Builder playable.";
+            details["entryUnavailableReason"] = "Soccer World Cup sportsbook context is research-only and not Entry Builder playable.";
             details["resultGradingSupported"] = false;
+            details["resultGradingUnavailableReason"] = SoccerHistoryUnavailableMessage;
+            details["publicSoccerGradingEnabled"] = false;
+            details["showExpectedValue"] = false;
+            details["displayExpectedValue"] = null;
+            details["expectedValueUnavailableReason"] = "World Cup sportsbook context is research-only until Soccer predictions and grading are enabled.";
+            details["selectedSideProbability"] = null;
+            details["modelProbabilityAvailable"] = false;
+            details["probabilitySource"] = null;
+            details["hitChanceUnavailableReason"] = "World Cup model hit chance is not available yet.";
         }
 
         using var document = JsonSerializer.SerializeToDocument(details);

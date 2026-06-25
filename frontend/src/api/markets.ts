@@ -12,8 +12,12 @@ import type {
 
 export type PerformanceGradingMode = 'allHistory' | 'latestGraded' | 'latestCompleted' | 'currentSlate' | 'rollingWindow';
 
+function competitionForSport(sport: string) {
+  return sport.toUpperCase() === 'SOCCER' ? 'World Cup' : undefined;
+}
+
 export function getMarketFreshness(signal?: AbortSignal, sport = 'MLB') {
-  return apiGet<MarketFreshnessDto>(`/api/markets/freshness${buildQuery({ sport })}`, signal);
+  return apiGet<MarketFreshnessDto>(`/api/markets/freshness${buildQuery({ sport, competition: competitionForSport(sport) })}`, signal);
 }
 
 export function getProviderStatus(signal?: AbortSignal) {
@@ -26,7 +30,7 @@ export function getScheduledRefreshStatus(signal?: AbortSignal) {
 
 export function getTopPicks(signal?: AbortSignal, take = 25, sport = 'MLB') {
   return apiGet<PublicTopPicksResponseDto>(
-    `/api/markets/top-picks${buildQuery({ sport, take, providerCategory: 'DFS', freshnessMinutes: 30 })}`,
+    `/api/markets/top-picks${buildQuery({ sport, competition: competitionForSport(sport), take, providerCategory: 'DFS', freshnessMinutes: 30 })}`,
     signal
   ).then(normalizeTopPicksResponse);
 }
@@ -35,6 +39,7 @@ export function getLineShopping(signal?: AbortSignal, take = 50, topOnly = true,
   return apiGet<PublicLineShoppingResponseDto>(
     `/api/markets/line-shopping${buildQuery({
       sport,
+      competition: competitionForSport(sport),
       take,
       topOnly,
       freshnessMinutes: 30,

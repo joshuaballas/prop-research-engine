@@ -31,16 +31,21 @@ export function LineShoppingPage() {
   const [candidateOnly, setCandidateOnly] = useState(true);
   const [page, setPage] = useState(1);
   const lineShoppingQuery = useLineShoppingData(50, false, 'line-shopping');
-  const lineShoppingMarkets = lineShoppingQuery.markets.filter((market) => market.providerCategory === 'DFS');
+  const lineShoppingMarkets = lineShoppingQuery.markets.filter(isLineShoppingDisplayMarket);
+  const sportOptions = useMemo(() => buildOptions(lineShoppingMarkets.map((market) => market.sport)), [lineShoppingMarkets]);
+  const sportFilteredRows = useMemo(
+    () => lineShoppingMarkets.filter((market) => filters.sport === 'All' || market.sport === filters.sport),
+    [filters.sport, lineShoppingMarkets]
+  );
+  const providerOptions = useMemo(() => buildOptions(sportFilteredRows.map((market) => market.provider)), [sportFilteredRows]);
   const providerCategoryOptions = useMemo(
-    () => buildOptions(lineShoppingMarkets.map((market) => categoryFilterValue(market.providerCategory)), categoryFilterLabel),
-    [lineShoppingMarkets]
+    () => buildOptions(sportFilteredRows.map((market) => categoryFilterValue(market.providerCategory)), categoryFilterLabel),
+    [sportFilteredRows]
   );
   const opportunityOptions = useMemo(
-    () => buildOptions(lineShoppingMarkets.map((market) => marketTagValue(market)), marketTagLabel),
-    [lineShoppingMarkets]
+    () => buildOptions(sportFilteredRows.map((market) => marketTagValue(market)), marketTagLabel),
+    [sportFilteredRows]
   );
-  const showOpportunityFilter = opportunityOptions.length > 2;
   const visibleMarkets = useMemo(
     () => lineShoppingMarkets.filter((market) => lineShoppingMarketMatchesFilters(market, filters, candidateOnly, builder)),
     [builder, candidateOnly, filters, lineShoppingMarkets]
@@ -58,6 +63,21 @@ export function LineShoppingPage() {
     setFilters(defaultLineShoppingFilters);
     setCandidateOnly(true);
   };
+
+  useEffect(() => {
+    if (filters.sport === 'SOCCER' && filters.canAddOnly) {
+      setFilters((current) => ({ ...current, canAddOnly: false }));
+    }
+  }, [filters.canAddOnly, filters.sport]);
+
+  useEffect(() => {
+    setFilters((current) => normalizeFilterSelection(current, {
+      sportOptions,
+      providerOptions,
+      providerCategoryOptions,
+      opportunityOptions
+    }));
+  }, [opportunityOptions, providerCategoryOptions, providerOptions, sportOptions]);
 
   useEffect(() => {
     setPage(1);
@@ -87,12 +107,15 @@ export function LineShoppingPage() {
       </Grid>
 
       <MarketFilters
-        classificationLabel="Opportunity"
         values={filters}
         onValuesChange={setFilters}
+        scannerFields
+        compactMobile
+        sportOptions={sportOptions}
+        providerOptions={providerOptions}
         providerCategoryOptions={providerCategoryOptions}
-        trustOptions={opportunityOptions}
-        showClassificationFilter={showOpportunityFilter}
+        opportunityOptions={opportunityOptions}
+        showClassificationFilter={false}
         candidateOnly={candidateOnly}
         onCandidateOnlyChange={setCandidateOnly}
         showCanAddOnly
@@ -100,7 +123,7 @@ export function LineShoppingPage() {
         onClearFilters={clearFilters}
       />
       <Typography variant="body2" color="text.secondary" sx={{ mt: -1.25 }}>
-        Sportsbook lines are for comparison only. Provider lines are the picks you can add to an entry.
+        Soccer / World Cup sportsbook rows are research-only market context. They are not graded yet and cannot be added to entries.
       </Typography>
       {lineShoppingQuery.loading ? (
         <ApiStateCard message="Loading latest line-shopping rows..." />
@@ -150,15 +173,49 @@ function categoryFilterLabel(value: string) {
   return value;
 }
 
+function normalizeFilterSelection(
+  filters: MarketFilterValues,
+  options: {
+    sportOptions: MarketFilterOption[];
+    providerOptions: MarketFilterOption[];
+    providerCategoryOptions: MarketFilterOption[];
+    opportunityOptions: MarketFilterOption[];
+  }
+) {
+  const next = {
+    ...filters,
+    sport: optionValueOrAll(filters.sport, options.sportOptions),
+    provider: optionValueOrAll(filters.provider, options.providerOptions),
+    providerCategory: optionValueOrAll(filters.providerCategory, options.providerCategoryOptions),
+    opportunity: optionValueOrAll(filters.opportunity, options.opportunityOptions)
+  };
+
+  return shallowEqualFilters(filters, next) ? filters : next;
+}
+
+function optionValueOrAll(value: string, options: MarketFilterOption[]) {
+  return options.some((option) => option.value === value) ? value : 'All';
+}
+
+function shallowEqualFilters(left: MarketFilterValues, right: MarketFilterValues) {
+  return Object.keys(left).every((key) => left[key as keyof MarketFilterValues] === right[key as keyof MarketFilterValues]);
+}
+
+function isLineShoppingDisplayMarket(market: MarketOpportunity) {
+  return market.providerCategory === 'DFS' || (market.sport === 'SOCCER' && market.providerCategory === 'Sportsbook');
+}
+
 function lineShoppingMarketMatchesFilters(
   market: MarketOpportunity,
   filters: MarketFilterValues,
   candidateOnly: boolean,
   builder: ReturnType<typeof useEntryBuilder>
 ) {
+  if (filters.sport !== 'All' && market.sport !== filters.sport) return false;
+  if (filters.provider !== 'All' && market.provider !== filters.provider) return false;
   if (filters.providerCategory !== 'All' && categoryFilterValue(market.providerCategory) !== filters.providerCategory) return false;
-  if (filters.trust !== 'All' && marketTagValue(market) !== filters.trust) return false;
-  if (candidateOnly && market.strategyClassification !== 'Candidate') return false;
+  if (filters.opportunity !== 'All' && marketTagValue(market) !== filters.opportunity) return false;
+  if (candidateOnly && market.strategyClassification !== 'Candidate' && !market.sportsbookContextResearchOnly) return false;
   if (filters.canAddOnly && !isEntryCompatibleMarket(market, builder)) return false;
 
   const query = filters.search.trim().toLowerCase();

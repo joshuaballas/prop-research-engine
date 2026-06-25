@@ -1244,15 +1244,18 @@ public sealed class RefreshSafetyTests
         await factory.SeedSoccerWorldCupSnapshotsAsync();
         var before = await factory.CountArtifactsAsync();
 
-        var freshnessResponse = await client.GetAsync("/api/markets/freshness?sport=SOCCER");
-        var topPicksResponse = await client.GetAsync("/api/markets/top-picks?sport=SOCCER&take=10");
-        var lineShoppingResponse = await client.GetAsync("/api/markets/line-shopping?sport=SOCCER&take=10&includeBookmakerPrices=false");
+        var freshnessResponse = await client.GetAsync("/api/markets/freshness?sport=SOCCER&competition=World%20Cup");
+        var topPicksResponse = await client.GetAsync("/api/markets/top-picks?sport=SOCCER&competition=World%20Cup&take=10");
+        var topPicksDfsResponse = await client.GetAsync("/api/markets/top-picks?sport=SOCCER&competition=World%20Cup&providerCategory=DFS&take=10");
+        var lineShoppingResponse = await client.GetAsync("/api/markets/line-shopping?sport=SOCCER&competition=World%20Cup&topOnly=false&take=10&includeBookmakerPrices=false");
 
         await EnsureSuccessWithBodyAsync(freshnessResponse);
         await EnsureSuccessWithBodyAsync(topPicksResponse);
+        await EnsureSuccessWithBodyAsync(topPicksDfsResponse);
         await EnsureSuccessWithBodyAsync(lineShoppingResponse);
         var freshness = await freshnessResponse.Content.ReadFromJsonAsync<JsonElement>();
         var topPicks = await topPicksResponse.Content.ReadFromJsonAsync<JsonElement>();
+        var topPicksDfs = await topPicksDfsResponse.Content.ReadFromJsonAsync<JsonElement>();
         var lineShopping = await lineShoppingResponse.Content.ReadFromJsonAsync<JsonElement>();
 
         Assert.Equal("SOCCER", freshness.GetProperty("effectiveSport").GetString());
@@ -1264,12 +1267,23 @@ public sealed class RefreshSafetyTests
         Assert.False(topPicks.GetProperty("topPicks")[0].GetProperty("entryActionableForUser").GetBoolean());
         Assert.True(topPicks.GetProperty("topPicks")[0].GetProperty("sportsbookContextResearchOnly").GetBoolean());
         Assert.Equal("Sportsbook", topPicks.GetProperty("topPicks")[0].GetProperty("entryProviderCategory").GetString());
+        Assert.Equal("Sportsbook", topPicks.GetProperty("topPicks")[0].GetProperty("providerCategory").GetString());
+        Assert.False(topPicks.GetProperty("topPicks")[0].GetProperty("resultGradingSupported").GetBoolean());
+        Assert.Equal("Soccer history is not available yet.", topPicks.GetProperty("topPicks")[0].GetProperty("resultGradingUnavailableReason").GetString());
+        Assert.Equal("Soccer World Cup sportsbook context is research-only and not Entry Builder playable.", topPicks.GetProperty("topPicks")[0].GetProperty("entryUnavailableReason").GetString());
+        Assert.False(topPicks.GetProperty("topPicks")[0].GetProperty("showExpectedValue").GetBoolean());
+        Assert.Equal(JsonValueKind.Null, topPicks.GetProperty("topPicks")[0].GetProperty("displayExpectedValue").ValueKind);
         Assert.Equal(0, topPicks.GetProperty("summary").GetProperty("actionableCandidateCount").GetInt32());
+        Assert.Empty(topPicksDfs.GetProperty("topPicks").EnumerateArray());
         Assert.True(lineShopping.GetProperty("snapshotBacked").GetBoolean());
         Assert.Equal("SOCCER", lineShopping.GetProperty("comparisonGroups")[0].GetProperty("sport").GetString());
+        Assert.Equal("World Cup", lineShopping.GetProperty("comparisonGroups")[0].GetProperty("competition").GetString());
+        Assert.Equal("Sportsbook", lineShopping.GetProperty("comparisonGroups")[0].GetProperty("providerCategory").GetString());
         Assert.False(lineShopping.GetProperty("comparisonGroups")[0].GetProperty("entryActionableForUser").GetBoolean());
         Assert.True(lineShopping.GetProperty("comparisonGroups")[0].GetProperty("sportsbookContextResearchOnly").GetBoolean());
         Assert.Equal("Sportsbook", lineShopping.GetProperty("comparisonGroups")[0].GetProperty("entryProviderCategory").GetString());
+        Assert.False(lineShopping.GetProperty("comparisonGroups")[0].GetProperty("resultGradingSupported").GetBoolean());
+        Assert.Equal("World Cup model hit chance is not available yet.", lineShopping.GetProperty("comparisonGroups")[0].GetProperty("hitChanceUnavailableReason").GetString());
         Assert.Equal(0, lineShopping.GetProperty("summary").GetProperty("actionableComparisonGroups").GetInt32());
         Assert.Equal(0, factory.TheOddsAdapter.CallCount);
         Assert.Equal(before, await factory.CountArtifactsAsync());
@@ -6551,11 +6565,11 @@ public sealed class SafetyTestApplicationFactory : WebApplicationFactory<Program
             Blocked = false,
             DryRun = false,
             ForceLive = true,
-            BookmakerPreset = "dfsOnly",
-            ProviderCategoriesIncluded = "DFS",
-            SportsbookBookmakersRequested = string.Empty,
-            DfsBookmakersRequested = "prizepicks",
-            MarketsRequested = "soccer_world_cup_shots",
+            BookmakerPreset = "sportsbookContext",
+            ProviderCategoriesIncluded = "Sportsbook",
+            SportsbookBookmakersRequested = "fanduel",
+            DfsBookmakersRequested = string.Empty,
+            MarketsRequested = "player_shots",
             EstimatedApiCalls = 1,
             ActualApiCalls = 1,
             PredictionCount = 1,
@@ -6574,12 +6588,14 @@ public sealed class SafetyTestApplicationFactory : WebApplicationFactory<Program
           "propType": "Shots",
           "side": "Over",
           "line": 1.5,
-          "provider": "PrizePicks",
-          "providerCategory": "DFS",
-          "entryProvider": "PrizePicks",
-          "entryActionableForUser": true,
-          "estimatedEv": 0.12,
-          "bestEstimatedEv": 0.12,
+          "provider": "FanDuel",
+          "providerCategory": "Sportsbook",
+          "entryProviderCategory": "Sportsbook",
+          "entryProvider": "FanDuel",
+          "entryActionableForUser": false,
+          "sportsbookContextResearchOnly": true,
+          "isResearchOnly": true,
+          "resultGradingSupported": false,
           "eventName": "Country A @ Country B"
         }
         """);
@@ -6592,10 +6608,10 @@ public sealed class SafetyTestApplicationFactory : WebApplicationFactory<Program
             Sport = "SOCCER",
             SlateDate = refreshRun.SlateDate,
             GeneratedAtUtc = DateTimeOffset.UtcNow,
-            BookmakerPreset = "dfsOnly",
-            ProviderCategory = "DFS",
+            BookmakerPreset = "sportsbookContext",
+            ProviderCategory = "Sportsbook",
             Provider = "The Odds API",
-            Bookmaker = "PrizePicks",
+            Bookmaker = "FanDuel",
             Player = "Test Forward",
             EventId = "world-cup-event-1",
             EventName = "Country A @ Country B",
@@ -6606,17 +6622,17 @@ public sealed class SafetyTestApplicationFactory : WebApplicationFactory<Program
             PropType = "Shots",
             Line = 1.5m,
             BestSide = "Over",
-            BestBookmaker = "PrizePicks",
-            BestProbability = 0.62m,
-            BestEstimatedEv = 0.12m,
-            BestProbabilityEdge = 0.08m,
-            StrategyClassification = "Candidate",
-            StrategyTier = "ConservativeCandidate",
-            IsCandidate = true,
-            EntryProvider = "PrizePicks",
-            EntryCompatibilityGroup = "PrizePicks",
-            EntryProviderCategory = "DFS",
-            EntryActionableForUser = true,
+            BestBookmaker = "FanDuel",
+            BestProbability = null,
+            BestEstimatedEv = null,
+            BestProbabilityEdge = null,
+            StrategyClassification = "ResearchOnly",
+            StrategyTier = "ResearchOnly",
+            IsCandidate = false,
+            EntryProvider = "FanDuel",
+            EntryCompatibilityGroup = "SportsbookContext",
+            EntryProviderCategory = "Sportsbook",
+            EntryActionableForUser = false,
             DetailsJson = details
         });
         dbContext.MarketLineShoppingSnapshots.Add(new MarketLineShoppingSnapshot
@@ -6626,10 +6642,10 @@ public sealed class SafetyTestApplicationFactory : WebApplicationFactory<Program
             Sport = "SOCCER",
             SlateDate = refreshRun.SlateDate,
             GeneratedAtUtc = DateTimeOffset.UtcNow,
-            BookmakerPreset = "dfsOnly",
-            ProviderCategory = "DFS",
+            BookmakerPreset = "sportsbookContext",
+            ProviderCategory = "Sportsbook",
             Provider = "The Odds API",
-            Bookmaker = "PrizePicks",
+            Bookmaker = "FanDuel",
             Player = "Test Forward",
             EventId = "world-cup-event-1",
             EventName = "Country A @ Country B",
@@ -6640,17 +6656,17 @@ public sealed class SafetyTestApplicationFactory : WebApplicationFactory<Program
             PropType = "Shots",
             Line = 1.5m,
             BestSide = "Over",
-            BestBookmaker = "PrizePicks",
-            BestProbability = 0.62m,
-            BestEstimatedEv = 0.12m,
-            BestProbabilityEdge = 0.08m,
-            StrategyClassification = "Candidate",
-            StrategyTier = "ConservativeCandidate",
-            IsCandidate = true,
-            EntryProvider = "PrizePicks",
-            EntryCompatibilityGroup = "PrizePicks",
-            EntryProviderCategory = "DFS",
-            EntryActionableForUser = true,
+            BestBookmaker = "FanDuel",
+            BestProbability = null,
+            BestEstimatedEv = null,
+            BestProbabilityEdge = null,
+            StrategyClassification = "ResearchOnly",
+            StrategyTier = "ResearchOnly",
+            IsCandidate = false,
+            EntryProvider = "FanDuel",
+            EntryCompatibilityGroup = "SportsbookContext",
+            EntryProviderCategory = "Sportsbook",
+            EntryActionableForUser = false,
             DetailsJson = details
         });
 

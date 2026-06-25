@@ -83,10 +83,17 @@ function mapMarketGroupToOpportunity(group: MarketGroupDto, index: number, sourc
   const isAlternateMarket = readBoolean(group, 'isAlternateMarket', 'IsAlternateMarket') ?? false;
   const payoutMultiplierMayDiffer = readBoolean(group, 'payoutMultiplierMayDiffer', 'PayoutMultiplierMayDiffer') ?? false;
   const specialProjectionWarning = readString(group, 'specialProjectionWarning', 'SpecialProjectionWarning') ?? null;
+  const sportsbookContextResearchOnly = readBoolean(group, 'sportsbookContextResearchOnly', 'SportsbookContextResearchOnly') ?? false;
+  const isResearchOnly = readBoolean(group, 'isResearchOnly', 'IsResearchOnly') ?? sportsbookContextResearchOnly;
+  const resultGradingSupported = readBoolean(group, 'resultGradingSupported', 'ResultGradingSupported') ?? true;
+  const resultGradingUnavailableReason = readString(group, 'resultGradingUnavailableReason', 'ResultGradingUnavailableReason') ?? null;
+  const entryUnavailableReason = readString(group, 'entryUnavailableReason', 'EntryUnavailableReason') ?? null;
   const warnings = [
     ...strategyWarnings,
     ...(sampleWarning ? [sampleWarning] : []),
     ...(entryRuleWarning && providerCategory !== 'DFS' ? [entryRuleWarning] : []),
+    ...(entryUnavailableReason && providerCategory !== 'DFS' ? [entryUnavailableReason] : []),
+    ...(resultGradingUnavailableReason && resultGradingSupported === false ? [resultGradingUnavailableReason] : []),
     ...(specialProjectionWarning ? [specialProjectionWarning] : [])
   ]
     .map(cleanWarning)
@@ -114,6 +121,11 @@ function mapMarketGroupToOpportunity(group: MarketGroupDto, index: number, sourc
     showExpectedValue,
     displayExpectedValue,
     expectedValueUnavailableReason,
+    sportsbookContextResearchOnly,
+    isResearchOnly,
+    resultGradingSupported,
+    resultGradingUnavailableReason,
+    entryUnavailableReason,
     entryCompatibilityGroup,
     entryProvider: provider,
     canAddToEntry: providerCategory === 'DFS' && entryActionable && !isExpired && (!lifecycleStatusNormalized || lifecycleStatusNormalized === 'active'),

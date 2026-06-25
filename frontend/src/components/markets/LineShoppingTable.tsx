@@ -148,19 +148,20 @@ function LineShoppingActionCell({ market, onDetails }: { market: MarketOpportuni
   const selected = builder.isSelected(market.id);
   const incompatible = !selected && !builder.isCompatible(market);
   const canAdd = market.canAddToEntry && market.estimatedEv > 0 && !incompatible;
+  const researchOnly = market.sportsbookContextResearchOnly || (market.sport === 'SOCCER' && market.providerCategory === 'Sportsbook');
 
   return (
     <TableCell data-sticky-action="true" align="center" sx={{ ...stickyActionCellSx, minWidth: 130 }}>
       <AppRowActions sx={{ mx: 'auto' }}>
         <Button
-          startIcon={selected ? <RemoveCircleOutlineRoundedIcon /> : incompatible ? <LockRoundedIcon /> : <AddCircleOutlineRoundedIcon />}
+          startIcon={selected ? <RemoveCircleOutlineRoundedIcon /> : researchOnly || incompatible ? <LockRoundedIcon /> : <AddCircleOutlineRoundedIcon />}
           size="small"
           variant="contained"
           disabled={!selected && !canAdd}
           onClick={() => (selected || canAdd ? builder.toggleLeg(market) : undefined)}
-          sx={entryButtonSx(selected, incompatible)}
+          sx={entryButtonSx(selected, researchOnly || incompatible)}
         >
-          {selected ? 'Remove' : incompatible ? 'Locked' : 'Add leg'}
+          {selected ? 'Remove' : researchOnly ? 'Research only' : incompatible ? 'Locked' : 'Add leg'}
         </Button>
         <Button size="small" variant="outlined" onClick={onDetails} sx={detailsButtonSx}>
           Details
@@ -183,18 +184,19 @@ export function LineShoppingCard({ market }: { market: MarketOpportunity }) {
   const selected = builder.isSelected(market.id);
   const incompatible = !selected && !builder.isCompatible(market);
   const canAdd = market.canAddToEntry && market.estimatedEv > 0 && !incompatible;
+  const researchOnly = market.sportsbookContextResearchOnly || (market.sport === 'SOCCER' && market.providerCategory === 'Sportsbook');
   const warning = renderOpportunityCautionText(market.warnings);
   const actions = (
     <>
       <Button
-        startIcon={selected ? <RemoveCircleOutlineRoundedIcon /> : incompatible ? <LockRoundedIcon /> : <AddCircleOutlineRoundedIcon />}
+        startIcon={selected ? <RemoveCircleOutlineRoundedIcon /> : researchOnly || incompatible ? <LockRoundedIcon /> : <AddCircleOutlineRoundedIcon />}
         size="small"
         variant="contained"
         disabled={!selected && !canAdd}
         onClick={() => (selected || canAdd ? builder.toggleLeg(market) : undefined)}
-        sx={mobileEntryButtonSxFor(selected, incompatible)}
+        sx={mobileEntryButtonSxFor(selected, researchOnly || incompatible)}
       >
-        {selected ? 'Remove' : incompatible ? 'Locked' : 'Add leg'}
+        {selected ? 'Remove' : researchOnly ? 'Research only' : incompatible ? 'Locked' : 'Add leg'}
       </Button>
       <Button size="small" variant="outlined" onClick={() => setDetailsOpen(true)} sx={mobileDetailsButtonSx}>
         Details
@@ -309,18 +311,19 @@ function LineShoppingCardActions({ market, onDetails }: { market: MarketOpportun
   const selected = builder.isSelected(market.id);
   const incompatible = !selected && !builder.isCompatible(market);
   const canAdd = market.canAddToEntry && market.estimatedEv > 0 && !incompatible;
+  const researchOnly = market.sportsbookContextResearchOnly || (market.sport === 'SOCCER' && market.providerCategory === 'Sportsbook');
 
   return (
     <AppRowActions sx={{ mx: 'auto' }}>
       <Button
-        startIcon={selected ? <RemoveCircleOutlineRoundedIcon /> : incompatible ? <LockRoundedIcon /> : <AddCircleOutlineRoundedIcon />}
+        startIcon={selected ? <RemoveCircleOutlineRoundedIcon /> : researchOnly || incompatible ? <LockRoundedIcon /> : <AddCircleOutlineRoundedIcon />}
         size="small"
         variant="contained"
         disabled={!selected && !canAdd}
         onClick={() => (selected || canAdd ? builder.toggleLeg(market) : undefined)}
-        sx={entryButtonSx(selected, incompatible)}
+        sx={entryButtonSx(selected, researchOnly || incompatible)}
       >
-        {selected ? 'Remove' : incompatible ? 'Locked' : 'Add leg'}
+        {selected ? 'Remove' : researchOnly ? 'Research only' : incompatible ? 'Locked' : 'Add leg'}
       </Button>
       <Button size="small" variant="outlined" onClick={onDetails} sx={detailsButtonSx}>
         Details
