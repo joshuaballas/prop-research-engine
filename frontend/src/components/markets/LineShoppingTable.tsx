@@ -216,7 +216,7 @@ export function LineShoppingCard({ market }: { market: MarketOpportunity }) {
           <Typography variant="caption" color="text.secondary" fontWeight={850} lineHeight={1}>
             Edge
           </Typography>
-          <Typography color={market.probabilityEdge > 0 ? 'success.main' : 'error.main'} fontWeight={950} lineHeight={1.1}>
+          <Typography color={(market.probabilityEdge ?? 0) > 0 ? 'success.main' : 'error.main'} fontWeight={950} lineHeight={1.1}>
             {formatPercent(market.probabilityEdge, { signed: true })}
           </Typography>
         </Stack>
@@ -287,7 +287,7 @@ export function LineShoppingCard({ market }: { market: MarketOpportunity }) {
             <Divider />
             <OpportunityMetricGrid columns={{ xs: 2 }} sx={{ borderTop: 0, pt: 0 }}>
               <OpportunityMetricItem label="Edge" value={formatPercent(market.probabilityEdge, { signed: true })} metric="edge" />
-              <OpportunityMetricItem label="Hit chance" value={formatPercent(market.modelProbability)} metric="hitChance" />
+              <OpportunityMetricItem label="Model hit chance" value={formatPercent(market.modelProbability)} metric="hitChance" />
               <OpportunityMetricItem label="Trust" value={<TrustValue level={confidence} sx={{ fontSize: 14, fontWeight: 950, lineHeight: 1.5 }} />} metric="trust" />
               <OpportunityMetricItem label="Sample" value={String(market.historicalSampleSize)} />
             </OpportunityMetricGrid>
@@ -755,9 +755,10 @@ function resolveConfidence(market: MarketOpportunity): 'Strong' | 'Medium' | 'We
 
   const hasModerateCaution = hasRenderableWarning(market.warnings) || market.projectionModifier !== 'Normal' || market.historicalSampleSize < 90;
 
-  if (market.probabilityEdge > 0.1 && market.historicalSampleSize >= 90 && !hasModerateCaution) {
+  const edge = market.probabilityEdge ?? 0;
+  if (edge > 0.1 && market.historicalSampleSize >= 90 && !hasModerateCaution) {
     return 'Strong';
   }
 
-  return market.probabilityEdge > 0 ? 'Medium' : 'Weak';
+  return edge > 0 ? 'Medium' : 'Weak';
 }

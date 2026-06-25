@@ -93,6 +93,186 @@ public static class PredictionDebugEndpoints
         .WithName("PredictionProbabilitiesDebug")
         .WithSummary("Returns read-only prototype probability estimates for persisted predictions.");
 
+        endpoints.MapGet("/api/debug/predictions/mlb/public-row-probability-audit", async (
+            string playerName,
+            string? provider,
+            string? bookmaker,
+            string propType,
+            decimal line,
+            string side,
+            DateOnly? eventDate,
+            ApplicationDbContext dbContext,
+            CancellationToken cancellationToken) =>
+        {
+            var latestRunId = await dbContext.MarketLineShoppingSnapshots
+                .AsNoTracking()
+                .Where(row => row.Sport == "MLB")
+                .OrderByDescending(row => row.GeneratedAtUtc)
+                .Select(row => (Guid?)row.TheOddsRefreshRunId)
+                .FirstOrDefaultAsync(cancellationToken);
+
+            if (!latestRunId.HasValue)
+            {
+                return Results.Ok(new
+                {
+                    generatedAtUtc = DateTimeOffset.UtcNow,
+                    callsExternalApis = false,
+                    readOnly = true,
+                    publicRowMatched = false,
+                    rootCauseCategory = "NoPublicLineShoppingSnapshots"
+                });
+            }
+
+            var snapshots = await dbContext.MarketLineShoppingSnapshots
+                .AsNoTracking()
+                .Where(row => row.TheOddsRefreshRunId == latestRunId.Value)
+                .ToArrayAsync(cancellationToken);
+            var normalizedPlayer = NormalizePlayerName(playerName);
+            var normalizedPropType = NormalizePredictionPropTypeName(propType);
+            var normalizedSide = NormalizeSideName(side);
+            var normalizedProvider = NormalizeProviderName(provider ?? bookmaker);
+            var matchedRows = snapshots
+                .Select(snapshot => new { Snapshot = snapshot, Details = snapshot.DetailsJson.RootElement })
+                .Where(row => NormalizePlayerName(ReadJsonString(row.Details, "player", "Player") ?? row.Snapshot.Player) == normalizedPlayer)
+                .Where(row => NormalizePredictionPropTypeName(ReadJsonString(row.Details, "normalizedPropType", "NormalizedPropType") ?? row.Snapshot.PropType) == normalizedPropType)
+                .Where(row => row.Snapshot.Line == line)
+                .Where(row =>
+                {
+                    var rowSide = NormalizeSideName(ReadJsonString(row.Details, "bestSide", "BestSide") ?? row.Snapshot.BestSide);
+                    return rowSide == normalizedSide || string.IsNullOrWhiteSpace(rowSide);
+                })
+                .Where(row => !eventDate.HasValue || row.Snapshot.SlateDate == eventDate.Value || ReadJsonDateOnly(row.Details, "expectedResultDate", "ExpectedResultDate") == eventDate.Value)
+                .Where(row => string.IsNullOrWhiteSpace(normalizedProvider)
+                    || NormalizeProviderName(ReadJsonString(row.Details, "entryProvider", "EntryProvider", "bestBookmaker", "BestBookmaker") ?? row.Snapshot.Provider ?? row.Snapshot.Bookmaker) == normalizedProvider
+                    || NormalizeProviderName(row.Snapshot.Provider) == normalizedProvider
+                    || NormalizeProviderName(row.Snapshot.Bookmaker) == normalizedProvider)
+                .OrderByDescending(row => row.Snapshot.GeneratedAtUtc)
+                .ToArray();
+            var publicRow = matchedRows.FirstOrDefault();
+
+            if (publicRow is null)
+            {
+                return Results.Ok(new
+                {
+                    generatedAtUtc = DateTimeOffset.UtcNow,
+                    callsExternalApis = false,
+                    readOnly = true,
+                    latestSnapshotRunId = latestRunId,
+                    publicRowMatched = false,
+                    rootCauseCategory = "NoPublicRowMatchedFilters"
+                });
+            }
+
+            var details = publicRow.Details;
+            var platformPropId = ReadFirstBookmakerPlatformPropId(details) ?? ReadJsonString(details, "platformPropId", "PlatformPropId");
+            var platformProp = string.IsNullOrWhiteSpace(platformPropId)
+                ? null
+                : await dbContext.PlatformProps
+                    .AsNoTracking()
+                    .Include(row => row.Prop)
+                        .ThenInclude(prop => prop!.Player)
+                    .Include(row => row.Prop)
+                        .ThenInclude(prop => prop!.PropType)
+                    .SingleOrDefaultAsync(row => row.PlatformPropId == platformPropId, cancellationToken);
+            var prediction = platformProp is null || !publicRow.Snapshot.PredictionRunId.HasValue
+                ? null
+                : await dbContext.Predictions
+                    .AsNoTracking()
+                    .Where(row => row.PredictionRunId == publicRow.Snapshot.PredictionRunId.Value && row.PropId == platformProp.PropId)
+                    .OrderByDescending(row => row.CreatedAt)
+                    .FirstOrDefaultAsync(cancellationToken);
+            var selectedSideProbability = ReadJsonDecimal(details, "selectedSideProbability", "SelectedSideProbability", "bestProbability", "BestProbability");
+            var modelOverProbability = ReadJsonDecimal(details, "modelProbabilityOver", "ModelProbabilityOver", "modelOverProbability", "ModelOverProbability");
+            var modelUnderProbability = ReadJsonDecimal(details, "modelProbabilityUnder", "ModelProbabilityUnder", "modelUnderProbability", "ModelUnderProbability");
+            var probabilityEdge = ReadJsonDecimal(details, "bestProbabilityEdge", "BestProbabilityEdge");
+            var historicalSampleSize = ReadJsonInt(details, "historicalSampleSize", "HistoricalSampleSize") ?? 0;
+            var historyCount = platformProp?.Prop is null
+                ? 0
+                : await dbContext.PropResults
+                    .AsNoTracking()
+                    .CountAsync(row => row.ExternalSource == "mlb"
+                        && row.PlayerId == platformProp.Prop.PlayerId
+                        && row.PropTypeId == platformProp.Prop.PropTypeId, cancellationToken);
+            var historyAvailable = historyCount > 0 || historicalSampleSize > 0;
+            var rootCause = selectedSideProbability.HasValue
+                ? "ModelProbabilityAvailable"
+                : historyAvailable
+                    ? "HistoricalDataAvailableButModelProbabilityMissing"
+                    : prediction is null
+                        ? "NoPredictionJoinedToPublicRow"
+                        : "ModelProbabilityMissing";
+
+            return Results.Ok(new
+            {
+                generatedAtUtc = DateTimeOffset.UtcNow,
+                callsExternalApis = false,
+                readOnly = true,
+                latestSnapshotRunId = latestRunId,
+                publicRowMatched = true,
+                matchedPublicRows = matchedRows.Length,
+                rootCauseCategory = rootCause,
+                publicRow = new
+                {
+                    snapshotId = publicRow.Snapshot.Id,
+                    snapshotRunId = publicRow.Snapshot.TheOddsRefreshRunId,
+                    predictionRunId = publicRow.Snapshot.PredictionRunId,
+                    provider = publicRow.Snapshot.Provider,
+                    bookmaker = publicRow.Snapshot.Bookmaker,
+                    providerCategory = publicRow.Snapshot.ProviderCategory,
+                    platformPropId,
+                    playerId = platformProp?.Prop?.PlayerId,
+                    playerName = publicRow.Snapshot.Player,
+                    propType = publicRow.Snapshot.PropType,
+                    side = publicRow.Snapshot.BestSide,
+                    publicRow.Snapshot.Line,
+                    eventId = publicRow.Snapshot.EventId,
+                    providerEventId = publicRow.Snapshot.EventId,
+                    eventDate = ReadJsonDateOnly(details, "expectedResultDate", "ExpectedResultDate") ?? publicRow.Snapshot.SlateDate,
+                    hitChance = selectedSideProbability,
+                    selectedSideProbability,
+                    predictedProbability = prediction?.PredictedProbability,
+                    edge = probabilityEdge,
+                    trust = ReadJsonString(details, "trustLevel", "TrustLevel") ?? publicRow.Snapshot.StrategyTier,
+                    modelProbabilityAvailable = selectedSideProbability.HasValue,
+                    hitChanceUnavailableReason = ReadJsonString(details, "hitChanceUnavailableReason", "HitChanceUnavailableReason")
+                        ?? (selectedSideProbability.HasValue ? null : historyAvailable ? "HistoricalDataAvailableButModelProbabilityMissing" : "Model hit chance is unavailable for this row. Historical hit rate is shown in the chart."),
+                    modelOverProbability,
+                    modelUnderProbability,
+                    probabilitySource = ReadJsonString(details, "probabilitySource", "ProbabilitySource", "probabilityMethod", "ProbabilityMethod")
+                },
+                latestPredictionMatch = prediction is null
+                    ? null
+                    : new
+                    {
+                        prediction.Id,
+                        prediction.PredictionRunId,
+                        prediction.PropId,
+                        prediction.PredictedProbability,
+                        prediction.PredictedValue,
+                        prediction.SportsbookLine,
+                        prediction.Edge,
+                        prediction.Recommendation,
+                        prediction.Confidence
+                    },
+                history = new
+                {
+                    persistedPropResults = historyCount,
+                    historicalSampleSize,
+                    historyAvailable
+                },
+                join = new
+                {
+                    platformPropResolved = platformProp is not null,
+                    predictionJoinedBy = platformProp is null ? null : "snapshot.PredictionRunId + platformProp.PropId",
+                    playerNormalized = normalizedPlayer,
+                    propTypeNormalized = normalizedPropType,
+                    providerNormalized = normalizedProvider
+                }
+            });
+        })
+        .WithName("MlbPublicRowProbabilityAuditDebug")
+        .WithSummary("Read-only audit for public MLB market rows with missing model hit probability.");
+
         endpoints.MapGet("/api/debug/predictions/mlb/side-selection-audit", async (
             DateOnly? date,
             DateOnly? fromDate,
@@ -4211,6 +4391,123 @@ public static class PredictionDebugEndpoints
     private static string NormalizePredictionPropTypeName(string propType)
     {
         return new string(propType.Trim().ToUpperInvariant().Where(char.IsLetterOrDigit).ToArray());
+    }
+
+    private static string NormalizeSideName(string? side)
+    {
+        var normalized = side?.Trim().ToLowerInvariant();
+        return normalized is "under" or "lower" ? "Under" : normalized is "over" or "higher" ? "Over" : string.Empty;
+    }
+
+    private static string NormalizeProviderName(string? provider)
+    {
+        if (string.IsNullOrWhiteSpace(provider))
+        {
+            return string.Empty;
+        }
+
+        var normalized = new string(provider.Trim().ToLowerInvariant().Where(char.IsLetterOrDigit).ToArray());
+        return normalized switch
+        {
+            "betrdfs" or "betrpicks" or "betrusdfs" => "betrpicks",
+            "underdogfantasy" or "underdog" => "underdog",
+            "prizepicks" or "prizepicksdfs" => "prizepicks",
+            "draftkingspick6" or "pick6" => "draftkingspick6",
+            _ => normalized
+        };
+    }
+
+    private static string? ReadJsonString(JsonElement element, params string[] propertyNames)
+    {
+        foreach (var propertyName in propertyNames)
+        {
+            if (element.TryGetProperty(propertyName, out var value) && value.ValueKind == JsonValueKind.String)
+            {
+                var text = value.GetString();
+                if (!string.IsNullOrWhiteSpace(text))
+                {
+                    return text;
+                }
+            }
+        }
+
+        return null;
+    }
+
+    private static decimal? ReadJsonDecimal(JsonElement element, params string[] propertyNames)
+    {
+        foreach (var propertyName in propertyNames)
+        {
+            if (!element.TryGetProperty(propertyName, out var value))
+            {
+                continue;
+            }
+
+            if (value.ValueKind == JsonValueKind.Number && value.TryGetDecimal(out var decimalValue))
+            {
+                return decimalValue;
+            }
+
+            if (value.ValueKind == JsonValueKind.String && decimal.TryParse(value.GetString(), out decimalValue))
+            {
+                return decimalValue;
+            }
+        }
+
+        return null;
+    }
+
+    private static int? ReadJsonInt(JsonElement element, params string[] propertyNames)
+    {
+        foreach (var propertyName in propertyNames)
+        {
+            if (!element.TryGetProperty(propertyName, out var value))
+            {
+                continue;
+            }
+
+            if (value.ValueKind == JsonValueKind.Number && value.TryGetInt32(out var intValue))
+            {
+                return intValue;
+            }
+
+            if (value.ValueKind == JsonValueKind.String && int.TryParse(value.GetString(), out intValue))
+            {
+                return intValue;
+            }
+        }
+
+        return null;
+    }
+
+    private static DateOnly? ReadJsonDateOnly(JsonElement element, params string[] propertyNames)
+    {
+        var value = ReadJsonString(element, propertyNames);
+        return DateOnly.TryParse(value, out var date) ? date : null;
+    }
+
+    private static string? ReadFirstBookmakerPlatformPropId(JsonElement element)
+    {
+        if (!element.TryGetProperty("bookmakerPrices", out var prices) && !element.TryGetProperty("BookmakerPrices", out prices))
+        {
+            return null;
+        }
+
+        if (prices.ValueKind != JsonValueKind.Array)
+        {
+            return null;
+        }
+
+        foreach (var price in prices.EnumerateArray())
+        {
+            var platformPropId = ReadJsonString(price, "platformPropId", "PlatformPropId");
+            if (!string.IsNullOrWhiteSpace(platformPropId))
+            {
+                return platformPropId;
+            }
+        }
+
+        return null;
     }
 
     private static string BuildPredictionTrustLevel(decimal confidenceScore)

@@ -67,7 +67,7 @@ export function MarketsPage() {
     return sortedMarkets.slice(start, start + pageSize);
   }, [page, pageSize, sortedMarkets]);
   const dfsMarkets = filteredMarkets.filter((market) => market.providerCategory === 'DFS');
-  const bestEdge = dfsMarkets.length ? Math.max(...dfsMarkets.map((market) => market.probabilityEdge)) : 0;
+  const bestEdge = dfsMarkets.length ? Math.max(...dfsMarkets.map((market) => market.probabilityEdge ?? Number.NEGATIVE_INFINITY)) : null;
   const dfsProviderCount = new Set(dfsMarkets.map((market) => market.provider)).size;
 
   useEffect(() => {
@@ -198,17 +198,17 @@ function sortMarkets(markets: MarketOpportunity[], sort: string) {
   const rows = [...markets];
   switch (sort) {
     case 'Edge':
-      return rows.sort((a, b) => b.probabilityEdge - a.probabilityEdge);
+      return rows.sort((a, b) => (b.probabilityEdge ?? Number.NEGATIVE_INFINITY) - (a.probabilityEdge ?? Number.NEGATIVE_INFINITY));
     case 'HitChance':
-      return rows.sort((a, b) => b.modelProbability - a.modelProbability);
+      return rows.sort((a, b) => (b.modelProbability ?? Number.NEGATIVE_INFINITY) - (a.modelProbability ?? Number.NEGATIVE_INFINITY));
     case 'Trust':
-      return rows.sort((a, b) => trustRank(b) - trustRank(a) || b.probabilityEdge - a.probabilityEdge);
+      return rows.sort((a, b) => trustRank(b) - trustRank(a) || (b.probabilityEdge ?? Number.NEGATIVE_INFINITY) - (a.probabilityEdge ?? Number.NEGATIVE_INFINITY));
     case 'PlayerAz':
       return rows.sort((a, b) => a.player.localeCompare(b.player));
     case 'StartsSoon':
       return rows.sort((a, b) => Date.parse(a.startTime || '') - Date.parse(b.startTime || ''));
     default:
-      return rows.sort((a, b) => b.probabilityEdge - a.probabilityEdge);
+      return rows.sort((a, b) => (b.probabilityEdge ?? Number.NEGATIVE_INFINITY) - (a.probabilityEdge ?? Number.NEGATIVE_INFINITY));
   }
 }
 

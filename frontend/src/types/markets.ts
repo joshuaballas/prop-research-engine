@@ -43,9 +43,15 @@ export interface MarketOpportunity {
   canAddToEntry: boolean;
   bestAmericanPrice: number;
   bestDecimalPrice: number;
-  modelProbability: number;
-  impliedProbability: number;
-  probabilityEdge: number;
+  modelProbability: number | null;
+  selectedSideProbability?: number | null;
+  modelProbabilityAvailable?: boolean;
+  hitChanceUnavailableReason?: string | null;
+  modelOverProbability?: number | null;
+  modelUnderProbability?: number | null;
+  probabilitySource?: string | null;
+  impliedProbability: number | null;
+  probabilityEdge: number | null;
   estimatedEv: number;
   strategyClassification: StrategyClassification;
   strategyTier: string;

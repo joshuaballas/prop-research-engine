@@ -12,5 +12,5 @@ export function getDisplayExpectedValue(market: MarketOpportunity) {
 }
 
 export function getPublicRankingValue(market: MarketOpportunity) {
-  return getDisplayExpectedValue(market) ?? market.probabilityEdge;
+  return getDisplayExpectedValue(market) ?? market.probabilityEdge ?? 0;
 }

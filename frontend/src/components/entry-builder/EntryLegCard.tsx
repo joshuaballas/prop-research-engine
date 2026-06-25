@@ -19,7 +19,7 @@ export function EntryLegCard({ leg, onRemove }: { leg: EntryLeg; onRemove?: (id:
       contentSx={{ p: 1.35, '&:last-child': { pb: 1.35 } }}
       title={leg.player}
       value={
-        <Typography color={leg.probabilityEdge > 0 ? 'success.main' : 'error.main'} fontWeight={950} sx={{ flexShrink: 0 }}>
+        <Typography color={(leg.probabilityEdge ?? 0) > 0 ? 'success.main' : 'error.main'} fontWeight={950} sx={{ flexShrink: 0 }}>
           {formatSignedPercent(leg.probabilityEdge)}
         </Typography>
       }
@@ -33,7 +33,7 @@ export function EntryLegCard({ leg, onRemove }: { leg: EntryLeg; onRemove?: (id:
       metrics={
         <OpportunityMetricGrid columns={{ xs: 2, sm: 4 }} sx={{ borderTop: 0, pt: 0 }}>
           <OpportunityMetricItem label="Edge" value={formatSignedPercent(leg.probabilityEdge)} metric="edge" />
-          <OpportunityMetricItem label="Hit chance" value={formatPercent(leg.modelProbability)} metric="hitChance" />
+          <OpportunityMetricItem label="Model hit chance" value={formatPercent(leg.modelProbability)} metric="hitChance" />
           <OpportunityMetricItem label="Trust" value={<TrustValue level={leg.trustLevel} sx={{ fontSize: 14, fontWeight: 950, lineHeight: 1.5 }} />} metric="trust" />
           <OpportunityMetricItem label="Sample" value={String(leg.historicalSampleSize)} />
         </OpportunityMetricGrid>
@@ -50,7 +50,8 @@ export function EntryLegCard({ leg, onRemove }: { leg: EntryLeg; onRemove?: (id:
   );
 }
 
-function formatSignedPercent(value: number) {
+function formatSignedPercent(value: number | null | undefined) {
+  if (value === null || value === undefined || !Number.isFinite(value)) return '—';
   const formatted = `${Math.abs(value * 100).toFixed(2)}%`;
   return value >= 0 ? `+${formatted}` : `-${formatted}`;
 }

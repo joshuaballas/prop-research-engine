@@ -428,9 +428,8 @@ function LineStripPreview() {
                 </Typography>
               </Grid>
               <Grid size={{ xs: 4 }}>
-                <Typography variant="body2" color={row.probabilityEdge > 0 ? 'success.main' : 'text.secondary'} textAlign="right" fontWeight={950}>
-                  {row.probabilityEdge > 0 ? '+' : ''}
-                  {(row.probabilityEdge * 100).toFixed(1)}% Edge
+                <Typography variant="body2" color={(row.probabilityEdge ?? 0) > 0 ? 'success.main' : 'text.secondary'} textAlign="right" fontWeight={950}>
+                  {row.probabilityEdge === null ? '—' : `${row.probabilityEdge > 0 ? '+' : ''}${(row.probabilityEdge * 100).toFixed(1)}%`} Edge
                 </Typography>
               </Grid>
             </Grid>

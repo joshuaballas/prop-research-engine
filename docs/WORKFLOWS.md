@@ -497,6 +497,8 @@ The `/research` MLB Line Shopping table shows strategy classification/tier badge
 
 DFS candidate tiers prioritize selected-side hit chance, projection edge, sample/trust, and model edge. Rows from DFS providers between 0.50 and 0.55 selected-side hit probability can remain watchlist/research only, and rows below 0.50 should not become user-facing picks. Sportsbook-context candidate analysis can still use positive `bestEstimatedEv` when sportsbook odds or break-even pricing exists; DFS EV stays hidden from customer-facing display.
 
+Public market rows distinguish model hit chance from historical chart hit rate. `selectedSideProbability`/`modelProbability` may be null when no selected side has a usable model probability even if the details chart has historical results. In that case the frontend should show an unavailable marker for Model hit chance and keep the chart metric labeled as historical hit rate. Do not default missing model probability to 0, and do not substitute historical hit rate as the model probability. Use `/api/debug/predictions/mlb/public-row-probability-audit` with `playerName`, `provider`, `propType`, `side`, and `line` to trace a public row back to snapshot details, prediction joins, and persisted result history.
+
 Persist strategy simulation snapshots after a slate is graded:
 
 ```powershell

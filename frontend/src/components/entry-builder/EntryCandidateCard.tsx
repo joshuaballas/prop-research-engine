@@ -82,7 +82,7 @@ export function EntryCandidateCard({ market, lockedProvider, selected = false, o
         value={
           <Stack alignItems="flex-end" spacing={0.25} sx={{ flexShrink: 0 }}>
             <MetricLabelWithHelp metric="edge" align="right" />
-            <Typography color={market.probabilityEdge > 0 ? 'success.main' : 'error.main'} fontWeight={950}>
+            <Typography color={(market.probabilityEdge ?? 0) > 0 ? 'success.main' : 'error.main'} fontWeight={950}>
               {formatSignedPercent(market.probabilityEdge)}
             </Typography>
           </Stack>
@@ -95,7 +95,7 @@ export function EntryCandidateCard({ market, lockedProvider, selected = false, o
         metrics={
           <OpportunityMetricGrid columns={{ xs: 2, sm: 4 }} sx={{ borderTop: 0, pt: 0 }}>
             <OpportunityMetricItem label="Edge" value={formatSignedPercent(market.probabilityEdge)} metric="edge" />
-            <OpportunityMetricItem label="Hit chance" value={formatPercent(market.modelProbability)} metric="hitChance" />
+            <OpportunityMetricItem label="Model hit chance" value={formatPercent(market.modelProbability)} metric="hitChance" />
             <OpportunityMetricItem label="Trust" value={<TrustValue level={market.trustLevel} sx={{ fontSize: 14, fontWeight: 950, lineHeight: 1.5 }} />} metric="trust" />
             <OpportunityMetricItem label="Sample" value={String(market.historicalSampleSize)} />
           </OpportunityMetricGrid>
@@ -115,11 +115,13 @@ export function EntryCandidateCard({ market, lockedProvider, selected = false, o
   );
 }
 
-function formatPercent(value: number) {
+function formatPercent(value: number | null | undefined) {
+  if (value === null || value === undefined || !Number.isFinite(value)) return '—';
   return `${(value * 100).toFixed(2)}%`;
 }
 
-function formatSignedPercent(value: number) {
+function formatSignedPercent(value: number | null | undefined) {
+  if (value === null || value === undefined || !Number.isFinite(value)) return '—';
   const formatted = `${Math.abs(value * 100).toFixed(2)}%`;
   return value >= 0 ? `+${formatted}` : `-${formatted}`;
 }

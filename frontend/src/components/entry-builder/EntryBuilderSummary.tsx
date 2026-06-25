@@ -20,7 +20,7 @@ export function EntryBuilderSummary({
 }) {
   const review = buildEntryReview(legs, rules, amount, selectedEntryType);
   const rule = review.rule;
-  const averageEdge = legs.length ? legs.reduce((sum, leg) => sum + leg.probabilityEdge, 0) / legs.length : 0;
+  const averageEdge = legs.length ? legs.reduce((sum, leg) => sum + (leg.probabilityEdge ?? 0), 0) / legs.length : 0;
   const sports = Array.from(new Set(legs.map((leg) => leg.sport)));
   const possibleLegCounts = review.allowedFinalLegCounts.length ? review.allowedFinalLegCounts.join(', ') : rule?.allowedLegCounts.join(', ') || 'Unavailable';
 
@@ -110,7 +110,8 @@ function MetricRow({ label, value }: { label: string; value: string }) {
   );
 }
 
-function formatSignedPercent(value: number) {
+function formatSignedPercent(value: number | null | undefined) {
+  if (value === null || value === undefined || !Number.isFinite(value)) return '—';
   const formatted = `${Math.abs(value * 100).toFixed(1)}%`;
   return value >= 0 ? `+${formatted}` : `-${formatted}`;
 }

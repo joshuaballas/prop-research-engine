@@ -147,7 +147,7 @@ export function EntryReceiptDialog({ open, onClose, legs, review, amount }: Entr
                       <TableCell>Prop</TableCell>
                       <TableCell>Game</TableCell>
                       <TableCell align="right">Edge</TableCell>
-                      <TableCell align="right">Hit Chance</TableCell>
+                      <TableCell align="right">Model Hit Chance</TableCell>
                       <TableCell>Trust</TableCell>
                       <TableCell align="right">Sample</TableCell>
                       {showNotesColumn ? <TableCell>Notes</TableCell> : null}
@@ -214,7 +214,7 @@ export function EntryReceiptDialog({ open, onClose, legs, review, amount }: Entr
                     </Typography>
                     <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 0.75 }}>
                       <ReceiptMiniMetric label="Edge" value={formatPercent(leg.probabilityEdge, { signed: true })} />
-                      <ReceiptMiniMetric label="Hit Chance" value={formatPercent(leg.modelProbability)} />
+                      <ReceiptMiniMetric label="Model Hit Chance" value={formatPercent(leg.modelProbability)} />
                       <ReceiptMiniMetric label="Sample" value={String(leg.historicalSampleSize)} />
                     </Box>
                     {legNotes[index] ? (
@@ -324,8 +324,8 @@ function buildReceiptStats(legs: EntryLeg[]) {
     return { averageEdge: null, allHitChance: null };
   }
 
-  const edgeValues = legs.map((leg) => leg.probabilityEdge).filter((value) => Number.isFinite(value));
-  const probabilities = legs.map((leg) => leg.modelProbability).filter((value) => Number.isFinite(value) && value > 0);
+  const edgeValues = legs.map((leg) => leg.probabilityEdge).filter((value): value is number => typeof value === 'number' && Number.isFinite(value));
+  const probabilities = legs.map((leg) => leg.modelProbability).filter((value): value is number => typeof value === 'number' && Number.isFinite(value) && value > 0);
 
   return {
     averageEdge: edgeValues.length === legs.length ? edgeValues.reduce((sum, value) => sum + value, 0) / legs.length : null,

@@ -189,17 +189,17 @@ function sortTopPicks(markets: MarketOpportunity[], sort: string) {
 
   switch (sort) {
     case 'Edge':
-      return rows.sort((a, b) => b.probabilityEdge - a.probabilityEdge);
+      return rows.sort((a, b) => (b.probabilityEdge ?? Number.NEGATIVE_INFINITY) - (a.probabilityEdge ?? Number.NEGATIVE_INFINITY));
     case 'Hit chance':
-      return rows.sort((a, b) => b.modelProbability - a.modelProbability);
+      return rows.sort((a, b) => (b.modelProbability ?? Number.NEGATIVE_INFINITY) - (a.modelProbability ?? Number.NEGATIVE_INFINITY));
     case 'Trust':
-      return rows.sort((a, b) => trustSortRank(b) - trustSortRank(a) || b.probabilityEdge - a.probabilityEdge);
+      return rows.sort((a, b) => trustSortRank(b) - trustSortRank(a) || (b.probabilityEdge ?? Number.NEGATIVE_INFINITY) - (a.probabilityEdge ?? Number.NEGATIVE_INFINITY));
     case 'Rank':
       return rows.sort((a, b) => (a.rank ?? Number.MAX_SAFE_INTEGER) - (b.rank ?? Number.MAX_SAFE_INTEGER));
     case 'Sample':
       return rows.sort((a, b) => b.historicalSampleSize - a.historicalSampleSize);
     default:
-      return rows.sort((a, b) => b.probabilityEdge - a.probabilityEdge);
+      return rows.sort((a, b) => (b.probabilityEdge ?? Number.NEGATIVE_INFINITY) - (a.probabilityEdge ?? Number.NEGATIVE_INFINITY));
   }
 }
 

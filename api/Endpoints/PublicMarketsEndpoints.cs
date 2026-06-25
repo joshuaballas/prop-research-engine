@@ -1285,6 +1285,22 @@ public static class PublicMarketsEndpoints
             details["eventStartTimeUtc"] = eventStartTime.Value;
         }
 
+        var bestProbability = ReadNullableDecimal(details, "bestProbability", "BestProbability");
+        var modelProbabilityOver = ReadNullableDecimal(details, "modelProbabilityOver", "ModelProbabilityOver");
+        var modelProbabilityUnder = ReadNullableDecimal(details, "modelProbabilityUnder", "ModelProbabilityUnder");
+        var historicalSampleSize = ReadNullableInt(details, "historicalSampleSize", "HistoricalSampleSize") ?? 0;
+        var probabilityMethod = ReadNullableString(details, "probabilityMethod", "ProbabilityMethod");
+        details["selectedSideProbability"] ??= bestProbability;
+        details["modelProbabilityAvailable"] ??= bestProbability.HasValue;
+        details["probabilitySource"] ??= bestProbability.HasValue ? probabilityMethod : null;
+        details["modelOverProbability"] ??= modelProbabilityOver;
+        details["modelUnderProbability"] ??= modelProbabilityUnder;
+        details["hitChanceUnavailableReason"] ??= bestProbability.HasValue
+            ? null
+            : historicalSampleSize > 0
+                ? "HistoricalDataAvailableButModelProbabilityMissing"
+                : "Model hit chance is unavailable for this row. Historical hit rate is shown in the chart.";
+
         if (IsSoccerSport(sport))
         {
             details["providerCategory"] = "Sportsbook";
@@ -1299,6 +1315,45 @@ public static class PublicMarketsEndpoints
 
         using var document = JsonSerializer.SerializeToDocument(details);
         return document.RootElement.Clone();
+    }
+
+    private static decimal? ReadNullableDecimal(JsonObject details, params string[] propertyNames)
+    {
+        foreach (var propertyName in propertyNames)
+        {
+            if (details[propertyName] is JsonValue value && value.TryGetValue<decimal>(out var decimalValue))
+            {
+                return decimalValue;
+            }
+        }
+
+        return null;
+    }
+
+    private static int? ReadNullableInt(JsonObject details, params string[] propertyNames)
+    {
+        foreach (var propertyName in propertyNames)
+        {
+            if (details[propertyName] is JsonValue value && value.TryGetValue<int>(out var intValue))
+            {
+                return intValue;
+            }
+        }
+
+        return null;
+    }
+
+    private static string? ReadNullableString(JsonObject details, params string[] propertyNames)
+    {
+        foreach (var propertyName in propertyNames)
+        {
+            if (details[propertyName] is JsonValue value && value.TryGetValue<string>(out var stringValue))
+            {
+                return stringValue;
+            }
+        }
+
+        return null;
     }
 
     private static async Task<Guid?> ResolveLatestTopPickSnapshotRunIdAsync(

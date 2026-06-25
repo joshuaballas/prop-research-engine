@@ -93,7 +93,7 @@ function TopPickEv({ market, compact = false }: { market: MarketOpportunity; com
         <MetricLabelWithHelp metric="ev" align="right" />
       )}
       <Typography
-        color={value >= 0 ? 'success.main' : 'error.main'}
+        color={value === null ? 'text.secondary' : value >= 0 ? 'success.main' : 'error.main'}
         fontWeight={950}
         fontSize={compact ? 14 : undefined}
         whiteSpace="nowrap"
@@ -144,7 +144,7 @@ function TopPickMetrics({ market, detailed, confidence }: { market: MarketOpport
           <OpportunityMetricItem label="Modifier" value={market.projectionModifier === 'Normal' ? '-' : market.projectionModifier} noWrap={false} />
         </>
       ) : null}
-      <OpportunityMetricItem label="Hit chance" value={formatPercent(market.modelProbability)} metric="hitChance" />
+      <OpportunityMetricItem label="Model hit chance" value={formatPercent(market.modelProbability)} metric="hitChance" />
       {showSportsbookPricing ? <OpportunityMetricItem label="Break-even" value={formatPercent(market.impliedProbability)} /> : null}
       <OpportunityMetricItem label="Edge" value={formatPercent(market.probabilityEdge, { signed: true })} metric="edge" />
       {detailed && market.showExpectedValue ? (
@@ -239,11 +239,12 @@ function resolveConfidence(market: MarketOpportunity): 'Strong' | 'Medium' | 'We
 
   const hasModerateCaution = hasRenderableWarning(market.warnings) || market.projectionModifier !== 'Normal' || market.historicalSampleSize < 90;
 
-  if (market.probabilityEdge > 0.1 && market.historicalSampleSize >= 90 && !hasModerateCaution) {
+  const edge = market.probabilityEdge ?? 0;
+  if (edge > 0.1 && market.historicalSampleSize >= 90 && !hasModerateCaution) {
     return 'Strong';
   }
 
-  return market.probabilityEdge > 0 ? 'Medium' : 'Weak';
+  return edge > 0 ? 'Medium' : 'Weak';
 }
 
 function cleanWarning(warning: string) {

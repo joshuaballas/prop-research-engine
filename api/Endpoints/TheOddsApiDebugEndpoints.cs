@@ -4061,6 +4061,10 @@ public static partial class TheOddsApiDebugEndpoints
             group.BestAmericanPrice,
             group.BestDecimalPrice,
             group.BestProbability,
+            selectedSideProbability = group.BestProbability,
+            modelProbabilityAvailable = group.BestProbability.HasValue,
+            hitChanceUnavailableReason = BuildHitChanceUnavailableReason(group),
+            probabilitySource = group.BestProbability.HasValue ? group.ProbabilityMethod : null,
             group.BestImpliedProbability,
             group.BestProbabilityEdge,
             group.BestProjectionEdge,
@@ -4083,6 +4087,26 @@ public static partial class TheOddsApiDebugEndpoints
             entryCompatibility.AllowedLegCounts,
             entryCompatibility.EntryRuleWarning
         };
+    }
+
+    private static string? BuildHitChanceUnavailableReason(TheOddsLineShoppingGroup group)
+    {
+        if (group.BestProbability.HasValue)
+        {
+            return null;
+        }
+
+        if (group.HistoricalSampleSize > 0)
+        {
+            return "HistoricalDataAvailableButModelProbabilityMissing";
+        }
+
+        if (group.BestSide == "None")
+        {
+            return "No selected side cleared the model probability and projection-edge gates.";
+        }
+
+        return "Model hit chance is unavailable for this row. Historical hit rate is shown in the chart.";
     }
 
     private static ExpectedValueDisplayMetadata BuildExpectedValueDisplayMetadata(

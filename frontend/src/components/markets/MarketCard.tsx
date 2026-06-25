@@ -32,6 +32,7 @@ export function MarketCard({ market }: { market: MarketOpportunity }) {
   const canAddFromScanner = addable && !incompatible;
   const cautions = getOperationalMarketCautions(market, { locked: incompatible && addable });
   const displayEv = getDisplayExpectedValue(market);
+  const headlineValue = displayEv ?? market.probabilityEdge;
   const actions = (
     <>
       {canAddFromScanner || selected ? (
@@ -63,8 +64,8 @@ export function MarketCard({ market }: { market: MarketOpportunity }) {
             <Typography variant="caption" color="text.secondary" fontWeight={850} lineHeight={1}>
               {displayEv === null ? 'Edge' : 'EV'}
             </Typography>
-            <Typography color={(displayEv ?? market.probabilityEdge) > 0 ? 'success.main' : 'error.main'} fontWeight={950} whiteSpace="nowrap" lineHeight={1.1}>
-              {formatPercent(displayEv ?? market.probabilityEdge, { signed: true })}
+            <Typography color={(headlineValue ?? 0) > 0 ? 'success.main' : 'error.main'} fontWeight={950} whiteSpace="nowrap" lineHeight={1.1}>
+              {formatPercent(headlineValue, { signed: true })}
             </Typography>
           </Stack>
         }
@@ -105,7 +106,7 @@ export function MarketCard({ market }: { market: MarketOpportunity }) {
           <Box>
             <OpportunityMetricGrid columns={{ xs: 2, sm: 4 }} sx={{ borderTop: 0, pt: 0 }}>
               <OpportunityMetricItem label="Edge" value={formatPercent(market.probabilityEdge, { signed: true })} metric="edge" />
-              <OpportunityMetricItem label="Hit chance" value={formatPercent(market.modelProbability)} metric="hitChance" />
+              <OpportunityMetricItem label="Model hit chance" value={formatPercent(market.modelProbability)} metric="hitChance" />
               <OpportunityMetricItem label="Trust" value={<TrustValue level={market.trustLevel} sx={{ fontSize: 14, fontWeight: 950, lineHeight: 1.5 }} />} metric="trust" />
               <OpportunityMetricItem label="Sample" value={String(market.historicalSampleSize)} />
             </OpportunityMetricGrid>

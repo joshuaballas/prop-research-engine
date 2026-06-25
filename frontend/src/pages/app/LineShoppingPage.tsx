@@ -52,7 +52,7 @@ export function LineShoppingPage() {
     const start = (page - 1) * pageSize;
     return groups.slice(start, start + pageSize);
   }, [groups, page, pageSize]);
-  const bestEdge = visibleMarkets.length ? Math.max(...visibleMarkets.map((market) => market.probabilityEdge)) : 0;
+  const bestEdge = visibleMarkets.length ? Math.max(...visibleMarkets.map((market) => market.probabilityEdge ?? Number.NEGATIVE_INFINITY)) : null;
   const dfsProviderCount = new Set(visibleMarkets.map((market) => market.provider)).size;
   const clearFilters = () => {
     setFilters(defaultLineShoppingFilters);

@@ -63,7 +63,7 @@ export function DashboardPage() {
   const latestImportedResultsDateLabel = formatDateShort(performanceAvailability?.latestResultsImportDate);
   const returnedTopPicks = topPicks.length;
   const bestEdgeMarket = filtered.reduce<MarketOpportunity | undefined>(
-    (best, market) => (!best || market.probabilityEdge > best.probabilityEdge ? market : best),
+    (best, market) => (!best || (market.probabilityEdge ?? Number.NEGATIVE_INFINITY) > (best.probabilityEdge ?? Number.NEGATIVE_INFINITY) ? market : best),
     undefined
   );
   const freshness = freshnessQuery.data;
@@ -107,7 +107,7 @@ export function DashboardPage() {
           <MetricCard label="Top Picks" value={`${returnedTopPicks}`} helper="Current props" />
         </Grid>
         <Grid size={{ xs: 6, sm: 6, lg: 2.4 }}>
-          <MetricCard label="Best Edge" value={formatPercent(bestEdgeMarket?.probabilityEdge ?? 0, { signed: true })} helper={bestEdgeMarket?.player ?? 'No active prop'} />
+          <MetricCard label="Best Edge" value={formatPercent(bestEdgeMarket?.probabilityEdge, { signed: true })} helper={bestEdgeMarket?.player ?? 'No active prop'} />
         </Grid>
         <Grid size={{ xs: 6, sm: 6, lg: 2.4 }}>
           <MetricCard label="Providers" value={`${new Set(activeDfs.map((market) => market.provider)).size}`} helper="Live providers" />
@@ -255,7 +255,7 @@ function DashboardOpportunityCard({ market, builder }: { market: MarketOpportuni
         metrics={
           <OpportunityMetricGrid columns={{ xs: 2, sm: 3 }} sx={{ borderTop: 0, pt: 0 }}>
             <OpportunityMetricItem label="Edge" value={formatPercent(market.probabilityEdge, { signed: true })} metric="edge" />
-            <OpportunityMetricItem label="Hit chance" value={formatPercent(market.modelProbability)} metric="hitChance" />
+            <OpportunityMetricItem label="Model hit chance" value={formatPercent(market.modelProbability)} metric="hitChance" />
             <OpportunityMetricItem
               label="Trust"
               value={<TrustValue level={market.trustLevel} sx={{ fontSize: '0.875rem', fontWeight: 900, lineHeight: 1.43 }} />}
@@ -280,13 +280,13 @@ function ApiStateCard({ message, tone = 'default' }: { message: string; tone?: '
   );
 }
 
-function EdgeValue({ value }: { value: number }) {
+function EdgeValue({ value }: { value: number | null }) {
   return (
     <Stack direction="row" spacing={0.55} alignItems="baseline" flexShrink={0}>
       <Typography variant="caption" color="text.secondary" fontWeight={850}>
         Edge
       </Typography>
-      <Typography color={value >= 0 ? 'success.main' : 'error.main'} fontWeight={950}>
+      <Typography color={(value ?? 0) >= 0 ? 'success.main' : 'error.main'} fontWeight={950}>
         {formatPercent(value, { signed: true })}
       </Typography>
     </Stack>
@@ -339,7 +339,7 @@ function hasReferenceLine(market: MarketOpportunity) {
 
 function EntryBuilderPreview({ provider, legs, sports, onReview }: { provider: string; legs: MarketOpportunity[]; sports: string[]; onReview: () => void }) {
   const hasProvider = legs.length > 0;
-  const projectedEdge = legs.length ? legs.reduce((sum, leg) => sum + leg.probabilityEdge, 0) / legs.length : 0;
+  const projectedEdge = legs.length ? legs.reduce((sum, leg) => sum + (leg.probabilityEdge ?? 0), 0) / legs.length : 0;
   const payoutMayVary = legs.some((leg) => leg.projectionModifier !== 'Normal');
 
   if (!hasProvider) {
@@ -417,7 +417,7 @@ function EntryBuilderPreview({ provider, legs, sports, onReview }: { provider: s
                     }}
                   />
                 </Box>
-                <Typography color={leg.probabilityEdge > 0 ? 'success.main' : 'error.main'} fontWeight={950}>
+                <Typography color={(leg.probabilityEdge ?? 0) > 0 ? 'success.main' : 'error.main'} fontWeight={950}>
                   {formatPercent(leg.probabilityEdge, { signed: true })}
                 </Typography>
               </Stack>

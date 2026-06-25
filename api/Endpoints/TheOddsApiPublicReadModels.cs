@@ -1003,6 +1003,7 @@ public static partial class TheOddsApiDebugEndpoints
         }
 
         AddExpectedValueDisplayMetadata(obj);
+        AddModelProbabilityDisplayMetadata(obj);
 
         if (playerId.HasValue && playerId.Value != Guid.Empty)
         {
@@ -1032,6 +1033,26 @@ public static partial class TheOddsApiDebugEndpoints
         obj["showExpectedValue"] = expectedValueDisplay.ShowExpectedValue;
         obj["displayExpectedValue"] = expectedValueDisplay.DisplayExpectedValue;
         obj["expectedValueUnavailableReason"] = expectedValueDisplay.ExpectedValueUnavailableReason;
+    }
+
+    private static void AddModelProbabilityDisplayMetadata(JsonObject obj)
+    {
+        var bestProbability = GetDecimal(obj, "selectedSideProbability", "SelectedSideProbability", "bestProbability", "BestProbability");
+        var modelOverProbability = GetDecimal(obj, "modelOverProbability", "ModelOverProbability", "modelProbabilityOver", "ModelProbabilityOver");
+        var modelUnderProbability = GetDecimal(obj, "modelUnderProbability", "ModelUnderProbability", "modelProbabilityUnder", "ModelProbabilityUnder");
+        var historicalSampleSize = GetInt32(obj, "historicalSampleSize", "HistoricalSampleSize") ?? 0;
+        var probabilitySource = GetString(obj, "probabilitySource", "ProbabilitySource", "probabilityMethod", "ProbabilityMethod");
+
+        obj["selectedSideProbability"] = bestProbability;
+        obj["modelProbabilityAvailable"] = bestProbability.HasValue;
+        obj["hitChanceUnavailableReason"] = bestProbability.HasValue
+            ? null
+            : historicalSampleSize > 0
+                ? "HistoricalDataAvailableButModelProbabilityMissing"
+                : "Model hit chance is unavailable for this row. Historical hit rate is shown in the chart.";
+        obj["modelOverProbability"] = modelOverProbability;
+        obj["modelUnderProbability"] = modelUnderProbability;
+        obj["probabilitySource"] = bestProbability.HasValue ? probabilitySource : null;
     }
 
     private static string? GetString(JsonObject obj, params string[] keys)

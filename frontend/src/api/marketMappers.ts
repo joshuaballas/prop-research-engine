@@ -32,6 +32,11 @@ function mapMarketGroupToOpportunity(group: MarketGroupDto, index: number, sourc
   const isDfs = readBoolean(group, 'isDfs', 'IsDfs') ?? providerCategory === 'DFS';
   const isSportsbook = readBoolean(group, 'isSportsbook', 'IsSportsbook') ?? providerCategory === 'Sportsbook';
   const rawEstimatedEv = readNumber(group, 'bestEstimatedEv', 'BestEstimatedEv') ?? 0;
+  const selectedSideProbability = readNumber(group, 'selectedSideProbability', 'SelectedSideProbability', 'bestProbability', 'BestProbability') ?? null;
+  const modelProbabilityAvailable =
+    readBoolean(group, 'modelProbabilityAvailable', 'ModelProbabilityAvailable') ??
+    selectedSideProbability !== null;
+  const probabilityEdge = readNumber(group, 'bestProbabilityEdge', 'BestProbabilityEdge') ?? null;
   const hasSportsbookPricing =
     readNumber(group, 'bestImpliedProbability', 'BestImpliedProbability') !== undefined ||
     readNumber(group, 'bestDecimalPrice', 'BestDecimalPrice') !== undefined ||
@@ -114,9 +119,17 @@ function mapMarketGroupToOpportunity(group: MarketGroupDto, index: number, sourc
     canAddToEntry: providerCategory === 'DFS' && entryActionable && !isExpired && (!lifecycleStatusNormalized || lifecycleStatusNormalized === 'active'),
     bestAmericanPrice: readNumber(group, 'bestAmericanPrice', 'BestAmericanPrice') ?? 0,
     bestDecimalPrice: readNumber(group, 'bestDecimalPrice', 'BestDecimalPrice') ?? 0,
-    modelProbability: readNumber(group, 'bestProbability', 'BestProbability') ?? 0,
-    impliedProbability: readNumber(group, 'bestImpliedProbability', 'BestImpliedProbability') ?? 0,
-    probabilityEdge: readNumber(group, 'bestProbabilityEdge', 'BestProbabilityEdge') ?? 0,
+    modelProbability: selectedSideProbability,
+    selectedSideProbability,
+    modelProbabilityAvailable,
+    hitChanceUnavailableReason:
+      readString(group, 'hitChanceUnavailableReason', 'HitChanceUnavailableReason') ??
+      (modelProbabilityAvailable ? null : 'Model hit chance is unavailable for this row. Historical hit rate is shown in the chart.'),
+    modelOverProbability: readNumber(group, 'modelOverProbability', 'ModelOverProbability') ?? null,
+    modelUnderProbability: readNumber(group, 'modelUnderProbability', 'ModelUnderProbability') ?? null,
+    probabilitySource: readString(group, 'probabilitySource', 'ProbabilitySource') ?? null,
+    impliedProbability: readNumber(group, 'bestImpliedProbability', 'BestImpliedProbability') ?? null,
+    probabilityEdge,
     estimatedEv: rawEstimatedEv,
     strategyClassification: normalizeStrategy(group.strategyClassification, group),
     strategyTier: readString(group, 'strategyTier', 'StrategyTier') ?? 'Research',

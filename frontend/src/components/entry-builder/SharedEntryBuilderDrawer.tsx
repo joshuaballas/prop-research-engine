@@ -12,7 +12,7 @@ export function SharedEntryBuilderDrawer() {
   const theme = useTheme();
   const isMobile = useMediaQuery(theme.breakpoints.down('md'));
   const lockedProvider = builder.lockedProviderName;
-  const averageEdge = builder.legs.length ? builder.legs.reduce((sum, leg) => sum + leg.probabilityEdge, 0) / builder.legs.length : 0;
+  const averageEdge = builder.legs.length ? builder.legs.reduce((sum, leg) => sum + (leg.probabilityEdge ?? 0), 0) / builder.legs.length : 0;
   const [rules, setRules] = useState<EntryRule[]>(mockEntryRules);
 
   useEffect(() => {
@@ -89,7 +89,8 @@ export function SharedEntryBuilderDrawer() {
   );
 }
 
-function formatSignedPercent(value: number) {
+function formatSignedPercent(value: number | null | undefined) {
+  if (value === null || value === undefined || !Number.isFinite(value)) return '—';
   const formatted = `${Math.abs(value * 100).toFixed(1)}%`;
   return value >= 0 ? `+${formatted}` : `-${formatted}`;
 }

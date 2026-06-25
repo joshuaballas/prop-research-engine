@@ -1,4 +1,8 @@
-export function formatPercent(value: number, options?: { signed?: boolean; digits?: number }) {
+export function formatPercent(value: number | null | undefined, options?: { signed?: boolean; digits?: number }) {
+  if (value === null || value === undefined || !Number.isFinite(value)) {
+    return '—';
+  }
+
   const digits = options?.digits ?? 2;
   const prefix = options?.signed && value > 0 ? '+' : '';
   return `${prefix}${(value * 100).toFixed(digits)}%`;
