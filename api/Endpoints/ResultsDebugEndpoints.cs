@@ -2820,6 +2820,85 @@ public static class ResultsDebugEndpoints
         .WithName("ApiSportsSoccerManualVisibleAliasApprovalDebug")
         .WithSummary("Dry-run-first manual pair approval for visible Soccer World Cup missing-history aliases.");
 
+        endpoints.MapPost("/api/debug/soccer/player-history/identity-reconcile-visible", async (
+            SoccerIdentityResolutionDebugRequest request,
+            ISoccerPlayerIdentityResolutionService identityResolutionService,
+            IOptions<SoccerIdentityResolutionOptions> identityOptions,
+            CancellationToken cancellationToken) =>
+        {
+            var options = identityOptions.Value;
+            if (!options.Enabled)
+            {
+                return Results.Conflict(new
+                {
+                    generatedAtUtc = DateTimeOffset.UtcNow,
+                    callsExternalApis = false,
+                    readOnly = true,
+                    writesRows = false,
+                    blocked = true,
+                    blockReason = "SoccerIdentityResolutionDisabled",
+                    options = new
+                    {
+                        options.Enabled,
+                        options.AutoWriteSafeLinks,
+                        options.MaxWritesPerRun
+                    },
+                    guardrails = BuildSoccerResearchOnlyGuardrails()
+                });
+            }
+
+            var dryRun = request.DryRun != false;
+            var forceWrite = request.ForceWrite == true;
+            var maxWrites = Math.Clamp(request.MaxWrites ?? options.MaxWritesPerRun, 0, 500);
+            var result = await identityResolutionService.ReconcileVisibleAsync(
+                new SoccerIdentityResolutionRequest(
+                    request.Competition,
+                    dryRun,
+                    forceWrite,
+                    Math.Clamp(request.MinScore ?? 0.90m, 0m, 1m),
+                    Math.Clamp(request.MaxCandidateCount ?? 3, 1, 25),
+                    request.OnlyVisible ?? true,
+                    maxWrites),
+                cancellationToken);
+
+            return Results.Ok(new
+            {
+                result.GeneratedAtUtc,
+                result.CallsExternalApis,
+                result.ReadOnly,
+                result.WritesRows,
+                guardrails = BuildSoccerResearchOnlyGuardrails(),
+                options = new
+                {
+                    options.Enabled,
+                    options.AutoWriteSafeLinks,
+                    options.MaxWritesPerRun
+                },
+                filters = new
+                {
+                    result.Competition,
+                    result.DryRun,
+                    forceWrite,
+                    minScore = Math.Clamp(request.MinScore ?? 0.90m, 0m, 1m),
+                    maxCandidateCount = Math.Clamp(request.MaxCandidateCount ?? 3, 1, 25),
+                    onlyVisible = request.OnlyVisible ?? true,
+                    maxWrites
+                },
+                summary = new
+                {
+                    result.Evaluated,
+                    result.AlreadyLinked,
+                    result.SafeLinkable,
+                    result.Written,
+                    result.ReviewRequired,
+                    result.Blocked
+                },
+                rows = result.Rows
+            });
+        })
+        .WithName("ApiSportsSoccerVisibleIdentityReconcileDebug")
+        .WithSummary("Dry-run-first automatic Soccer visible player identity reconciliation.");
+
         endpoints.MapGet("/api/debug/soccer/player-history/readiness", async (
             ApplicationDbContext dbContext,
             CancellationToken cancellationToken) =>
@@ -14013,6 +14092,15 @@ public static class ResultsDebugEndpoints
         bool? DryRun,
         bool? ForceWrite,
         VisibleSoccerAliasManualApproval[]? Approvals);
+
+    private sealed record SoccerIdentityResolutionDebugRequest(
+        string? Competition,
+        bool? DryRun,
+        bool? ForceWrite,
+        decimal? MinScore,
+        int? MaxCandidateCount,
+        bool? OnlyVisible,
+        int? MaxWrites);
 
     private sealed record VisibleSoccerAliasManualApproval(
         Guid LocalPlayerId,

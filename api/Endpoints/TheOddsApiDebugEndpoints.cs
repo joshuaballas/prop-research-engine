@@ -9,6 +9,7 @@ using System.Text;
 using System.Text.Json;
 using SportsBetting.Api.Data;
 using SportsBetting.Api.Integrations.Results.Mlb;
+using SportsBetting.Api.Integrations.Results.Soccer;
 using SportsBetting.Api.Models;
 using SportsBetting.Api.Predictions;
 
@@ -2985,6 +2986,8 @@ public static partial class TheOddsApiDebugEndpoints
             ApplicationDbContext dbContext,
             IApplicationErrorLogger errorLogger,
             ITheOddsMlbRefreshService mlbRefreshService,
+            ISoccerPlayerIdentityResolutionService soccerIdentityResolutionService,
+            IOptions<SoccerIdentityResolutionOptions> soccerIdentityResolutionOptions,
             HttpContext httpContext,
             CancellationToken cancellationToken) =>
         {
@@ -3046,6 +3049,8 @@ public static partial class TheOddsApiDebugEndpoints
                 ingestionService,
                 dbContext,
                 errorLogger,
+                soccerIdentityResolutionService,
+                soccerIdentityResolutionOptions.Value,
                 httpContext,
                 cancellationToken);
         })
@@ -11013,6 +11018,8 @@ public static partial class TheOddsApiDebugEndpoints
         ITheOddsApiMlbEventIngestionService ingestionService,
         ApplicationDbContext dbContext,
         IApplicationErrorLogger errorLogger,
+        ISoccerPlayerIdentityResolutionService soccerIdentityResolutionService,
+        SoccerIdentityResolutionOptions soccerIdentityResolutionOptions,
         HttpContext httpContext,
         CancellationToken cancellationToken)
     {
@@ -11329,6 +11336,50 @@ public static partial class TheOddsApiDebugEndpoints
                 .SelectMany(row => row.ProviderDiagnostics.SelectMany(diagnostic => diagnostic.MarketKeys.Select(market => new { market, rows = row.PlatformPropsUpserted })))
                 .GroupBy(row => row.market, StringComparer.OrdinalIgnoreCase)
                 .ToDictionary(group => group.Key, group => group.Sum(row => row.rows), StringComparer.OrdinalIgnoreCase);
+            SoccerIdentityResolutionResult? identityResolution = null;
+            if (soccerIdentityResolutionOptions.Enabled)
+            {
+                identityResolution = await soccerIdentityResolutionService.ReconcileVisibleAsync(
+                    new SoccerIdentityResolutionRequest(
+                        Competition: "World Cup",
+                        DryRun: !soccerIdentityResolutionOptions.AutoWriteSafeLinks,
+                        ForceWrite: soccerIdentityResolutionOptions.AutoWriteSafeLinks,
+                        MinScore: 0.90m,
+                        MaxCandidateCount: 3,
+                        OnlyVisible: true,
+                        MaxWrites: Math.Max(0, soccerIdentityResolutionOptions.MaxWritesPerRun)),
+                    cancellationToken);
+                refreshRun.DiagnosticsJson = JsonSerializer.SerializeToDocument(new
+                {
+                    sport = "SOCCER",
+                    competition = "World Cup",
+                    fromDate,
+                    toDate,
+                    maxEvents,
+                    resultGradingSupported = false,
+                    providerCategory,
+                    region,
+                    sportsbookContextResearchOnly = !isDfsContext,
+                    sportsbookContextNotDfsPlayable = !isDfsContext,
+                    eventsDiscovered = eventFetch.Events.Count,
+                    eventsEligible = eligibleEvents.Length,
+                    eventsSkipped = skippedEvents,
+                    eventsFetched = events.Length,
+                    eventsMatchedToSlate = events.Length,
+                    diagnostics = soccerDiagnostics,
+                    identityResolution = new
+                    {
+                        identityResolution.Evaluated,
+                        identityResolution.AlreadyLinked,
+                        identityResolution.SafeLinkable,
+                        identityResolution.Written,
+                        identityResolution.ReviewRequired,
+                        identityResolution.Blocked,
+                        identityResolution.DryRun
+                    }
+                });
+                await dbContext.SaveChangesAsync(cancellationToken);
+            }
 
             return Results.Ok(new
             {
@@ -11370,6 +11421,26 @@ public static partial class TheOddsApiDebugEndpoints
                 soccerMarketsDiscovered = ingestionResults.Sum(row => row.NormalizedRecords),
                 soccerMarketsMapped = ingestionResults.Sum(row => row.PlatformPropsUpserted),
                 soccerMarketsUnsupported = soccerDiagnostics.UnsupportedMarketsReturned,
+                identityResolution = identityResolution is null
+                    ? (object)new
+                    {
+                        enabled = false,
+                        soccerIdentityResolutionOptions.AutoWriteSafeLinks,
+                        soccerIdentityResolutionOptions.MaxWritesPerRun
+                    }
+                    : new
+                    {
+                        enabled = true,
+                        identityResolution.Evaluated,
+                        identityResolution.AlreadyLinked,
+                        identityResolution.SafeLinkable,
+                        identityResolution.Written,
+                        identityResolution.ReviewRequired,
+                        identityResolution.Blocked,
+                        identityResolution.DryRun,
+                        soccerIdentityResolutionOptions.AutoWriteSafeLinks,
+                        soccerIdentityResolutionOptions.MaxWritesPerRun
+                    },
                 diagnostics = soccerDiagnostics
             });
         }

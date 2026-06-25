@@ -243,6 +243,15 @@ Broader current-year Soccer history is guarded debug-only. `GET /api/debug/socce
 
 For remaining reviewed aliases, `GET /api/debug/soccer/player-history/visible-alias-approval-plan` returns a compact manual plan and `POST /api/debug/soccer/player-history/visible-alias-link-approve` approves explicit `localPlayerId` + `providerPlayerId` pairs. This manual route still defaults to dry-run, requires `forceWrite=true` for writes, requires the provider id to appear in the visible alias candidates, requires supported local history rows, and blocks any local/canonical player that already has an approved API-Sports link.
 
+`SoccerPlayerIdentityResolutionService` is the reusable automatic version of the visible missing-history recovery workflow. It uses only local `platform_props`, `provider_entity_links`, `player_external_refs`, and persisted API-Sports Football `prop_results`. It never calls providers, merges players, rewrites results, or enables Soccer grading. Automatic write categories are intentionally narrow:
+
+- `SafeAliasToAlreadyApprovedProvider`: the provider player id is already approved for another local Soccer alias, score is at least `0.90`, candidate fan-out is at most `3`, and there are no close competitors or local/canonical conflicts.
+- `SafeReviewedAliasPattern`: a strong reviewed alias pattern scores at least `0.92`, has supported results, candidate fan-out is at most `3`, and has no local/canonical conflict.
+
+Everything else remains `ReviewRequired`; current weak or high-fan-out examples such as Danilo Luiz da Silva -> Danilo and Roberto Lopes -> Robert should not be auto-linked under these rules.
+
+After successful Soccer / World Cup provider-context ingestion, the manual refresh path calls this service when `SoccerIdentityResolution:Enabled=true`. `SoccerIdentityResolution:AutoWriteSafeLinks=true` writes only automatic-safe links; set it to `false` to make the post-ingestion run diagnostic-only. `SoccerIdentityResolution:MaxWritesPerRun` caps automatic writes.
+
 ```powershell
 $base = "http://localhost:5299"
 $stamp = Get-Date -Format "yyyyMMdd-HHmmss"
@@ -325,6 +334,23 @@ $manualWrite = Invoke-RestMethod -Method Post "$base/api/debug/soccer/player-his
 $manualWrite | ConvertTo-Json -Depth 100 | Set-Content $manualWritePath
 $manualWrite.summary | ConvertTo-Json -Depth 20
 $manualWrite.rows | Select-Object playerName,selectedProviderDisplayName,score,confidenceBucket,decision,writtenLinkId | ConvertTo-Json -Depth 30
+
+$reconcilePath = "tmp-soccer-identity-reconcile-visible-$stamp.json"
+$reconcile = Invoke-RestMethod -Method Post "$base/api/debug/soccer/player-history/identity-reconcile-visible" `
+  -ContentType "application/json" `
+  -Body '{"competition":"World Cup","dryRun":true,"minScore":0.90,"maxCandidateCount":3,"onlyVisible":true,"maxWrites":100}'
+$reconcile | ConvertTo-Json -Depth 100 | Set-Content $reconcilePath
+$reconcile.summary | ConvertTo-Json -Depth 20
+$reconcile.rows | Select-Object playerName,selectedProviderDisplayName,score,category,decision,blockReasons,writtenLinkId | ConvertTo-Json -Depth 30
+
+# Only after reviewing dry-run output.
+$reconcileWritePath = "tmp-soccer-identity-reconcile-visible-write-$stamp.json"
+$reconcileWrite = Invoke-RestMethod -Method Post "$base/api/debug/soccer/player-history/identity-reconcile-visible" `
+  -ContentType "application/json" `
+  -Body '{"competition":"World Cup","dryRun":false,"forceWrite":true,"minScore":0.90,"maxCandidateCount":3,"onlyVisible":true,"maxWrites":100}'
+$reconcileWrite | ConvertTo-Json -Depth 100 | Set-Content $reconcileWritePath
+$reconcileWrite.summary | ConvertTo-Json -Depth 20
+$reconcileWrite.rows | Select-Object playerName,selectedProviderDisplayName,score,category,decision,blockReasons,writtenLinkId | ConvertTo-Json -Depth 30
 ```
 
 `GET /api/debug/soccer/player-identity/bridge-preview` is the read-only review queue for linking local platform/sportsbook Soccer players to historical API-Sports player ids. It compares normalized display names, existing API-Sports refs, existing approved provider links, duplicate local player names, and available competition context. Categories are `SafeExactName`, `NeedsReview`, `Conflict`, `AlreadyLinked`, and `NoCandidate`. Preview supports `offset`, `limit`, `category`, and `excludeAlreadyLinked=false` by default so reviewers can inspect linked and unlinked rows. `POST /api/debug/soccer/player-identity/bridge-apply` supports the same paging/filtering fields, defaults `excludeAlreadyLinked=true`, and defaults to `dryRun=true`; real writes require `dryRun=false` and `forceWrite=true`, and only conflict-free `SafeExactName` rows are approved. The apply step writes `provider_entity_links` with `provider_key=api-sports-football`; it does not merge duplicate local players, move historical `prop_results`, call API-Sports, or enable public Soccer grading.

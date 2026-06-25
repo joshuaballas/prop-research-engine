@@ -595,6 +595,27 @@ $write | Select-Object summary,pagination | ConvertTo-Json -Depth 20
 
 `player-history/visible-alias-approval-plan` and `player-history/visible-alias-link-approve` support one-by-one manual approval for remaining reviewed visible aliases. The plan endpoint is read-only and flags suggested approvals versus riskier rows. The manual apply endpoint requires explicit `localPlayerId` + `providerPlayerId` pairs, defaults to dry-run, requires `forceWrite=true` for writes, verifies the provider id appears in that player's visible alias candidates, requires supported history rows, blocks existing local/canonical API-Sports links, and writes only `api-sports-football` `provider_entity_links` with source `ManualVisibleAliasApproval`.
 
+`SoccerPlayerIdentityResolutionService` converts the visible missing-history recovery flow into reusable automatic identity resolution. It is local-DB-only and evaluates persisted The Odds context-v2 Soccer sportsbook rows against API-Sports Football historical result players. Automatic categories are `SafeAliasToAlreadyApprovedProvider` and `SafeReviewedAliasPattern`; rows with weak scores, many candidates, close competitors, or local/canonical conflicts remain `ReviewRequired`. The debug endpoint is `POST /api/debug/soccer/player-history/identity-reconcile-visible`, and successful Soccer provider-context ingestion calls the same service when `SoccerIdentityResolution:Enabled=true`. `AutoWriteSafeLinks=true` writes only safe automatic links; otherwise the post-ingestion run is dry-run diagnostic output only.
+
+```powershell
+$reconcilePath = "tmp-soccer-identity-reconcile-visible-$stamp.json"
+$reconcile = Invoke-RestMethod -Method Post "$base/api/debug/soccer/player-history/identity-reconcile-visible" `
+  -ContentType "application/json" `
+  -Body '{"competition":"World Cup","dryRun":true,"minScore":0.90,"maxCandidateCount":3,"onlyVisible":true,"maxWrites":100}'
+$reconcile | ConvertTo-Json -Depth 100 | Set-Content $reconcilePath
+$reconcile.summary | ConvertTo-Json -Depth 20
+$reconcile.rows | Select-Object playerName,selectedProviderDisplayName,score,category,decision,blockReasons,writtenLinkId | ConvertTo-Json -Depth 30
+
+# Only after reviewing dry-run output.
+$reconcileWritePath = "tmp-soccer-identity-reconcile-visible-write-$stamp.json"
+$reconcileWrite = Invoke-RestMethod -Method Post "$base/api/debug/soccer/player-history/identity-reconcile-visible" `
+  -ContentType "application/json" `
+  -Body '{"competition":"World Cup","dryRun":false,"forceWrite":true,"minScore":0.90,"maxCandidateCount":3,"onlyVisible":true,"maxWrites":100}'
+$reconcileWrite | ConvertTo-Json -Depth 100 | Set-Content $reconcileWritePath
+$reconcileWrite.summary | ConvertTo-Json -Depth 20
+$reconcileWrite.rows | Select-Object playerName,selectedProviderDisplayName,score,category,decision,blockReasons,writtenLinkId | ConvertTo-Json -Depth 30
+```
+
 `bridge-preview` and `bridge-apply` are the safe identity bridge workflow for platform/sportsbook Soccer players. Preview is read-only and returns `SafeExactName`, `NeedsReview`, `Conflict`, `AlreadyLinked`, and `NoCandidate` rows with reasons, blocking conflicts, total category counts, and pagination. Both endpoints support `offset`, `limit`, `category`, and `excludeAlreadyLinked`; preview defaults `excludeAlreadyLinked=false`, while apply defaults it to `true` so repeated safe applies can continue past already-approved rows. Apply is dry-run-first; real writes require `forceWrite=true` and only persist conflict-free `SafeExactName` rows as approved `provider_entity_links`. It never merges players, rewrites `prop_results`, calls providers, or enables public Soccer grading.
 
 `duplicate-bridge-preview` and `duplicate-bridge-apply` handle the next review tier: duplicate local platform player records sharing the same normalized name. A group is writable only when every duplicate platform player resolves to exactly one API-Sports provider player id and there are no mixed approved links. Writable groups are categorized `ResolvableDuplicateSameProvider`; blocked categories include `MultipleHistoricalCandidates`, `ExistingMixedLinks`, `MissingHistoricalCandidate`, and `Conflict`. Apply remains dry-run-first, requires `forceWrite=true` for writes, writes approved `provider_entity_links` for unlinked local duplicate players only, and never merges players or rewrites historical results.
