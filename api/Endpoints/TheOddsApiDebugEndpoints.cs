@@ -3678,6 +3678,10 @@ public static partial class TheOddsApiDebugEndpoints
                 ExtractDecimalPrice(row.Metadata, "higher"),
                 ExtractDecimalPrice(row.Metadata, "lower"),
                 ResolveMlbResultDateForBacktest(row.Metadata, ExtractEventStartTime(row.Metadata), row.ObservedAt),
+                ExtractMetadataString(row.Metadata, "sport", "code"),
+                ExtractMetadataString(row.Metadata, "sport", "competition"),
+                ExtractMetadataString(row.Metadata, "sport", "providerSportKey"),
+                ExtractMetadataRootString(row.Metadata, "contextSchemaVersion"),
                 HasDataProvider(row.Metadata)))
             .ToList();
     }
@@ -10236,6 +10240,10 @@ public static partial class TheOddsApiDebugEndpoints
         decimal? PriceOverDecimal,
         decimal? PriceUnderDecimal,
         TheOddsMlbBacktestResultDate BacktestResultDate,
+        string? SportCode,
+        string? Competition,
+        string? ProviderSportKey,
+        string? ContextSchemaVersion,
         bool HasTheOddsDataProvider);
 
     private sealed record TheOddsProjectionMetadata(

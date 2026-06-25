@@ -382,6 +382,104 @@ public static partial class TheOddsApiDebugEndpoints
             comparisonGroups);
     }
 
+    internal static async Task<MlbLineShoppingReadResponse> BuildSoccerWorldCupLineShoppingContextResponseAsync(
+        int? take,
+        bool includeBookmakerPrices,
+        int? freshnessMinutes,
+        string? providerCategory,
+        ApplicationDbContext dbContext,
+        CancellationToken cancellationToken)
+    {
+        var totalStopwatch = Stopwatch.StartNew();
+        var generatedAtUtc = DateTimeOffset.UtcNow;
+        var lifecycleFreshnessMinutes = Math.Clamp(freshnessMinutes ?? DefaultTheOddsLineShoppingFreshnessMinutes, 1, 1440);
+        var requestedTake = Math.Clamp(take ?? 50, 1, 500);
+        var latestSoccerRun = await dbContext.TheOddsRefreshRuns
+            .AsNoTracking()
+            .Where(row => row.Provider == "The Odds API" && row.Sport == "SOCCER" && row.Succeeded && !row.DryRun)
+            .OrderByDescending(row => row.CompletedAtUtc ?? row.StartedAtUtc)
+            .FirstOrDefaultAsync(cancellationToken);
+        var platformProps = await LoadSoccerWorldCupSportsbookPlatformPropsAsync(
+            dbContext,
+            providerCategory,
+            cancellationToken);
+        var rows = BuildTheOddsResearchOnlyLineShoppingRows(platformProps);
+        var groups = BuildTheOddsLineShoppingGroups(rows, generatedAtUtc, lifecycleFreshnessMinutes)
+            .OrderByDescending(group => group.EventStartTime ?? group.LastObservedAt)
+            .ThenBy(group => group.Player)
+            .ThenBy(group => group.NormalizedPropType)
+            .ThenBy(group => group.Line)
+            .Take(requestedTake)
+            .ToArray();
+        var comparisonGroups = groups
+            .Select(group => ToSoccerWorldCupResearchOnlyResponseGroup(group, includeBookmakerPrices))
+            .ToArray();
+        var strategyClassificationSummary = BuildTheOddsStrategyClassificationSummary(groups);
+        totalStopwatch.Stop();
+
+        return new MlbLineShoppingReadResponse(
+            generatedAtUtc,
+            SnapshotBacked: false,
+            RefreshRunId: latestSoccerRun?.Id,
+            FallbackReason: platformProps.Count == 0
+                ? "No persisted Soccer / World Cup sportsbook provider context rows are available yet."
+                : "Built from persisted Soccer / World Cup sportsbook provider context rows because prediction-backed line-shopping snapshots are not enabled for Soccer yet.",
+            Diagnostics: new
+            {
+                callsTheOddsApi = false,
+                usesPersistedDatabaseRowsOnly = true,
+                source = "platform_props",
+                contextSchemaVersion = "the-odds-provider-context-v2",
+                sport = "SOCCER",
+                competition = "World Cup",
+                providerCategory = "Sportsbook",
+                publicSoccerGradingEnabled = false,
+                soccerPredictionsEnabled = false,
+                entryActionableForUser = false,
+                snapshotBacked = false,
+                providerContextRowCount = platformProps.Count,
+                researchOnlyComparisonGroupCount = groups.Length,
+                totalDurationMs = totalStopwatch.ElapsedMilliseconds,
+                lifecycleFreshnessMinutes,
+                take = requestedTake,
+                includeBookmakerPrices
+            },
+            Run: new
+            {
+                runId = latestSoccerRun?.Id,
+                latestSoccerRun?.PredictionCount,
+                latestSoccerRun?.LineShoppingGroupCount,
+                latestSoccerRun?.PlatformPropsUpserted
+            },
+            Summary: new
+            {
+                totalComparisonGroups = groups.Length,
+                totalMarketsCompared = rows.Count,
+                totalBookmakers = rows.Select(row => row.Bookmaker).Distinct(StringComparer.OrdinalIgnoreCase).Count(),
+                groupsWithMultipleBookmakers = groups.Count(group => group.BookmakerPrices.Count > 1),
+                groupsWithSingleBookmaker = groups.Count(group => group.BookmakerPrices.Count == 1),
+                eligibleComparisonGroups = 0,
+                returnedComparisonGroups = comparisonGroups.Length,
+                actionableCandidateCount = 0,
+                sportsbookContextCandidateCount = 0,
+                dfsCandidateCount = 0,
+                providerContextRowCount = platformProps.Count,
+                providerCategoryBreakdown = groups
+                    .GroupBy(group => group.ProviderCategory, StringComparer.OrdinalIgnoreCase)
+                    .Select(group => new
+                    {
+                        providerCategory = group.Key,
+                        count = group.Count(),
+                        activeCount = group.Count(row => string.Equals(row.LifecycleStatus, "Active", StringComparison.OrdinalIgnoreCase)),
+                        researchOnlyCount = group.Count()
+                    })
+                    .OrderBy(row => row.providerCategory)
+                    .ToArray()
+            },
+            strategyClassificationSummary,
+            comparisonGroups);
+    }
+
     private static async Task PersistTheOddsMarketSnapshotsAsync(
         TheOddsRefreshRun refreshRun,
         Guid? predictionRunId,
@@ -1333,6 +1431,180 @@ public static partial class TheOddsApiDebugEndpoints
                 .Where(row => string.Equals(row.ProviderCategory, providerCategory, StringComparison.OrdinalIgnoreCase))
                 .ToList();
     }
+
+    internal static async Task<SoccerWorldCupProviderContextCounts> GetSoccerWorldCupProviderContextCountsAsync(
+        ApplicationDbContext dbContext,
+        CancellationToken cancellationToken)
+    {
+        var platformProps = await LoadSoccerWorldCupSportsbookPlatformPropsAsync(
+            dbContext,
+            providerCategory: null,
+            cancellationToken);
+        var activeRows = platformProps.Count(row => string.Equals(row.Status, "active", StringComparison.OrdinalIgnoreCase));
+
+        return new SoccerWorldCupProviderContextCounts(
+            PlatformRowCount: platformProps.Count,
+            ActivePlatformRowCount: activeRows,
+            ProviderEventCount: platformProps
+                .Select(row => row.EventId)
+                .Where(value => !string.IsNullOrWhiteSpace(value))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .Count(),
+            BookmakerCount: platformProps
+                .Select(row => NormalizeTheOddsBookmakerKey(row.BookmakerKey, row.PlatformName))
+                .Where(value => !string.IsNullOrWhiteSpace(value))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .Count());
+    }
+
+    private static async Task<List<TheOddsPersistedPlatformPropRow>> LoadSoccerWorldCupSportsbookPlatformPropsAsync(
+        ApplicationDbContext dbContext,
+        string? providerCategory,
+        CancellationToken cancellationToken)
+    {
+        var rows = await LoadTheOddsPlatformPropDataRowsAsync(dbContext, cancellationToken);
+        var platformProps = ParseTheOddsPlatformProps(rows);
+
+        return platformProps
+            .Where(IsRealSoccerWorldCupSportsbookContextRow)
+            .Where(row => string.IsNullOrWhiteSpace(providerCategory) ||
+                string.Equals(row.ProviderCategory, providerCategory, StringComparison.OrdinalIgnoreCase))
+            .ToList();
+    }
+
+    private static bool IsRealSoccerWorldCupSportsbookContextRow(TheOddsPersistedPlatformPropRow row)
+    {
+        return row.HasTheOddsDataProvider
+            && string.Equals(row.ContextSchemaVersion, "the-odds-provider-context-v2", StringComparison.OrdinalIgnoreCase)
+            && string.Equals(row.SportCode, "SOCCER", StringComparison.OrdinalIgnoreCase)
+            && string.Equals(row.Competition, "World Cup", StringComparison.OrdinalIgnoreCase)
+            && string.Equals(row.ProviderSportKey, "soccer_fifa_world_cup", StringComparison.OrdinalIgnoreCase)
+            && string.Equals(row.ProviderCategory, "Sportsbook", StringComparison.OrdinalIgnoreCase)
+            && !IsSyntheticSoccerProviderEventId(row.EventId);
+    }
+
+    private static bool IsSyntheticSoccerProviderEventId(string? eventId)
+    {
+        return string.IsNullOrWhiteSpace(eventId)
+            || eventId.Contains("|balanced", StringComparison.OrdinalIgnoreCase)
+            || eventId.Contains("|alternate", StringComparison.OrdinalIgnoreCase)
+            || eventId.Contains("SCR_game", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static List<TheOddsLineShoppingSourceRow> BuildTheOddsResearchOnlyLineShoppingRows(
+        IReadOnlyCollection<TheOddsPersistedPlatformPropRow> platformProps)
+    {
+        return platformProps
+            .Select(row =>
+            {
+                var eventStartUtc = row.EventStartTime?.ToUniversalTime();
+                var eventDate = DateOnly.FromDateTime((eventStartUtc ?? row.ObservedAt.ToUniversalTime()).DateTime);
+                var overImpliedProbability = CalculateImpliedProbability(row.PriceOverDecimal);
+                var underImpliedProbability = CalculateImpliedProbability(row.PriceUnderDecimal);
+
+                return new TheOddsLineShoppingSourceRow(
+                    row.EventId,
+                    row.EventStartTime,
+                    row.HomeTeam,
+                    row.AwayTeam,
+                    row.PlayerName,
+                    row.PropType,
+                    row.CurrentLine,
+                    row.MarketClassification,
+                    row.MarketKey,
+                    row.ProjectionMetadata.ProjectionType,
+                    row.ProjectionMetadata.ProjectionTypeConfidence,
+                    row.ProjectionMetadata.IsAlternateMarket,
+                    row.ProjectionMetadata.PayoutMultiplierMayDiffer,
+                    row.ProjectionMetadata.SpecialProjectionWarning,
+                    "Sportsbook",
+                    row.Region,
+                    IsActionableForUser: false,
+                    row.IsIndicativeOdds,
+                    IsEligibleAsNormalRecommendation: false,
+                    ModelProbabilityOver: null,
+                    ModelProbabilityUnder: null,
+                    ModelProbabilityPush: null,
+                    ModelProjection: null,
+                    ProjectionEdge: null,
+                    RankingScore: 0m,
+                    row.PlatformName,
+                    NormalizeTheOddsBookmakerKey(row.BookmakerKey, row.PlatformName),
+                    row.PlatformPropId,
+                    row.ObservedAt,
+                    row.OverAvailable,
+                    row.UnderAvailable,
+                    row.PriceOver,
+                    row.PriceOverDecimal,
+                    row.PriceUnder,
+                    row.PriceUnderDecimal,
+                    overImpliedProbability,
+                    underImpliedProbability,
+                    OverProbabilityEdge: null,
+                    UnderProbabilityEdge: null,
+                    OverEstimatedEv: null,
+                    UnderEstimatedEv: null,
+                    row.PlayerId,
+                    row.PropTypeId,
+                    eventDate,
+                    eventStartUtc,
+                    eventDate,
+                    "SoccerWorldCupProviderContext",
+                    eventDate,
+                    ResolvedMlbDate: null,
+                    HistoricalSampleSize: 0,
+                    ProbabilityMethod: "Unavailable",
+                    ConfidenceScore: 0m);
+            })
+            .ToList();
+    }
+
+    private static object ToSoccerWorldCupResearchOnlyResponseGroup(
+        TheOddsLineShoppingGroup group,
+        bool includeBookmakerPrices)
+    {
+        var node = JsonSerializer.SerializeToNode(ToLineShoppingResponseGroup(group, includeBookmakerPrices)) as JsonObject ?? [];
+        node["sport"] = "SOCCER";
+        node["competition"] = "World Cup";
+        node["providerCategory"] = "Sportsbook";
+        node["entryProviderCategory"] = "Sportsbook";
+        node["entryActionableForUser"] = false;
+        node["isActionableForUser"] = false;
+        node["sportsbookContextResearchOnly"] = true;
+        node["isResearchOnly"] = true;
+        node["resultGradingSupported"] = false;
+        node["resultGradingUnavailableReason"] = "Soccer history is not available yet.";
+        node["publicSoccerGradingEnabled"] = false;
+        node["entryUnavailableReason"] = "Soccer World Cup sportsbook context is research-only and not Entry Builder playable.";
+        node["entryRuleWarning"] = "Soccer World Cup sportsbook context is research-only and not Entry Builder playable.";
+        node["showExpectedValue"] = false;
+        node["displayExpectedValue"] = null;
+        node["expectedValueUnavailableReason"] = "World Cup sportsbook context is research-only until Soccer predictions and grading are enabled.";
+        node["bestEstimatedEv"] = null;
+        node["bestProbability"] = null;
+        node["selectedSideProbability"] = null;
+        node["modelProbabilityAvailable"] = false;
+        node["modelProbabilityOver"] = null;
+        node["modelProbabilityUnder"] = null;
+        node["modelProbabilityPush"] = null;
+        node["modelProjection"] = null;
+        node["projectionEdge"] = null;
+        node["probabilitySource"] = null;
+        node["hitChanceUnavailableReason"] = "World Cup model hit chance is not available yet.";
+        node["strategyClassification"] = "ResearchOnly";
+        node["strategyTier"] = "ResearchOnly";
+        node["isCandidate"] = false;
+        node["isWatchlist"] = false;
+        node["isAvoid"] = false;
+
+        return node;
+    }
+
+    internal sealed record SoccerWorldCupProviderContextCounts(
+        int PlatformRowCount,
+        int ActivePlatformRowCount,
+        int ProviderEventCount,
+        int BookmakerCount);
 
     private static async Task<PredictionProbabilityRunAnalysis> LoadProbabilityAnalysisAsync(
         Guid? runId,

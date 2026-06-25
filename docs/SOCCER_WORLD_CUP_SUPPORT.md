@@ -22,6 +22,7 @@ These endpoints are read-only and do not call external APIs. They return Soccer 
 Phase 1 public app behavior is intentionally narrow:
 
 - Line Shopping may surface persisted World Cup sportsbook context with `sport=SOCCER&competition=World Cup`.
+- If Soccer line-shopping snapshots do not exist because no Soccer prediction-backed groups were generated, public Line Shopping builds read-only research groups directly from persisted The Odds `platform_props` context rows.
 - Top Picks remains DFS-scoped in the customer app and must not present Soccer sportsbook context as model recommendations.
 - Soccer rows are always returned as research-only sportsbook context: `providerCategory=Sportsbook`, `entryActionableForUser=false`, `sportsbookContextResearchOnly=true`, `resultGradingSupported=false`, and `publicSoccerGradingEnabled=false`.
 - Soccer rows include unavailable reasons for grading and entry actionability. Model hit chance and EV should render as unavailable when prediction inputs are not present; do not show fake zeros.

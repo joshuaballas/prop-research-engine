@@ -1290,6 +1290,55 @@ public sealed class RefreshSafetyTests
     }
 
     [Fact]
+    public async Task SoccerWorldCupLineShopping_ReturnsPersistedProviderContext_WhenSnapshotsDoNotExist()
+    {
+        await using var factory = new SafetyTestApplicationFactory();
+        using var client = factory.CreateClient();
+        await factory.SeedSoccerWorldCupProviderContextRowsWithoutSnapshotsAsync();
+        var before = await factory.CountArtifactsAsync();
+
+        var freshnessResponse = await client.GetAsync("/api/markets/freshness?sport=SOCCER&competition=World%20Cup");
+        var lineShoppingResponse = await client.GetAsync("/api/markets/line-shopping?sport=SOCCER&competition=World%20Cup&includeBookmakerPrices=false");
+        var topPicksResponse = await client.GetAsync("/api/markets/top-picks?sport=SOCCER&competition=World%20Cup&providerCategory=DFS&take=10");
+
+        await EnsureSuccessWithBodyAsync(freshnessResponse);
+        await EnsureSuccessWithBodyAsync(lineShoppingResponse);
+        await EnsureSuccessWithBodyAsync(topPicksResponse);
+        var freshness = await freshnessResponse.Content.ReadFromJsonAsync<JsonElement>();
+        var lineShopping = await lineShoppingResponse.Content.ReadFromJsonAsync<JsonElement>();
+        var topPicks = await topPicksResponse.Content.ReadFromJsonAsync<JsonElement>();
+
+        Assert.True(freshness.GetProperty("hasUsableMarketData").GetBoolean());
+        Assert.Equal(0, freshness.GetProperty("lineShoppingSnapshotCount").GetInt32());
+        Assert.Equal(2, freshness.GetProperty("publicReadableContextRowCount").GetInt32());
+        Assert.Equal(1, freshness.GetProperty("publicReadableContextProviderEventCount").GetInt32());
+        Assert.Equal(2, freshness.GetProperty("diagnostics").GetProperty("soccerProviderContextRows").GetInt32());
+        Assert.False(lineShopping.GetProperty("snapshotBacked").GetBoolean());
+        Assert.Equal("SOCCER", lineShopping.GetProperty("effectiveSport").GetString());
+        Assert.Equal("World Cup", lineShopping.GetProperty("competition").GetString());
+        Assert.False(lineShopping.GetProperty("resultGradingSupported").GetBoolean());
+        Assert.Equal(2, lineShopping.GetProperty("summary").GetProperty("providerContextRowCount").GetInt32());
+        Assert.NotEmpty(lineShopping.GetProperty("comparisonGroups").EnumerateArray());
+
+        var group = lineShopping.GetProperty("comparisonGroups").EnumerateArray().First();
+        Assert.Equal("SOCCER", group.GetProperty("sport").GetString());
+        Assert.Equal("World Cup", group.GetProperty("competition").GetString());
+        Assert.Equal("Sportsbook", group.GetProperty("providerCategory").GetString());
+        Assert.False(group.GetProperty("entryActionableForUser").GetBoolean());
+        Assert.True(group.GetProperty("sportsbookContextResearchOnly").GetBoolean());
+        Assert.False(group.GetProperty("resultGradingSupported").GetBoolean());
+        Assert.Equal(JsonValueKind.Null, group.GetProperty("selectedSideProbability").ValueKind);
+        Assert.False(group.GetProperty("modelProbabilityAvailable").GetBoolean());
+        Assert.Equal("World Cup model hit chance is not available yet.", group.GetProperty("hitChanceUnavailableReason").GetString());
+        Assert.False(group.GetProperty("showExpectedValue").GetBoolean());
+        Assert.Equal(JsonValueKind.Null, group.GetProperty("displayExpectedValue").ValueKind);
+        Assert.Equal("ResearchOnly", group.GetProperty("strategyClassification").GetString());
+        Assert.Empty(topPicks.GetProperty("topPicks").EnumerateArray());
+        Assert.Equal(0, factory.TheOddsAdapter.CallCount);
+        Assert.Equal(before, await factory.CountArtifactsAsync());
+    }
+
+    [Fact]
     public async Task SoccerPerformanceSummary_RemainsUnavailable_WithoutCallingProviders()
     {
         await using var factory = new SafetyTestApplicationFactory();
@@ -6669,6 +6718,175 @@ public sealed class SafetyTestApplicationFactory : WebApplicationFactory<Program
             EntryActionableForUser = false,
             DetailsJson = details
         });
+
+        await dbContext.SaveChangesAsync();
+    }
+
+    public async Task SeedSoccerWorldCupProviderContextRowsWithoutSnapshotsAsync()
+    {
+        using var scope = Services.CreateScope();
+        var dbContext = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+        await dbContext.Database.EnsureDeletedAsync();
+        await dbContext.Database.EnsureCreatedAsync();
+
+        var sport = new Sport { Id = Guid.NewGuid(), Code = "SOCCER", Name = "Soccer" };
+        var league = new League
+        {
+            Id = Guid.NewGuid(),
+            SportId = sport.Id,
+            Name = "World Cup",
+            Code = "WC2026",
+            SeasonType = "2026"
+        };
+        var homeTeam = new Team { Id = Guid.NewGuid(), LeagueId = league.Id, Name = "Uruguay" };
+        var awayTeam = new Team { Id = Guid.NewGuid(), LeagueId = league.Id, Name = "Cape Verde" };
+        var eventStart = new DateTimeOffset(2026, 6, 21, 22, 0, 0, TimeSpan.Zero);
+        var game = new Game
+        {
+            Id = Guid.NewGuid(),
+            LeagueId = league.Id,
+            HomeTeamId = homeTeam.Id,
+            AwayTeamId = awayTeam.Id,
+            ScheduledStartAt = eventStart,
+            Status = "scheduled"
+        };
+        var propType = new PropType
+        {
+            Id = Guid.NewGuid(),
+            SportId = sport.Id,
+            Name = "Shots",
+            StatKey = "SHOTS",
+            ValueType = "numeric"
+        };
+        var platform = new Platform
+        {
+            Id = Guid.NewGuid(),
+            Name = "FanDuel",
+            Slug = "theodds-fanduel"
+        };
+        var refreshRun = new TheOddsRefreshRun
+        {
+            Id = Guid.NewGuid(),
+            Provider = "The Odds API",
+            Sport = "SOCCER",
+            SlateDate = new DateOnly(2026, 6, 21),
+            StartedAtUtc = DateTimeOffset.UtcNow.AddMinutes(-10),
+            CompletedAtUtc = DateTimeOffset.UtcNow.AddMinutes(-9),
+            Succeeded = true,
+            Failed = false,
+            Blocked = false,
+            DryRun = false,
+            ForceLive = true,
+            BookmakerPreset = "sportsbookContext",
+            ProviderCategoriesIncluded = "Sportsbook",
+            SportsbookBookmakersRequested = "fanduel",
+            DfsBookmakersRequested = string.Empty,
+            MarketsRequested = "player_shots",
+            EstimatedApiCalls = 1,
+            ActualApiCalls = 1,
+            PlatformPropsCreated = 2,
+            PlatformPropsUpserted = 2,
+            PredictionCount = 0,
+            LineShoppingGroupCount = 0,
+            DiagnosticsJson = JsonSerializer.SerializeToDocument(new
+            {
+                sport = "SOCCER",
+                competition = "World Cup",
+                platformPropsUpserted = 2,
+                lineShoppingGroupCount = 0,
+                soccerResultGradingSupported = false
+            })
+        };
+
+        dbContext.Sports.Add(sport);
+        dbContext.Leagues.Add(league);
+        dbContext.Teams.AddRange(homeTeam, awayTeam);
+        dbContext.Games.Add(game);
+        dbContext.PropTypes.Add(propType);
+        dbContext.Platforms.Add(platform);
+        dbContext.TheOddsRefreshRuns.Add(refreshRun);
+
+        foreach (var playerName in new[] { "Test Forward", "Second Forward" })
+        {
+            var player = new Player
+            {
+                Id = Guid.NewGuid(),
+                DisplayName = playerName,
+                TeamId = homeTeam.Id,
+                LeagueId = league.Id,
+                Position = "F"
+            };
+            var prop = new Prop
+            {
+                Id = Guid.NewGuid(),
+                PlayerId = player.Id,
+                GameId = game.Id,
+                LeagueId = league.Id,
+                PropTypeId = propType.Id,
+                NormalizedKey = $"soccer-public-context-{Guid.NewGuid():N}",
+                StartsAt = eventStart,
+                Status = "active"
+            };
+
+            dbContext.Players.Add(player);
+            dbContext.Props.Add(prop);
+            dbContext.PlatformProps.Add(new PlatformProp
+            {
+                Id = Guid.NewGuid(),
+                PropId = prop.Id,
+                PlatformId = platform.Id,
+                PlatformPropId = $"fanduel-{Guid.NewGuid():N}",
+                ExternalStableKey = "852a3abe6d46820720febc0fedebff9a",
+                Label = $"{playerName} Shots",
+                CurrentLine = 1.5m,
+                OverAvailable = true,
+                UnderAvailable = true,
+                PayoutType = "sportsbook",
+                Status = "active",
+                ObservedAt = DateTimeOffset.UtcNow.AddMinutes(-8),
+                Metadata = JsonSerializer.SerializeToDocument(new
+                {
+                    dataProvider = "The Odds API",
+                    contextSchemaVersion = "the-odds-provider-context-v2",
+                    providerCategory = "Sportsbook",
+                    region = "us",
+                    sport = new
+                    {
+                        code = "SOCCER",
+                        name = "Soccer",
+                        providerSportKey = "soccer_fifa_world_cup",
+                        competition = "World Cup",
+                        leagueCode = "WC2026",
+                        leagueName = "World Cup"
+                    },
+                    isActionableForUser = false,
+                    isIndicativeOdds = false,
+                    bookmaker = new
+                    {
+                        key = "fanduel",
+                        title = "FanDuel"
+                    },
+                    eventInfo = new
+                    {
+                        eventId = "852a3abe6d46820720febc0fedebff9a",
+                        providerEventId = "852a3abe6d46820720febc0fedebff9a",
+                        eventName = "Cape Verde @ Uruguay",
+                        eventStartTime = eventStart,
+                        homeTeam = "Uruguay",
+                        awayTeam = "Cape Verde"
+                    },
+                    market = new
+                    {
+                        key = "player_shots"
+                    },
+                    options = new
+                    {
+                        higher = new { americanPrice = 120, decimalPrice = 2.20m },
+                        lower = new { americanPrice = -140, decimalPrice = 1.71m }
+                    }
+                })
+            });
+        }
 
         await dbContext.SaveChangesAsync();
     }

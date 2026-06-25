@@ -593,7 +593,11 @@ public static class PublicMarketsEndpoints
         var minutesSinceLatest = latestCompletedOrStarted.HasValue
             ? Math.Round((generatedAtUtc - latestCompletedOrStarted.Value).TotalMinutes, 1)
             : (double?)null;
-        var hasUsableMarketData = topPickSnapshotCount > 0 || activeGroupCount > 0;
+        var soccerProviderContextCounts = IsSoccerSport(effectiveSport)
+            ? await TheOddsApiDebugEndpoints.GetSoccerWorldCupProviderContextCountsAsync(dbContext, cancellationToken)
+            : null;
+        var hasPublicReadableContextRows = soccerProviderContextCounts?.PlatformRowCount > 0;
+        var hasUsableMarketData = topPickSnapshotCount > 0 || activeGroupCount > 0 || hasPublicReadableContextRows;
         var isFresh = minutesSinceLatest.HasValue && minutesSinceLatest.Value <= thresholdMinutes;
 
         return new
@@ -631,6 +635,9 @@ public static class PublicMarketsEndpoints
             topPickSnapshotCount,
             activeGroupCount,
             staleOrExpiredGroupCount,
+            publicReadableContextRowCount = soccerProviderContextCounts?.PlatformRowCount ?? 0,
+            publicReadableContextProviderEventCount = soccerProviderContextCounts?.ProviderEventCount ?? 0,
+            publicReadableContextBookmakerCount = soccerProviderContextCounts?.BookmakerCount ?? 0,
             providerIngestionFailureCount = 0,
             providerIngestionSuccessCount = hasUsableMarketData ? 1 : 0,
             providerRejectedKeyDetected = false,
@@ -642,6 +649,11 @@ public static class PublicMarketsEndpoints
                 soccerMarketsDiscovered = IsSoccerSport(effectiveSport) ? lineShoppingSnapshotCount + topPickSnapshotCount : 0,
                 soccerMarketsMapped = IsSoccerSport(effectiveSport) ? activeGroupCount + topPickSnapshotCount : 0,
                 soccerCurrentLineCounts = IsSoccerSport(effectiveSport) ? activeGroupCount : 0,
+                soccerProviderContextRows = soccerProviderContextCounts?.PlatformRowCount ?? 0,
+                soccerProviderContextEvents = soccerProviderContextCounts?.ProviderEventCount ?? 0,
+                soccerProviderContextBookmakers = soccerProviderContextCounts?.BookmakerCount ?? 0,
+                soccerPublicReadableContextRows = soccerProviderContextCounts?.PlatformRowCount ?? 0,
+                soccerLineShoppingSnapshotsAvailable = lineShoppingSnapshotCount,
                 soccerResultGradingSupported = false
             },
             freshnessMinutesThreshold = thresholdMinutes
@@ -1060,15 +1072,56 @@ public static class PublicMarketsEndpoints
     {
         if (IsSoccerSport(effectiveSport))
         {
-            return await BuildGenericMarketLineShoppingResponseAsync(
-                requestedSport,
-                effectiveSport,
-                runId,
+            var hasSoccerLineShoppingSnapshots = await dbContext.MarketLineShoppingSnapshots
+                .AsNoTracking()
+                .Where(row => row.Sport == effectiveSport)
+                .Where(row => string.IsNullOrWhiteSpace(providerCategory) || row.ProviderCategory == providerCategory)
+                .AnyAsync(cancellationToken);
+            if (hasSoccerLineShoppingSnapshots)
+            {
+                return await BuildGenericMarketLineShoppingResponseAsync(
+                    requestedSport,
+                    effectiveSport,
+                    runId,
+                    take,
+                    topOnly,
+                    providerCategory,
+                    dbContext,
+                    cancellationToken);
+            }
+
+            var soccerLineShopping = await TheOddsApiDebugEndpoints.BuildSoccerWorldCupLineShoppingContextResponseAsync(
                 take,
-                topOnly,
+                includeBookmakerPrices ?? false,
+                freshnessMinutes,
                 providerCategory,
                 dbContext,
                 cancellationToken);
+
+            return new
+            {
+                generatedAtUtc = soccerLineShopping.GeneratedAtUtc,
+                callsExternalApis = false,
+                readOnly = true,
+                supportedSports = SupportedMarketSports,
+                supportedCompetitions = BuildSupportedCompetitionDiagnostics(),
+                requestedSport,
+                effectiveSport,
+                competition = ResolveCompetitionName(effectiveSport),
+                resultGradingSupported = false,
+                resultGradingUnavailableReason = SoccerHistoryUnavailableMessage,
+                publicSoccerGradingEnabled = false,
+                limitation = MarketReadLimitation,
+                freshness = await BuildGenericMarketFreshnessResponseAsync(requestedSport, effectiveSport, null, null, freshnessMinutes, dbContext, cancellationToken),
+                soccerLineShopping.SnapshotBacked,
+                refreshRunId = soccerLineShopping.RefreshRunId,
+                soccerLineShopping.FallbackReason,
+                soccerLineShopping.Diagnostics,
+                soccerLineShopping.Run,
+                soccerLineShopping.Summary,
+                soccerLineShopping.StrategyClassificationSummary,
+                soccerLineShopping.ComparisonGroups
+            };
         }
 
         var freshness = await TheOddsApiDebugEndpoints.BuildMlbRefreshFreshnessResponseAsync(
