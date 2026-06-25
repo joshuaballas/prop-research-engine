@@ -230,6 +230,8 @@ The World Cup backfill endpoint is intentionally narrow: API-Sports Football onl
 
 `import-status` is persisted-only unless `forceLive=true`. Persisted-only status reports imported fixture/result rows and `coverageByDate` without API-Sports calls. Force-live status adds discovered fixture count, completed fixture count, skipped pending fixture count, missing completed fixture count, and per-date API call estimates. `backfill-completed` returns the same `coverageByDate` shape plus previewed/written result rows, failed fixtures, and per-fixture import diagnostics.
 
+Broader current-year Soccer history is still status-only. `GET /api/debug/soccer/results/api-sports/historical/coverage-status` reports configured API-Sports Football historical competitions and local imported coverage for Goals, Assists, Shots, and Shots On Target. The default configured set is EPL, La Liga, Bundesliga, Serie A, Ligue 1, MLS, and Champions League. This endpoint never calls API-Sports and does not import club/league history yet.
+
 Supported mappings include goals, assists, shots, shots on target, passes attempted, tackles, fouls, fouls drawn, offsides, goalie saves for goalkeepers, and attempted dribbles. Conservative mappings such as Goal + Assist, Cards, Goals Allowed, and Shots Assisted are flagged as `NeedsConfirmation` in import diagnostics.
 
 Soccer prop type display names are not unique because period-specific and combo markets can share customer-facing names. API-Sports result imports resolve prop types by Sport + canonical `statKey`, not display name.

@@ -418,6 +418,15 @@ When reviewed provider identity links are approved, `coverage` also reports `pla
 
 API-Sports Soccer stat mappings are DB-backed in `provider_stat_mappings`; see `docs/PROVIDER_STAT_MAPPING.md`. Import and coverage diagnostics report whether DB mappings or temporary fallback mappings were used. Soccer `public_grading_enabled` remains false.
 
+Historical Soccer player-stat coverage starts with a config/status-only endpoint:
+
+```powershell
+Invoke-RestMethod "$base/api/debug/soccer/results/api-sports/historical/coverage-status?fromDate=2026-01-01&toDate=2026-12-31" |
+  ConvertTo-Json -Depth 80
+```
+
+Configured competitions live under `ApiSports:Football:HistoricalCompetitions` and default to EPL, La Liga, Bundesliga, Serie A, Ligue 1, MLS, and Champions League. The endpoint reads only local `prop_results` for Goals, Assists, Shots, and Shots On Target. It does not call API-Sports, discover fixtures, import rows, enable Soccer grading, enable Soccer predictions, or make Soccer Entry Builder playable.
+
 ```powershell
 Invoke-RestMethod "$base/api/debug/soccer/results/api-sports/world-cup/coverage?fromDate=2026-06-11&toDate=2026-06-21" |
   ConvertTo-Json -Depth 60

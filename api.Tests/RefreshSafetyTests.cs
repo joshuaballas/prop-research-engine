@@ -1962,6 +1962,49 @@ public sealed class RefreshSafetyTests
     }
 
     [Fact]
+    public async Task ApiSportsHistoricalCoverageStatus_ReturnsConfigAndPersistedCoverage_ReadOnly()
+    {
+        await using var factory = new SafetyTestApplicationFactory(ApiSportsLiveConfig());
+        using var client = factory.CreateClient();
+        await factory.EnsureDatabaseAsync();
+        await AddApiSportsHistoricalSoccerResultAsync(factory, "EPL", "EPL", 2025, "100001", new DateOnly(2026, 1, 15), "GOALS", "Goals");
+        await AddApiSportsHistoricalSoccerResultAsync(factory, "EPL", "EPL", 2025, "100001", new DateOnly(2026, 1, 15), "SHOTS", "Shots");
+        var before = await CountApiSportsSoccerResultsAsync(factory);
+        var callsBefore = factory.ApiSportsFootballClient.FixturePlayerStatsCallCount;
+
+        var response = await client.GetAsync("/api/debug/soccer/results/api-sports/historical/coverage-status?fromDate=2026-01-01&toDate=2026-01-31");
+
+        await EnsureSuccessWithBodyAsync(response);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.False(json.GetProperty("callsExternalApis").GetBoolean());
+        Assert.True(json.GetProperty("readOnly").GetBoolean());
+        Assert.False(json.GetProperty("writesRows").GetBoolean());
+        Assert.False(json.GetProperty("guardrails").GetProperty("publicSoccerGradingEnabled").GetBoolean());
+        Assert.False(json.GetProperty("guardrails").GetProperty("soccerPredictionsEnabled").GetBoolean());
+        Assert.False(json.GetProperty("guardrails").GetProperty("soccerEntryBuilderEnabled").GetBoolean());
+        Assert.Equal(7, json.GetProperty("configuredCompetitionCount").GetInt32());
+        Assert.Equal(7, json.GetProperty("enabledCompetitionCount").GetInt32());
+        var statKeys = json.GetProperty("statsOfInterest").EnumerateArray().Select(row => row.GetProperty("statKey").GetString()!).ToArray();
+        Assert.Equal(["GOALS", "ASSISTS", "SHOTS", "SHOTS_ON_TARGET"], statKeys);
+        var epl = json.GetProperty("competitions").EnumerateArray().Single(row => row.GetProperty("key").GetString() == "EPL");
+        Assert.Equal("EPL", epl.GetProperty("displayName").GetString());
+        Assert.Equal(39, epl.GetProperty("leagueId").GetInt32());
+        Assert.Equal(2025, epl.GetProperty("season").GetInt32());
+        Assert.True(epl.GetProperty("enabled").GetBoolean());
+        Assert.True(epl.GetProperty("localLeagueExists").GetBoolean());
+        Assert.Equal(2, epl.GetProperty("importedResultRows").GetInt32());
+        Assert.Equal(1, epl.GetProperty("importedFixtureCount").GetInt32());
+        Assert.Equal(1, epl.GetProperty("distinctPlayers").GetInt32());
+        var eplRowsByStat = epl.GetProperty("rowsByStat").EnumerateArray().ToArray();
+        Assert.Contains(eplRowsByStat, row => row.GetProperty("statKey").GetString() == "GOALS" && row.GetProperty("resultRows").GetInt32() == 1);
+        Assert.Contains(eplRowsByStat, row => row.GetProperty("statKey").GetString() == "SHOTS" && row.GetProperty("resultRows").GetInt32() == 1);
+        var championsLeague = json.GetProperty("competitions").EnumerateArray().Single(row => row.GetProperty("key").GetString() == "CHAMPIONS_LEAGUE");
+        Assert.False(championsLeague.GetProperty("localLeagueExists").GetBoolean());
+        Assert.Equal(before, await CountApiSportsSoccerResultsAsync(factory));
+        Assert.Equal(callsBefore, factory.ApiSportsFootballClient.FixturePlayerStatsCallCount);
+    }
+
+    [Fact]
     public async Task ApiSportsWorldCupCoverage_ReturnsPersistedResultCountsReadOnly()
     {
         await using var factory = new SafetyTestApplicationFactory(ApiSportsLiveConfig());
@@ -4571,6 +4614,112 @@ public sealed class RefreshSafetyTests
             ActualResultValue = 1m,
             ExternalSource = "api-sports-football",
             ExternalSourceIdentifier = $"api-sports-football:{fixtureId}:{Guid.NewGuid():N}:GOALS",
+            CreatedAt = DateTimeOffset.UtcNow,
+            UpdatedAt = DateTimeOffset.UtcNow
+        });
+        await dbContext.SaveChangesAsync();
+    }
+
+    private static async Task AddApiSportsHistoricalSoccerResultAsync(
+        SafetyTestApplicationFactory factory,
+        string competitionKey,
+        string competitionName,
+        int season,
+        string fixtureId,
+        DateOnly eventDate,
+        string statKey,
+        string propTypeName)
+    {
+        using var scope = factory.Services.CreateScope();
+        var dbContext = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+        var sport = await dbContext.Sports.SingleOrDefaultAsync(row => row.Code == "SOCCER");
+        if (sport is null)
+        {
+            sport = new Sport { Id = Guid.NewGuid(), Code = "SOCCER", Name = "Soccer" };
+            dbContext.Sports.Add(sport);
+            await dbContext.SaveChangesAsync();
+        }
+
+        var leagueCode = $"API_SPORTS_{competitionKey}_{season}";
+        var league = await dbContext.Leagues.SingleOrDefaultAsync(row => row.SportId == sport.Id && row.Code == leagueCode);
+        if (league is null)
+        {
+            league = new League
+            {
+                Id = Guid.NewGuid(),
+                SportId = sport.Id,
+                Name = competitionName,
+                Code = leagueCode,
+                SeasonType = season.ToString(CultureInfo.InvariantCulture)
+            };
+            dbContext.Leagues.Add(league);
+            await dbContext.SaveChangesAsync();
+        }
+
+        var team = await dbContext.Teams.SingleOrDefaultAsync(row => row.LeagueId == league.Id && row.Name == $"{competitionName} Test FC");
+        if (team is null)
+        {
+            team = new Team
+            {
+                Id = Guid.NewGuid(),
+                LeagueId = league.Id,
+                Name = $"{competitionName} Test FC"
+            };
+            dbContext.Teams.Add(team);
+        }
+
+        var propType = await dbContext.PropTypes.SingleOrDefaultAsync(row => row.SportId == sport.Id && row.StatKey == statKey);
+        if (propType is null)
+        {
+            propType = new PropType
+            {
+                Id = Guid.NewGuid(),
+                SportId = sport.Id,
+                Name = propTypeName,
+                StatKey = statKey,
+                ValueType = "numeric"
+            };
+            dbContext.PropTypes.Add(propType);
+        }
+
+        var providerPlayerId = "50001";
+        var player = await dbContext.PlayerExternalRefs
+            .Include(reference => reference.Player)
+            .Where(reference => reference.Provider == "api-sports-football"
+                && reference.ProviderPlayerId == providerPlayerId)
+            .Select(reference => reference.Player)
+            .SingleOrDefaultAsync();
+        if (player is null)
+        {
+            player = new Player
+            {
+                Id = Guid.NewGuid(),
+                DisplayName = "Historical Test Forward",
+                TeamId = team.Id,
+                LeagueId = league.Id,
+                Position = "F"
+            };
+            dbContext.Players.Add(player);
+            dbContext.PlayerExternalRefs.Add(new PlayerExternalRef
+            {
+                Id = Guid.NewGuid(),
+                PlayerId = player.Id,
+                Provider = "api-sports-football",
+                ProviderPlayerId = providerPlayerId,
+                ProviderDisplayName = player.DisplayName
+            });
+        }
+
+        dbContext.PropResults.Add(new PropResult
+        {
+            Id = Guid.NewGuid(),
+            PlayerId = player.Id,
+            LeagueId = league.Id,
+            PropTypeId = propType.Id,
+            EventDate = eventDate,
+            ActualResultValue = 1m,
+            ExternalSource = "api-sports-football",
+            ExternalSourceIdentifier = $"api-sports-football:{fixtureId}:{providerPlayerId}:{statKey}",
             CreatedAt = DateTimeOffset.UtcNow,
             UpdatedAt = DateTimeOffset.UtcNow
         });
