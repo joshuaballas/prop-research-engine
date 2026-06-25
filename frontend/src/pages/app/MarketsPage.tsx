@@ -12,7 +12,7 @@ import { useResponsiveView } from '../../hooks/useResponsiveView';
 import { palette } from '../../theme/palette';
 import type { MarketOpportunity } from '../../types/markets';
 import { formatPercent } from '../../utils/formatters';
-import { isPlayableMarket } from '../../utils/marketCautions';
+import { isLineNoLongerAvailable, isPlayableMarket } from '../../utils/marketCautions';
 import { marketTagLabel, marketTagValue } from '../../utils/marketTags';
 
 const defaultFilters: MarketFilterValues = {
@@ -23,7 +23,7 @@ const defaultFilters: MarketFilterValues = {
   trust: 'All',
   opportunity: 'All',
   sort: 'Edge',
-  canAddOnly: true
+  canAddOnly: false
 };
 
 const sortOptions: MarketFilterOption[] = [
@@ -66,9 +66,8 @@ export function MarketsPage() {
     const start = (page - 1) * pageSize;
     return sortedMarkets.slice(start, start + pageSize);
   }, [page, pageSize, sortedMarkets]);
-  const dfsMarkets = filteredMarkets.filter((market) => market.providerCategory === 'DFS');
-  const bestEdge = dfsMarkets.length ? Math.max(...dfsMarkets.map((market) => market.probabilityEdge ?? Number.NEGATIVE_INFINITY)) : null;
-  const dfsProviderCount = new Set(dfsMarkets.map((market) => market.provider)).size;
+  const bestEdge = filteredMarkets.length ? Math.max(...filteredMarkets.map((market) => market.probabilityEdge ?? Number.NEGATIVE_INFINITY)) : null;
+  const providerCount = new Set(filteredMarkets.map((market) => market.provider)).size;
 
   useEffect(() => {
     setFilters((current) => normalizeFilterSelection(current, {
@@ -97,7 +96,7 @@ export function MarketsPage() {
           <MetricCard label="Props" value={String(filteredMarkets.length)} helper="Available now" />
         </Grid>
         <Grid size={{ xs: 6, sm: 6, lg: 4 }}>
-          <MetricCard label="Providers" value={String(dfsProviderCount)} helper="Live providers" />
+          <MetricCard label="Providers" value={String(providerCount)} helper="Live providers" />
         </Grid>
         <Grid size={{ xs: 6, sm: 6, lg: 4 }}>
           <MetricCard label="Best Edge" value={formatPercent(bestEdge, { signed: true })} helper="Top current prop" valueColor="success.main" />
@@ -119,6 +118,11 @@ export function MarketsPage() {
         showCanAddOnly
         onClearFilters={() => setFilters(defaultFilters)}
       />
+      <Typography variant="body2" color="text.secondary" sx={{ mt: -1.25 }}>
+        {filters.canAddOnly
+          ? 'Showing playable DFS rows only. Sportsbook rows are hidden because they cannot be added to Entry Builder.'
+          : 'Showing all current props. Use Playable lines to show only DFS rows that can be added to an entry.'}
+      </Typography>
 
       <SectionHeader title="Available props" description="Review available props, open Details for player history, and add eligible picks to an entry." />
       {marketsQuery.loading ? (
@@ -179,6 +183,7 @@ function shallowEqualFilters(left: MarketFilterValues, right: MarketFilterValues
 }
 
 function marketMatchesFilters(market: MarketOpportunity, filters: MarketFilterValues) {
+  if (isLineNoLongerAvailable(market)) return false;
   if (filters.sport !== 'All' && market.sport !== filters.sport) return false;
   if (filters.provider !== 'All' && market.provider !== filters.provider) return false;
   if (filters.providerCategory !== 'All' && categoryFilterValue(market.providerCategory) !== filters.providerCategory) return false;
@@ -213,7 +218,7 @@ function sortMarkets(markets: MarketOpportunity[], sort: string) {
 }
 
 function categoryFilterValue(category: string) {
-  return category === 'Sportsbook' ? 'Reference only' : category;
+  return category;
 }
 
 function categoryFilterLabel(value: string) {

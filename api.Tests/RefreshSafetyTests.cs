@@ -1208,6 +1208,39 @@ public sealed class RefreshSafetyTests
     }
 
     [Fact]
+    public async Task PublicLineShopping_ProviderCategoryAllCombinesDfsAndSportsbookRows()
+    {
+        await using var factory = new SafetyTestApplicationFactory();
+        using var client = factory.CreateClient();
+        await factory.SeedExpectedValueDisplaySnapshotsAsync();
+        await factory.SeedNewerDfsOnlyExpectedValueSnapshotAsync();
+
+        var allResponse = await client.GetAsync("/api/markets/line-shopping?sport=MLB&providerCategory=All&topOnly=false&take=10&includeBookmakerPrices=false");
+        var dfsResponse = await client.GetAsync("/api/markets/line-shopping?sport=MLB&providerCategory=DFS&topOnly=false&take=10&includeBookmakerPrices=false");
+        var sportsbookResponse = await client.GetAsync("/api/markets/line-shopping?sport=MLB&providerCategory=Sportsbook&topOnly=false&take=10&includeBookmakerPrices=false");
+
+        await EnsureSuccessWithBodyAsync(allResponse);
+        await EnsureSuccessWithBodyAsync(dfsResponse);
+        await EnsureSuccessWithBodyAsync(sportsbookResponse);
+
+        var allJson = await allResponse.Content.ReadFromJsonAsync<JsonElement>();
+        var dfsJson = await dfsResponse.Content.ReadFromJsonAsync<JsonElement>();
+        var sportsbookJson = await sportsbookResponse.Content.ReadFromJsonAsync<JsonElement>();
+        var allGroups = allJson.GetProperty("comparisonGroups").EnumerateArray().ToArray();
+        var dfsGroups = dfsJson.GetProperty("comparisonGroups").EnumerateArray().ToArray();
+        var sportsbookGroups = sportsbookJson.GetProperty("comparisonGroups").EnumerateArray().ToArray();
+
+        Assert.NotEmpty(allGroups);
+        Assert.Contains(allGroups, row => row.GetProperty("providerCategory").GetString() == "DFS");
+        Assert.Contains(allGroups, row => row.GetProperty("providerCategory").GetString() == "Sportsbook");
+        Assert.Equal(dfsGroups.Length + sportsbookGroups.Length, allGroups.Length);
+        Assert.Equal(allGroups.Length, allJson.GetProperty("summary").GetProperty("returnedComparisonGroups").GetInt32());
+        Assert.Contains(allJson.GetProperty("summary").GetProperty("providerCategoryBreakdown").EnumerateArray(), row => row.GetProperty("providerCategory").GetString() == "DFS");
+        Assert.Contains(allJson.GetProperty("summary").GetProperty("providerCategoryBreakdown").EnumerateArray(), row => row.GetProperty("providerCategory").GetString() == "Sportsbook");
+        Assert.Equal(0, factory.TheOddsAdapter.CallCount);
+    }
+
+    [Fact]
     public async Task MlbSportsbookTopPicks_AreRecommendationsButNotEntryBuilderLegs()
     {
         await using var factory = new SafetyTestApplicationFactory();
@@ -6635,6 +6668,51 @@ public sealed class SafetyTestApplicationFactory : WebApplicationFactory<Program
                 bestDecimalPrice: 1.91m,
                 bestAmericanPrice: -110,
                 entryActionable: false));
+
+        await dbContext.SaveChangesAsync();
+    }
+
+    public async Task SeedNewerDfsOnlyExpectedValueSnapshotAsync()
+    {
+        using var scope = Services.CreateScope();
+        var dbContext = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+
+        var refreshRun = new TheOddsRefreshRun
+        {
+            Id = Guid.NewGuid(),
+            Provider = "The Odds API",
+            Sport = "MLB",
+            SlateDate = DateOnly.FromDateTime(DateTime.UtcNow),
+            StartedAtUtc = DateTimeOffset.UtcNow.AddMinutes(-2),
+            CompletedAtUtc = DateTimeOffset.UtcNow.AddMinutes(-1),
+            Succeeded = true,
+            Failed = false,
+            Blocked = false,
+            DryRun = false,
+            ForceLive = true,
+            BookmakerPreset = "dfsOnly",
+            ProviderCategoriesIncluded = "DFS",
+            SportsbookBookmakersRequested = string.Empty,
+            DfsBookmakersRequested = "prizepicks",
+            MarketsRequested = "pitcher_strikeouts",
+            EstimatedApiCalls = 1,
+            ActualApiCalls = 1,
+            PredictionCount = 1,
+            LineShoppingGroupCount = 1,
+            DiagnosticsJson = JsonSerializer.SerializeToDocument(new { })
+        };
+
+        dbContext.TheOddsRefreshRuns.Add(refreshRun);
+        dbContext.MarketLineShoppingSnapshots.Add(BuildExpectedValueDisplaySnapshot(
+            refreshRun,
+            "Newer DFS Player",
+            "DFS",
+            "PrizePicks",
+            bestEstimatedEv: 0.11m,
+            bestImpliedProbability: 0.5m,
+            bestDecimalPrice: 2.0m,
+            bestAmericanPrice: 100,
+            entryActionable: true));
 
         await dbContext.SaveChangesAsync();
     }

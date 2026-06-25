@@ -188,6 +188,8 @@ public static partial class TheOddsApiDebugEndpoints
         PredictionGenerationOptions selectionOptions,
         CancellationToken cancellationToken)
     {
+        providerCategory = NormalizePublicProviderCategoryFilter(providerCategory);
+
         if (!runId.HasValue)
         {
             var snapshot = await TryBuildTopPicksSnapshotResponseAsync(
@@ -297,6 +299,8 @@ public static partial class TheOddsApiDebugEndpoints
         PredictionGenerationOptions selectionOptions,
         CancellationToken cancellationToken)
     {
+        providerCategory = NormalizePublicProviderCategoryFilter(providerCategory);
+
         if (!runId.HasValue && !summaryOnly)
         {
             var snapshot = await TryBuildLineShoppingSnapshotResponseAsync(
@@ -810,11 +814,16 @@ public static partial class TheOddsApiDebugEndpoints
         ApplicationDbContext dbContext,
         CancellationToken cancellationToken)
     {
-        var refreshRunId = await FindLatestTopPickSnapshotRefreshRunIdAsync(
-            dbContext,
-            providerCategory,
-            cancellationToken);
-        if (!refreshRunId.HasValue)
+        IReadOnlyDictionary<string, Guid> refreshRunIdsByCategory = string.IsNullOrWhiteSpace(providerCategory)
+            ? await FindLatestTopPickSnapshotRefreshRunIdsByCategoryAsync(dbContext, cancellationToken)
+            : new Dictionary<string, Guid>(StringComparer.OrdinalIgnoreCase);
+        var refreshRunIds = refreshRunIdsByCategory.Count > 0
+            ? refreshRunIdsByCategory.Values.Distinct().ToArray()
+            : await FindLatestTopPickSnapshotRefreshRunIdsAsync(
+                dbContext,
+                providerCategory,
+                cancellationToken);
+        if (refreshRunIds.Length == 0)
         {
             return null;
         }
@@ -822,10 +831,18 @@ public static partial class TheOddsApiDebugEndpoints
         var requestedTake = Math.Clamp(take ?? 10, 1, 100);
         var query = dbContext.MarketTopPickSnapshots
             .AsNoTracking()
-            .Where(row => row.TheOddsRefreshRunId == refreshRunId.Value);
+            .Where(row => refreshRunIds.Contains(row.TheOddsRefreshRunId));
         if (!string.IsNullOrWhiteSpace(providerCategory))
         {
             query = query.Where(row => row.ProviderCategory == providerCategory);
+        }
+        else if (refreshRunIdsByCategory.Count > 0)
+        {
+            var dfsRefreshRunId = refreshRunIdsByCategory.GetValueOrDefault("DFS");
+            var sportsbookRefreshRunId = refreshRunIdsByCategory.GetValueOrDefault("Sportsbook");
+            query = query.Where(row =>
+                (dfsRefreshRunId != Guid.Empty && row.ProviderCategory == "DFS" && row.TheOddsRefreshRunId == dfsRefreshRunId) ||
+                (sportsbookRefreshRunId != Guid.Empty && row.ProviderCategory == "Sportsbook" && row.TheOddsRefreshRunId == sportsbookRefreshRunId));
         }
 
         var rows = await query
@@ -838,23 +855,49 @@ public static partial class TheOddsApiDebugEndpoints
             return null;
         }
 
-        var refreshRun = await dbContext.TheOddsRefreshRuns
+        var refreshRuns = await dbContext.TheOddsRefreshRuns
             .AsNoTracking()
-            .FirstAsync(row => row.Id == refreshRunId.Value, cancellationToken);
+            .Where(row => refreshRunIds.Contains(row.Id))
+            .ToArrayAsync(cancellationToken);
+        var latestRefreshRun = refreshRuns
+            .OrderByDescending(row => row.CompletedAtUtc ?? row.StartedAtUtc)
+            .ThenByDescending(row => row.StartedAtUtc)
+            .First();
         var playerIdsBySnapshotId = await ResolveTopPickSnapshotPlayerIdsAsync(dbContext, rows, cancellationToken);
 
         return new MlbTopPicksReadResponse(
-            rows.FirstOrDefault()?.GeneratedAtUtc ?? refreshRun.CompletedAtUtc ?? refreshRun.StartedAtUtc,
+            rows.FirstOrDefault()?.GeneratedAtUtc ?? latestRefreshRun.CompletedAtUtc ?? latestRefreshRun.StartedAtUtc,
             SnapshotBacked: true,
-            RefreshRunId: refreshRun.Id,
+            RefreshRunId: refreshRunIds.Length == 1 ? refreshRunIds[0] : null,
             FallbackReason: null,
             Diagnostics: BuildSnapshotDiagnostics(rows.Count, providerCategory),
-            Run: new { runId = rows.FirstOrDefault()?.PredictionRunId, predictionCount = refreshRun.PredictionCount },
+            Run: new { runId = rows.FirstOrDefault()?.PredictionRunId, refreshRunIds, predictionCount = refreshRuns.Sum(row => row.PredictionCount) },
             Summary: BuildSnapshotSummary(rows),
             StrategyClassificationSummary: BuildSnapshotStrategySummary(rows),
             TopPicks: rows
                 .Select(row => BuildSnapshotDetailsWithPlayerId(row.DetailsJson.RootElement, playerIdsBySnapshotId.GetValueOrDefault(row.Id)))
                 .ToArray());
+    }
+
+    private static string? NormalizePublicProviderCategoryFilter(string? providerCategory)
+    {
+        if (string.IsNullOrWhiteSpace(providerCategory)
+            || string.Equals(providerCategory, "All", StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+
+        if (string.Equals(providerCategory, "DFS", StringComparison.OrdinalIgnoreCase))
+        {
+            return "DFS";
+        }
+
+        if (string.Equals(providerCategory, "Sportsbook", StringComparison.OrdinalIgnoreCase))
+        {
+            return "Sportsbook";
+        }
+
+        return providerCategory.Trim();
     }
 
     private static async Task<MlbLineShoppingReadResponse?> TryBuildLineShoppingSnapshotResponseAsync(
@@ -865,11 +908,16 @@ public static partial class TheOddsApiDebugEndpoints
         ApplicationDbContext dbContext,
         CancellationToken cancellationToken)
     {
-        var refreshRunId = await FindLatestLineShoppingSnapshotRefreshRunIdAsync(
-            dbContext,
-            providerCategory,
-            cancellationToken);
-        if (!refreshRunId.HasValue)
+        IReadOnlyDictionary<string, Guid> refreshRunIdsByCategory = string.IsNullOrWhiteSpace(providerCategory)
+            ? await FindLatestLineShoppingSnapshotRefreshRunIdsByCategoryAsync(dbContext, cancellationToken)
+            : new Dictionary<string, Guid>(StringComparer.OrdinalIgnoreCase);
+        var refreshRunIds = refreshRunIdsByCategory.Count > 0
+            ? refreshRunIdsByCategory.Values.Distinct().ToArray()
+            : await FindLatestLineShoppingSnapshotRefreshRunIdsAsync(
+                dbContext,
+                providerCategory,
+                cancellationToken);
+        if (refreshRunIds.Length == 0)
         {
             return null;
         }
@@ -877,10 +925,18 @@ public static partial class TheOddsApiDebugEndpoints
         var requestedTake = Math.Clamp(take, 1, 500);
         var query = dbContext.MarketLineShoppingSnapshots
             .AsNoTracking()
-            .Where(row => row.TheOddsRefreshRunId == refreshRunId.Value);
+            .Where(row => refreshRunIds.Contains(row.TheOddsRefreshRunId));
         if (!string.IsNullOrWhiteSpace(providerCategory))
         {
             query = query.Where(row => row.ProviderCategory == providerCategory);
+        }
+        else if (refreshRunIdsByCategory.Count > 0)
+        {
+            var dfsRefreshRunId = refreshRunIdsByCategory.GetValueOrDefault("DFS");
+            var sportsbookRefreshRunId = refreshRunIdsByCategory.GetValueOrDefault("Sportsbook");
+            query = query.Where(row =>
+                (dfsRefreshRunId != Guid.Empty && row.ProviderCategory == "DFS" && row.TheOddsRefreshRunId == dfsRefreshRunId) ||
+                (sportsbookRefreshRunId != Guid.Empty && row.ProviderCategory == "Sportsbook" && row.TheOddsRefreshRunId == sportsbookRefreshRunId));
         }
 
         if (topOnly)
@@ -902,18 +958,23 @@ public static partial class TheOddsApiDebugEndpoints
             return null;
         }
 
-        var refreshRun = await dbContext.TheOddsRefreshRuns
+        var refreshRuns = await dbContext.TheOddsRefreshRuns
             .AsNoTracking()
-            .FirstAsync(row => row.Id == refreshRunId.Value, cancellationToken);
+            .Where(row => refreshRunIds.Contains(row.Id))
+            .ToArrayAsync(cancellationToken);
+        var latestRefreshRun = refreshRuns
+            .OrderByDescending(row => row.CompletedAtUtc ?? row.StartedAtUtc)
+            .ThenByDescending(row => row.StartedAtUtc)
+            .First();
         var playerIdsBySnapshotId = await ResolveLineShoppingSnapshotPlayerIdsAsync(dbContext, rows, cancellationToken);
 
         return new MlbLineShoppingReadResponse(
-            rows.FirstOrDefault()?.GeneratedAtUtc ?? refreshRun.CompletedAtUtc ?? refreshRun.StartedAtUtc,
+            rows.FirstOrDefault()?.GeneratedAtUtc ?? latestRefreshRun.CompletedAtUtc ?? latestRefreshRun.StartedAtUtc,
             SnapshotBacked: true,
-            RefreshRunId: refreshRun.Id,
+            RefreshRunId: refreshRunIds.Length == 1 ? refreshRunIds[0] : null,
             FallbackReason: null,
             Diagnostics: BuildSnapshotDiagnostics(rows.Count, providerCategory, includeBookmakerPrices),
-            Run: new { runId = rows.FirstOrDefault()?.PredictionRunId, predictionCount = refreshRun.PredictionCount },
+            Run: new { runId = rows.FirstOrDefault()?.PredictionRunId, refreshRunIds, predictionCount = refreshRuns.Sum(row => row.PredictionCount) },
             Summary: BuildSnapshotSummary(rows),
             StrategyClassificationSummary: BuildSnapshotStrategySummary(rows),
             ComparisonGroups: rows
@@ -947,6 +1008,45 @@ public static partial class TheOddsApiDebugEndpoints
             .ThenByDescending(row => row.snapshot.GeneratedAtUtc)
             .Select(row => (Guid?)row.refreshRun.Id)
             .FirstOrDefaultAsync(cancellationToken);
+    }
+
+    private static async Task<Guid[]> FindLatestTopPickSnapshotRefreshRunIdsAsync(
+        ApplicationDbContext dbContext,
+        string? providerCategory,
+        CancellationToken cancellationToken)
+    {
+        if (!string.IsNullOrWhiteSpace(providerCategory))
+        {
+            var refreshRunId = await FindLatestTopPickSnapshotRefreshRunIdAsync(dbContext, providerCategory, cancellationToken);
+            return refreshRunId.HasValue ? [refreshRunId.Value] : [];
+        }
+
+        var dfsRefreshRunId = await FindLatestTopPickSnapshotRefreshRunIdAsync(dbContext, "DFS", cancellationToken);
+        var sportsbookRefreshRunId = await FindLatestTopPickSnapshotRefreshRunIdAsync(dbContext, "Sportsbook", cancellationToken);
+
+        return new[] { dfsRefreshRunId, sportsbookRefreshRunId }
+            .Where(id => id.HasValue)
+            .Select(id => id!.Value)
+            .Distinct()
+            .ToArray();
+    }
+
+    private static async Task<IReadOnlyDictionary<string, Guid>> FindLatestTopPickSnapshotRefreshRunIdsByCategoryAsync(
+        ApplicationDbContext dbContext,
+        CancellationToken cancellationToken)
+    {
+        var result = new Dictionary<string, Guid>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var providerCategory in new[] { "DFS", "Sportsbook" })
+        {
+            var refreshRunId = await FindLatestTopPickSnapshotRefreshRunIdAsync(dbContext, providerCategory, cancellationToken);
+            if (refreshRunId.HasValue)
+            {
+                result[providerCategory] = refreshRunId.Value;
+            }
+        }
+
+        return result;
     }
 
     private static async Task<string> BuildSnapshotFallbackReasonAsync(
@@ -1008,6 +1108,45 @@ public static partial class TheOddsApiDebugEndpoints
             .ThenByDescending(row => row.snapshot.GeneratedAtUtc)
             .Select(row => (Guid?)row.refreshRun.Id)
             .FirstOrDefaultAsync(cancellationToken);
+    }
+
+    private static async Task<Guid[]> FindLatestLineShoppingSnapshotRefreshRunIdsAsync(
+        ApplicationDbContext dbContext,
+        string? providerCategory,
+        CancellationToken cancellationToken)
+    {
+        if (!string.IsNullOrWhiteSpace(providerCategory))
+        {
+            var refreshRunId = await FindLatestLineShoppingSnapshotRefreshRunIdAsync(dbContext, providerCategory, cancellationToken);
+            return refreshRunId.HasValue ? [refreshRunId.Value] : [];
+        }
+
+        var dfsRefreshRunId = await FindLatestLineShoppingSnapshotRefreshRunIdAsync(dbContext, "DFS", cancellationToken);
+        var sportsbookRefreshRunId = await FindLatestLineShoppingSnapshotRefreshRunIdAsync(dbContext, "Sportsbook", cancellationToken);
+
+        return new[] { dfsRefreshRunId, sportsbookRefreshRunId }
+            .Where(id => id.HasValue)
+            .Select(id => id!.Value)
+            .Distinct()
+            .ToArray();
+    }
+
+    private static async Task<IReadOnlyDictionary<string, Guid>> FindLatestLineShoppingSnapshotRefreshRunIdsByCategoryAsync(
+        ApplicationDbContext dbContext,
+        CancellationToken cancellationToken)
+    {
+        var result = new Dictionary<string, Guid>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var providerCategory in new[] { "DFS", "Sportsbook" })
+        {
+            var refreshRunId = await FindLatestLineShoppingSnapshotRefreshRunIdAsync(dbContext, providerCategory, cancellationToken);
+            if (refreshRunId.HasValue)
+            {
+                result[providerCategory] = refreshRunId.Value;
+            }
+        }
+
+        return result;
     }
 
     private static string? BuildSnapshotEventName(TheOddsLineShoppingGroup group)

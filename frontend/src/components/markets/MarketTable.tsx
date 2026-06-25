@@ -1,11 +1,12 @@
 import AddCircleOutlineRoundedIcon from '@mui/icons-material/AddCircleOutlineRounded';
+import LockRoundedIcon from '@mui/icons-material/LockRounded';
 import RemoveCircleOutlineRoundedIcon from '@mui/icons-material/RemoveCircleOutlineRounded';
 import { Button, Stack, TableBody, TableCell, TableHead, TableRow, Typography } from '@mui/material';
 import { useState } from 'react';
 import { useEntryBuilder } from '../../hooks/useEntryBuilder';
 import type { MarketOpportunity } from '../../types/markets';
 import { formatPercent } from '../../utils/formatters';
-import { isPlayableMarket } from '../../utils/marketCautions';
+import { entryBuilderUnavailableReason, isEntryBuilderAddableMarket } from '../../utils/marketCautions';
 import { MetricLabelWithHelp } from '../metrics/MetricLabelWithHelp';
 import { TrustValue } from '../metrics/TrustValue';
 import { PropDetailsModal } from '../prop-history/PropDetailsModal';
@@ -66,10 +67,11 @@ export function MarketTable({ markets }: { markets: MarketOpportunity[] }) {
         </TableHead>
         <TableBody>
           {markets.map((market) => {
-            const addable = isPlayableMarket(market);
+            const addable = isEntryBuilderAddableMarket(market);
             const selected = builder.isSelected(market.id);
             const incompatible = !selected && !builder.isCompatible(market);
             const canAddFromScanner = addable && !incompatible;
+            const locked = !selected && !canAddFromScanner;
             return (
               <TableRow
                 key={market.id}
@@ -101,7 +103,7 @@ export function MarketTable({ markets }: { markets: MarketOpportunity[] }) {
                 <TableCell sx={{ overflow: 'hidden', py: 1.05 }}>
                   {market.providerCategory === 'Sportsbook' ? (
                     <Stack spacing={0.2}>
-                      <AppTableMetricValue>Reference only</AppTableMetricValue>
+                      <AppTableMetricValue>{market.recommendationActionableForUser ? 'Sportsbook pick' : 'Sportsbook line'}</AppTableMetricValue>
                       <AppTableSecondaryText>
                         Sportsbook line
                       </AppTableSecondaryText>
@@ -138,17 +140,17 @@ export function MarketTable({ markets }: { markets: MarketOpportunity[] }) {
                 ) : null}
                 <TableCell data-sticky-action="true" align="center" sx={{ ...stickyActionCellSx, width: 130, pl: 1.5, pr: 2, py: 1.05 }}>
                   <AppRowActions sx={{ mx: 'auto' }}>
-                    {canAddFromScanner || selected ? (
-                      <Button
-                        size="small"
-                        variant="contained"
-                        startIcon={selected ? <RemoveCircleOutlineRoundedIcon /> : <AddCircleOutlineRoundedIcon />}
-                        onClick={() => builder.toggleLeg(market)}
-                        sx={entryButtonSx(selected)}
-                      >
-                        {selected ? 'Remove' : 'Add leg'}
-                      </Button>
-                    ) : null}
+                    <Button
+                      size="small"
+                      variant="contained"
+                      startIcon={selected ? <RemoveCircleOutlineRoundedIcon /> : locked ? <LockRoundedIcon /> : <AddCircleOutlineRoundedIcon />}
+                      disabled={locked}
+                      title={locked ? incompatible ? 'This entry is locked to another provider.' : entryBuilderUnavailableReason(market) : undefined}
+                      onClick={() => (locked ? undefined : builder.toggleLeg(market))}
+                      sx={entryButtonSx(selected)}
+                    >
+                      {selected ? 'Remove' : 'Add leg'}
+                    </Button>
                     <Button
                       size="small"
                       variant="outlined"

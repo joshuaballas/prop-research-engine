@@ -69,6 +69,10 @@ export interface MarketOpportunity {
   marketShape: string;
   historicalSampleSize: number;
   freshness: 'Fresh' | 'Stale' | 'Unavailable';
+  lifecycleStatus?: string;
+  isFresh?: boolean;
+  isStale?: boolean;
+  isExpired?: boolean;
   projectionModifier: ProjectionModifier;
   projectionType?: string;
   projectionTypeConfidence?: 'Known' | 'Inferred' | 'Unknown' | string;

@@ -122,7 +122,7 @@ export function MarketFilters({
           {...fieldProps('providerCategory')}
           sx={{ minWidth: { xs: '100%', md: 148 }, width: { md: 148 } }}
         >
-          {(providerCategoryOptions ?? ['All', 'DFS', 'Reference only'].map((item) => ({ label: item, value: item }))).map((item) => (
+          {(providerCategoryOptions ?? ['All', 'DFS', 'Sportsbook'].map((item) => ({ label: item, value: item }))).map((item) => (
             <MenuItem key={item.value} value={item.value}>
               {item.label}
             </MenuItem>

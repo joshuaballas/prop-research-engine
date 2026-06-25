@@ -45,13 +45,35 @@ const descriptions: Record<CautionKey, string> = {
 };
 
 export function isPlayableMarket(market: MarketOpportunity) {
-  return (
-    market.providerCategory === 'DFS' &&
-    market.canAddToEntry &&
-    market.estimatedEv > 0 &&
-    (market.strategyClassification === 'Candidate' || market.strategyClassification === 'Watchlist') &&
-    market.freshness === 'Fresh'
+  return isEntryBuilderAddableMarket(market);
+}
+
+export function isEntryBuilderAddableMarket(market: MarketOpportunity) {
+  return market.providerCategory === 'DFS' && !isLineNoLongerAvailable(market);
+}
+
+export function isLineNoLongerAvailable(market: MarketOpportunity) {
+  const lifecycleStatus = String(market.lifecycleStatus ?? '').trim().toLowerCase();
+  return Boolean(
+    market.isExpired ||
+    market.isStale ||
+    market.freshness === 'Stale' ||
+    lifecycleStatus === 'expired' ||
+    lifecycleStatus === 'awaitingresults' ||
+    lifecycleStatus === 'completed'
   );
+}
+
+export function entryBuilderUnavailableReason(market: MarketOpportunity) {
+  if (market.providerCategory === 'Sportsbook') {
+    return 'Sportsbook line. Entry Builder supports DFS entries only.';
+  }
+
+  if (isLineNoLongerAvailable(market)) {
+    return 'Line no longer available.';
+  }
+
+  return market.entryRuleWarning ?? market.entryUnavailableReason ?? 'Entry Builder unavailable for this row.';
 }
 
 export function getMarketCautions(market: MarketOpportunity, options: { locked?: boolean } = {}) {

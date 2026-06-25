@@ -11,6 +11,7 @@ import { useResponsiveView } from '../../hooks/useResponsiveView';
 import { palette } from '../../theme/palette';
 import type { MarketOpportunity } from '../../types/markets';
 import { formatPercent } from '../../utils/formatters';
+import { isEntryBuilderAddableMarket, isLineNoLongerAvailable } from '../../utils/marketCautions';
 import { marketTagLabel, marketTagValue } from '../../utils/marketTags';
 
 const defaultLineShoppingFilters: MarketFilterValues = {
@@ -21,14 +22,14 @@ const defaultLineShoppingFilters: MarketFilterValues = {
   trust: 'All',
   opportunity: 'All',
   sort: 'Edge',
-  canAddOnly: true
+  canAddOnly: false
 };
 
 export function LineShoppingPage() {
   const { isMobile } = useResponsiveView();
   const builder = useEntryBuilder();
   const [filters, setFilters] = useState<MarketFilterValues>(defaultLineShoppingFilters);
-  const [candidateOnly, setCandidateOnly] = useState(true);
+  const [candidateOnly, setCandidateOnly] = useState(false);
   const [page, setPage] = useState(1);
   const lineShoppingQuery = useLineShoppingData(50, false, 'line-shopping');
   const lineShoppingMarkets = lineShoppingQuery.markets.filter(isLineShoppingDisplayMarket);
@@ -61,14 +62,8 @@ export function LineShoppingPage() {
   const dfsProviderCount = new Set(visibleMarkets.map((market) => market.provider)).size;
   const clearFilters = () => {
     setFilters(defaultLineShoppingFilters);
-    setCandidateOnly(true);
+    setCandidateOnly(false);
   };
-
-  useEffect(() => {
-    if ((filters.sport === 'SOCCER' || filters.providerCategory === 'Sportsbook') && filters.canAddOnly) {
-      setFilters((current) => ({ ...current, canAddOnly: false }));
-    }
-  }, [filters.canAddOnly, filters.providerCategory, filters.sport]);
 
   useEffect(() => {
     setFilters((current) => normalizeFilterSelection(current, {
@@ -123,7 +118,9 @@ export function LineShoppingPage() {
         onClearFilters={clearFilters}
       />
       <Typography variant="body2" color="text.secondary" sx={{ mt: -1.25 }}>
-        Sportsbook recommendations stay separate from DFS entry legs. Only Entry-compatible DFS rows can be added.
+        {filters.canAddOnly
+          ? 'Showing Entry-compatible DFS rows only. Sportsbook rows are hidden because they cannot be added to Entry Builder.'
+          : 'Showing all current rows. Use Entry-compatible to show only DFS rows that can be added to an entry.'}
       </Typography>
       {lineShoppingQuery.loading ? (
         <ApiStateCard message="Loading latest line-shopping rows..." />
@@ -202,7 +199,7 @@ function shallowEqualFilters(left: MarketFilterValues, right: MarketFilterValues
 }
 
 function isLineShoppingDisplayMarket(market: MarketOpportunity) {
-  return market.providerCategory === 'DFS' || market.providerCategory === 'Sportsbook';
+  return (market.providerCategory === 'DFS' || market.providerCategory === 'Sportsbook') && !isLineNoLongerAvailable(market);
 }
 
 function lineShoppingMarketMatchesFilters(
@@ -228,7 +225,7 @@ function lineShoppingMarketMatchesFilters(
 
 function isEntryCompatibleMarket(market: MarketOpportunity, builder: ReturnType<typeof useEntryBuilder>) {
   const selected = builder.isSelected(market.id);
-  return selected || (market.canAddToEntry && market.estimatedEv > 0 && builder.isCompatible(market));
+  return selected || (isEntryBuilderAddableMarket(market) && builder.isCompatible(market));
 }
 
 function ApiStateCard({ message, tone = 'default' }: { message: string; tone?: 'default' | 'error' }) {

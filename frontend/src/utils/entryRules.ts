@@ -1,4 +1,5 @@
 import type { EntryLeg, EntryRule } from '../types/entryBuilder';
+import { entryBuilderUnavailableReason, isEntryBuilderAddableMarket } from './marketCautions';
 
 export function canAddLeg(existingLegs: EntryLeg[], candidate: EntryLeg, rules: EntryRule[]) {
   if (existingLegs.some((leg) => leg.id === candidate.id)) {
@@ -12,8 +13,8 @@ export function canAddLeg(existingLegs: EntryLeg[], candidate: EntryLeg, rules: 
     }
   }
 
-  if (!candidate.canAddToEntry || candidate.providerCategory !== 'DFS') {
-    return { allowed: false, reason: getActionabilityMessage(candidate) };
+  if (!isEntryBuilderAddableMarket(candidate)) {
+    return { allowed: false, reason: entryBuilderUnavailableReason(candidate) };
   }
 
   const compatibilityGroup = existingLegs[0]?.entryCompatibilityGroup ?? candidate.entryCompatibilityGroup;
@@ -32,20 +33,4 @@ export function canAddLeg(existingLegs: EntryLeg[], candidate: EntryLeg, rules: 
   }
 
   return { allowed: true, reason: existingLegs.length ? 'Leg is compatible.' : 'Provider locked for this entry.' };
-}
-
-function getActionabilityMessage(candidate: EntryLeg) {
-  if (candidate.providerCategory === 'Sportsbook') {
-    return 'Sportsbook lines are comparison context only and cannot be added to an entry.';
-  }
-
-  if (candidate.freshness === 'Stale') {
-    return 'This line is stale and cannot be added to an entry.';
-  }
-
-  if (candidate.freshness === 'Unavailable') {
-    return 'This line is unavailable and cannot be added to an entry.';
-  }
-
-  return 'This line cannot be added to an entry.';
 }

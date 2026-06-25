@@ -993,6 +993,8 @@ public static class PublicMarketsEndpoints
         SoccerTopPicksOptions soccerTopPicksOptions,
         CancellationToken cancellationToken)
     {
+        providerCategory = NormalizePublicProviderCategoryFilter(providerCategory);
+
         if (IsSoccerSport(effectiveSport))
         {
             if (!soccerTopPicksOptions.Enabled)
@@ -1229,6 +1231,8 @@ public static class PublicMarketsEndpoints
         SoccerTopPicksOptions soccerTopPicksOptions,
         CancellationToken cancellationToken)
     {
+        providerCategory = NormalizePublicProviderCategoryFilter(providerCategory);
+
         if (IsSoccerSport(effectiveSport))
         {
             var hasSoccerLineShoppingSnapshots = await dbContext.MarketLineShoppingSnapshots
@@ -1344,6 +1348,8 @@ public static class PublicMarketsEndpoints
         ApplicationDbContext dbContext,
         CancellationToken cancellationToken)
     {
+        providerCategory = NormalizePublicProviderCategoryFilter(providerCategory);
+
         var requestedTake = Math.Clamp(take ?? 50, 1, 500);
         var latestRunId = runId ?? await ResolveLatestLineShoppingSnapshotRunIdAsync(
             dbContext,
@@ -1411,6 +1417,27 @@ public static class PublicMarketsEndpoints
                 .Select(row => BuildSnapshotDetails(row.DetailsJson, row.Sport, row.EventName, row.EventStartTime))
                 .ToArray()
         };
+    }
+
+    private static string? NormalizePublicProviderCategoryFilter(string? providerCategory)
+    {
+        if (string.IsNullOrWhiteSpace(providerCategory)
+            || string.Equals(providerCategory, "All", StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+
+        if (string.Equals(providerCategory, "DFS", StringComparison.OrdinalIgnoreCase))
+        {
+            return "DFS";
+        }
+
+        if (string.Equals(providerCategory, "Sportsbook", StringComparison.OrdinalIgnoreCase))
+        {
+            return "Sportsbook";
+        }
+
+        return providerCategory.Trim();
     }
 
     private static MarketSportResolution ResolveMarketSport(string? sport)

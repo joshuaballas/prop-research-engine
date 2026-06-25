@@ -1,11 +1,12 @@
 import AddCircleOutlineRoundedIcon from '@mui/icons-material/AddCircleOutlineRounded';
+import LockRoundedIcon from '@mui/icons-material/LockRounded';
 import RemoveCircleOutlineRoundedIcon from '@mui/icons-material/RemoveCircleOutlineRounded';
 import { Box, Button, Stack, Typography } from '@mui/material';
 import { useState } from 'react';
 import { useEntryBuilder } from '../../hooks/useEntryBuilder';
 import type { MarketOpportunity } from '../../types/markets';
 import { formatPercent } from '../../utils/formatters';
-import { getOperationalMarketCautions, isPlayableMarket } from '../../utils/marketCautions';
+import { entryBuilderUnavailableReason, getOperationalMarketCautions, isEntryBuilderAddableMarket } from '../../utils/marketCautions';
 import { TrustValue } from '../metrics/TrustValue';
 import { PropDetailsModal } from '../prop-history/PropDetailsModal';
 import { StatusPill } from '../ui/StatusPill';
@@ -27,27 +28,28 @@ import { marketDisplayLabel } from '../../utils/marketDisplay';
 export function MarketCard({ market }: { market: MarketOpportunity }) {
   const [detailsOpen, setDetailsOpen] = useState(false);
   const builder = useEntryBuilder();
-  const addable = isPlayableMarket(market);
+  const addable = isEntryBuilderAddableMarket(market);
   const selected = builder.isSelected(market.id);
   const incompatible = !selected && !builder.isCompatible(market);
   const canAddFromScanner = addable && !incompatible;
   const cautions = getOperationalMarketCautions(market, { locked: incompatible && addable });
+  const locked = !selected && !canAddFromScanner;
   const displayEv = getDisplayExpectedValue(market);
   const headlineValue = displayEv ?? market.probabilityEdge;
   const displayLabel = marketDisplayLabel(market);
   const actions = (
     <>
-      {canAddFromScanner || selected ? (
-        <Button
-          size="small"
-          variant="contained"
-          startIcon={selected ? <RemoveCircleOutlineRoundedIcon /> : <AddCircleOutlineRoundedIcon />}
-          onClick={() => builder.toggleLeg(market)}
-          sx={entryButtonSx(selected)}
-        >
-          {selected ? 'Remove' : 'Add leg'}
-        </Button>
-      ) : null}
+      <Button
+        size="small"
+        variant="contained"
+        startIcon={selected ? <RemoveCircleOutlineRoundedIcon /> : locked ? <LockRoundedIcon /> : <AddCircleOutlineRoundedIcon />}
+        disabled={locked}
+        title={locked ? incompatible ? 'This entry is locked to another provider.' : entryBuilderUnavailableReason(market) : undefined}
+        onClick={() => (locked ? undefined : builder.toggleLeg(market))}
+        sx={entryButtonSx(selected)}
+      >
+        {selected ? 'Remove' : 'Add leg'}
+      </Button>
       <Button size="small" variant="outlined" onClick={() => setDetailsOpen(true)} sx={secondaryActionButtonSx}>
         Details
       </Button>
@@ -91,7 +93,7 @@ export function MarketCard({ market }: { market: MarketOpportunity }) {
           market.providerCategory === 'Sportsbook' ? (
             <Stack direction="row" justifyContent="space-between" alignItems="center" gap={1} flexWrap="wrap" useFlexGap sx={{ minHeight: 28 }}>
               <Stack spacing={0}>
-                <Typography fontWeight={900}>Reference only</Typography>
+                <Typography fontWeight={900}>{market.recommendationActionableForUser ? 'Sportsbook pick' : 'Sportsbook line'}</Typography>
                 <Typography variant="caption" color="text.secondary">
                   Sportsbook line
                 </Typography>
