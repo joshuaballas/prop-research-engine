@@ -58,6 +58,15 @@ Invoke-RestMethod "$base/api/debug/provider-stat-mappings?sport=SOCCER&providerK
   ConvertTo-Json -Depth 80
 ```
 
+Read-only Soccer prop/stat mapping gap diagnostic across resolved The Odds/API-Sports fixture pairs:
+
+```powershell
+Invoke-RestMethod "$base/api/debug/soccer/results/api-sports/world-cup/prop-mapping-gap?fromDate=2026-06-21&toDate=2026-06-24&includeSamples=true&maxSamples=100" |
+  ConvertTo-Json -Depth 80
+```
+
+The gap diagnostic is for review only. It reports The Odds market keys missing canonical mappings, API-Sports result stat keys missing provider mappings, canonical key mismatches, mappings that exist but are not gradeable, imported stats that were not requested by The Odds, and player-matched/stat-missing rows. It never writes `provider_stat_mappings`, writes grades, imports results, refreshes odds, or enables public Soccer grading.
+
 Dry-run one fixture and verify DB mappings:
 
 ```powershell
@@ -67,4 +76,6 @@ Invoke-RestMethod -Method Post "$base/api/debug/soccer/results/api-sports/import
   ConvertTo-Json -Depth 80
 ```
 
-Soccer public grading remains disabled until identity linking, mapping confidence, and grading rules are explicitly approved.
+Soccer public grading remains disabled until identity linking, provider event/team context, mapping confidence, and grading rules are explicitly approved. The Odds Soccer market refresh now persists event-level context for new rows, but The Odds does not currently provide stable provider player ids or player team fields in the player prop payload.
+
+`/api/debug/soccer/results/api-sports/world-cup/grading-preview` can use these canonical stat keys for a read-only preview once API-Sports result rows and The Odds Soccer platform rows join by event, normalized player name, and prop/stat key. That preview compares actual values to sportsbook context side/line only after the result row is joined. It does not write grades and does not change the `public_grading_enabled=false` Soccer gate.

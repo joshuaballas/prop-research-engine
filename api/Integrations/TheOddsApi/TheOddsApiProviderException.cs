@@ -12,6 +12,8 @@ public sealed class TheOddsApiProviderException : Exception
         string? providerBodyPreview = null,
         string? requestUrl = null,
         TheOddsApiCreditUsage? creditUsage = null,
+        string? operation = null,
+        string providerName = "The Odds API",
         Exception? innerException = null)
         : base(message, innerException)
     {
@@ -20,6 +22,10 @@ public sealed class TheOddsApiProviderException : Exception
         StatusCode = statusCode;
         ProviderBodyPreview = providerBodyPreview;
         RequestUrl = requestUrl;
+        RawProviderBody = providerBodyPreview;
+        SanitizedRequestUrl = requestUrl;
+        Operation = operation;
+        ProviderName = providerName;
         CreditUsage = creditUsage ?? new TheOddsApiCreditUsage(null, null, null);
     }
 
@@ -34,6 +40,14 @@ public sealed class TheOddsApiProviderException : Exception
     public string? ProviderBodyPreview { get; }
 
     public string? RequestUrl { get; }
+
+    public string? RawProviderBody { get; }
+
+    public string? SanitizedRequestUrl { get; }
+
+    public string? Operation { get; }
+
+    public string ProviderName { get; }
 
     public TheOddsApiCreditUsage CreditUsage { get; }
 }

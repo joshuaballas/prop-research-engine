@@ -221,7 +221,11 @@ public sealed class RefreshSafetyTests
     [Fact]
     public async Task SportNeutralSoccerRefresh_DryRun_DoesNotCallProvider_AndReportsMissingConfig()
     {
-        await using var factory = new SafetyTestApplicationFactory();
+        await using var factory = new SafetyTestApplicationFactory(new Dictionary<string, string?>
+        {
+            ["TheOddsApi:SoccerWorldCupSportKey"] = string.Empty,
+            ["TheOddsApi:SoccerWorldCupMarkets"] = string.Empty
+        });
         using var client = factory.CreateClient();
         await factory.SeedRejectedKeyRefreshAsync();
         var before = await factory.CountArtifactsAsync();
@@ -280,7 +284,11 @@ public sealed class RefreshSafetyTests
     [Fact]
     public async Task SportNeutralSoccerRefresh_ForceLiveWithMissingConfig_DoesNotCallProvider()
     {
-        await using var factory = new SafetyTestApplicationFactory();
+        await using var factory = new SafetyTestApplicationFactory(new Dictionary<string, string?>
+        {
+            ["TheOddsApi:SoccerWorldCupSportKey"] = string.Empty,
+            ["TheOddsApi:SoccerWorldCupMarkets"] = string.Empty
+        });
         using var client = factory.CreateClient();
         await factory.SeedRejectedKeyRefreshAsync();
         var before = await factory.CountArtifactsAsync();
@@ -301,6 +309,433 @@ public sealed class RefreshSafetyTests
         Assert.Contains(json.GetProperty("diagnostics").GetProperty("missingConfig").EnumerateArray(), row => row.GetString() == "TheOddsApi:SoccerWorldCupSportKey");
         Assert.Equal(0, factory.TheOddsAdapter.CallCount);
         Assert.Equal(before, await factory.CountArtifactsAsync());
+    }
+
+    [Fact]
+    public async Task SportNeutralSoccerRefresh_ForceLive_PersistsProviderEventContext()
+    {
+        await using var factory = new SafetyTestApplicationFactory(new Dictionary<string, string?>
+        {
+            ["TheOddsApi:SoccerWorldCupSportKey"] = "soccer_fifa_world_cup",
+            ["TheOddsApi:SoccerWorldCupMarkets"] = "player_shots"
+        });
+        factory.TheOddsAdapter.ConfigureSoccerWorldCupContextPayload();
+        using var client = factory.CreateClient();
+        await factory.EnsureDatabaseAsync();
+
+        var response = await client.PostAsJsonAsync("/api/debug/the-odds/markets/refresh-current", new
+        {
+            sport = "SOCCER",
+            competition = "World Cup",
+            date = "2026-06-21",
+            dryRun = false,
+            forceLive = true,
+            includeDfs = true
+        });
+
+        await EnsureSuccessWithBodyAsync(response);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.True(json.GetProperty("success").GetBoolean());
+        Assert.True(json.GetProperty("callsExternalApis").GetBoolean());
+        Assert.Equal(2, factory.TheOddsAdapter.CallCount);
+        Assert.Equal(1, json.GetProperty("platformPropsUpserted").GetInt32());
+        Assert.Equal(2, json.GetProperty("soccerMarketsDiscovered").GetInt32());
+        Assert.False(json.GetProperty("diagnostics").GetProperty("providerPlayerIdAvailable").GetBoolean());
+        Assert.False(json.GetProperty("diagnostics").GetProperty("playerTeamAvailable").GetBoolean());
+        Assert.Equal(1, json.GetProperty("diagnostics").GetProperty("normalizedPropsCount").GetInt32());
+        Assert.False(json.GetProperty("diagnostics").GetProperty("noProviderMarketsReturned").GetBoolean());
+        Assert.False(json.GetProperty("diagnostics").GetProperty("providerMarketsReturnedButNoRowsMapped").GetBoolean());
+        Assert.Contains(json.GetProperty("diagnostics").GetProperty("mappedMarketsReturned").EnumerateArray(), row => row.GetString() == "player_shots");
+
+        var contextResponse = await client.GetAsync("/api/debug/soccer/player-identity/api-sports/world-cup/platform-context?fromDate=2026-06-21&toDate=2026-06-21&includeSamples=true&maxSamples=10");
+        await EnsureSuccessWithBodyAsync(contextResponse);
+        var context = await contextResponse.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.True(context.GetProperty("fieldAvailability").GetProperty("hasEventNameCount").GetInt32() > 0);
+        Assert.True(context.GetProperty("fieldAvailability").GetProperty("hasStartTimeCount").GetInt32() > 0);
+        Assert.True(context.GetProperty("fieldAvailability").GetProperty("hasProviderEventIdCount").GetInt32() > 0);
+        Assert.True(context.GetProperty("fieldAvailability").GetProperty("hasLeagueOrCompetitionCount").GetInt32() > 0);
+        Assert.Equal(0, context.GetProperty("fieldAvailability").GetProperty("hasProviderPlayerIdCount").GetInt32());
+        Assert.NotEqual("PreContextOrMissingContext", context.GetProperty("contextEnrichment").GetProperty("status").GetString());
+        var sample = Assert.Single(context.GetProperty("samples").EnumerateArray());
+        Assert.Equal("Away FC @ Home FC", sample.GetProperty("eventName").GetString());
+        Assert.Equal("soccer-event-1", sample.GetProperty("providerEventId").GetString());
+    }
+
+    [Fact]
+    public async Task SportNeutralSoccerRefresh_Provider422_ReturnsStructuredProviderRejection()
+    {
+        await using var factory = new SafetyTestApplicationFactory(new Dictionary<string, string?>
+        {
+            ["TheOddsApi:SoccerWorldCupSportKey"] = "soccer_fifa_world_cup",
+            ["TheOddsApi:SoccerWorldCupMarkets"] = "bad_market"
+        });
+        factory.TheOddsAdapter.ConfigureSoccerWorldCupProviderRejection();
+        using var client = factory.CreateClient();
+        await factory.EnsureDatabaseAsync();
+
+        var response = await client.PostAsJsonAsync("/api/debug/the-odds/markets/refresh-current", new
+        {
+            sport = "SOCCER",
+            competition = "World Cup",
+            date = "2026-06-21",
+            dryRun = false,
+            forceLive = true,
+            includeDfs = true
+        });
+
+        Assert.NotEqual(HttpStatusCode.InternalServerError, response.StatusCode);
+        await AssertStatusWithBodyAsync(response, HttpStatusCode.BadGateway);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.False(json.GetProperty("success").GetBoolean());
+        Assert.True(json.GetProperty("blocked").GetBoolean());
+        Assert.True(json.GetProperty("providerRejectedRequest").GetBoolean());
+        Assert.Equal("ProviderRejectedRequest", json.GetProperty("blockReason").GetString());
+        Assert.True(json.GetProperty("callsExternalApis").GetBoolean());
+        Assert.False(json.GetProperty("wouldWriteRows").GetBoolean());
+        var providerError = json.GetProperty("providerError");
+        Assert.Equal(422, providerError.GetProperty("statusCode").GetInt32());
+        Assert.Equal("FetchEventOdds", providerError.GetProperty("operation").GetString());
+        Assert.Contains("bad_market", providerError.GetProperty("sanitizedRequestUrl").GetString());
+        Assert.DoesNotContain("TEST_THE_ODDS_API_KEY", providerError.GetProperty("sanitizedRequestUrl").GetString());
+        Assert.Contains("Invalid market", providerError.GetProperty("rawProviderBody").GetString());
+        var rejectedInputs = json.GetProperty("diagnostics").GetProperty("likelyRejectedInputs");
+        Assert.Equal("soccer_fifa_world_cup", rejectedInputs.GetProperty("sportKey").GetString());
+        Assert.Equal("bad_market", rejectedInputs.GetProperty("markets").GetString());
+        Assert.Equal("soccer-event-1", rejectedInputs.GetProperty("eventId").GetString());
+        Assert.False(json.GetProperty("resultGradingSupported").GetBoolean());
+        Assert.Equal(2, factory.TheOddsAdapter.CallCount);
+        Assert.Equal(0, await CountSoccerPlatformPropsAsync(factory));
+    }
+
+    [Fact]
+    public async Task SportNeutralSoccerRefresh_DefaultsToSportsbookContext_PersistsResearchOnlyRows()
+    {
+        await using var factory = new SafetyTestApplicationFactory(new Dictionary<string, string?>
+        {
+            ["TheOddsApi:SoccerWorldCupSportKey"] = "soccer_fifa_world_cup",
+            ["TheOddsApi:SoccerWorldCupMarkets"] = "player_goals,player_assists,player_shots,player_shots_on_target,player_tackles",
+            ["TheOddsApi:SoccerWorldCupSportsbookRegion"] = "us",
+            ["TheOddsApi:SoccerWorldCupDfsRegion"] = "us_dfs"
+        });
+        factory.TheOddsAdapter.ConfigureSoccerWorldCupSportsbookContextPayload();
+        using var client = factory.CreateClient();
+        await factory.EnsureDatabaseAsync();
+
+        var response = await client.PostAsJsonAsync("/api/debug/the-odds/markets/refresh-current", new
+        {
+            sport = "SOCCER",
+            competition = "World Cup",
+            date = "2026-06-21",
+            dryRun = false,
+            forceLive = true
+        });
+
+        await EnsureSuccessWithBodyAsync(response);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.True(json.GetProperty("success").GetBoolean());
+        Assert.Equal("Sportsbook", json.GetProperty("providerCategory").GetString());
+        Assert.Equal("us", json.GetProperty("region").GetString());
+        Assert.True(json.GetProperty("sportsbookContextResearchOnly").GetBoolean());
+        Assert.True(json.GetProperty("sportsbookContextNotDfsPlayable").GetBoolean());
+        Assert.Equal(1, json.GetProperty("platformPropsUpserted").GetInt32());
+        Assert.Equal(1, json.GetProperty("sportsbookContextRowsCreated").GetInt32());
+        Assert.Equal(0, json.GetProperty("dfsRowsCreated").GetInt32());
+        Assert.Contains(json.GetProperty("diagnostics").GetProperty("configuredMarketsReturned").EnumerateArray(), row => row.GetString() == "player_goals");
+        Assert.Contains(json.GetProperty("diagnostics").GetProperty("configuredMarketsMissing").EnumerateArray(), row => row.GetString() == "player_tackles");
+
+        var metadata = await GetSingleSoccerPlatformPropMetadataAsync(factory);
+        Assert.Equal("Sportsbook", metadata.GetProperty("providerCategory").GetString());
+        Assert.Equal("us", metadata.GetProperty("region").GetString());
+        Assert.False(metadata.GetProperty("isActionableForUser").GetBoolean());
+        Assert.False(metadata.GetProperty("isIndicativeOdds").GetBoolean());
+        var entry = metadata.GetProperty("entry");
+        Assert.Equal("Sportsbook", entry.GetProperty("providerCategory").GetString());
+        Assert.False(entry.GetProperty("actionableForUser").GetBoolean());
+        Assert.Contains("research-only", entry.GetProperty("ruleWarning").GetString(), StringComparison.OrdinalIgnoreCase);
+        Assert.Equal("soccer_fifa_world_cup", metadata.GetProperty("sport").GetProperty("providerSportKey").GetString());
+        Assert.Equal("World Cup", metadata.GetProperty("sport").GetProperty("competition").GetString());
+        Assert.Equal("betmgm", metadata.GetProperty("bookmaker").GetProperty("key").GetString());
+        Assert.Equal("player_goals", metadata.GetProperty("market").GetProperty("key").GetString());
+        var eventInfo = metadata.GetProperty("eventInfo");
+        Assert.Equal("soccer-event-1", eventInfo.GetProperty("providerEventId").GetString());
+        Assert.Equal("Home FC", eventInfo.GetProperty("homeTeam").GetString());
+        Assert.Equal("Away FC", eventInfo.GetProperty("awayTeam").GetString());
+    }
+
+    [Fact]
+    public async Task SportNeutralSoccerRefresh_DryRunForceLive_PlansEligibleWindowEvents_AndWritesNothing()
+    {
+        await using var factory = new SafetyTestApplicationFactory(new Dictionary<string, string?>
+        {
+            ["TheOddsApi:SoccerWorldCupSportKey"] = "soccer_fifa_world_cup",
+            ["TheOddsApi:SoccerWorldCupMarkets"] = "player_goals,player_shots",
+            ["TheOddsApi:SoccerWorldCupSportsbookRegion"] = "us"
+        });
+        factory.TheOddsAdapter.ConfigureSoccerWorldCupMultiEventSportsbookContextPayload();
+        using var client = factory.CreateClient();
+        await factory.EnsureDatabaseAsync();
+        var before = await factory.CountArtifactsAsync();
+
+        var response = await client.PostAsJsonAsync("/api/debug/the-odds/markets/refresh-current", new
+        {
+            sport = "SOCCER",
+            competition = "World Cup",
+            fromDate = "2026-06-21",
+            toDate = "2026-06-24",
+            dryRun = true,
+            forceLive = true,
+            maxEvents = 2,
+            includeSportsbook = true,
+            bookmakers = new[] { "fanduel", "betmgm", "betrivers" },
+            markets = new[] { "player_goals", "player_shots" }
+        });
+
+        await EnsureSuccessWithBodyAsync(response);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.True(json.GetProperty("dryRun").GetBoolean());
+        Assert.True(json.GetProperty("callsExternalApis").GetBoolean());
+        Assert.False(json.GetProperty("wouldWriteRows").GetBoolean());
+        Assert.Equal("Sportsbook", json.GetProperty("providerCategory").GetString());
+        Assert.Equal("us", json.GetProperty("region").GetString());
+        Assert.Equal(3, json.GetProperty("eventsDiscovered").GetInt32());
+        Assert.Equal(3, json.GetProperty("eventsEligible").GetInt32());
+        Assert.Equal(1, json.GetProperty("eventsSkipped").GetInt32());
+        Assert.Equal(2, json.GetProperty("eventsToFetch").GetInt32());
+        Assert.Equal(3, json.GetProperty("estimatedApiCalls").GetInt32());
+        Assert.Equal(1, json.GetProperty("skipReasons").GetProperty("maxEventsLimit").GetInt32());
+        Assert.Equal(2, json.GetProperty("perEventExpectedRequests").GetArrayLength());
+        Assert.Equal(1, factory.TheOddsAdapter.CallCount);
+        Assert.Equal(before, await factory.CountArtifactsAsync());
+        Assert.Equal(0, await CountSoccerPlatformPropsAsync(factory));
+    }
+
+    [Fact]
+    public async Task SportNeutralSoccerRefresh_RealMode_PersistsMultipleProviderEvents_RespectingMaxEvents()
+    {
+        await using var factory = new SafetyTestApplicationFactory(new Dictionary<string, string?>
+        {
+            ["TheOddsApi:SoccerWorldCupSportKey"] = "soccer_fifa_world_cup",
+            ["TheOddsApi:SoccerWorldCupMarkets"] = "player_goals,player_shots",
+            ["TheOddsApi:SoccerWorldCupSportsbookRegion"] = "us"
+        });
+        factory.TheOddsAdapter.ConfigureSoccerWorldCupMultiEventSportsbookContextPayload();
+        using var client = factory.CreateClient();
+        await factory.EnsureDatabaseAsync();
+
+        var response = await client.PostAsJsonAsync("/api/debug/the-odds/markets/refresh-current", new
+        {
+            sport = "SOCCER",
+            competition = "World Cup",
+            fromDate = "2026-06-21",
+            toDate = "2026-06-24",
+            dryRun = false,
+            forceLive = true,
+            maxEvents = 2,
+            includeSportsbook = true,
+            bookmakers = new[] { "fanduel", "betmgm", "betrivers" },
+            markets = new[] { "player_goals", "player_shots" }
+        });
+
+        await EnsureSuccessWithBodyAsync(response);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.True(json.GetProperty("success").GetBoolean());
+        Assert.Equal("Sportsbook", json.GetProperty("providerCategory").GetString());
+        Assert.Equal("us", json.GetProperty("region").GetString());
+        Assert.True(json.GetProperty("sportsbookContextResearchOnly").GetBoolean());
+        Assert.True(json.GetProperty("sportsbookContextNotDfsPlayable").GetBoolean());
+        Assert.False(json.GetProperty("resultGradingSupported").GetBoolean());
+        Assert.Equal(3, json.GetProperty("eventsDiscovered").GetInt32());
+        Assert.Equal(3, json.GetProperty("eventsEligible").GetInt32());
+        Assert.Equal(2, json.GetProperty("eventsFetched").GetInt32());
+        Assert.Equal(2, json.GetProperty("eventsWithRows").GetInt32());
+        Assert.Equal(0, json.GetProperty("eventsWithoutRows").GetInt32());
+        Assert.Equal(2, json.GetProperty("providerEventsPersisted").GetInt32());
+        Assert.Equal(2, json.GetProperty("platformPropsUpserted").GetInt32());
+        Assert.Equal(2, json.GetProperty("sportsbookContextRowsCreated").GetInt32());
+        Assert.Equal(0, json.GetProperty("dfsRowsCreated").GetInt32());
+        Assert.Equal(3, factory.TheOddsAdapter.CallCount);
+
+        var rowsByProviderEvent = json.GetProperty("rowsByProviderEvent");
+        Assert.Equal(1, rowsByProviderEvent.GetProperty("soccer-event-1").GetInt32());
+        Assert.Equal(1, rowsByProviderEvent.GetProperty("soccer-event-2").GetInt32());
+        Assert.False(rowsByProviderEvent.TryGetProperty("soccer-event-3", out _));
+        Assert.Equal(2, await CountSoccerPlatformPropsAsync(factory));
+
+        var metadataRows = await GetSoccerPlatformPropMetadataAsync(factory);
+        Assert.Equal(2, metadataRows.Length);
+        Assert.All(metadataRows, metadata =>
+        {
+            Assert.Equal("the-odds-provider-context-v2", metadata.GetProperty("contextSchemaVersion").GetString());
+            Assert.Equal("Sportsbook", metadata.GetProperty("providerCategory").GetString());
+            Assert.False(metadata.GetProperty("isActionableForUser").GetBoolean());
+            Assert.Equal("soccer_fifa_world_cup", metadata.GetProperty("sport").GetProperty("providerSportKey").GetString());
+            Assert.Equal("World Cup", metadata.GetProperty("sport").GetProperty("competition").GetString());
+            var providerEventId = metadata.GetProperty("eventInfo").GetProperty("providerEventId").GetString();
+            Assert.False(string.IsNullOrWhiteSpace(providerEventId));
+            Assert.DoesNotContain("|balanced", providerEventId, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("|alternate", providerEventId, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("SCR_game", providerEventId, StringComparison.OrdinalIgnoreCase);
+        });
+    }
+
+    [Theory]
+    [InlineData("zeroBookmakers", 0, 0, 0, "NoBookmakersReturned")]
+    [InlineData("zeroMarkets", 1, 0, 0, "NoMarketsReturned")]
+    [InlineData("unsupportedMarket", 1, 1, 2, "UnsupportedMarketsReturned")]
+    [InlineData("configuredMarketZeroOutcomes", 1, 1, 0, "ConfiguredMarketsReturnedWithNoOutcomes")]
+    public async Task SportNeutralSoccerRefresh_ZeroRowDiagnostics_ExplainProviderShape(
+        string payloadMode,
+        int expectedBookmakerCount,
+        int expectedMarketCount,
+        int expectedOutcomeCount,
+        string expectedSkipReason)
+    {
+        await using var factory = new SafetyTestApplicationFactory(new Dictionary<string, string?>
+        {
+            ["TheOddsApi:SoccerWorldCupSportKey"] = "soccer_fifa_world_cup",
+            ["TheOddsApi:SoccerWorldCupMarkets"] = "player_shots"
+        });
+        factory.TheOddsAdapter.ConfigureSoccerWorldCupContextPayload(payloadMode);
+        using var client = factory.CreateClient();
+        await factory.EnsureDatabaseAsync();
+
+        var response = await client.PostAsJsonAsync("/api/debug/the-odds/markets/refresh-current", new
+        {
+            sport = "SOCCER",
+            competition = "World Cup",
+            date = "2026-06-21",
+            dryRun = false,
+            forceLive = true,
+            includeDfs = true
+        });
+
+        await EnsureSuccessWithBodyAsync(response);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.True(json.GetProperty("success").GetBoolean());
+        Assert.Equal(0, json.GetProperty("platformPropsUpserted").GetInt32());
+        Assert.Equal(0, await CountSoccerPlatformPropsAsync(factory));
+        var diagnostics = json.GetProperty("diagnostics");
+        Assert.Equal(1, diagnostics.GetProperty("eventsFetched").GetInt32());
+        Assert.Equal(1, diagnostics.GetProperty("events").GetArrayLength());
+        var eventDiagnostics = diagnostics.GetProperty("events")[0];
+        Assert.Equal("soccer-event-1", eventDiagnostics.GetProperty("providerEventId").GetString());
+        Assert.Equal(expectedBookmakerCount, eventDiagnostics.GetProperty("bookmakerCount").GetInt32());
+        Assert.Equal(expectedMarketCount, eventDiagnostics.GetProperty("marketCount").GetInt32());
+        Assert.Equal(expectedOutcomeCount, eventDiagnostics.GetProperty("outcomeCount").GetInt32());
+        Assert.Equal(0, eventDiagnostics.GetProperty("normalizedPropsCount").GetInt32());
+        Assert.Contains(
+            eventDiagnostics.GetProperty("skipReasons").EnumerateArray(),
+            row => row.GetString() == expectedSkipReason);
+
+        if (payloadMode == "unsupportedMarket")
+        {
+            Assert.Contains(json.GetProperty("soccerMarketsUnsupported").EnumerateArray(), row => row.GetString() == "player_passes");
+            Assert.True(diagnostics.GetProperty("providerMarketsReturnedButNoRowsMapped").GetBoolean());
+        }
+
+        if (payloadMode is "zeroBookmakers" or "zeroMarkets")
+        {
+            Assert.True(diagnostics.GetProperty("noProviderMarketsReturned").GetBoolean());
+        }
+    }
+
+    [Fact]
+    public async Task SoccerWorldCupProviderAvailability_WithoutForceLive_DoesNotCallProviderOrWrite()
+    {
+        await using var factory = new SafetyTestApplicationFactory(new Dictionary<string, string?>
+        {
+            ["TheOddsApi:SoccerWorldCupSportKey"] = "soccer_fifa_world_cup",
+            ["TheOddsApi:SoccerWorldCupMarkets"] = "player_shots"
+        });
+        using var client = factory.CreateClient();
+        await factory.EnsureDatabaseAsync();
+        var before = await factory.CountArtifactsAsync();
+
+        var response = await client.GetAsync("/api/debug/the-odds/soccer/world-cup/provider-availability?slateDate=2026-06-21");
+
+        await AssertStatusWithBodyAsync(response, HttpStatusCode.Conflict);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.True(json.GetProperty("blocked").GetBoolean());
+        Assert.True(json.GetProperty("requiresForceLive").GetBoolean());
+        Assert.False(json.GetProperty("callsExternalApis").GetBoolean());
+        Assert.False(json.GetProperty("wouldWriteRows").GetBoolean());
+        Assert.Equal(0, factory.TheOddsAdapter.CallCount);
+        Assert.Equal(before, await factory.CountArtifactsAsync());
+        Assert.Equal(0, await CountSoccerPlatformPropsAsync(factory));
+    }
+
+    [Fact]
+    public async Task SoccerWorldCupProviderAvailability_ComparesRegions_WithoutWritingRows()
+    {
+        await using var factory = new SafetyTestApplicationFactory(new Dictionary<string, string?>
+        {
+            ["TheOddsApi:SoccerWorldCupSportKey"] = "soccer_fifa_world_cup",
+            ["TheOddsApi:SoccerWorldCupMarkets"] = "player_shots"
+        });
+        factory.TheOddsAdapter.ConfigureSoccerWorldCupAvailabilityByRegion();
+        using var client = factory.CreateClient();
+        await factory.EnsureDatabaseAsync();
+        var before = await factory.CountArtifactsAsync();
+
+        var response = await client.GetAsync("/api/debug/the-odds/soccer/world-cup/provider-availability?slateDate=2026-06-21&regions=us_dfs,us&markets=player_shots&maxEvents=1&forceLive=true");
+
+        await EnsureSuccessWithBodyAsync(response);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.True(json.GetProperty("success").GetBoolean());
+        Assert.True(json.GetProperty("readOnly").GetBoolean());
+        Assert.True(json.GetProperty("callsExternalApis").GetBoolean());
+        Assert.False(json.GetProperty("wouldWriteRows").GetBoolean());
+        Assert.Equal(3, json.GetProperty("estimatedLiveCalls").GetInt32());
+        Assert.Equal(3, json.GetProperty("actualLiveCalls").GetInt32());
+        Assert.Equal(1, json.GetProperty("eventsFetched").GetInt32());
+        Assert.Equal(1, json.GetProperty("eventsMatchedToSlate").GetInt32());
+        Assert.Equal(1, json.GetProperty("eventsWithBookmakers").GetInt32());
+        Assert.Equal(1, json.GetProperty("eventsWithMarkets").GetInt32());
+        Assert.True(json.GetProperty("hasAnyProviderLines").GetBoolean());
+        var events = json.GetProperty("events").EnumerateArray().ToArray();
+        Assert.Equal(2, events.Length);
+        var dfsEvent = Assert.Single(events, row => row.GetProperty("requestedRegions").GetString() == "us_dfs");
+        Assert.Equal(0, dfsEvent.GetProperty("bookmakerCount").GetInt32());
+        var usEvent = Assert.Single(events, row => row.GetProperty("requestedRegions").GetString() == "us");
+        Assert.Equal(1, usEvent.GetProperty("bookmakerCount").GetInt32());
+        Assert.Contains(usEvent.GetProperty("bookmakerKeysReturned").EnumerateArray(), row => row.GetString() == "prizepicks");
+        Assert.Contains(usEvent.GetProperty("configuredMarketsReturned").EnumerateArray(), row => row.GetString() == "player_shots");
+        Assert.Equal(before, await factory.CountArtifactsAsync());
+        Assert.Equal(0, await CountSoccerPlatformPropsAsync(factory));
+    }
+
+    [Fact]
+    public async Task SoccerWorldCupProviderAvailability_Provider422_IsStructuredAndDoesNotWriteRows()
+    {
+        await using var factory = new SafetyTestApplicationFactory(new Dictionary<string, string?>
+        {
+            ["TheOddsApi:SoccerWorldCupSportKey"] = "soccer_fifa_world_cup",
+            ["TheOddsApi:SoccerWorldCupMarkets"] = "bad_market"
+        });
+        factory.TheOddsAdapter.ConfigureSoccerWorldCupProviderRejection();
+        using var client = factory.CreateClient();
+        await factory.EnsureDatabaseAsync();
+        var before = await factory.CountArtifactsAsync();
+
+        var response = await client.GetAsync("/api/debug/the-odds/soccer/world-cup/provider-availability?slateDate=2026-06-21&regions=us_dfs&markets=bad_market&maxEvents=1&forceLive=true");
+
+        await EnsureSuccessWithBodyAsync(response);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.False(json.GetProperty("success").GetBoolean());
+        Assert.True(json.GetProperty("readOnly").GetBoolean());
+        Assert.False(json.GetProperty("wouldWriteRows").GetBoolean());
+        Assert.Equal(1, json.GetProperty("providerRejectedCount").GetInt32());
+        var eventRow = Assert.Single(json.GetProperty("events").EnumerateArray());
+        Assert.True(eventRow.GetProperty("providerRejectedRequest").GetBoolean());
+        Assert.False(eventRow.GetProperty("eventOddsHttpSucceeded").GetBoolean());
+        var providerError = eventRow.GetProperty("providerError");
+        Assert.Equal(422, providerError.GetProperty("statusCode").GetInt32());
+        Assert.Equal("FetchEventOdds", providerError.GetProperty("operation").GetString());
+        Assert.Contains("bad_market", providerError.GetProperty("sanitizedRequestUrl").GetString());
+        Assert.DoesNotContain("TEST_THE_ODDS_API_KEY", providerError.GetProperty("sanitizedRequestUrl").GetString());
+        Assert.Contains("Invalid market", providerError.GetProperty("rawProviderBody").GetString());
+        Assert.Equal(before, await factory.CountArtifactsAsync());
+        Assert.Equal(0, await CountSoccerPlatformPropsAsync(factory));
     }
 
     [Fact]
@@ -1158,6 +1593,1099 @@ public sealed class RefreshSafetyTests
     }
 
     [Fact]
+    public async Task ApiSportsWorldCupMarketJoinPreview_DetectsEventPlayerPropOverlap_ReadOnly()
+    {
+        await using var factory = new SafetyTestApplicationFactory(ApiSportsLiveConfig());
+        using var client = factory.CreateClient();
+        await factory.SeedApiSportsSoccerMarketJoinRowsAsync();
+        var resultsBefore = await CountApiSportsSoccerResultsAsync(factory);
+        var platformPropsBefore = await CountSoccerPlatformPropsAsync(factory);
+        var providerCallsBefore = factory.ApiSportsFootballClient.FixturePlayerStatsCallCount;
+
+        var response = await client.GetAsync("/api/debug/soccer/results/api-sports/world-cup/market-join-preview?fromDate=2026-06-21&toDate=2026-06-21&fixtureId=1489393&providerEventId=852a3abe6d46820720febc0fedebff9a");
+
+        await EnsureSuccessWithBodyAsync(response);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.False(json.GetProperty("callsExternalApis").GetBoolean());
+        Assert.True(json.GetProperty("readOnly").GetBoolean());
+        Assert.False(json.GetProperty("publicSoccerGradingEnabled").GetBoolean());
+
+        var summary = json.GetProperty("summary");
+        Assert.Equal(1, summary.GetProperty("importedResultRows").GetInt32());
+        Assert.Equal(1, summary.GetProperty("candidatePlatformRows").GetInt32());
+        Assert.Equal(1, summary.GetProperty("eventMatchedRows").GetInt32());
+        Assert.Equal(1, summary.GetProperty("playerNameMatchedRows").GetInt32());
+        Assert.Equal(1, summary.GetProperty("propTypeMatchedRows").GetInt32());
+        Assert.Equal(1, summary.GetProperty("playerAndPropMatchedRows").GetInt32());
+        Assert.Equal(1, summary.GetProperty("fullyJoinableRows").GetInt32());
+        Assert.Equal(0, summary.GetProperty("unmatchedResultRows").GetInt32());
+        Assert.Equal(0, summary.GetProperty("unmatchedPlatformRows").GetInt32());
+
+        var matched = Assert.Single(json.GetProperty("samples").GetProperty("matched").EnumerateArray());
+        Assert.Equal("1489393", matched.GetProperty("apiSportsFixtureId").GetString());
+        Assert.Equal("Test Forward", matched.GetProperty("apiSportsPlayerName").GetString());
+        Assert.Equal("GOALS", matched.GetProperty("apiSportsStatKey").GetString());
+        Assert.Equal("852a3abe6d46820720febc0fedebff9a", matched.GetProperty("providerEventId").GetString());
+        Assert.Equal("player_goals", matched.GetProperty("providerMarketKey").GetString());
+        Assert.Equal("betmgm", matched.GetProperty("bookmaker").GetString());
+
+        Assert.Equal(resultsBefore, await CountApiSportsSoccerResultsAsync(factory));
+        Assert.Equal(platformPropsBefore, await CountSoccerPlatformPropsAsync(factory));
+        Assert.Equal(providerCallsBefore, factory.ApiSportsFootballClient.FixturePlayerStatsCallCount);
+    }
+
+    [Fact]
+    public async Task ApiSportsWorldCupMarketJoinPreview_ReportsMissingProviderContextBlockers()
+    {
+        await using var factory = new SafetyTestApplicationFactory(ApiSportsLiveConfig());
+        using var client = factory.CreateClient();
+        await factory.SeedApiSportsSoccerMarketJoinRowsAsync(
+            includeProviderEventId: false,
+            includeResultTeam: false,
+            includeMarketKey: false);
+
+        var response = await client.GetAsync("/api/debug/soccer/results/api-sports/world-cup/market-join-preview?fromDate=2026-06-21&toDate=2026-06-21&includeSamples=true");
+
+        await EnsureSuccessWithBodyAsync(response);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        var blockers = json.GetProperty("blockers");
+        Assert.Equal(1, blockers.GetProperty("missingProviderEventId").GetInt32());
+        Assert.Equal(1, blockers.GetProperty("missingApiSportsFixtureIdOnMarketRows").GetInt32());
+        Assert.True(blockers.GetProperty("missingPlayerTeam").GetInt32() >= 2);
+        Assert.Equal(1, blockers.GetProperty("missingProviderPlayerId").GetInt32());
+        Assert.True(blockers.GetProperty("propTypeMappingMissing").GetInt32() > 0);
+        Assert.NotEmpty(json.GetProperty("samples").GetProperty("unmatchedResults").EnumerateArray());
+        Assert.False(json.GetProperty("callsExternalApis").GetBoolean());
+    }
+
+    [Fact]
+    public async Task ApiSportsWorldCupPropMappingGap_IdentifiesMissingTheOddsMarketMapping_ReadOnly()
+    {
+        await using var factory = new SafetyTestApplicationFactory(ApiSportsLiveConfig());
+        using var client = factory.CreateClient();
+        await factory.SeedApiSportsSoccerMarketJoinRowsAsync(
+            platformMarketKey: "player_crosses",
+            platformPropTypeName: "Crosses",
+            platformStatKey: "CROSSES",
+            apiSportsPropTypeName: "Crosses",
+            apiSportsStatKey: "CROSSES");
+        var resultsBefore = await CountApiSportsSoccerResultsAsync(factory);
+        var platformPropsBefore = await CountSoccerPlatformPropsAsync(factory);
+        var providerCallsBefore = factory.ApiSportsFootballClient.FixturePlayerStatsCallCount;
+
+        var response = await client.GetAsync("/api/debug/soccer/results/api-sports/world-cup/prop-mapping-gap?fromDate=2026-06-21&toDate=2026-06-21&includeSamples=true");
+
+        await EnsureSuccessWithBodyAsync(response);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.False(json.GetProperty("callsExternalApis").GetBoolean());
+        Assert.True(json.GetProperty("readOnly").GetBoolean());
+        Assert.False(json.GetProperty("writesRows").GetBoolean());
+        Assert.False(json.GetProperty("publicSoccerGradingEnabled").GetBoolean());
+        Assert.Equal(1, json.GetProperty("summary").GetProperty("resolvedPairsEvaluated").GetInt32());
+        Assert.Contains(
+            json.GetProperty("theOddsMarketGaps").EnumerateArray(),
+            row => row.GetProperty("providerMarketKey").GetString() == "player_crosses"
+                && row.GetProperty("category").GetString() == "TheOddsMarketKeyMissingCanonicalMapping");
+        Assert.Equal(resultsBefore, await CountApiSportsSoccerResultsAsync(factory));
+        Assert.Equal(platformPropsBefore, await CountSoccerPlatformPropsAsync(factory));
+        Assert.Equal(providerCallsBefore, factory.ApiSportsFootballClient.FixturePlayerStatsCallCount);
+    }
+
+    [Fact]
+    public async Task ApiSportsWorldCupPropMappingGap_IdentifiesMissingApiSportsStatMapping()
+    {
+        await using var factory = new SafetyTestApplicationFactory(ApiSportsLiveConfig());
+        using var client = factory.CreateClient();
+        await factory.SeedApiSportsSoccerMarketJoinRowsAsync(
+            platformMarketKey: "player_goals",
+            platformPropTypeName: "Goals",
+            platformStatKey: "GOALS",
+            apiSportsPropTypeName: "Mystery Stat",
+            apiSportsStatKey: "MYSTERY_STAT");
+
+        var response = await client.GetAsync("/api/debug/soccer/results/api-sports/world-cup/prop-mapping-gap?fromDate=2026-06-21&toDate=2026-06-21&includeSamples=true");
+
+        await EnsureSuccessWithBodyAsync(response);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Contains(
+            json.GetProperty("apiSportsStatGaps").EnumerateArray(),
+            row => row.GetProperty("apiSportsStatKey").GetString() == "MYSTERYSTAT"
+                && row.GetProperty("category").GetString() == "ApiSportsStatKeyMissingProviderMapping");
+    }
+
+    [Fact]
+    public async Task ApiSportsWorldCupPropMappingGap_SeparatesImportedStatNoise()
+    {
+        await using var factory = new SafetyTestApplicationFactory(ApiSportsLiveConfig());
+        using var client = factory.CreateClient();
+        await factory.SeedApiSportsSoccerMarketJoinRowsAsync(
+            platformMarketKey: "player_goals",
+            platformPropTypeName: "Goals",
+            platformStatKey: "GOALS",
+            apiSportsPropTypeName: "Passes Attempted",
+            apiSportsStatKey: "PASSES_ATTEMPTED");
+        await factory.SeedApiSportsSoccerProviderStatMappingsAsync();
+
+        var response = await client.GetAsync("/api/debug/soccer/results/api-sports/world-cup/prop-mapping-gap?fromDate=2026-06-21&toDate=2026-06-21&includeSamples=true");
+
+        await EnsureSuccessWithBodyAsync(response);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Contains(
+            json.GetProperty("apiSportsStatGaps").EnumerateArray(),
+            row => row.GetProperty("apiSportsStatKey").GetString() == "PASSES_ATTEMPTED"
+                && row.GetProperty("category").GetString() == "ImportedStatNotRequestedByTheOdds"
+                && row.GetProperty("recommendation").GetString() == "IgnoreImportedStatNoise");
+    }
+
+    [Fact]
+    public async Task ApiSportsWorldCupPropMappingGap_DetectsMappingExistsButNotGradeable()
+    {
+        await using var factory = new SafetyTestApplicationFactory(ApiSportsLiveConfig());
+        using var client = factory.CreateClient();
+        await factory.SeedApiSportsSoccerMarketJoinRowsAsync(
+            platformMarketKey: "player_goals",
+            platformPropTypeName: "Goals",
+            platformStatKey: "GOALS",
+            apiSportsPropTypeName: "Goal + Assist",
+            apiSportsStatKey: "GOAL_ASSIST");
+        await factory.SeedApiSportsSoccerProviderStatMappingsAsync();
+
+        var response = await client.GetAsync("/api/debug/soccer/results/api-sports/world-cup/prop-mapping-gap?fromDate=2026-06-21&toDate=2026-06-21&includeSamples=true");
+
+        await EnsureSuccessWithBodyAsync(response);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Contains(
+            json.GetProperty("apiSportsStatGaps").EnumerateArray(),
+            row => row.GetProperty("apiSportsStatKey").GetString() == "GOAL_ASSIST"
+                && row.GetProperty("category").GetString() == "MappingExistsButNotGradeable"
+                && row.GetProperty("isGradeable").GetBoolean() == false);
+    }
+
+    [Theory]
+    [InlineData(1, 0.5, true, false, "OverWin", 1, 0, 0, 0)]
+    [InlineData(0, 0.5, false, true, "UnderWin", 0, 1, 0, 0)]
+    [InlineData(0.5, 0.5, true, false, "Push", 0, 0, 1, 0)]
+    [InlineData(1, 0.5, false, false, "NoLine", 0, 0, 0, 1)]
+    public async Task ApiSportsWorldCupGradingPreview_GradesJoinableRows(
+        decimal actualValue,
+        decimal line,
+        bool overAvailable,
+        bool underAvailable,
+        string expectedGrade,
+        int expectedOverWins,
+        int expectedUnderWins,
+        int expectedPushes,
+        int expectedNoLineRows)
+    {
+        await using var factory = new SafetyTestApplicationFactory(ApiSportsLiveConfig());
+        using var client = factory.CreateClient();
+        await factory.SeedApiSportsSoccerMarketJoinRowsAsync(
+            actualValue: actualValue,
+            currentLine: line,
+            overAvailable: overAvailable,
+            underAvailable: underAvailable);
+        var resultsBefore = await CountApiSportsSoccerResultsAsync(factory);
+        var platformPropsBefore = await CountSoccerPlatformPropsAsync(factory);
+        var providerCallsBefore = factory.ApiSportsFootballClient.FixturePlayerStatsCallCount;
+
+        var response = await client.GetAsync("/api/debug/soccer/results/api-sports/world-cup/grading-preview?fromDate=2026-06-21&toDate=2026-06-21&fixtureId=1489393&providerEventId=852a3abe6d46820720febc0fedebff9a&includeSamples=true");
+
+        await EnsureSuccessWithBodyAsync(response);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.False(json.GetProperty("callsExternalApis").GetBoolean());
+        Assert.True(json.GetProperty("readOnly").GetBoolean());
+        Assert.False(json.GetProperty("writesRows").GetBoolean());
+        Assert.False(json.GetProperty("publicSoccerGradingEnabled").GetBoolean());
+
+        var summary = json.GetProperty("summary");
+        Assert.Equal(1, summary.GetProperty("candidatePlatformRows").GetInt32());
+        Assert.Equal(1, summary.GetProperty("importedResultRows").GetInt32());
+        Assert.Equal(1, summary.GetProperty("fullyJoinableRows").GetInt32());
+        Assert.Equal(expectedNoLineRows == 0 ? 1 : 0, summary.GetProperty("gradedPreviewRows").GetInt32());
+        Assert.Equal(expectedOverWins, summary.GetProperty("overWins").GetInt32());
+        Assert.Equal(expectedUnderWins, summary.GetProperty("underWins").GetInt32());
+        Assert.Equal(expectedPushes, summary.GetProperty("pushes").GetInt32());
+        Assert.Equal(expectedNoLineRows, summary.GetProperty("noLineRows").GetInt32());
+
+        var sample = Assert.Single(json.GetProperty("samples").GetProperty("graded").EnumerateArray());
+        Assert.Equal(expectedGrade, sample.GetProperty("gradeResult").GetString());
+        Assert.Equal("Sportsbook", sample.GetProperty("providerCategory").GetString());
+        Assert.True(sample.GetProperty("sportsbookContextResearchOnly").GetBoolean());
+        Assert.False(sample.GetProperty("entryActionableForUser").GetBoolean());
+        Assert.Equal(actualValue, sample.GetProperty("actualValue").GetDecimal());
+        Assert.Equal(line, sample.GetProperty("line").GetDecimal());
+
+        Assert.Equal(resultsBefore, await CountApiSportsSoccerResultsAsync(factory));
+        Assert.Equal(platformPropsBefore, await CountSoccerPlatformPropsAsync(factory));
+        Assert.Equal(providerCallsBefore, factory.ApiSportsFootballClient.FixturePlayerStatsCallCount);
+    }
+
+    [Fact]
+    public async Task ApiSportsWorldCupGradingPreview_DoesNotGradeUnjoinableRows()
+    {
+        await using var factory = new SafetyTestApplicationFactory(ApiSportsLiveConfig());
+        using var client = factory.CreateClient();
+        await factory.SeedApiSportsSoccerMarketJoinRowsAsync(platformPlayerName: "Different Forward");
+
+        var response = await client.GetAsync("/api/debug/soccer/results/api-sports/world-cup/grading-preview?fromDate=2026-06-21&toDate=2026-06-21&includeSamples=true");
+
+        await EnsureSuccessWithBodyAsync(response);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        var summary = json.GetProperty("summary");
+        Assert.Equal(0, summary.GetProperty("fullyJoinableRows").GetInt32());
+        Assert.Equal(0, summary.GetProperty("gradedPreviewRows").GetInt32());
+        Assert.Equal(1, summary.GetProperty("ungradedRows").GetInt32());
+        Assert.Equal(2, json.GetProperty("blockers").GetProperty("unjoinableRows").GetInt32());
+        Assert.Empty(json.GetProperty("samples").GetProperty("graded").EnumerateArray());
+        Assert.NotEmpty(json.GetProperty("samples").GetProperty("unjoinableResults").EnumerateArray());
+        Assert.False(json.GetProperty("publicSoccerGradingEnabled").GetBoolean());
+    }
+
+    [Fact]
+    public async Task ApiSportsWorldCupGradingCoverageSummary_ReturnsSafeZeroSummaryForEmptyData()
+    {
+        await using var factory = new SafetyTestApplicationFactory(ApiSportsLiveConfig());
+        using var client = factory.CreateClient();
+        await factory.EnsureDatabaseAsync();
+        var providerCallsBefore = factory.ApiSportsFootballClient.FixturePlayerStatsCallCount;
+
+        var response = await client.GetAsync("/api/debug/soccer/results/api-sports/world-cup/grading-coverage-summary?fromDate=2026-06-21&toDate=2026-06-21");
+
+        await EnsureSuccessWithBodyAsync(response);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.False(json.GetProperty("callsExternalApis").GetBoolean());
+        Assert.True(json.GetProperty("readOnly").GetBoolean());
+        Assert.False(json.GetProperty("writesRows").GetBoolean());
+        Assert.False(json.GetProperty("publicSoccerGradingEnabled").GetBoolean());
+        var summary = json.GetProperty("summary");
+        Assert.Equal(0, summary.GetProperty("resolvedPairsEvaluated").GetInt32());
+        Assert.Equal(0, summary.GetProperty("totalCandidatePlatformRows").GetInt32());
+        Assert.Equal(0, summary.GetProperty("totalImportedResultRows").GetInt32());
+        Assert.Equal(providerCallsBefore, factory.ApiSportsFootballClient.FixturePlayerStatsCallCount);
+    }
+
+    [Fact]
+    public async Task ApiSportsWorldCupGradingCoverageSummary_ReportsResultsWithoutPlatformRows()
+    {
+        await using var factory = new SafetyTestApplicationFactory(ApiSportsLiveConfig());
+        using var client = factory.CreateClient();
+        await factory.SeedApiSportsSoccerMarketJoinRowsAsync(includePlatformRow: false);
+
+        var response = await client.GetAsync("/api/debug/soccer/results/api-sports/world-cup/grading-coverage-summary?fromDate=2026-06-21&toDate=2026-06-21&includeFixtureDetails=true");
+
+        await EnsureSuccessWithBodyAsync(response);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        var summary = json.GetProperty("summary");
+        Assert.Equal(0, summary.GetProperty("resolvedPairsEvaluated").GetInt32());
+        Assert.Equal(1, summary.GetProperty("resultOnlyFixtures").GetInt32());
+        Assert.Empty(json.GetProperty("fixtureDetails").EnumerateArray());
+        var resultOnly = Assert.Single(json.GetProperty("resultOnlyFixtures").EnumerateArray());
+        Assert.Equal("1489393", resultOnly.GetProperty("fixtureId").GetString());
+        Assert.Equal(1, resultOnly.GetProperty("importedResultRows").GetInt32());
+    }
+
+    [Fact]
+    public async Task ApiSportsWorldCupGradingCoverageSummary_ReportsPlatformRowsWithoutResults()
+    {
+        await using var factory = new SafetyTestApplicationFactory(ApiSportsLiveConfig());
+        using var client = factory.CreateClient();
+        await factory.SeedApiSportsSoccerMarketJoinRowsAsync(includeResultRow: false);
+
+        var response = await client.GetAsync("/api/debug/soccer/results/api-sports/world-cup/grading-coverage-summary?fromDate=2026-06-21&toDate=2026-06-21&includeFixtureDetails=true");
+
+        await EnsureSuccessWithBodyAsync(response);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        var summary = json.GetProperty("summary");
+        Assert.Equal(0, summary.GetProperty("resolvedPairsEvaluated").GetInt32());
+        Assert.Equal(1, summary.GetProperty("unresolvedProviderEvents").GetInt32());
+        Assert.Empty(json.GetProperty("fixtureDetails").EnumerateArray());
+        var unresolved = Assert.Single(json.GetProperty("unresolvedProviderEvents").EnumerateArray());
+        Assert.Equal("852a3abe6d46820720febc0fedebff9a", unresolved.GetProperty("providerEventId").GetString());
+        Assert.Equal(1, unresolved.GetProperty("candidatePlatformRows").GetInt32());
+    }
+
+    [Fact]
+    public async Task ApiSportsWorldCupGradingCoverageSummary_BucketsSyntheticProviderEventsSeparately()
+    {
+        await using var factory = new SafetyTestApplicationFactory(ApiSportsLiveConfig());
+        using var client = factory.CreateClient();
+        await factory.SeedApiSportsSoccerMarketJoinRowsAsync(
+            includeResultRow: false,
+            useTheOddsContext: false,
+            providerEventIdOverride: "320878-50-SCR_game_8upFm4DZHyMeLIkeLhuBs52o-11-false");
+
+        var response = await client.GetAsync("/api/debug/soccer/results/api-sports/world-cup/grading-coverage-summary?fromDate=2026-06-21&toDate=2026-06-21&includeFixtureDetails=true");
+
+        await EnsureSuccessWithBodyAsync(response);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        var summary = json.GetProperty("summary");
+        Assert.Equal(0, summary.GetProperty("resolvedPairsEvaluated").GetInt32());
+        Assert.Equal(0, summary.GetProperty("unresolvedProviderEvents").GetInt32());
+        Assert.Equal(1, summary.GetProperty("platformOnlyEvents").GetInt32());
+        Assert.Empty(json.GetProperty("fixtureDetails").EnumerateArray());
+        var synthetic = Assert.Single(json.GetProperty("platformOnlyEvents").EnumerateArray());
+        Assert.Equal("NotTheOddsSoccerWorldCupProviderEvent", synthetic.GetProperty("reason").GetString());
+        Assert.Equal("320878-50-SCR_game_8upFm4DZHyMeLIkeLhuBs52o-11-false", synthetic.GetProperty("providerEventId").GetString());
+    }
+
+    [Fact]
+    public async Task ApiSportsWorldCupGradingCoverageSummary_UsesApprovedAliasLinks()
+    {
+        await using var factory = new SafetyTestApplicationFactory(ApiSportsLiveConfig());
+        using var client = factory.CreateClient();
+        await factory.SeedApiSportsSoccerMarketJoinRowsAsync(
+            resultPlayerName: "Maximiliano Araujo",
+            platformPlayerName: "Maximiliano Javier Araujo Vilches",
+            fixtureId: "1489398");
+        var writeResponse = await client.PostAsJsonAsync("/api/debug/soccer/player-identity/the-odds/api-sports/alias-link", new
+        {
+            fixtureId = "1489398",
+            providerEventId = "852a3abe6d46820720febc0fedebff9a",
+            dryRun = false
+        });
+        await EnsureSuccessWithBodyAsync(writeResponse);
+
+        var response = await client.GetAsync("/api/debug/soccer/results/api-sports/world-cup/grading-coverage-summary?fromDate=2026-06-21&toDate=2026-06-21&includeFixtureDetails=true&includeSamples=true&maxSamplesPerFixture=5");
+
+        await EnsureSuccessWithBodyAsync(response);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.True(json.GetProperty("knownWorkingPairDetected").GetBoolean());
+        var detail = Assert.Single(json.GetProperty("fixtureDetails").EnumerateArray());
+        Assert.Equal(0, detail.GetProperty("fullyJoinableRowsBeforeAlias").GetInt32());
+        Assert.Equal(1, detail.GetProperty("fullyJoinableRowsAfterAlias").GetInt32());
+        Assert.Equal(1, detail.GetProperty("gradedPreviewRows").GetInt32());
+        Assert.Equal(1, detail.GetProperty("aliasLinkedPlayers").GetInt32());
+        Assert.NotEmpty(detail.GetProperty("sampleAliasLinkedRows").EnumerateArray());
+    }
+
+    [Fact]
+    public async Task ApiSportsWorldCupGradingCoverageSummary_AggregatesBlockersAndIsReadOnly()
+    {
+        await using var factory = new SafetyTestApplicationFactory(ApiSportsLiveConfig());
+        using var client = factory.CreateClient();
+        await factory.SeedApiSportsSoccerMarketJoinRowsAsync(platformPlayerName: "Different Forward");
+        var resultsBefore = await CountApiSportsSoccerResultsAsync(factory);
+        var platformPropsBefore = await CountSoccerPlatformPropsAsync(factory);
+        var linksBefore = await CountTheOddsSoccerAliasLinksAsync(factory);
+        var providerCallsBefore = factory.ApiSportsFootballClient.FixturePlayerStatsCallCount;
+
+        var response = await client.GetAsync("/api/debug/soccer/results/api-sports/world-cup/grading-coverage-summary?fromDate=2026-06-21&toDate=2026-06-21&includeFixtureDetails=true&includeSamples=true");
+
+        await EnsureSuccessWithBodyAsync(response);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.False(json.GetProperty("callsExternalApis").GetBoolean());
+        Assert.True(json.GetProperty("readOnly").GetBoolean());
+        Assert.False(json.GetProperty("writesRows").GetBoolean());
+        Assert.False(json.GetProperty("publicSoccerGradingEnabled").GetBoolean());
+        Assert.Equal(1, json.GetProperty("summary").GetProperty("resolvedPairsEvaluated").GetInt32());
+        Assert.Equal(1, json.GetProperty("topBlockersAggregated").GetProperty("playerNameMismatch").GetInt32());
+        Assert.True(json.GetProperty("topBlockersAggregated").GetProperty("unjoinableRows").GetInt32() > 0);
+        Assert.Equal(resultsBefore, await CountApiSportsSoccerResultsAsync(factory));
+        Assert.Equal(platformPropsBefore, await CountSoccerPlatformPropsAsync(factory));
+        Assert.Equal(linksBefore, await CountTheOddsSoccerAliasLinksAsync(factory));
+        Assert.Equal(providerCallsBefore, factory.ApiSportsFootballClient.FixturePlayerStatsCallCount);
+    }
+
+    [Fact]
+    public async Task TheOddsApiSportsFixtureMappingCoverage_ResolvesKnownWorkingProviderEvent()
+    {
+        await using var factory = new SafetyTestApplicationFactory(ApiSportsLiveConfig());
+        using var client = factory.CreateClient();
+        await factory.SeedApiSportsSoccerMarketJoinRowsAsync(fixtureId: "1489398");
+        var resultsBefore = await CountApiSportsSoccerResultsAsync(factory);
+        var platformPropsBefore = await CountSoccerPlatformPropsAsync(factory);
+        var providerCallsBefore = factory.ApiSportsFootballClient.FixturePlayerStatsCallCount;
+
+        var response = await client.GetAsync("/api/debug/soccer/the-odds/api-sports/fixture-mapping-coverage?fromDate=2026-06-21&toDate=2026-06-21&includeResolved=true&includeUnresolved=true&includeSamples=true");
+
+        await EnsureSuccessWithBodyAsync(response);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.False(json.GetProperty("callsExternalApis").GetBoolean());
+        Assert.True(json.GetProperty("readOnly").GetBoolean());
+        Assert.False(json.GetProperty("writesRows").GetBoolean());
+        Assert.False(json.GetProperty("publicSoccerGradingEnabled").GetBoolean());
+        Assert.True(json.GetProperty("knownWorkingPairDetected").GetBoolean());
+        var summary = json.GetProperty("summary");
+        Assert.Equal(1, summary.GetProperty("providerEventsEvaluated").GetInt32());
+        Assert.Equal(1, summary.GetProperty("resolvedEvents").GetInt32());
+        Assert.Equal(0, summary.GetProperty("unresolvedEvents").GetInt32());
+        Assert.Equal(1, summary.GetProperty("resolvedPlatformRows").GetInt32());
+        var resolved = Assert.Single(json.GetProperty("resolvedEvents").EnumerateArray());
+        Assert.Equal("852a3abe6d46820720febc0fedebff9a", resolved.GetProperty("providerEventId").GetString());
+        Assert.Equal("1489398", resolved.GetProperty("resolvedFixtureId").GetString());
+        Assert.Equal("Resolved", resolved.GetProperty("resolutionStatus").GetString());
+        Assert.True(resolved.GetProperty("confidence").GetDecimal() >= 0.80m);
+        Assert.Contains(resolved.GetProperty("matchReasons").EnumerateArray(), row => row.GetString() == "ExactEventDate");
+        Assert.Equal(resultsBefore, await CountApiSportsSoccerResultsAsync(factory));
+        Assert.Equal(platformPropsBefore, await CountSoccerPlatformPropsAsync(factory));
+        Assert.Equal(providerCallsBefore, factory.ApiSportsFootballClient.FixturePlayerStatsCallCount);
+    }
+
+    [Fact]
+    public async Task TheOddsApiSportsFixtureMappingCoverage_ExcludesSyntheticProviderEvents()
+    {
+        await using var factory = new SafetyTestApplicationFactory(ApiSportsLiveConfig());
+        using var client = factory.CreateClient();
+        await factory.SeedApiSportsSoccerMarketJoinRowsAsync(
+            includeResultRow: false,
+            providerEventIdOverride: "852a3abe6d46820720febc0fedebff9a|balanced");
+
+        var response = await client.GetAsync("/api/debug/soccer/the-odds/api-sports/fixture-mapping-coverage?fromDate=2026-06-21&toDate=2026-06-21&includeResolved=true&includeUnresolved=true");
+
+        await EnsureSuccessWithBodyAsync(response);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        var summary = json.GetProperty("summary");
+        Assert.Equal(0, summary.GetProperty("providerEventsEvaluated").GetInt32());
+        Assert.Equal(0, summary.GetProperty("resolvedEvents").GetInt32());
+        Assert.Equal(0, summary.GetProperty("unresolvedEvents").GetInt32());
+        var excluded = Assert.Single(json.GetProperty("excludedEvents").EnumerateArray());
+        Assert.Equal("Excluded", excluded.GetProperty("resolutionStatus").GetString());
+        Assert.Equal("852a3abe6d46820720febc0fedebff9a|balanced", excluded.GetProperty("providerEventId").GetString());
+        Assert.Contains(excluded.GetProperty("blockers").EnumerateArray(), row => row.GetString() == "NotTheOddsSoccerWorldCupProviderEvent");
+    }
+
+    [Fact]
+    public async Task TheOddsApiSportsFixtureMappingCoverage_ReportsNoCandidateEvents()
+    {
+        await using var factory = new SafetyTestApplicationFactory(ApiSportsLiveConfig());
+        using var client = factory.CreateClient();
+        await factory.SeedApiSportsSoccerMarketJoinRowsAsync(
+            includeResultRow: false,
+            eventHomeTeamName: "Uruguay",
+            eventAwayTeamName: "Cape Verde");
+        await AddApiSportsSoccerResultFixtureAsync(factory, "1489400", new DateOnly(2026, 6, 25), "Mexico");
+
+        var response = await client.GetAsync("/api/debug/soccer/the-odds/api-sports/fixture-mapping-coverage?fromDate=2026-06-21&toDate=2026-06-25&includeResolved=true&includeUnresolved=true");
+
+        await EnsureSuccessWithBodyAsync(response);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        var summary = json.GetProperty("summary");
+        Assert.Equal(1, summary.GetProperty("providerEventsEvaluated").GetInt32());
+        Assert.Equal(0, summary.GetProperty("resolvedEvents").GetInt32());
+        Assert.Equal(1, summary.GetProperty("noCandidateEvents").GetInt32());
+        var unresolved = Assert.Single(json.GetProperty("unresolvedEvents").EnumerateArray());
+        Assert.Equal("NoCandidate", unresolved.GetProperty("resolutionStatus").GetString());
+        Assert.Contains(unresolved.GetProperty("blockers").EnumerateArray(), row => row.GetString() == "NoFixtureCandidates");
+    }
+
+    [Fact]
+    public async Task TheOddsApiSportsFixtureMappingCoverage_ReportsAmbiguousEvents()
+    {
+        await using var factory = new SafetyTestApplicationFactory(ApiSportsLiveConfig());
+        using var client = factory.CreateClient();
+        await factory.SeedApiSportsSoccerMarketJoinRowsAsync(fixtureId: "1489398");
+        await AddApiSportsSoccerResultFixtureAsync(factory, "1489399", new DateOnly(2026, 6, 21), "Uruguay");
+
+        var response = await client.GetAsync("/api/debug/soccer/the-odds/api-sports/fixture-mapping-coverage?fromDate=2026-06-21&toDate=2026-06-21&includeResolved=true&includeUnresolved=true");
+
+        await EnsureSuccessWithBodyAsync(response);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        var summary = json.GetProperty("summary");
+        Assert.Equal(0, summary.GetProperty("resolvedEvents").GetInt32());
+        Assert.Equal(1, summary.GetProperty("ambiguousEvents").GetInt32());
+        var unresolved = Assert.Single(json.GetProperty("unresolvedEvents").EnumerateArray());
+        Assert.Equal("Ambiguous", unresolved.GetProperty("resolutionStatus").GetString());
+        Assert.Contains(unresolved.GetProperty("blockers").EnumerateArray(), row => row.GetString() == "MultipleHighConfidenceFixtures");
+        Assert.True(unresolved.GetProperty("candidateApiSportsFixtures").GetArrayLength() >= 2);
+    }
+
+    [Fact]
+    public async Task TheOddsApiSportsFixtureMappingCoverage_UsesWorldCupTeamAliases()
+    {
+        await using var factory = new SafetyTestApplicationFactory(ApiSportsLiveConfig());
+        using var client = factory.CreateClient();
+        await factory.SeedApiSportsSoccerMarketJoinRowsAsync(
+            fixtureId: "1489398",
+            eventHomeTeamName: "Uruguay",
+            eventAwayTeamName: "Cape Verde",
+            resultPlayerTeamName: "Cape Verde Islands");
+
+        var response = await client.GetAsync("/api/debug/soccer/the-odds/api-sports/fixture-mapping-coverage?fromDate=2026-06-21&toDate=2026-06-21&includeResolved=true&includeUnresolved=true");
+
+        await EnsureSuccessWithBodyAsync(response);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        var resolved = Assert.Single(json.GetProperty("resolvedEvents").EnumerateArray());
+        Assert.Equal("Resolved", resolved.GetProperty("resolutionStatus").GetString());
+        Assert.Equal("1489398", resolved.GetProperty("resolvedFixtureId").GetString());
+        Assert.Contains(resolved.GetProperty("matchReasons").EnumerateArray(), row => row.GetString() == "OneTeamMatch");
+    }
+
+    [Fact]
+    public async Task TheOddsSoccerWorldCupIngestionCoverage_CountsRealLegacyAndApiSportsGaps_ReadOnly()
+    {
+        await using var factory = new SafetyTestApplicationFactory(ApiSportsLiveConfig());
+        using var client = factory.CreateClient();
+        await factory.SeedApiSportsSoccerMarketJoinRowsAsync(fixtureId: "1489398");
+        await AddLegacySoccerPlatformPropAsync(factory, "320878-50-SCR_game_test");
+        await AddApiSportsSoccerResultFixtureAsync(factory, "1489400", new DateOnly(2026, 6, 22), "Mexico");
+        var resultsBefore = await CountApiSportsSoccerResultsAsync(factory);
+        var platformPropsBefore = await CountSoccerPlatformPropsAsync(factory);
+        var providerCallsBefore = factory.ApiSportsFootballClient.FixturePlayerStatsCallCount;
+
+        var response = await client.GetAsync("/api/debug/soccer/the-odds/world-cup/ingestion-coverage?fromDate=2026-06-21&toDate=2026-06-22&includeSamples=true&maxSamples=10");
+
+        await EnsureSuccessWithBodyAsync(response);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.False(json.GetProperty("callsExternalApis").GetBoolean());
+        Assert.True(json.GetProperty("readOnly").GetBoolean());
+        Assert.False(json.GetProperty("writesRows").GetBoolean());
+        Assert.False(json.GetProperty("publicSoccerGradingEnabled").GetBoolean());
+        var summary = json.GetProperty("summary");
+        Assert.Equal(1, summary.GetProperty("realTheOddsProviderEvents").GetInt32());
+        Assert.Equal(1, summary.GetProperty("realTheOddsPlatformRows").GetInt32());
+        Assert.Equal(1, summary.GetProperty("syntheticOrLegacySoccerRows").GetInt32());
+        Assert.Equal(2, summary.GetProperty("apiSportsFixturesWithResults").GetInt32());
+        Assert.Equal(1, summary.GetProperty("resolvedProviderEvents").GetInt32());
+        Assert.Equal(1, json.GetProperty("realProviderEvents").GetArrayLength());
+        Assert.Equal(1, json.GetProperty("syntheticOrLegacySoccerRows").GetProperty("samples").GetArrayLength());
+        Assert.Equal(1, json.GetProperty("gapAnalysis").GetProperty("apiSportsFixturesWithResultsButNoRealTheOddsEvent").GetInt32());
+        Assert.Equal(resultsBefore, await CountApiSportsSoccerResultsAsync(factory));
+        Assert.Equal(platformPropsBefore, await CountSoccerPlatformPropsAsync(factory));
+        Assert.Equal(providerCallsBefore, factory.ApiSportsFootballClient.FixturePlayerStatsCallCount);
+    }
+
+    [Fact]
+    public async Task TheOddsSoccerWorldCupIngestionCoverage_SurfacesLatestSoccerRefreshDiagnostics()
+    {
+        await using var factory = new SafetyTestApplicationFactory(ApiSportsLiveConfig());
+        using var client = factory.CreateClient();
+        await factory.SeedApiSportsSoccerMarketJoinRowsAsync(fixtureId: "1489398");
+        var refreshRunId = await AddSoccerTheOddsRefreshRunAsync(factory);
+
+        var response = await client.GetAsync("/api/debug/soccer/the-odds/world-cup/ingestion-coverage?fromDate=2026-06-21&toDate=2026-06-21&includeSamples=true&maxSamples=10");
+
+        await EnsureSuccessWithBodyAsync(response);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        var summary = json.GetProperty("summary");
+        Assert.Equal(refreshRunId, summary.GetProperty("latestSoccerRefreshRunId").GetGuid());
+        Assert.True(summary.GetProperty("latestSoccerRefreshSucceeded").GetBoolean());
+        Assert.Equal(34, summary.GetProperty("latestSoccerRefreshEventCount").GetInt32());
+        Assert.Equal(119, summary.GetProperty("latestSoccerRefreshPlatformRowsUpserted").GetInt32());
+        var refresh = json.GetProperty("latestSoccerRefreshRun");
+        Assert.Equal("SOCCER", refresh.GetProperty("sport").GetString());
+        Assert.Equal("Sportsbook", refresh.GetProperty("providerCategoriesIncluded").GetString());
+        Assert.Equal("player_goals,player_shots", refresh.GetProperty("marketsRequested").GetString());
+        Assert.Equal(34, refresh.GetProperty("diagnostics").GetProperty("eventsFetched").GetInt32());
+    }
+
+    [Theory]
+    [InlineData("Test Forward", "Test Forward", "SafeAliasCandidate", true)]
+    [InlineData("Mathías Olivera", "Mathias Olivera", "SafeAliasCandidate", true)]
+    [InlineData("Maximiliano Araújo", "Maximiliano Javier Araujo Vilches", "SafeAliasCandidate", false)]
+    [InlineData("Ryan Mendes", "Ryan Mendes da Graca", "SafeAliasCandidate", false)]
+    public async Task TheOddsApiSportsAliasCandidates_ReturnsConservativeNameAliases(
+        string apiSportsName,
+        string theOddsName,
+        string expectedAction,
+        bool expectedExactNormalized)
+    {
+        await using var factory = new SafetyTestApplicationFactory(ApiSportsLiveConfig());
+        using var client = factory.CreateClient();
+        await factory.SeedApiSportsSoccerAliasCandidateRowsAsync([apiSportsName], [theOddsName]);
+        var resultsBefore = await CountApiSportsSoccerResultsAsync(factory);
+        var platformPropsBefore = await CountSoccerPlatformPropsAsync(factory);
+        var providerCallsBefore = factory.ApiSportsFootballClient.FixturePlayerStatsCallCount;
+
+        var response = await client.GetAsync("/api/debug/soccer/player-identity/the-odds/api-sports/alias-candidates?fixtureId=1489398&providerEventId=852a3abe6d46820720febc0fedebff9a&includeSamples=true");
+
+        await EnsureSuccessWithBodyAsync(response);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.False(json.GetProperty("callsExternalApis").GetBoolean());
+        Assert.True(json.GetProperty("readOnly").GetBoolean());
+        Assert.False(json.GetProperty("writesRows").GetBoolean());
+        Assert.False(json.GetProperty("publicSoccerGradingEnabled").GetBoolean());
+        Assert.Equal(1, json.GetProperty("summary").GetProperty("candidateCount").GetInt32());
+        Assert.Equal(1, json.GetProperty("summary").GetProperty("safeCandidateCount").GetInt32());
+        Assert.Equal(expectedExactNormalized ? 0 : 1, json.GetProperty("summary").GetProperty("totalUnjoinedPlatformPlayers").GetInt32());
+
+        var sample = Assert.Single(json.GetProperty("samples").GetProperty("aliasCandidates").EnumerateArray());
+        Assert.Equal(theOddsName, sample.GetProperty("platformPlayerName").GetString());
+        Assert.Equal(expectedAction, sample.GetProperty("suggestedAction").GetString());
+        Assert.Equal(expectedExactNormalized, sample.GetProperty("exactNormalizedMatch").GetBoolean());
+        var candidate = Assert.Single(sample.GetProperty("candidates").EnumerateArray());
+        Assert.Equal(apiSportsName, candidate.GetProperty("apiSportsPlayerName").GetString());
+        Assert.True(candidate.GetProperty("confidence").GetDecimal() >= 0.92m);
+
+        Assert.Equal(resultsBefore, await CountApiSportsSoccerResultsAsync(factory));
+        Assert.Equal(platformPropsBefore, await CountSoccerPlatformPropsAsync(factory));
+        Assert.Equal(providerCallsBefore, factory.ApiSportsFootballClient.FixturePlayerStatsCallCount);
+    }
+
+    [Fact]
+    public async Task TheOddsApiSportsAliasCandidates_BlocksAmbiguousLongNameCandidates()
+    {
+        await using var factory = new SafetyTestApplicationFactory(ApiSportsLiveConfig());
+        using var client = factory.CreateClient();
+        await factory.SeedApiSportsSoccerAliasCandidateRowsAsync(
+            ["Ryan Mendes", "Ryan Graca"],
+            ["Ryan Mendes da Graca"]);
+
+        var response = await client.GetAsync("/api/debug/soccer/player-identity/the-odds/api-sports/alias-candidates?fixtureId=1489398&providerEventId=852a3abe6d46820720febc0fedebff9a&includeSamples=true");
+
+        await EnsureSuccessWithBodyAsync(response);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal(1, json.GetProperty("summary").GetProperty("ambiguousCount").GetInt32());
+        Assert.Equal(0, json.GetProperty("summary").GetProperty("safeCandidateCount").GetInt32());
+        var sample = Assert.Single(json.GetProperty("samples").GetProperty("aliasCandidates").EnumerateArray());
+        Assert.Equal("Ambiguous", sample.GetProperty("suggestedAction").GetString());
+        Assert.Equal(2, sample.GetProperty("candidates").GetArrayLength());
+        Assert.Contains(sample.GetProperty("blockers").EnumerateArray(), blocker => blocker.GetString() == "AmbiguousCandidate");
+        Assert.False(json.GetProperty("publicSoccerGradingEnabled").GetBoolean());
+    }
+
+    [Fact]
+    public async Task TheOddsApiSportsAliasCandidates_ReturnsNoCandidateForWeakOverlap()
+    {
+        await using var factory = new SafetyTestApplicationFactory(ApiSportsLiveConfig());
+        using var client = factory.CreateClient();
+        await factory.SeedApiSportsSoccerAliasCandidateRowsAsync(["Kevin Lenini"], ["Completely Different"]);
+
+        var response = await client.GetAsync("/api/debug/soccer/player-identity/the-odds/api-sports/alias-candidates?fixtureId=1489398&providerEventId=852a3abe6d46820720febc0fedebff9a&includeSamples=true");
+
+        await EnsureSuccessWithBodyAsync(response);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal(1, json.GetProperty("summary").GetProperty("noCandidateCount").GetInt32());
+        Assert.Equal(1, json.GetProperty("blockers").GetProperty("insufficientTokenOverlap").GetInt32());
+        var sample = Assert.Single(json.GetProperty("samples").GetProperty("noCandidate").EnumerateArray());
+        Assert.Equal("NoCandidate", sample.GetProperty("suggestedAction").GetString());
+    }
+
+    [Fact]
+    public async Task TheOddsApiSportsAliasLink_DryRunProposesSafeLinksAndWritesNothing()
+    {
+        await using var factory = new SafetyTestApplicationFactory(ApiSportsLiveConfig());
+        using var client = factory.CreateClient();
+        await factory.SeedApiSportsSoccerAliasCandidateRowsAsync(["Maximiliano Araujo"], ["Maximiliano Javier Araujo Vilches"]);
+        var linksBefore = await CountTheOddsSoccerAliasLinksAsync(factory);
+        var providerCallsBefore = factory.ApiSportsFootballClient.FixturePlayerStatsCallCount;
+
+        var response = await client.PostAsJsonAsync("/api/debug/soccer/player-identity/the-odds/api-sports/alias-link", new
+        {
+            fixtureId = "1489398",
+            providerEventId = "852a3abe6d46820720febc0fedebff9a",
+            dryRun = true,
+            minConfidence = 0.94m,
+            maxLinks = 50
+        });
+
+        await EnsureSuccessWithBodyAsync(response);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.False(json.GetProperty("callsExternalApis").GetBoolean());
+        Assert.True(json.GetProperty("readOnly").GetBoolean());
+        Assert.False(json.GetProperty("writesRows").GetBoolean());
+        Assert.False(json.GetProperty("publicSoccerGradingEnabled").GetBoolean());
+        Assert.Equal(1, json.GetProperty("summary").GetProperty("linksProposed").GetInt32());
+        Assert.Equal(0, json.GetProperty("summary").GetProperty("linksInserted").GetInt32());
+        Assert.Equal(1, json.GetProperty("summary").GetProperty("safeCandidates").GetInt32());
+        Assert.Single(json.GetProperty("proposedLinks").EnumerateArray());
+        Assert.Empty(json.GetProperty("writtenLinks").EnumerateArray());
+        Assert.Equal(linksBefore, await CountTheOddsSoccerAliasLinksAsync(factory));
+        Assert.Equal(providerCallsBefore, factory.ApiSportsFootballClient.FixturePlayerStatsCallCount);
+    }
+
+    [Fact]
+    public async Task TheOddsApiSportsAliasLink_WritesSafelyAndImprovesGradingPreviewJoin()
+    {
+        await using var factory = new SafetyTestApplicationFactory(ApiSportsLiveConfig());
+        using var client = factory.CreateClient();
+        await factory.SeedApiSportsSoccerMarketJoinRowsAsync(
+            resultPlayerName: "Maximiliano Araujo",
+            platformPlayerName: "Maximiliano Javier Araujo Vilches");
+
+        var beforePreview = await client.GetAsync("/api/debug/soccer/results/api-sports/world-cup/grading-preview?fromDate=2026-06-21&toDate=2026-06-21&fixtureId=1489393&providerEventId=852a3abe6d46820720febc0fedebff9a&includeSamples=true");
+        await EnsureSuccessWithBodyAsync(beforePreview);
+        var beforeJson = await beforePreview.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal(0, beforeJson.GetProperty("summary").GetProperty("fullyJoinableRows").GetInt32());
+
+        var response = await client.PostAsJsonAsync("/api/debug/soccer/player-identity/the-odds/api-sports/alias-link", new
+        {
+            fixtureId = "1489393",
+            providerEventId = "852a3abe6d46820720febc0fedebff9a",
+            dryRun = false,
+            minConfidence = 0.94m,
+            maxLinks = 50
+        });
+
+        await EnsureSuccessWithBodyAsync(response);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.False(json.GetProperty("readOnly").GetBoolean());
+        Assert.True(json.GetProperty("writesRows").GetBoolean());
+        Assert.False(json.GetProperty("publicSoccerGradingEnabled").GetBoolean());
+        Assert.Equal(1, json.GetProperty("summary").GetProperty("linksInserted").GetInt32());
+        Assert.Equal(1, await CountTheOddsSoccerAliasLinksAsync(factory));
+
+        var afterPreview = await client.GetAsync("/api/debug/soccer/results/api-sports/world-cup/grading-preview?fromDate=2026-06-21&toDate=2026-06-21&fixtureId=1489393&providerEventId=852a3abe6d46820720febc0fedebff9a&includeSamples=true");
+        await EnsureSuccessWithBodyAsync(afterPreview);
+        var afterJson = await afterPreview.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal(1, afterJson.GetProperty("summary").GetProperty("fullyJoinableRows").GetInt32());
+        Assert.Equal(1, afterJson.GetProperty("summary").GetProperty("gradedPreviewRows").GetInt32());
+        var sample = Assert.Single(afterJson.GetProperty("samples").GetProperty("graded").EnumerateArray());
+        Assert.Contains("approvedTheOddsAliasLink", sample.GetProperty("joinMethod").GetString());
+    }
+
+    [Fact]
+    public async Task TheOddsApiSportsAliasLink_IsIdempotentOnSecondWrite()
+    {
+        await using var factory = new SafetyTestApplicationFactory(ApiSportsLiveConfig());
+        using var client = factory.CreateClient();
+        await factory.SeedApiSportsSoccerAliasCandidateRowsAsync(["Maximiliano Araujo"], ["Maximiliano Javier Araujo Vilches"]);
+
+        var first = await client.PostAsJsonAsync("/api/debug/soccer/player-identity/the-odds/api-sports/alias-link", new
+        {
+            fixtureId = "1489398",
+            providerEventId = "852a3abe6d46820720febc0fedebff9a",
+            dryRun = false
+        });
+        await EnsureSuccessWithBodyAsync(first);
+
+        var second = await client.PostAsJsonAsync("/api/debug/soccer/player-identity/the-odds/api-sports/alias-link", new
+        {
+            fixtureId = "1489398",
+            providerEventId = "852a3abe6d46820720febc0fedebff9a",
+            dryRun = false
+        });
+
+        await EnsureSuccessWithBodyAsync(second);
+        var json = await second.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal(0, json.GetProperty("summary").GetProperty("linksInserted").GetInt32());
+        Assert.Equal(1, json.GetProperty("summary").GetProperty("linksAlreadyExisting").GetInt32());
+        Assert.False(json.GetProperty("writesRows").GetBoolean());
+        Assert.Equal(1, await CountTheOddsSoccerAliasLinksAsync(factory));
+    }
+
+    [Fact]
+    public async Task TheOddsApiSportsAliasLink_RejectsAmbiguousAndNoCandidateRows()
+    {
+        await using var factory = new SafetyTestApplicationFactory(ApiSportsLiveConfig());
+        using var client = factory.CreateClient();
+        await factory.SeedApiSportsSoccerAliasCandidateRowsAsync(
+            ["Ryan Mendes", "Ryan Graca"],
+            ["Ryan Mendes da Graca", "Completely Different"]);
+
+        var response = await client.PostAsJsonAsync("/api/debug/soccer/player-identity/the-odds/api-sports/alias-link", new
+        {
+            fixtureId = "1489398",
+            providerEventId = "852a3abe6d46820720febc0fedebff9a",
+            dryRun = false
+        });
+
+        await EnsureSuccessWithBodyAsync(response);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal(0, json.GetProperty("summary").GetProperty("linksInserted").GetInt32());
+        Assert.Equal(1, json.GetProperty("summary").GetProperty("skippedAmbiguous").GetInt32());
+        Assert.Equal(1, json.GetProperty("summary").GetProperty("skippedNoCandidate").GetInt32());
+        Assert.Empty(json.GetProperty("writtenLinks").EnumerateArray());
+        Assert.Equal(0, await CountTheOddsSoccerAliasLinksAsync(factory));
+    }
+
+    [Fact]
+    public async Task TheOddsApiSportsAliasLink_RespectsMinimumConfidence()
+    {
+        await using var factory = new SafetyTestApplicationFactory(ApiSportsLiveConfig());
+        using var client = factory.CreateClient();
+        await factory.SeedApiSportsSoccerAliasCandidateRowsAsync(["Maximiliano Araujo"], ["Maximiliano Javier Araujo Vilches"]);
+
+        var response = await client.PostAsJsonAsync("/api/debug/soccer/player-identity/the-odds/api-sports/alias-link", new
+        {
+            fixtureId = "1489398",
+            providerEventId = "852a3abe6d46820720febc0fedebff9a",
+            dryRun = false,
+            minConfidence = 0.95m
+        });
+
+        await EnsureSuccessWithBodyAsync(response);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal(0, json.GetProperty("summary").GetProperty("linksInserted").GetInt32());
+        Assert.Equal(1, json.GetProperty("summary").GetProperty("skippedBelowConfidence").GetInt32());
+        Assert.False(json.GetProperty("writesRows").GetBoolean());
+        Assert.Equal(0, await CountTheOddsSoccerAliasLinksAsync(factory));
+    }
+
+    [Fact]
+    public async Task TheOddsApiSportsAliasManualApprove_DryRunWritesNothing()
+    {
+        await using var factory = new SafetyTestApplicationFactory(ApiSportsLiveConfig());
+        using var client = factory.CreateClient();
+        await factory.SeedApiSportsSoccerAliasCandidateRowsAsync(["Casemiro"], ["Carlos Casemiro"]);
+        var candidate = await GetSingleTheOddsAliasCandidateAsync(client);
+        var providerCallsBefore = factory.ApiSportsFootballClient.FixturePlayerStatsCallCount;
+
+        var response = await client.PostAsJsonAsync("/api/debug/soccer/player-identity/the-odds/api-sports/alias-link/manual-approve", new
+        {
+            fixtureId = "1489398",
+            providerEventId = "852a3abe6d46820720febc0fedebff9a",
+            platformPlayerName = "Carlos Casemiro",
+            apiSportsPlayerId = candidate.ApiSportsPlayerId,
+            localPlayerId = candidate.LocalPlayerId,
+            dryRun = true,
+            reason = "manual reviewed exact soccer player identity"
+        });
+
+        await EnsureSuccessWithBodyAsync(response);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.False(json.GetProperty("callsExternalApis").GetBoolean());
+        Assert.True(json.GetProperty("readOnly").GetBoolean());
+        Assert.False(json.GetProperty("writesRows").GetBoolean());
+        Assert.False(json.GetProperty("publicSoccerGradingEnabled").GetBoolean());
+        Assert.Equal("NeedsReview", json.GetProperty("summary").GetProperty("suggestedAction").GetString());
+        Assert.Equal(1, json.GetProperty("summary").GetProperty("linksProposed").GetInt32());
+        Assert.Equal(0, json.GetProperty("summary").GetProperty("linksInserted").GetInt32());
+        Assert.Equal("Carlos Casemiro", json.GetProperty("proposedLink").GetProperty("platformPlayerName").GetString());
+        Assert.Equal(0, await CountTheOddsSoccerAliasLinksAsync(factory));
+        Assert.Equal(providerCallsBefore, factory.ApiSportsFootballClient.FixturePlayerStatsCallCount);
+    }
+
+    [Fact]
+    public async Task TheOddsApiSportsAliasManualApprove_WritesNeedsReviewLinkAndIsIdempotent()
+    {
+        await using var factory = new SafetyTestApplicationFactory(ApiSportsLiveConfig());
+        using var client = factory.CreateClient();
+        await factory.SeedApiSportsSoccerAliasCandidateRowsAsync(["Casemiro"], ["Carlos Casemiro"]);
+        var candidate = await GetSingleTheOddsAliasCandidateAsync(client);
+
+        var response = await client.PostAsJsonAsync("/api/debug/soccer/player-identity/the-odds/api-sports/alias-link/manual-approve", new
+        {
+            fixtureId = "1489398",
+            providerEventId = "852a3abe6d46820720febc0fedebff9a",
+            platformPlayerName = "Carlos Casemiro",
+            apiSportsPlayerId = candidate.ApiSportsPlayerId,
+            localPlayerId = candidate.LocalPlayerId,
+            dryRun = false,
+            reason = "manual reviewed exact soccer player identity"
+        });
+
+        await EnsureSuccessWithBodyAsync(response);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.False(json.GetProperty("readOnly").GetBoolean());
+        Assert.True(json.GetProperty("writesRows").GetBoolean());
+        Assert.False(json.GetProperty("publicSoccerGradingEnabled").GetBoolean());
+        Assert.Equal(1, json.GetProperty("summary").GetProperty("linksInserted").GetInt32());
+        Assert.Equal("Carlos Casemiro", json.GetProperty("writtenLink").GetProperty("platformPlayerName").GetString());
+        Assert.Equal(1, await CountTheOddsSoccerAliasLinksAsync(factory));
+
+        var second = await client.PostAsJsonAsync("/api/debug/soccer/player-identity/the-odds/api-sports/alias-link/manual-approve", new
+        {
+            fixtureId = "1489398",
+            providerEventId = "852a3abe6d46820720febc0fedebff9a",
+            platformPlayerName = "Carlos Casemiro",
+            apiSportsPlayerId = candidate.ApiSportsPlayerId,
+            localPlayerId = candidate.LocalPlayerId,
+            dryRun = false,
+            reason = "manual reviewed exact soccer player identity"
+        });
+
+        await EnsureSuccessWithBodyAsync(second);
+        var secondJson = await second.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.False(secondJson.GetProperty("writesRows").GetBoolean());
+        Assert.Equal(0, secondJson.GetProperty("summary").GetProperty("linksInserted").GetInt32());
+        Assert.Equal("AlreadyLinked", secondJson.GetProperty("skipped").GetProperty("reason").GetString());
+        Assert.Equal(1, await CountTheOddsSoccerAliasLinksAsync(factory));
+    }
+
+    [Fact]
+    public async Task TheOddsApiSportsAliasManualApprove_RejectsAmbiguousAndNoCandidateRows()
+    {
+        await using var ambiguousFactory = new SafetyTestApplicationFactory(ApiSportsLiveConfig());
+        using var ambiguousClient = ambiguousFactory.CreateClient();
+        await ambiguousFactory.SeedApiSportsSoccerAliasCandidateRowsAsync(
+            ["Ryan Mendes", "Ryan Graca"],
+            ["Ryan Mendes da Graca"]);
+
+        var ambiguousResponse = await ambiguousClient.PostAsJsonAsync("/api/debug/soccer/player-identity/the-odds/api-sports/alias-link/manual-approve", new
+        {
+            fixtureId = "1489398",
+            providerEventId = "852a3abe6d46820720febc0fedebff9a",
+            platformPlayerName = "Ryan Mendes da Graca",
+            apiSportsPlayerId = "1000",
+            localPlayerId = Guid.NewGuid(),
+            dryRun = false,
+            reason = "manual reviewed exact soccer player identity"
+        });
+
+        await EnsureSuccessWithBodyAsync(ambiguousResponse);
+        var ambiguousJson = await ambiguousResponse.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.False(ambiguousJson.GetProperty("writesRows").GetBoolean());
+        Assert.Equal("Ambiguous", ambiguousJson.GetProperty("skipped").GetProperty("reason").GetString());
+        Assert.Equal(0, await CountTheOddsSoccerAliasLinksAsync(ambiguousFactory));
+
+        await using var noCandidateFactory = new SafetyTestApplicationFactory(ApiSportsLiveConfig());
+        using var noCandidateClient = noCandidateFactory.CreateClient();
+        await noCandidateFactory.SeedApiSportsSoccerAliasCandidateRowsAsync(["Kevin Lenini"], ["Completely Different"]);
+
+        var noCandidateResponse = await noCandidateClient.PostAsJsonAsync("/api/debug/soccer/player-identity/the-odds/api-sports/alias-link/manual-approve", new
+        {
+            fixtureId = "1489398",
+            providerEventId = "852a3abe6d46820720febc0fedebff9a",
+            platformPlayerName = "Completely Different",
+            apiSportsPlayerId = "1000",
+            localPlayerId = Guid.NewGuid(),
+            dryRun = false,
+            reason = "manual reviewed exact soccer player identity"
+        });
+
+        await EnsureSuccessWithBodyAsync(noCandidateResponse);
+        var noCandidateJson = await noCandidateResponse.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.False(noCandidateJson.GetProperty("writesRows").GetBoolean());
+        Assert.Equal("NoCandidate", noCandidateJson.GetProperty("skipped").GetProperty("reason").GetString());
+        Assert.Equal(0, await CountTheOddsSoccerAliasLinksAsync(noCandidateFactory));
+    }
+
+    [Fact]
+    public async Task TheOddsApiSportsAliasManualApprove_RejectsMismatchedCandidateIds()
+    {
+        await using var factory = new SafetyTestApplicationFactory(ApiSportsLiveConfig());
+        using var client = factory.CreateClient();
+        await factory.SeedApiSportsSoccerAliasCandidateRowsAsync(["Casemiro"], ["Carlos Casemiro"]);
+
+        var response = await client.PostAsJsonAsync("/api/debug/soccer/player-identity/the-odds/api-sports/alias-link/manual-approve", new
+        {
+            fixtureId = "1489398",
+            providerEventId = "852a3abe6d46820720febc0fedebff9a",
+            platformPlayerName = "Carlos Casemiro",
+            apiSportsPlayerId = "wrong-player-id",
+            localPlayerId = Guid.NewGuid(),
+            dryRun = false,
+            reason = "manual reviewed exact soccer player identity"
+        });
+
+        await EnsureSuccessWithBodyAsync(response);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.False(json.GetProperty("writesRows").GetBoolean());
+        Assert.Equal("CandidateIdMismatch", json.GetProperty("skipped").GetProperty("reason").GetString());
+        Assert.False(json.GetProperty("publicSoccerGradingEnabled").GetBoolean());
+        Assert.Equal(0, await CountTheOddsSoccerAliasLinksAsync(factory));
+    }
+
+    [Fact]
+    public async Task TheOddsApiSportsAliasCandidatesBatch_ReusesSingleFixtureBehaviorAcrossResolvedPairs()
+    {
+        await using var factory = new SafetyTestApplicationFactory(ApiSportsLiveConfig());
+        using var client = factory.CreateClient();
+        await SeedTwoResolvedSoccerAliasPairsAsync(factory);
+        var linksBefore = await CountTheOddsSoccerAliasLinksAsync(factory);
+        var providerCallsBefore = factory.ApiSportsFootballClient.FixturePlayerStatsCallCount;
+
+        var response = await client.GetAsync("/api/debug/soccer/player-identity/the-odds/api-sports/alias-candidates-batch?fromDate=2026-06-21&toDate=2026-06-22&includeSamples=true&maxFixtures=50&maxSamples=20&minConfidence=0.94");
+
+        await EnsureSuccessWithBodyAsync(response);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.False(json.GetProperty("callsExternalApis").GetBoolean());
+        Assert.True(json.GetProperty("readOnly").GetBoolean());
+        Assert.False(json.GetProperty("writesRows").GetBoolean());
+        Assert.False(json.GetProperty("publicSoccerGradingEnabled").GetBoolean());
+        var summary = json.GetProperty("summary");
+        Assert.Equal(2, summary.GetProperty("resolvedPairsEvaluated").GetInt32());
+        Assert.Equal(2, summary.GetProperty("platformPlayerNamesEvaluated").GetInt32());
+        Assert.Equal(2, summary.GetProperty("safeCandidateCount").GetInt32());
+        Assert.Equal(0, summary.GetProperty("ambiguousCount").GetInt32());
+        Assert.Equal(0, summary.GetProperty("alreadyLinkedCount").GetInt32());
+        Assert.Equal(2, summary.GetProperty("newSafeCandidateCount").GetInt32());
+        Assert.Equal(2, json.GetProperty("candidateGroups").GetArrayLength());
+        Assert.True(json.GetProperty("deduplicatedCandidates").GetArrayLength() >= 2);
+        var impact = json.GetProperty("estimatedCoverageImpact");
+        Assert.Equal(0, impact.GetProperty("currentFullyJoinableRows").GetInt32());
+        Assert.True(impact.GetProperty("projectedAdditionalJoinableRows").GetInt32() >= 2);
+        Assert.Equal(linksBefore, await CountTheOddsSoccerAliasLinksAsync(factory));
+        Assert.Equal(providerCallsBefore, factory.ApiSportsFootballClient.FixturePlayerStatsCallCount);
+    }
+
+    [Fact]
+    public async Task TheOddsApiSportsAliasLinkBatch_DryRunWritesNothing_RealWriteIsIdempotent()
+    {
+        await using var factory = new SafetyTestApplicationFactory(ApiSportsLiveConfig());
+        using var client = factory.CreateClient();
+        await SeedTwoResolvedSoccerAliasPairsAsync(factory);
+
+        var dryRun = await client.PostAsJsonAsync("/api/debug/soccer/player-identity/the-odds/api-sports/alias-link-batch", new
+        {
+            fromDate = "2026-06-21",
+            toDate = "2026-06-22",
+            dryRun = true,
+            minConfidence = 0.94m,
+            maxLinks = 200,
+            includeExactNormalizedMatches = true,
+            includeTokenSubsetMatches = true
+        });
+
+        await EnsureSuccessWithBodyAsync(dryRun);
+        var dryRunJson = await dryRun.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.True(dryRunJson.GetProperty("readOnly").GetBoolean());
+        Assert.False(dryRunJson.GetProperty("writesRows").GetBoolean());
+        Assert.Equal(2, dryRunJson.GetProperty("summary").GetProperty("linksProposed").GetInt32());
+        Assert.Equal(0, dryRunJson.GetProperty("summary").GetProperty("linksInserted").GetInt32());
+        Assert.Equal(0, await CountTheOddsSoccerAliasLinksAsync(factory));
+
+        var write = await client.PostAsJsonAsync("/api/debug/soccer/player-identity/the-odds/api-sports/alias-link-batch", new
+        {
+            fromDate = "2026-06-21",
+            toDate = "2026-06-22",
+            dryRun = false,
+            minConfidence = 0.94m,
+            maxLinks = 200,
+            includeExactNormalizedMatches = true,
+            includeTokenSubsetMatches = true
+        });
+
+        await EnsureSuccessWithBodyAsync(write);
+        var writeJson = await write.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.False(writeJson.GetProperty("readOnly").GetBoolean());
+        Assert.True(writeJson.GetProperty("writesRows").GetBoolean());
+        Assert.False(writeJson.GetProperty("publicSoccerGradingEnabled").GetBoolean());
+        Assert.Equal(2, writeJson.GetProperty("summary").GetProperty("linksInserted").GetInt32());
+        Assert.Equal(2, writeJson.GetProperty("writtenLinks").GetArrayLength());
+        Assert.Equal(2, await CountTheOddsSoccerAliasLinksAsync(factory));
+
+        var secondWrite = await client.PostAsJsonAsync("/api/debug/soccer/player-identity/the-odds/api-sports/alias-link-batch", new
+        {
+            fromDate = "2026-06-21",
+            toDate = "2026-06-22",
+            dryRun = false,
+            minConfidence = 0.94m,
+            maxLinks = 200
+        });
+
+        await EnsureSuccessWithBodyAsync(secondWrite);
+        var secondJson = await secondWrite.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.False(secondJson.GetProperty("writesRows").GetBoolean());
+        Assert.Equal(0, secondJson.GetProperty("summary").GetProperty("linksInserted").GetInt32());
+        Assert.Equal(2, secondJson.GetProperty("summary").GetProperty("linksAlreadyExisting").GetInt32());
+        Assert.Equal(2, await CountTheOddsSoccerAliasLinksAsync(factory));
+    }
+
+    [Fact]
+    public async Task TheOddsApiSportsAliasLinkBatch_SkipsExistingConflictingLinks()
+    {
+        await using var factory = new SafetyTestApplicationFactory(ApiSportsLiveConfig());
+        using var client = factory.CreateClient();
+        await factory.SeedApiSportsSoccerMarketJoinRowsAsync(
+            resultPlayerName: "Maximiliano Araujo",
+            platformPlayerName: "Maximiliano Javier Araujo Vilches",
+            fixtureId: "1489398",
+            providerEventIdOverride: "event-conflict");
+        await AddConflictingTheOddsSoccerAliasLinkAsync(
+            factory,
+            "event-conflict",
+            "MAXIMILIANOJAVIERARAUJOVILCHES");
+
+        var response = await client.PostAsJsonAsync("/api/debug/soccer/player-identity/the-odds/api-sports/alias-link-batch", new
+        {
+            fromDate = "2026-06-21",
+            toDate = "2026-06-21",
+            dryRun = false,
+            minConfidence = 0.94m,
+            maxLinks = 200
+        });
+
+        await EnsureSuccessWithBodyAsync(response);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.False(json.GetProperty("writesRows").GetBoolean());
+        Assert.Equal(0, json.GetProperty("summary").GetProperty("linksInserted").GetInt32());
+        Assert.Equal(1, json.GetProperty("summary").GetProperty("skippedConflictingExisting").GetInt32());
+        Assert.Single(json.GetProperty("skipped").EnumerateArray());
+        Assert.Equal(1, await CountTheOddsSoccerAliasLinksAsync(factory));
+    }
+
+    [Fact]
     public async Task ApiSportsSoccerPlayerIdentityCoverage_IsReadOnlyAndReportsNoCandidatesGracefully()
     {
         await using var factory = new SafetyTestApplicationFactory(ApiSportsLiveConfig());
@@ -1277,7 +2805,7 @@ public sealed class RefreshSafetyTests
         Assert.Equal(1, json.GetProperty("soccerPlatformPlayers").GetInt32());
         Assert.Equal(1, json.GetProperty("fieldAvailability").GetProperty("hasTeamNameCount").GetInt32());
         Assert.Equal(1, json.GetProperty("fieldAvailability").GetProperty("hasStartTimeCount").GetInt32());
-        Assert.Equal(1, json.GetProperty("fieldAvailability").GetProperty("hasProviderPlayerIdCount").GetInt32());
+        Assert.Equal(0, json.GetProperty("fieldAvailability").GetProperty("hasProviderPlayerIdCount").GetInt32());
         var sample = Assert.Single(json.GetProperty("samples").EnumerateArray());
         Assert.Equal("Test Forward", sample.GetProperty("playerName").GetString());
         Assert.Equal("Home FC", sample.GetProperty("teamName").GetString());
@@ -2084,6 +3612,359 @@ public sealed class RefreshSafetyTests
             && link.EntityType == "Player");
     }
 
+    private static async Task<int> CountTheOddsSoccerAliasLinksAsync(SafetyTestApplicationFactory factory)
+    {
+        using var scope = factory.Services.CreateScope();
+        var dbContext = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+        return await dbContext.ProviderEntityLinks.CountAsync(link =>
+            link.ProviderKey == "the-odds-soccer"
+            && link.EntityType == "Player");
+    }
+
+    private static async Task<TheOddsAliasCandidateIds> GetSingleTheOddsAliasCandidateAsync(HttpClient client)
+    {
+        var response = await client.GetAsync("/api/debug/soccer/player-identity/the-odds/api-sports/alias-candidates?fixtureId=1489398&providerEventId=852a3abe6d46820720febc0fedebff9a&includeSamples=true");
+        await EnsureSuccessWithBodyAsync(response);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        var sample = Assert.Single(json.GetProperty("samples").GetProperty("aliasCandidates").EnumerateArray());
+        Assert.Equal("NeedsReview", sample.GetProperty("suggestedAction").GetString());
+        var candidate = Assert.Single(sample.GetProperty("candidates").EnumerateArray());
+        return new TheOddsAliasCandidateIds(
+            candidate.GetProperty("apiSportsPlayerId").GetString()!,
+            candidate.GetProperty("localPlayerId").GetGuid());
+    }
+
+    private sealed record TheOddsAliasCandidateIds(
+        string ApiSportsPlayerId,
+        Guid LocalPlayerId);
+
+    private static async Task SeedTwoResolvedSoccerAliasPairsAsync(SafetyTestApplicationFactory factory)
+    {
+        await factory.SeedApiSportsSoccerMarketJoinRowsAsync(
+            resultPlayerName: "Maximiliano Araujo",
+            platformPlayerName: "Maximiliano Javier Araujo Vilches",
+            fixtureId: "1489398",
+            providerEventIdOverride: "event-one",
+            eventHomeTeamName: "Uruguay",
+            eventAwayTeamName: "Cape Verde",
+            resultPlayerTeamName: "Uruguay",
+            eventDate: new DateOnly(2026, 6, 21));
+        await factory.SeedApiSportsSoccerMarketJoinRowsAsync(
+            resultPlayerName: "Ryan Mendes",
+            platformPlayerName: "Ryan Mendes da Graca",
+            fixtureId: "1489399",
+            providerEventIdOverride: "event-two",
+            eventHomeTeamName: "United States",
+            eventAwayTeamName: "Czechia",
+            resultPlayerTeamName: "United States",
+            eventDate: new DateOnly(2026, 6, 22),
+            resetDatabase: false);
+    }
+
+    private static async Task AddConflictingTheOddsSoccerAliasLinkAsync(
+        SafetyTestApplicationFactory factory,
+        string providerEventId,
+        string normalizedPlatformPlayerName)
+    {
+        using var scope = factory.Services.CreateScope();
+        var dbContext = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+        var sport = await dbContext.Sports.SingleAsync(row => row.Code == "SOCCER");
+        var league = await dbContext.Leagues.FirstAsync(row => row.SportId == sport.Id);
+        var wrongPlayer = new Player
+        {
+            Id = Guid.NewGuid(),
+            LeagueId = league.Id,
+            DisplayName = "Wrong Soccer Player",
+            Position = "F"
+        };
+        dbContext.Players.Add(wrongPlayer);
+        dbContext.ProviderEntityLinks.Add(new ProviderEntityLink
+        {
+            Id = Guid.NewGuid(),
+            SportId = sport.Id,
+            EntityType = "Player",
+            CanonicalEntityId = wrongPlayer.Id,
+            CanonicalEntityKind = "Player",
+            CanonicalEntityName = wrongPlayer.DisplayName,
+            ProviderKey = "the-odds-soccer",
+            ProviderEntityId = $"soccer_fifa_world_cup:{providerEventId}:{normalizedPlatformPlayerName}",
+            ProviderEntityName = normalizedPlatformPlayerName,
+            ProviderCompetitionId = "soccer_fifa_world_cup",
+            ProviderCompetitionName = "World Cup",
+            ProviderEventId = providerEventId,
+            Confidence = 1m,
+            LinkStatus = "Approved",
+            LinkSource = "TestConflict",
+            CreatedAtUtc = DateTimeOffset.UtcNow,
+            UpdatedAtUtc = DateTimeOffset.UtcNow,
+            ApprovedAtUtc = DateTimeOffset.UtcNow,
+            ApprovedBy = "test"
+        });
+        await dbContext.SaveChangesAsync();
+    }
+
+    private static async Task<int> CountSoccerPlatformPropsAsync(SafetyTestApplicationFactory factory)
+    {
+        using var scope = factory.Services.CreateScope();
+        var dbContext = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+        return await dbContext.PlatformProps
+            .Include(row => row.Prop)!.ThenInclude(prop => prop!.League)!.ThenInclude(league => league!.Sport)
+            .CountAsync(row => row.Prop != null
+                && row.Prop.League != null
+                && row.Prop.League.Sport != null
+                && row.Prop.League.Sport.Code == "SOCCER");
+    }
+
+    private static async Task<JsonElement> GetSingleSoccerPlatformPropMetadataAsync(SafetyTestApplicationFactory factory)
+    {
+        using var scope = factory.Services.CreateScope();
+        var dbContext = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+        var metadata = await dbContext.PlatformProps
+            .Include(row => row.Prop)!.ThenInclude(prop => prop!.League)!.ThenInclude(league => league!.Sport)
+            .Where(row => row.Prop != null
+                && row.Prop.League != null
+                && row.Prop.League.Sport != null
+                && row.Prop.League.Sport.Code == "SOCCER")
+            .Select(row => row.Metadata)
+            .SingleAsync();
+        return metadata!.RootElement.Clone();
+    }
+
+    private static async Task<JsonElement[]> GetSoccerPlatformPropMetadataAsync(SafetyTestApplicationFactory factory)
+    {
+        using var scope = factory.Services.CreateScope();
+        var dbContext = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+        var metadataRows = await dbContext.PlatformProps
+            .Include(row => row.Prop)!.ThenInclude(prop => prop!.League)!.ThenInclude(league => league!.Sport)
+            .Where(row => row.Prop != null
+                && row.Prop.League != null
+                && row.Prop.League.Sport != null
+                && row.Prop.League.Sport.Code == "SOCCER")
+            .OrderBy(row => row.PlatformPropId)
+            .Select(row => row.Metadata)
+            .ToListAsync();
+        return metadataRows
+            .Select(metadata => metadata!.RootElement.Clone())
+            .ToArray();
+    }
+
+    private static async Task AddApiSportsSoccerResultFixtureAsync(
+        SafetyTestApplicationFactory factory,
+        string fixtureId,
+        DateOnly eventDate,
+        string teamName)
+    {
+        using var scope = factory.Services.CreateScope();
+        var dbContext = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+        var sport = await dbContext.Sports.SingleOrDefaultAsync(row => row.Code == "SOCCER");
+        if (sport is null)
+        {
+            sport = new Sport { Id = Guid.NewGuid(), Code = "SOCCER", Name = "Soccer" };
+            dbContext.Sports.Add(sport);
+            await dbContext.SaveChangesAsync();
+        }
+
+        var league = await dbContext.Leagues.SingleOrDefaultAsync(row => row.SportId == sport.Id && row.Code == "WC2026");
+        if (league is null)
+        {
+            league = new League
+            {
+                Id = Guid.NewGuid(),
+                SportId = sport.Id,
+                Name = "World Cup",
+                Code = "WC2026",
+                SeasonType = "2026"
+            };
+            dbContext.Leagues.Add(league);
+            await dbContext.SaveChangesAsync();
+        }
+
+        var team = await dbContext.Teams.SingleOrDefaultAsync(row => row.LeagueId == league.Id && row.Name == teamName);
+        if (team is null)
+        {
+            team = new Team
+            {
+                Id = Guid.NewGuid(),
+                LeagueId = league.Id,
+                Name = teamName
+            };
+            dbContext.Teams.Add(team);
+        }
+
+        var propType = await dbContext.PropTypes.SingleOrDefaultAsync(row => row.SportId == sport.Id && row.StatKey == "GOALS");
+        if (propType is null)
+        {
+            propType = new PropType
+            {
+                Id = Guid.NewGuid(),
+                SportId = sport.Id,
+                Name = "Goals",
+                StatKey = "GOALS",
+                ValueType = "numeric"
+            };
+            dbContext.PropTypes.Add(propType);
+        }
+
+        var player = new Player
+        {
+            Id = Guid.NewGuid(),
+            DisplayName = $"{teamName} Fixture Player {fixtureId}",
+            TeamId = team.Id,
+            LeagueId = league.Id,
+            Position = "F"
+        };
+        dbContext.Players.Add(player);
+        dbContext.PropResults.Add(new PropResult
+        {
+            Id = Guid.NewGuid(),
+            PlayerId = player.Id,
+            LeagueId = league.Id,
+            PropTypeId = propType.Id,
+            EventDate = eventDate,
+            ActualResultValue = 1m,
+            ExternalSource = "api-sports-football",
+            ExternalSourceIdentifier = $"api-sports-football:{fixtureId}:{Guid.NewGuid():N}:GOALS",
+            CreatedAt = DateTimeOffset.UtcNow,
+            UpdatedAt = DateTimeOffset.UtcNow
+        });
+        await dbContext.SaveChangesAsync();
+    }
+
+    private static async Task AddLegacySoccerPlatformPropAsync(
+        SafetyTestApplicationFactory factory,
+        string providerEventId)
+    {
+        using var scope = factory.Services.CreateScope();
+        var dbContext = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+        var sport = await dbContext.Sports.SingleAsync(row => row.Code == "SOCCER");
+        var league = await dbContext.Leagues.FirstAsync(row => row.SportId == sport.Id);
+        var homeTeam = await dbContext.Teams.FirstAsync(row => row.LeagueId == league.Id);
+        var awayTeam = await dbContext.Teams.FirstAsync(row => row.LeagueId == league.Id && row.Id != homeTeam.Id);
+        var game = await dbContext.Games.FirstAsync(row => row.LeagueId == league.Id);
+        var propType = await dbContext.PropTypes.FirstAsync(row => row.SportId == sport.Id);
+        var platform = await dbContext.Platforms.FirstOrDefaultAsync(row => row.Slug == "legacy-bookmaker");
+        if (platform is null)
+        {
+            platform = new Platform
+            {
+                Id = Guid.NewGuid(),
+                Name = "Legacy Bookmaker",
+                Slug = "legacy-bookmaker"
+            };
+            dbContext.Platforms.Add(platform);
+        }
+
+        var player = new Player
+        {
+            Id = Guid.NewGuid(),
+            DisplayName = "Legacy Soccer Player",
+            TeamId = homeTeam.Id,
+            LeagueId = league.Id,
+            Position = "F"
+        };
+        var prop = new Prop
+        {
+            Id = Guid.NewGuid(),
+            PlayerId = player.Id,
+            GameId = game.Id,
+            LeagueId = league.Id,
+            PropTypeId = propType.Id,
+            NormalizedKey = $"legacy-soccer-{Guid.NewGuid():N}",
+            StartsAt = game.ScheduledStartAt,
+            Status = "active"
+        };
+        dbContext.Players.Add(player);
+        dbContext.Props.Add(prop);
+        dbContext.PlatformProps.Add(new PlatformProp
+        {
+            Id = Guid.NewGuid(),
+            PropId = prop.Id,
+            PlatformId = platform.Id,
+            PlatformPropId = $"legacy-{Guid.NewGuid():N}",
+            ExternalStableKey = providerEventId,
+            Label = "Legacy Soccer Player Goals",
+            CurrentLine = 0.5m,
+            OverAvailable = true,
+            UnderAvailable = false,
+            PayoutType = "sportsbook",
+            Status = "active",
+            ObservedAt = DateTimeOffset.UtcNow,
+            Metadata = JsonSerializer.SerializeToDocument(new
+            {
+                dataProvider = "Internal",
+                contextSchemaVersion = "legacy",
+                providerCategory = "Sportsbook",
+                sport = new
+                {
+                    competition = "World Cup",
+                    providerSportKey = "soccer_fifa_world_cup"
+                },
+                eventInfo = new
+                {
+                    providerEventId,
+                    eventId = providerEventId,
+                    homeTeam = homeTeam.Name,
+                    awayTeam = awayTeam.Name
+                },
+                market = new { key = "player_goals" },
+                player = new
+                {
+                    providerPlayerId = (string?)null,
+                    teamName = (string?)null
+                }
+            })
+        });
+        await dbContext.SaveChangesAsync();
+    }
+
+    private static async Task<Guid> AddSoccerTheOddsRefreshRunAsync(SafetyTestApplicationFactory factory)
+    {
+        using var scope = factory.Services.CreateScope();
+        var dbContext = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+        var refreshRun = new TheOddsRefreshRun
+        {
+            Id = Guid.NewGuid(),
+            Provider = "The Odds API",
+            Sport = "SOCCER",
+            SlateDate = new DateOnly(2026, 6, 21),
+            StartedAtUtc = DateTimeOffset.UtcNow.AddMinutes(-10),
+            CompletedAtUtc = DateTimeOffset.UtcNow.AddMinutes(-9),
+            Succeeded = true,
+            Failed = false,
+            Blocked = false,
+            DryRun = false,
+            ForceLive = true,
+            BookmakerPreset = "sportsbookContext",
+            ProviderCategoriesIncluded = "Sportsbook",
+            SportsbookBookmakersRequested = "betmgm,fanduel",
+            DfsBookmakersRequested = string.Empty,
+            MarketsRequested = "player_goals,player_shots",
+            EstimatedApiCalls = 35,
+            ActualApiCalls = 35,
+            PlatformPropsCreated = 119,
+            PlatformPropsUpdated = 0,
+            PlatformPropsUpserted = 119,
+            PredictionCount = 0,
+            LineShoppingGroupCount = 34,
+            DiagnosticsJson = JsonSerializer.SerializeToDocument(new
+            {
+                sport = "SOCCER",
+                competition = "World Cup",
+                configuredSportKey = "soccer_fifa_world_cup",
+                requestedRegions = "us",
+                requestedMarkets = new[] { "player_goals", "player_shots" },
+                eventsFetched = 34,
+                eventOddsCalls = 1,
+                platformPropsCreated = 119,
+                platformPropsUpdated = 0,
+                platformPropsUpserted = 119
+            })
+        };
+        dbContext.TheOddsRefreshRuns.Add(refreshRun);
+        await dbContext.SaveChangesAsync();
+        return refreshRun.Id;
+    }
+
     private static async Task<ApiSportsProviderLinkTestState> GetApiSportsProviderLinkStateAsync(
         SafetyTestApplicationFactory factory,
         string providerEntityId)
@@ -2517,6 +4398,390 @@ public sealed class SafetyTestApplicationFactory : WebApplicationFactory<Program
                 Notes = "Seeded by test fixture.",
                 CreatedAtUtc = DateTimeOffset.UtcNow,
                 UpdatedAtUtc = DateTimeOffset.UtcNow
+            });
+        }
+
+        await dbContext.SaveChangesAsync();
+    }
+
+    public async Task SeedApiSportsSoccerMarketJoinRowsAsync(
+        bool includeProviderEventId = true,
+        bool includeResultTeam = true,
+        bool includeMarketKey = true,
+        decimal actualValue = 1m,
+        decimal currentLine = 0.5m,
+        bool overAvailable = true,
+        bool underAvailable = false,
+        string resultPlayerName = "Test Forward",
+        string platformPlayerName = "Test Forward",
+        bool includeResultRow = true,
+        bool includePlatformRow = true,
+        string fixtureId = "1489393",
+        bool useTheOddsContext = true,
+        string? providerEventIdOverride = null,
+        string eventHomeTeamName = "Uruguay",
+        string eventAwayTeamName = "Cape Verde",
+        string resultPlayerTeamName = "Uruguay",
+        DateOnly? eventDate = null,
+        string platformMarketKey = "player_goals",
+        string platformPropTypeName = "Goals",
+        string platformStatKey = "GOALS",
+        string apiSportsPropTypeName = "Goals",
+        string apiSportsStatKey = "GOALS",
+        bool resetDatabase = true)
+    {
+        using var scope = Services.CreateScope();
+        var dbContext = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+        if (resetDatabase)
+        {
+            await dbContext.Database.EnsureDeletedAsync();
+            await dbContext.Database.EnsureCreatedAsync();
+        }
+
+        var effectiveEventDate = eventDate ?? new DateOnly(2026, 6, 21);
+        var eventStart = new DateTimeOffset(effectiveEventDate.Year, effectiveEventDate.Month, effectiveEventDate.Day, 21, 0, 0, TimeSpan.Zero);
+        var sport = await GetOrCreateSoccerSportAsync(dbContext);
+        var league = resetDatabase
+            ? null
+            : await dbContext.Leagues.SingleOrDefaultAsync(row => row.SportId == sport.Id && row.Code == "WC2026");
+        if (league is null)
+        {
+            league = new League
+            {
+                Id = Guid.NewGuid(),
+                SportId = sport.Id,
+                Name = "World Cup",
+                Code = "WC2026",
+                SeasonType = "2026"
+            };
+            dbContext.Leagues.Add(league);
+        }
+        var homeTeam = new Team
+        {
+            Id = Guid.NewGuid(),
+            LeagueId = league.Id,
+            Name = eventHomeTeamName
+        };
+        var awayTeam = new Team
+        {
+            Id = Guid.NewGuid(),
+            LeagueId = league.Id,
+            Name = eventAwayTeamName
+        };
+        var resultTeam = string.Equals(resultPlayerTeamName, eventHomeTeamName, StringComparison.OrdinalIgnoreCase)
+            ? homeTeam
+            : new Team
+            {
+                Id = Guid.NewGuid(),
+                LeagueId = league.Id,
+                Name = resultPlayerTeamName
+            };
+        var game = new Game
+        {
+            Id = Guid.NewGuid(),
+            LeagueId = league.Id,
+            HomeTeamId = homeTeam.Id,
+            AwayTeamId = awayTeam.Id,
+            ScheduledStartAt = eventStart,
+            Status = "scheduled"
+        };
+        var propType = resetDatabase
+            ? null
+            : await dbContext.PropTypes.SingleOrDefaultAsync(row => row.SportId == sport.Id && row.StatKey == platformStatKey);
+        if (propType is null)
+        {
+            propType = new PropType
+            {
+                Id = Guid.NewGuid(),
+                SportId = sport.Id,
+                Name = platformPropTypeName,
+                StatKey = platformStatKey,
+                ValueType = "numeric"
+            };
+            dbContext.PropTypes.Add(propType);
+        }
+        var resultPropType = string.Equals(platformStatKey, apiSportsStatKey, StringComparison.OrdinalIgnoreCase)
+            ? propType
+            : resetDatabase
+                ? null
+                : await dbContext.PropTypes.SingleOrDefaultAsync(row => row.SportId == sport.Id && row.StatKey == apiSportsStatKey);
+        if (resultPropType is null)
+        {
+            resultPropType = new PropType
+            {
+                Id = Guid.NewGuid(),
+                SportId = sport.Id,
+                Name = apiSportsPropTypeName,
+                StatKey = apiSportsStatKey,
+                ValueType = "numeric"
+            };
+            dbContext.PropTypes.Add(resultPropType);
+        }
+        var player = new Player
+        {
+            Id = Guid.NewGuid(),
+            DisplayName = resultPlayerName,
+            TeamId = includeResultTeam ? resultTeam.Id : null,
+            LeagueId = league.Id,
+            Position = "F"
+        };
+        var platformPlayer = string.Equals(platformPlayerName, resultPlayerName, StringComparison.Ordinal)
+            ? player
+            : new Player
+            {
+                Id = Guid.NewGuid(),
+                DisplayName = platformPlayerName,
+                TeamId = includeResultTeam ? resultTeam.Id : null,
+                LeagueId = league.Id,
+                Position = "F"
+            };
+        var prop = new Prop
+        {
+            Id = Guid.NewGuid(),
+            PlayerId = platformPlayer.Id,
+            GameId = game.Id,
+            LeagueId = league.Id,
+            PropTypeId = propType.Id,
+            NormalizedKey = $"soccer-market-join-{Guid.NewGuid():N}",
+            StartsAt = game.ScheduledStartAt,
+            Status = "active"
+        };
+        var platform = resetDatabase
+            ? null
+            : await dbContext.Platforms.SingleOrDefaultAsync(row => row.Slug == "betmgm");
+        if (platform is null)
+        {
+            platform = new Platform
+            {
+                Id = Guid.NewGuid(),
+                Name = "BetMGM",
+                Slug = "betmgm"
+            };
+            dbContext.Platforms.Add(platform);
+        }
+        var providerEventId = includeProviderEventId ? providerEventIdOverride ?? "852a3abe6d46820720febc0fedebff9a" : null;
+        var metadata = JsonSerializer.SerializeToDocument(new
+        {
+            dataProvider = useTheOddsContext ? "The Odds API" : "Internal",
+            contextSchemaVersion = useTheOddsContext ? "the-odds-provider-context-v2" : "legacy",
+            providerCategory = "Sportsbook",
+            sport = new
+            {
+                competition = "World Cup",
+                providerSportKey = useTheOddsContext ? "soccer_fifa_world_cup" : "legacy_soccer"
+            },
+            eventInfo = new
+            {
+                providerEventId,
+                eventId = providerEventId,
+                homeTeam = eventHomeTeamName,
+                awayTeam = eventAwayTeamName
+            },
+            market = includeMarketKey
+                ? new { key = platformMarketKey }
+                : null,
+            player = new
+            {
+                providerPlayerId = (string?)null,
+                teamName = (string?)null
+            }
+        });
+
+        dbContext.Teams.AddRange(homeTeam, awayTeam);
+        dbContext.Games.Add(game);
+        dbContext.Players.Add(player);
+        if (resultTeam.Id != homeTeam.Id)
+        {
+            dbContext.Teams.Add(resultTeam);
+        }
+
+        if (platformPlayer.Id != player.Id)
+        {
+            dbContext.Players.Add(platformPlayer);
+        }
+
+        dbContext.Props.Add(prop);
+        if (includePlatformRow)
+        {
+            dbContext.PlatformProps.Add(new PlatformProp
+            {
+                Id = Guid.NewGuid(),
+                PropId = prop.Id,
+                PlatformId = platform.Id,
+                PlatformPropId = $"betmgm-{fixtureId}-{Guid.NewGuid():N}",
+                ExternalStableKey = providerEventId,
+                Label = $"{platformPlayerName} {platformPropTypeName}",
+                CurrentLine = currentLine,
+                OverAvailable = overAvailable,
+                UnderAvailable = underAvailable,
+                PayoutType = "sportsbook",
+                Status = "active",
+                ObservedAt = DateTimeOffset.UtcNow,
+                Metadata = metadata
+            });
+        }
+
+        if (includeResultRow)
+        {
+            dbContext.PropResults.Add(new PropResult
+            {
+                Id = Guid.NewGuid(),
+                PlayerId = player.Id,
+                LeagueId = league.Id,
+                PropTypeId = resultPropType.Id,
+                EventDate = effectiveEventDate,
+                ActualResultValue = actualValue,
+                ExternalSource = "api-sports-football",
+                ExternalSourceIdentifier = $"api-sports-football:{fixtureId}:1001:{apiSportsStatKey}",
+                CreatedAt = DateTimeOffset.UtcNow,
+                UpdatedAt = DateTimeOffset.UtcNow
+            });
+        }
+
+        await dbContext.SaveChangesAsync();
+    }
+
+    public async Task SeedApiSportsSoccerAliasCandidateRowsAsync(
+        IReadOnlyList<string> apiSportsPlayerNames,
+        IReadOnlyList<string> platformPlayerNames)
+    {
+        using var scope = Services.CreateScope();
+        var dbContext = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+        await dbContext.Database.EnsureDeletedAsync();
+        await dbContext.Database.EnsureCreatedAsync();
+
+        var sport = await GetOrCreateSoccerSportAsync(dbContext);
+        var league = new League
+        {
+            Id = Guid.NewGuid(),
+            SportId = sport.Id,
+            Name = "World Cup",
+            Code = "WC2026",
+            SeasonType = "2026"
+        };
+        var homeTeam = new Team
+        {
+            Id = Guid.NewGuid(),
+            LeagueId = league.Id,
+            Name = "Uruguay"
+        };
+        var awayTeam = new Team
+        {
+            Id = Guid.NewGuid(),
+            LeagueId = league.Id,
+            Name = "Cape Verde"
+        };
+        var game = new Game
+        {
+            Id = Guid.NewGuid(),
+            LeagueId = league.Id,
+            HomeTeamId = homeTeam.Id,
+            AwayTeamId = awayTeam.Id,
+            ScheduledStartAt = new DateTimeOffset(2026, 6, 21, 22, 0, 0, TimeSpan.Zero),
+            Status = "scheduled"
+        };
+        var propType = new PropType
+        {
+            Id = Guid.NewGuid(),
+            SportId = sport.Id,
+            Name = "Goals",
+            StatKey = "GOALS",
+            ValueType = "numeric"
+        };
+        var platform = new Platform
+        {
+            Id = Guid.NewGuid(),
+            Name = "BetMGM",
+            Slug = "theodds-betmgm"
+        };
+        const string providerEventId = "852a3abe6d46820720febc0fedebff9a";
+
+        dbContext.Leagues.Add(league);
+        dbContext.Teams.AddRange(homeTeam, awayTeam);
+        dbContext.Games.Add(game);
+        dbContext.PropTypes.Add(propType);
+        dbContext.Platforms.Add(platform);
+
+        for (var index = 0; index < apiSportsPlayerNames.Count; index++)
+        {
+            var player = new Player
+            {
+                Id = Guid.NewGuid(),
+                DisplayName = apiSportsPlayerNames[index],
+                TeamId = homeTeam.Id,
+                LeagueId = league.Id,
+                Position = "F"
+            };
+            dbContext.Players.Add(player);
+            dbContext.PropResults.Add(new PropResult
+            {
+                Id = Guid.NewGuid(),
+                PlayerId = player.Id,
+                LeagueId = league.Id,
+                PropTypeId = propType.Id,
+                EventDate = new DateOnly(2026, 6, 21),
+                ActualResultValue = 0,
+                ExternalSource = "api-sports-football",
+                ExternalSourceIdentifier = $"api-sports-football:1489398:{1000 + index}:GOALS",
+                CreatedAt = DateTimeOffset.UtcNow,
+                UpdatedAt = DateTimeOffset.UtcNow
+            });
+        }
+
+        foreach (var platformPlayerName in platformPlayerNames)
+        {
+            var player = new Player
+            {
+                Id = Guid.NewGuid(),
+                DisplayName = platformPlayerName,
+                TeamId = homeTeam.Id,
+                LeagueId = league.Id,
+                Position = "F"
+            };
+            var prop = new Prop
+            {
+                Id = Guid.NewGuid(),
+                PlayerId = player.Id,
+                GameId = game.Id,
+                LeagueId = league.Id,
+                PropTypeId = propType.Id,
+                NormalizedKey = $"soccer-alias-{Guid.NewGuid():N}",
+                StartsAt = game.ScheduledStartAt,
+                Status = "active"
+            };
+            dbContext.Players.Add(player);
+            dbContext.Props.Add(prop);
+            dbContext.PlatformProps.Add(new PlatformProp
+            {
+                Id = Guid.NewGuid(),
+                PropId = prop.Id,
+                PlatformId = platform.Id,
+                PlatformPropId = $"betmgm-{Guid.NewGuid():N}",
+                ExternalStableKey = providerEventId,
+                Label = $"{platformPlayerName} Goals",
+                CurrentLine = 0.5m,
+                OverAvailable = true,
+                UnderAvailable = false,
+                PayoutType = "sportsbook",
+                Status = "active",
+                ObservedAt = DateTimeOffset.UtcNow,
+                Metadata = JsonSerializer.SerializeToDocument(new
+                {
+                    providerCategory = "Sportsbook",
+                    eventInfo = new
+                    {
+                        providerEventId,
+                        eventId = providerEventId,
+                        homeTeam = "Uruguay",
+                        awayTeam = "Cape Verde"
+                    },
+                    market = new { key = "player_goals" },
+                    player = new
+                    {
+                        providerPlayerId = (string?)null,
+                        teamName = (string?)null
+                    }
+                })
             });
         }
 
@@ -2964,6 +5229,39 @@ public sealed class SafetyTestApplicationFactory : WebApplicationFactory<Program
 public sealed class CountingTheOddsAdapter : ITheOddsApiMlbPlayerPropsAdapter
 {
     public int CallCount { get; private set; }
+    private bool useSoccerWorldCupContextPayload;
+    private bool rejectSoccerWorldCupEventOdds;
+    private string soccerWorldCupPayloadMode = "valid";
+
+    public void ConfigureSoccerWorldCupContextPayload(string payloadMode = "valid")
+    {
+        useSoccerWorldCupContextPayload = true;
+        soccerWorldCupPayloadMode = payloadMode;
+    }
+
+    public void ConfigureSoccerWorldCupProviderRejection()
+    {
+        useSoccerWorldCupContextPayload = true;
+        rejectSoccerWorldCupEventOdds = true;
+    }
+
+    public void ConfigureSoccerWorldCupAvailabilityByRegion()
+    {
+        useSoccerWorldCupContextPayload = true;
+        soccerWorldCupPayloadMode = "availabilityByRegion";
+    }
+
+    public void ConfigureSoccerWorldCupSportsbookContextPayload()
+    {
+        useSoccerWorldCupContextPayload = true;
+        soccerWorldCupPayloadMode = "sportsbookUs";
+    }
+
+    public void ConfigureSoccerWorldCupMultiEventSportsbookContextPayload()
+    {
+        useSoccerWorldCupContextPayload = true;
+        soccerWorldCupPayloadMode = "multiSportsbookUs";
+    }
 
     public Task<TheOddsApiPlayerPropsSpikeResult> FetchSpikeAsync(
         string? eventId,
@@ -2971,10 +5269,259 @@ public sealed class CountingTheOddsAdapter : ITheOddsApiMlbPlayerPropsAdapter
         string? bookmakers,
         string? regions,
         string? oddsFormat,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        string? sportKey = null)
     {
         CallCount++;
+        if (useSoccerWorldCupContextPayload
+            && string.Equals(sportKey, "soccer_fifa_world_cup", StringComparison.OrdinalIgnoreCase))
+        {
+            if (string.IsNullOrWhiteSpace(eventId))
+            {
+                var events = soccerWorldCupPayloadMode == "multiSportsbookUs"
+                    ? new[]
+                    {
+                        new TheOddsApiEventRecord(
+                            "soccer-event-1",
+                            "soccer_fifa_world_cup",
+                            new DateTimeOffset(2026, 6, 21, 19, 0, 0, TimeSpan.Zero),
+                            "Home FC",
+                            "Away FC"),
+                        new TheOddsApiEventRecord(
+                            "soccer-event-2",
+                            "soccer_fifa_world_cup",
+                            new DateTimeOffset(2026, 6, 22, 20, 0, 0, TimeSpan.Zero),
+                            "Second Home",
+                            "Second Away"),
+                        new TheOddsApiEventRecord(
+                            "soccer-event-3",
+                            "soccer_fifa_world_cup",
+                            new DateTimeOffset(2026, 6, 23, 21, 0, 0, TimeSpan.Zero),
+                            "Third Home",
+                            "Third Away")
+                    }
+                    : [
+                        new TheOddsApiEventRecord(
+                            "soccer-event-1",
+                            "soccer_fifa_world_cup",
+                            new DateTimeOffset(2026, 6, 21, 19, 0, 0, TimeSpan.Zero),
+                            "Home FC",
+                            "Away FC")
+                    ];
+                return Task.FromResult(new TheOddsApiPlayerPropsSpikeResult(
+                    events,
+                    "soccer-event-1",
+                    [],
+                    [],
+                    new TheOddsApiCreditUsage(1, 99, 1),
+                    "https://api.the-odds-api.test/v4/sports/soccer_fifa_world_cup/events",
+                    "{}"));
+            }
+
+            if (rejectSoccerWorldCupEventOdds)
+            {
+                throw new TheOddsApiProviderException(
+                    "PROVIDER_NON_SUCCESS",
+                    "The Odds API returned HTTP 422.",
+                    "Review the sanitized provider response and request parameters before retrying.",
+                    HttpStatusCode.UnprocessableEntity,
+                    """{"message":"Invalid market: bad_market","error_code":"INVALID_MARKET"}""",
+                    "https://api.the-odds-api.test/v4/sports/soccer_fifa_world_cup/events/soccer-event-1/odds?apiKey=***&regions=us_dfs&markets=bad_market&oddsFormat=american",
+                    new TheOddsApiCreditUsage(2, 98, 1),
+                    "FetchEventOdds");
+            }
+
+            return Task.FromResult(BuildSoccerWorldCupEventOddsResult(eventId, regions));
+        }
+
         throw new InvalidOperationException("The Odds API adapter should not be called by safety tests.");
+    }
+
+    private TheOddsApiPlayerPropsSpikeResult BuildSoccerWorldCupEventOddsResult(string? eventId, string? regions)
+    {
+        var eventStartTime = eventId switch
+        {
+            "soccer-event-2" => new DateTimeOffset(2026, 6, 22, 20, 0, 0, TimeSpan.Zero),
+            "soccer-event-3" => new DateTimeOffset(2026, 6, 23, 21, 0, 0, TimeSpan.Zero),
+            _ => new DateTimeOffset(2026, 6, 21, 19, 0, 0, TimeSpan.Zero)
+        };
+        var homeTeam = eventId switch
+        {
+            "soccer-event-2" => "Second Home",
+            "soccer-event-3" => "Third Home",
+            _ => "Home FC"
+        };
+        var awayTeam = eventId switch
+        {
+            "soccer-event-2" => "Second Away",
+            "soccer-event-3" => "Third Away",
+            _ => "Away FC"
+        };
+        var eventRecord = new TheOddsApiEventRecord(
+            eventId,
+            "soccer_fifa_world_cup",
+            eventStartTime,
+            homeTeam,
+            awayTeam);
+        var requestUrl = "https://api.the-odds-api.test/v4/sports/soccer_fifa_world_cup/events/soccer-event-1/odds";
+
+        var effectivePayloadMode = soccerWorldCupPayloadMode switch
+        {
+            "availabilityByRegion" => string.Equals(regions, "us", StringComparison.OrdinalIgnoreCase) ? "valid" : "zeroBookmakers",
+            "sportsbookUs" or "multiSportsbookUs" => string.Equals(regions, "us", StringComparison.OrdinalIgnoreCase) ? "sportsbookUs" : "zeroBookmakers",
+            _ => soccerWorldCupPayloadMode
+        };
+
+        return effectivePayloadMode switch
+        {
+            "zeroBookmakers" => new TheOddsApiPlayerPropsSpikeResult(
+                [eventRecord],
+                eventId,
+                [],
+                [BuildSoccerWorldCupDiagnostics(eventId, [], [], outcomeCount: 0, playerOutcomeCount: 0)],
+                new TheOddsApiCreditUsage(2, 98, 1),
+                requestUrl,
+                """{"bookmakers":[]}"""),
+            "zeroMarkets" => new TheOddsApiPlayerPropsSpikeResult(
+                [eventRecord],
+                eventId,
+                [],
+                [BuildSoccerWorldCupDiagnostics(eventId, ["underdog"], [], outcomeCount: 0, playerOutcomeCount: 0)],
+                new TheOddsApiCreditUsage(2, 98, 1),
+                requestUrl,
+                """{"bookmakers":[{"key":"underdog","markets":[]}]}"""),
+            "unsupportedMarket" => new TheOddsApiPlayerPropsSpikeResult(
+                [eventRecord],
+                eventId,
+                [],
+                [BuildSoccerWorldCupDiagnostics(eventId, ["underdog"], ["player_passes"], outcomeCount: 2, playerOutcomeCount: 2)],
+                new TheOddsApiCreditUsage(2, 98, 1),
+                requestUrl,
+                """{"bookmakers":[{"key":"underdog","markets":[{"key":"player_passes"}]}]}"""),
+            "configuredMarketZeroOutcomes" => new TheOddsApiPlayerPropsSpikeResult(
+                [eventRecord],
+                eventId,
+                [],
+                [BuildSoccerWorldCupDiagnostics(eventId, ["underdog"], ["player_shots"], outcomeCount: 0, playerOutcomeCount: 0)],
+                new TheOddsApiCreditUsage(2, 98, 1),
+                requestUrl,
+                """{"bookmakers":[{"key":"underdog","markets":[{"key":"player_shots","outcomes":[]}]}]}"""),
+            "sportsbookUs" => new TheOddsApiPlayerPropsSpikeResult(
+                [eventRecord],
+                eventId,
+                [
+                    new TheOddsApiPlayerPropSpikeRecord(
+                        "The Odds API",
+                        "betmgm",
+                        "BetMGM",
+                        eventId,
+                        eventStartTime,
+                        homeTeam,
+                        awayTeam,
+                        "player_goals",
+                        new DateTimeOffset(2026, 6, 21, 18, 45, 0, TimeSpan.Zero),
+                        "Over",
+                        "Test Forward",
+                        "Over",
+                        0.5m,
+                        120,
+                        2.2m,
+                        "Goals",
+                        $"theodds:betmgm:{eventId}:player_goals:test-forward:0.5",
+                        new { }),
+                    new TheOddsApiPlayerPropSpikeRecord(
+                        "The Odds API",
+                        "betmgm",
+                        "BetMGM",
+                        eventId,
+                        eventStartTime,
+                        homeTeam,
+                        awayTeam,
+                        "player_goals",
+                        new DateTimeOffset(2026, 6, 21, 18, 45, 0, TimeSpan.Zero),
+                        "Under",
+                        "Test Forward",
+                        "Under",
+                        0.5m,
+                        -150,
+                        1.6667m,
+                        "Goals",
+                        $"theodds:betmgm:{eventId}:player_goals:test-forward:0.5",
+                        new { })
+                ],
+                [BuildSoccerWorldCupDiagnostics(eventId, ["betmgm"], ["player_goals"], outcomeCount: 2, playerOutcomeCount: 2)],
+                new TheOddsApiCreditUsage(2, 98, 1),
+                requestUrl,
+                "{}"),
+            _ => new TheOddsApiPlayerPropsSpikeResult(
+                [eventRecord],
+                eventId,
+                [
+                    new TheOddsApiPlayerPropSpikeRecord(
+                        "The Odds API",
+                        "prizepicks",
+                        "PrizePicks",
+                        eventId,
+                        new DateTimeOffset(2026, 6, 21, 19, 0, 0, TimeSpan.Zero),
+                        "Home FC",
+                        "Away FC",
+                        "player_shots",
+                        new DateTimeOffset(2026, 6, 21, 18, 45, 0, TimeSpan.Zero),
+                        "Over",
+                        "Test Forward",
+                        "Over",
+                        1.5m,
+                        -110,
+                        1.91m,
+                        "Shots",
+                        "theodds:prizepicks:soccer-event-1:player_shots:test-forward:1.5",
+                        new { }),
+                    new TheOddsApiPlayerPropSpikeRecord(
+                        "The Odds API",
+                        "prizepicks",
+                        "PrizePicks",
+                        eventId,
+                        new DateTimeOffset(2026, 6, 21, 19, 0, 0, TimeSpan.Zero),
+                        "Home FC",
+                        "Away FC",
+                        "player_shots",
+                        new DateTimeOffset(2026, 6, 21, 18, 45, 0, TimeSpan.Zero),
+                        "Under",
+                        "Test Forward",
+                        "Under",
+                        1.5m,
+                        -110,
+                        1.91m,
+                        "Shots",
+                        "theodds:prizepicks:soccer-event-1:player_shots:test-forward:1.5",
+                        new { })
+                ],
+                [BuildSoccerWorldCupDiagnostics(eventId, ["prizepicks"], ["player_shots"], outcomeCount: 2, playerOutcomeCount: 2)],
+                new TheOddsApiCreditUsage(2, 98, 1),
+                requestUrl,
+                "{}")
+        };
+    }
+
+    private static TheOddsApiEventOddsDiagnostics BuildSoccerWorldCupDiagnostics(
+        string? eventId,
+        IReadOnlyList<string> bookmakerKeys,
+        IReadOnlyList<string> marketKeys,
+        int outcomeCount,
+        int playerOutcomeCount)
+    {
+        return new TheOddsApiEventOddsDiagnostics(
+            eventId,
+            "Home FC",
+            "Away FC",
+            new DateTimeOffset(2026, 6, 21, 19, 0, 0, TimeSpan.Zero),
+            EventOddsHttpSucceeded: true,
+            bookmakerKeys.Count,
+            bookmakerKeys,
+            marketKeys.Count,
+            marketKeys,
+            outcomeCount,
+            playerOutcomeCount);
     }
 }
 

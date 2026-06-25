@@ -77,6 +77,18 @@ The migration also backfills Candidate rows from existing API-Sports Soccer `pro
 
 No public Soccer grading is enabled by these rows. No Soccer players are auto-linked on name alone.
 
+The Odds Soccer alias links can also be written after a dry-run review:
+
+- `provider_key=the-odds-soccer`
+- `entity_type=Player`
+- `provider_entity_id=soccer_fifa_world_cup:<providerEventId>:<normalized The Odds player name>`
+- `provider_entity_name=<The Odds player display name>`
+- `canonical_entity_id=<local API-Sports/result player id>`
+- `link_status=Approved`
+- `link_source=DebugTheOddsApiSportsAliasLink`
+
+These rows are created only by `/api/debug/soccer/player-identity/the-odds/api-sports/alias-link`, `/api/debug/soccer/player-identity/the-odds/api-sports/alias-link-batch`, or `/api/debug/soccer/player-identity/the-odds/api-sports/alias-link/manual-approve` with `dryRun=false` after a reviewed dry run. They bridge long-form The Odds player display names to API-Sports/local player identities for debug market-join and grading-preview diagnostics. Batch review starts with `/api/debug/soccer/player-identity/the-odds/api-sports/alias-candidates-batch`, which groups candidates by resolved provider event and fixture, deduplicates review rows, and estimates coverage impact without writing. Manual approval is one-at-a-time for reviewed `NeedsReview` rows and requires the submitted API-Sports/local ids to match the current diagnostic candidate. These links do not enable public Soccer grading, merge player rows, or call external APIs.
+
 ## Manual Review Workflow
 
 API-Sports Soccer player links can be reviewed through debug-only endpoints. These endpoints never call external APIs and default to dry-run for writes.
@@ -180,20 +192,29 @@ Imported-result coverage uses approved provider links in debug diagnostics only:
 ```powershell
 Invoke-RestMethod "$base/api/debug/soccer/results/api-sports/world-cup/coverage?fromDate=2026-06-11&toDate=2026-06-21&includeSamples=true&maxSamples=10" |
   ConvertTo-Json -Depth 80
+
+Invoke-RestMethod "$base/api/debug/soccer/results/api-sports/world-cup/market-join-preview?fromDate=2026-06-21&toDate=2026-06-21&fixtureId=1489393&providerEventId=852a3abe6d46820720febc0fedebff9a&includeSamples=true&maxSamples=50" |
+  ConvertTo-Json -Depth 80
 ```
 
 That response reports `playerLinkCoverage.approvedProviderLinksUsed`, `resultRowsWithApprovedPlayerLink`, and `playerLinkCoverageRate` separately from market join coverage. Public Soccer grading remains disabled.
 
+The market-join preview endpoint is also read-only. It compares imported API-Sports result rows with The Odds Soccer `platform_props` sportsbook context by event date/team context, normalized player name, and canonical prop/stat key. It helps prove overlap for one event before any debug-only grading preview is built, without approving identities, writing aliases, or enabling public Soccer grading.
+
 ## Current Soccer Limitation
 
-Persisted Soccer platform props currently include start time, provider/bookmaker, and provider line/projection identifiers, but do not provide enough team/opponent/event context to approve safe API-Sports links automatically.
+New The Odds Soccer market refreshes persist event-level context with `contextSchemaVersion=the-odds-provider-context-v2`: provider event id, event name, home team, away team, event start time, bookmaker/provider key, competition, market key, outcome line metadata, and player display name from the outcome description. Old Soccer platform rows remain pre-context or partial until the Soccer market refresh is rerun.
+
+The Odds Soccer player prop payload does not currently provide a stable provider player id or the player's team on the outcome row. Event-level home/away context can support review and event matching, but it does not make name-only player links bulk-safe by itself.
+
+Soccer / World Cup manual refresh can persist sportsbook-context rows from The Odds region `us` when no DFS rows are available in `us_dfs`. These rows are research-only and not Entry Builder playable, but they still provide provider event/team/bookmaker/market context that can help manual identity review.
 
 Next recommended path:
 
 - Keep Candidate rows as durable review inventory.
 - Use the debug-only manual approval workflow for reviewed API-Sports Soccer links.
-- Persist richer provider event/team context during Soccer market ingestion if available, especially provider event id, event name, home/away team, player team, provider player id, competition, and event start time.
-- Store raw provider context in `platform_props.metadata`/snapshot `details_json` and promote stable fields into `games`, `teams`, and `provider_entity_links` when the source fields are reliable.
+- Continue treating `MissingTeamContext` and `EventTeamOnly` as manual-review blockers for player approvals.
+- Store raw provider context in `platform_props.metadata`; promote stable event/team/player mappings into `provider_entity_links` only after review.
 - Keep Soccer public grading disabled until approved identity links and stat mappings are proven.
 
 ## Related Stat Mapping Configuration

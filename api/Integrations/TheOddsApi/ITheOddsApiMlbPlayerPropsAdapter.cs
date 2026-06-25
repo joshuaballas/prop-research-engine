@@ -8,5 +8,6 @@ public interface ITheOddsApiMlbPlayerPropsAdapter
         string? bookmakers,
         string? regions,
         string? oddsFormat,
-        CancellationToken cancellationToken);
+        CancellationToken cancellationToken,
+        string? sportKey = null);
 }

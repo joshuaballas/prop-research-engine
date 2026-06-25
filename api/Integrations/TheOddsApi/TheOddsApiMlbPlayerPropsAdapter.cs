@@ -28,16 +28,19 @@ public sealed class TheOddsApiMlbPlayerPropsAdapter(
         string? bookmakers,
         string? regions,
         string? oddsFormat,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        string? sportKey = null)
     {
         EnsureApiKeyConfigured();
+        var effectiveSportKey = FirstNonEmpty(sportKey, _options.SportKey);
 
         if (string.IsNullOrWhiteSpace(eventId))
         {
-            return await FetchEventsAsync(cancellationToken);
+            return await FetchEventsAsync(effectiveSportKey, cancellationToken);
         }
 
         return await FetchEventOddsAsync(
+            effectiveSportKey,
             eventId,
             FirstNonEmpty(markets, _options.Markets),
             bookmakers,
@@ -46,9 +49,9 @@ public sealed class TheOddsApiMlbPlayerPropsAdapter(
             cancellationToken);
     }
 
-    private async Task<TheOddsApiPlayerPropsSpikeResult> FetchEventsAsync(CancellationToken cancellationToken)
+    private async Task<TheOddsApiPlayerPropsSpikeResult> FetchEventsAsync(string sportKey, CancellationToken cancellationToken)
     {
-        var url = BuildUrl($"/v4/sports/{Uri.EscapeDataString(_options.SportKey)}/events", []);
+        var url = BuildUrl($"/v4/sports/{Uri.EscapeDataString(sportKey)}/events", []);
 
         using var request = new HttpRequestMessage(HttpMethod.Get, url);
         request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
@@ -81,12 +84,14 @@ public sealed class TheOddsApiMlbPlayerPropsAdapter(
             eventRecords,
             selectedEventId,
             [],
+            [],
             ExtractCreditUsage(response),
             MaskApiKey(url),
             rawJson);
     }
 
     private async Task<TheOddsApiPlayerPropsSpikeResult> FetchEventOddsAsync(
+        string sportKey,
         string eventId,
         string markets,
         string? bookmakers,
@@ -107,7 +112,7 @@ public sealed class TheOddsApiMlbPlayerPropsAdapter(
         }
 
         var url = BuildUrl(
-            $"/v4/sports/{Uri.EscapeDataString(_options.SportKey)}/events/{Uri.EscapeDataString(eventId)}/odds",
+            $"/v4/sports/{Uri.EscapeDataString(sportKey)}/events/{Uri.EscapeDataString(eventId)}/odds",
             query);
 
         using var request = new HttpRequestMessage(HttpMethod.Get, url);
@@ -120,6 +125,7 @@ public sealed class TheOddsApiMlbPlayerPropsAdapter(
         var payload = DeserializeProviderJson<TheOddsApiEventOddsDto>(rawJson, url, response, "FetchEventOdds")
             ?? new TheOddsApiEventOddsDto();
         var records = Normalize(payload);
+        var diagnostics = BuildEventOddsDiagnostics(payload);
 
         logger.LogInformation(
             "The Odds API MLB player props spike parsed {RecordCount} outcome records for event {EventId}.",
@@ -137,9 +143,44 @@ public sealed class TheOddsApiMlbPlayerPropsAdapter(
             ],
             payload.Id ?? eventId,
             records,
+            [diagnostics],
             ExtractCreditUsage(response),
             MaskApiKey(url),
             rawJson);
+    }
+
+    private static TheOddsApiEventOddsDiagnostics BuildEventOddsDiagnostics(TheOddsApiEventOddsDto payload)
+    {
+        var bookmakerKeys = payload.Bookmakers
+            .Select(bookmaker => bookmaker.Key)
+            .Where(key => !string.IsNullOrWhiteSpace(key))
+            .Select(key => key!)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(key => key, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        var marketKeys = payload.Bookmakers
+            .SelectMany(bookmaker => bookmaker.Markets)
+            .Select(market => market.Key)
+            .Where(key => !string.IsNullOrWhiteSpace(key))
+            .Select(key => key!)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(key => key, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        var markets = payload.Bookmakers.SelectMany(bookmaker => bookmaker.Markets).ToArray();
+        var outcomes = markets.SelectMany(market => market.Outcomes).ToArray();
+
+        return new TheOddsApiEventOddsDiagnostics(
+            payload.Id,
+            payload.HomeTeam,
+            payload.AwayTeam,
+            payload.CommenceTime,
+            EventOddsHttpSucceeded: true,
+            BookmakerCount: payload.Bookmakers.Count,
+            BookmakerKeys: bookmakerKeys,
+            MarketCount: markets.Length,
+            MarketKeys: marketKeys,
+            OutcomeCount: outcomes.Length,
+            PlayerOutcomeCount: outcomes.Count(outcome => !string.IsNullOrWhiteSpace(outcome.Description)));
     }
 
     private static List<TheOddsApiPlayerPropSpikeRecord> Normalize(TheOddsApiEventOddsDto payload)
@@ -323,7 +364,8 @@ public sealed class TheOddsApiMlbPlayerPropsAdapter(
             response.StatusCode,
             preview,
             MaskApiKey(requestUrl),
-            creditUsage);
+            creditUsage,
+            operation);
     }
 
     private T? DeserializeProviderJson<T>(
@@ -355,6 +397,8 @@ public sealed class TheOddsApiMlbPlayerPropsAdapter(
                 preview,
                 MaskApiKey(requestUrl),
                 ExtractCreditUsage(response),
+                operation,
+                DataProvider,
                 exception);
         }
     }
@@ -474,6 +518,11 @@ public sealed class TheOddsApiMlbPlayerPropsAdapter(
             "pitcher_hits_allowed" => "Hits Allowed",
             "pitcher_earned_runs" => "Earned Runs Allowed",
             "pitcher_outs" => "Pitching Outs",
+            "player_goals" => "Goals",
+            "player_assists" => "Assists",
+            "player_shots" => "Shots",
+            "player_shots_on_target" => "Shots On Target",
+            "player_tackles" => "Tackles",
             _ when !string.IsNullOrWhiteSpace(marketKey) => CultureInfo.InvariantCulture.TextInfo.ToTitleCase(marketKey.Replace('_', ' ')),
             _ => "Unknown"
         };

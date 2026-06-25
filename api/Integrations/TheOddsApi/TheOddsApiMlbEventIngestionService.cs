@@ -41,7 +41,8 @@ public sealed class TheOddsApiMlbEventIngestionService(
             request.Bookmakers,
             request.Region,
             oddsFormat: null,
-            cancellationToken);
+            cancellationToken,
+            request.ProviderSportKey);
         var fetchMarketsMs = stepStopwatch.ElapsedMilliseconds;
 
         stepStopwatch.Restart();
@@ -79,14 +80,20 @@ public sealed class TheOddsApiMlbEventIngestionService(
         var observedAt = DateTimeOffset.UtcNow;
         var lookupStopwatch = Stopwatch.StartNew();
         var sports = await dbContext.Sports.ToDictionaryAsync(x => x.Code, StringComparer.OrdinalIgnoreCase, cancellationToken);
-        var sport = GetOrCreateSport(sports);
+        var sport = GetOrCreateSport(sports, request);
         var leagues = await dbContext.Leagues.ToDictionaryAsync(x => $"{x.SportId:N}:{x.Code}", StringComparer.OrdinalIgnoreCase, cancellationToken);
-        var league = GetOrCreateLeague(leagues, sport);
+        var league = GetOrCreateLeague(leagues, sport, request);
         var propTypes = await dbContext.PropTypes.ToDictionaryAsync(x => $"{x.SportId:N}:{x.StatKey}", StringComparer.OrdinalIgnoreCase, cancellationToken);
         var playerResolutionCache = await playerResolutionService.LoadCacheForLeagueNamesAsync(
-            LeagueCode,
+            request.LeagueCode,
             marketGroups.Select(group => group.Key.PlayerName).Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
             cancellationToken);
+        var teams = await dbContext.Teams
+            .Where(team => team.LeagueId == league.Id)
+            .ToDictionaryAsync(team => team.Name, StringComparer.OrdinalIgnoreCase, cancellationToken);
+        var games = await dbContext.Games
+            .Where(game => game.LeagueId == league.Id)
+            .ToDictionaryAsync(game => BuildGameDictionaryKey(game), StringComparer.OrdinalIgnoreCase, cancellationToken);
         var requestedPlatformSlugs = marketGroups
             .Select(group => BuildTheOddsPlatformSlug(group.Key.BookmakerKey))
             .Distinct(StringComparer.OrdinalIgnoreCase)
@@ -117,6 +124,9 @@ public sealed class TheOddsApiMlbEventIngestionService(
                     league,
                     LegacyExternalRefs: null,
                     observedAt));
+            var game = IsSoccerIngestion(request)
+                ? GetOrCreateGame(games, teams, league, eventRecord, observedAt)
+                : null;
             var propNormalizedKey = BuildPropNormalizedKey(league, propType, playerResult.Player, group);
             var platformPropId = BuildPlatformPropIdCandidate(group.Key);
 
@@ -125,6 +135,7 @@ public sealed class TheOddsApiMlbEventIngestionService(
                 platform,
                 propType,
                 playerResult.Player,
+                game,
                 playerResult.Created,
                 propNormalizedKey,
                 platformPropId,
@@ -190,6 +201,7 @@ public sealed class TheOddsApiMlbEventIngestionService(
                 league,
                 item.PropType,
                 item.Player,
+                item.Game,
                 item.Group,
                 eventRecord,
                 observedAt);
@@ -278,6 +290,12 @@ public sealed class TheOddsApiMlbEventIngestionService(
             BookmakersParsed: records.Select(record => record.BookmakerKey).Distinct(StringComparer.OrdinalIgnoreCase).Count(),
             MarketsParsed: records.Select(record => record.MarketKey).Distinct(StringComparer.OrdinalIgnoreCase).Count(),
             NormalizedRecords: fetched.Records.Count,
+            NormalizedMarketKeys: fetched.Records
+                .Select(record => record.MarketKey)
+                .Where(key => !string.IsNullOrWhiteSpace(key))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .OrderBy(key => key, StringComparer.OrdinalIgnoreCase)
+                .ToArray()!,
             propsUpserted,
             platformPropsUpserted,
             snapshotsCreated,
@@ -288,6 +306,7 @@ public sealed class TheOddsApiMlbEventIngestionService(
             warnings,
             errors,
             fetched.CreditUsage,
+            fetched.EventOddsDiagnostics,
             new TheOddsApiMlbEventIngestionTiming(
                 totalStopwatch.ElapsedMilliseconds,
                 fetchMarketsMs,
@@ -318,6 +337,7 @@ public sealed class TheOddsApiMlbEventIngestionService(
             BookmakersParsed: 0,
             MarketsParsed: 0,
             NormalizedRecords: 0,
+            NormalizedMarketKeys: [],
             PropsUpserted: 0,
             PlatformPropsUpserted: 0,
             SnapshotsCreated: 0,
@@ -328,6 +348,7 @@ public sealed class TheOddsApiMlbEventIngestionService(
             Warnings: [],
             Errors: [error],
             CreditUsage: new TheOddsApiCreditUsage(null, null, null),
+            ProviderDiagnostics: [],
             Timing: new TheOddsApiMlbEventIngestionTiming(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0));
     }
 
@@ -411,34 +432,35 @@ public sealed class TheOddsApiMlbEventIngestionService(
         return payload;
     }
 
-    private Sport GetOrCreateSport(Dictionary<string, Sport> sports)
+    private Sport GetOrCreateSport(Dictionary<string, Sport> sports, TheOddsApiMlbEventIngestionRequest request)
     {
-        if (sports.TryGetValue(SportCode, out var sport))
+        var sportCode = CanonicalLeagueNormalizer.NormalizeCode(request.SportCode);
+        if (sports.TryGetValue(sportCode, out var sport))
         {
-            sport.Name = SportName;
+            sport.Name = request.SportName;
             return sport;
         }
 
         sport = new Sport
         {
             Id = Guid.NewGuid(),
-            Code = SportCode,
-            Name = SportName
+            Code = sportCode,
+            Name = request.SportName
         };
 
         dbContext.Sports.Add(sport);
-        sports[SportCode] = sport;
+        sports[sportCode] = sport;
         return sport;
     }
 
-    private League GetOrCreateLeague(Dictionary<string, League> leagues, Sport sport)
+    private League GetOrCreateLeague(Dictionary<string, League> leagues, Sport sport, TheOddsApiMlbEventIngestionRequest request)
     {
-        var leagueCode = CanonicalLeagueNormalizer.NormalizeCode(LeagueCode);
+        var leagueCode = CanonicalLeagueNormalizer.NormalizeCode(request.LeagueCode);
         var key = $"{sport.Id:N}:{leagueCode}";
 
         if (leagues.TryGetValue(key, out var league))
         {
-            league.Name = LeagueCode;
+            league.Name = request.LeagueName;
             league.Code = leagueCode;
             return league;
         }
@@ -448,13 +470,111 @@ public sealed class TheOddsApiMlbEventIngestionService(
             Id = Guid.NewGuid(),
             SportId = sport.Id,
             Sport = sport,
-            Name = LeagueCode,
+            Name = request.LeagueName,
             Code = leagueCode
         };
 
         dbContext.Leagues.Add(league);
         leagues[key] = league;
         return league;
+    }
+
+    private Game? GetOrCreateGame(
+        Dictionary<string, Game> games,
+        Dictionary<string, Team> teams,
+        League league,
+        TheOddsApiEventRecord? eventRecord,
+        DateTimeOffset observedAt)
+    {
+        if (eventRecord is null
+            || string.IsNullOrWhiteSpace(eventRecord.EventId)
+            || string.IsNullOrWhiteSpace(eventRecord.HomeTeam)
+            || string.IsNullOrWhiteSpace(eventRecord.AwayTeam))
+        {
+            return null;
+        }
+
+        var homeTeam = GetOrCreateTeam(teams, league, eventRecord.HomeTeam);
+        var awayTeam = GetOrCreateTeam(teams, league, eventRecord.AwayTeam);
+        var startTime = eventRecord.EventStartTime?.ToUniversalTime() ?? observedAt;
+        var key = BuildGameDictionaryKey(league.Id, homeTeam.Id, awayTeam.Id, startTime);
+        if (games.TryGetValue(key, out var game))
+        {
+            if (game.Status != "scheduled")
+            {
+                game.Status = "scheduled";
+            }
+
+            game.ExternalRefs = BuildGameExternalRefs(eventRecord);
+            return game;
+        }
+
+        game = new Game
+        {
+            Id = Guid.NewGuid(),
+            LeagueId = league.Id,
+            League = league,
+            HomeTeamId = homeTeam.Id,
+            HomeTeam = homeTeam,
+            AwayTeamId = awayTeam.Id,
+            AwayTeam = awayTeam,
+            ScheduledStartAt = startTime,
+            Status = "scheduled",
+            ExternalRefs = BuildGameExternalRefs(eventRecord)
+        };
+        dbContext.Games.Add(game);
+        games[key] = game;
+        return game;
+    }
+
+    private Team GetOrCreateTeam(Dictionary<string, Team> teams, League league, string teamName)
+    {
+        var normalizedName = teamName.Trim();
+        if (teams.TryGetValue(normalizedName, out var team))
+        {
+            return team;
+        }
+
+        team = new Team
+        {
+            Id = Guid.NewGuid(),
+            LeagueId = league.Id,
+            League = league,
+            Name = normalizedName
+        };
+        dbContext.Teams.Add(team);
+        teams[normalizedName] = team;
+        return team;
+    }
+
+    private static JsonDocument BuildGameExternalRefs(TheOddsApiEventRecord eventRecord)
+    {
+        return JsonSerializer.SerializeToDocument(new
+        {
+            theOdds = new
+            {
+                eventId = eventRecord.EventId,
+                sportKey = eventRecord.SportKey,
+                eventStartTime = eventRecord.EventStartTime,
+                homeTeam = eventRecord.HomeTeam,
+                awayTeam = eventRecord.AwayTeam
+            }
+        }, JsonOptions);
+    }
+
+    private static string BuildGameDictionaryKey(Game game)
+    {
+        return BuildGameDictionaryKey(game.LeagueId, game.HomeTeamId, game.AwayTeamId, game.ScheduledStartAt);
+    }
+
+    private static string BuildGameDictionaryKey(Guid leagueId, Guid homeTeamId, Guid awayTeamId, DateTimeOffset scheduledStartAt)
+    {
+        return $"{leagueId:N}:{homeTeamId:N}:{awayTeamId:N}:{scheduledStartAt.ToUniversalTime():O}";
+    }
+
+    private static bool IsSoccerIngestion(TheOddsApiMlbEventIngestionRequest request)
+    {
+        return string.Equals(request.SportCode, "SOCCER", StringComparison.OrdinalIgnoreCase);
     }
 
     private PropType GetOrCreatePropType(Dictionary<string, PropType> propTypes, Sport sport, string propTypeName)
@@ -488,6 +608,7 @@ public sealed class TheOddsApiMlbEventIngestionService(
         League league,
         PropType propType,
         Player player,
+        Game? game,
         MarketGroup group,
         TheOddsApiEventRecord? eventRecord,
         DateTimeOffset observedAt)
@@ -510,6 +631,13 @@ public sealed class TheOddsApiMlbEventIngestionService(
                 updated = true;
             }
 
+            if (game is not null && prop.GameId != game.Id)
+            {
+                prop.GameId = game.Id;
+                prop.Game = game;
+                updated = true;
+            }
+
             if (updated)
             {
                 prop.UpdatedAt = observedAt;
@@ -525,6 +653,8 @@ public sealed class TheOddsApiMlbEventIngestionService(
             Player = player,
             PropTypeId = propType.Id,
             PropType = propType,
+            GameId = game?.Id,
+            Game = game,
             LeagueId = league.Id,
             League = league,
             NormalizedKey = normalizedKey,
@@ -691,10 +821,30 @@ public sealed class TheOddsApiMlbEventIngestionService(
         return JsonSerializer.SerializeToDocument(new
         {
             dataProvider = DataProvider,
+            contextSchemaVersion = "the-odds-provider-context-v2",
             providerCategory = NormalizeProviderCategory(request.ProviderCategory),
             region = string.IsNullOrWhiteSpace(request.Region) ? "us" : request.Region.Trim(),
+            sport = new
+            {
+                code = request.SportCode,
+                name = request.SportName,
+                providerSportKey = request.ProviderSportKey ?? eventRecord?.SportKey,
+                competition = request.CompetitionName,
+                leagueCode = request.LeagueCode,
+                leagueName = request.LeagueName
+            },
             isActionableForUser = request.IsActionableForUser,
             isIndicativeOdds = request.IsIndicativeOdds,
+            entry = new
+            {
+                providerCategory = NormalizeProviderCategory(request.ProviderCategory),
+                actionableForUser = request.IsActionableForUser,
+                provider = request.IsActionableForUser ? group.Key.BookmakerTitle ?? group.Key.BookmakerKey : string.Empty,
+                compatibilityGroup = request.IsActionableForUser ? group.Key.BookmakerKey : string.Empty,
+                ruleWarning = request.IsActionableForUser
+                    ? string.Empty
+                    : "Sportsbook context is research-only and is not directly playable in the Entry Builder."
+            },
             marketClassification = projection.ProjectionType == "Standard" ? "Standard" : "Alternate",
             projectionType = projection.ProjectionType,
             projectionTypeConfidence = projection.ProjectionTypeConfidence,
@@ -709,9 +859,20 @@ public sealed class TheOddsApiMlbEventIngestionService(
             eventInfo = new
             {
                 eventId = group.Key.EventId,
+                providerEventId = group.Key.EventId,
+                eventName = BuildEventName(eventRecord?.HomeTeam, eventRecord?.AwayTeam),
                 eventRecord?.EventStartTime,
                 eventRecord?.HomeTeam,
                 eventRecord?.AwayTeam
+            },
+            player = new
+            {
+                name = group.Key.PlayerName,
+                providerPlayerId = (string?)null,
+                teamName = (string?)null,
+                providerPlayerIdAvailable = false,
+                playerTeamAvailable = false,
+                source = "The Odds API player prop outcome description"
             },
             market = new
             {
@@ -845,6 +1006,20 @@ public sealed class TheOddsApiMlbEventIngestionService(
             : "Sportsbook";
     }
 
+    private static string? BuildEventName(string? homeTeam, string? awayTeam)
+    {
+        if (!string.IsNullOrWhiteSpace(awayTeam) && !string.IsNullOrWhiteSpace(homeTeam))
+        {
+            return $"{awayTeam.Trim()} @ {homeTeam.Trim()}";
+        }
+
+        return !string.IsNullOrWhiteSpace(homeTeam)
+            ? homeTeam.Trim()
+            : !string.IsNullOrWhiteSpace(awayTeam)
+                ? awayTeam.Trim()
+                : null;
+    }
+
     private static string BuildPlatformPropDictionaryKey(Platform platform, string platformPropId)
     {
         return BuildPlatformPropDictionaryKey(platform.Id, platformPropId);
@@ -923,6 +1098,7 @@ public sealed class TheOddsApiMlbEventIngestionService(
         Platform Platform,
         PropType PropType,
         Player Player,
+        Game? Game,
         bool PlayerCreated,
         string PropNormalizedKey,
         string PlatformPropId,

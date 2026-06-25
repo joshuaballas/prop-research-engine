@@ -2976,6 +2976,10 @@ public static partial class TheOddsApiDebugEndpoints
         endpoints.MapPost("/api/debug/the-odds/markets/refresh-current", async (
             TheOddsMarketRefreshRequest request,
             IOptions<TheOddsApiOptions> theOddsApiOptions,
+            ITheOddsApiMlbPlayerPropsAdapter adapter,
+            ITheOddsApiMlbEventIngestionService ingestionService,
+            ApplicationDbContext dbContext,
+            IApplicationErrorLogger errorLogger,
             ITheOddsMlbRefreshService mlbRefreshService,
             HttpContext httpContext,
             CancellationToken cancellationToken) =>
@@ -3031,10 +3035,43 @@ public static partial class TheOddsApiDebugEndpoints
                 });
             }
 
-            return BuildSoccerWorldCupRefreshPlanningResponse(request, theOddsApiOptions.Value);
+            return await BuildSoccerWorldCupRefreshPlanningResponseAsync(
+                request,
+                theOddsApiOptions.Value,
+                adapter,
+                ingestionService,
+                dbContext,
+                errorLogger,
+                httpContext,
+                cancellationToken);
         })
         .WithName("TheOddsApiMarketsRefreshCurrentDebug")
         .WithSummary("Debug-only manual market refresh entry point for supported sports. Soccer / World Cup is blocked until provider key config is explicit.");
+
+        endpoints.MapGet("/api/debug/the-odds/soccer/world-cup/provider-availability", async (
+            DateOnly? slateDate,
+            string? regions,
+            string? markets,
+            string? bookmakers,
+            int? maxEvents,
+            bool? forceLive,
+            IOptions<TheOddsApiOptions> theOddsApiOptions,
+            ITheOddsApiMlbPlayerPropsAdapter adapter,
+            CancellationToken cancellationToken) =>
+        {
+            return await BuildSoccerWorldCupProviderAvailabilityResponseAsync(
+                slateDate,
+                regions,
+                markets,
+                bookmakers,
+                maxEvents,
+                forceLive,
+                theOddsApiOptions.Value,
+                adapter,
+                cancellationToken);
+        })
+        .WithName("TheOddsApiSoccerWorldCupProviderAvailabilityDebug")
+        .WithSummary("Debug-only read-only Soccer / World Cup provider availability probe for The Odds regions, bookmakers, and market keys.");
 
         endpoints.MapPost("/api/debug/the-odds/mlb/ingest-event", async (
             TheOddsApiMlbIngestEventRequest request,
@@ -3250,11 +3287,12 @@ public static partial class TheOddsApiDebugEndpoints
                 CorrelationId: httpContext?.TraceIdentifier ?? Guid.NewGuid().ToString("N"),
                 Metadata: new
                 {
-                    provider = "The Odds API",
+                    provider = exception.ProviderName,
                     exception.ErrorCode,
-                    providerStatusCode = exception.StatusCodeNumber,
-                    exception.ProviderBodyPreview,
-                    exception.RequestUrl,
+                    statusCode = exception.StatusCodeNumber,
+                    operation = exception.Operation,
+                    sanitizedRequestUrl = exception.SanitizedRequestUrl,
+                    rawProviderBody = exception.RawProviderBody,
                     exception.RecommendedAction,
                     exception.CreditUsage,
                     request = requestMetadata
@@ -3333,7 +3371,9 @@ public static partial class TheOddsApiDebugEndpoints
             statusCode = exception.StatusCodeNumber,
             errorCode = exception.ErrorCode,
             message = exception.Message,
-            providerBodyPreview = exception.ProviderBodyPreview,
+            operation = exception.Operation,
+            sanitizedRequestUrl = exception.SanitizedRequestUrl,
+            rawProviderBody = exception.RawProviderBody,
             creditUsage = exception.CreditUsage,
             recommendedAction = exception.RecommendedAction
         };
@@ -3369,6 +3409,33 @@ public static partial class TheOddsApiDebugEndpoints
     private static string? NullIfWhiteSpace(string? value)
     {
         return string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+    }
+
+    private static string? NormalizeJsonStringList(JsonElement? value)
+    {
+        if (value is not { } element || element.ValueKind is JsonValueKind.Null or JsonValueKind.Undefined)
+        {
+            return null;
+        }
+
+        if (element.ValueKind == JsonValueKind.String)
+        {
+            return NullIfWhiteSpace(element.GetString());
+        }
+
+        if (element.ValueKind == JsonValueKind.Array)
+        {
+            var values = element.EnumerateArray()
+                .Where(item => item.ValueKind == JsonValueKind.String)
+                .Select(item => item.GetString())
+                .Where(item => !string.IsNullOrWhiteSpace(item))
+                .Select(item => item!.Trim())
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+            return values.Length == 0 ? null : string.Join(',', values);
+        }
+
+        return null;
     }
 
     private static bool IsActiveTheOddsLineShoppingGroup(TheOddsLineShoppingGroup group)
@@ -8948,6 +9015,7 @@ public static partial class TheOddsApiDebugEndpoints
             BookmakersParsed: 0,
             MarketsParsed: 0,
             NormalizedRecords: 0,
+            NormalizedMarketKeys: [],
             PropsUpserted: 0,
             PlatformPropsUpserted: 0,
             SnapshotsCreated: 0,
@@ -8958,6 +9026,7 @@ public static partial class TheOddsApiDebugEndpoints
             Warnings: [],
             Errors: [error],
             CreditUsage: new TheOddsApiCreditUsage(null, null, null),
+            ProviderDiagnostics: [],
             Timing: new TheOddsApiMlbEventIngestionTiming(durationMs, durationMs, 0, durationMs, 0, durationMs, 0, 0, 0, 0, 0, 0, 1));
     }
 
@@ -10647,15 +10716,43 @@ public static partial class TheOddsApiDebugEndpoints
             : "MLB";
     }
 
-    private static IResult BuildSoccerWorldCupRefreshPlanningResponse(
+    private static async Task<IResult> BuildSoccerWorldCupRefreshPlanningResponseAsync(
         TheOddsMarketRefreshRequest request,
-        TheOddsApiOptions options)
+        TheOddsApiOptions options,
+        ITheOddsApiMlbPlayerPropsAdapter adapter,
+        ITheOddsApiMlbEventIngestionService ingestionService,
+        ApplicationDbContext dbContext,
+        IApplicationErrorLogger errorLogger,
+        HttpContext httpContext,
+        CancellationToken cancellationToken)
     {
         var dryRun = request.DryRun ?? true;
         var forceLive = request.ForceLive == true;
         var sportKey = NullIfWhiteSpace(options.SoccerWorldCupSportKey);
-        var markets = NullIfWhiteSpace(request.Markets) ?? NullIfWhiteSpace(options.SoccerWorldCupMarkets);
-        var configured = !string.IsNullOrWhiteSpace(sportKey);
+        var markets = NormalizeJsonStringList(request.Markets) ?? NullIfWhiteSpace(options.SoccerWorldCupMarkets);
+        var requestedProviderCategory = ResolveSoccerWorldCupProviderCategory(request);
+        var region = ResolveSoccerWorldCupRegion(request, options, requestedProviderCategory);
+        var bookmakers = NormalizeJsonStringList(request.Bookmakers);
+        var missingConfig = new List<string>();
+        if (string.IsNullOrWhiteSpace(sportKey))
+        {
+            missingConfig.Add("TheOddsApi:SoccerWorldCupSportKey");
+        }
+
+        if (string.IsNullOrWhiteSpace(markets))
+        {
+            missingConfig.Add("TheOddsApi:SoccerWorldCupMarkets");
+        }
+
+        var configured = missingConfig.Count == 0;
+        var fromDate = request.FromDate ?? request.Date ?? DateOnly.FromDateTime(DateTimeOffset.UtcNow.UtcDateTime);
+        var toDate = request.ToDate ?? request.Date ?? fromDate;
+        if (toDate < fromDate)
+        {
+            (fromDate, toDate) = (toDate, fromDate);
+        }
+
+        var maxEvents = Math.Clamp(request.MaxEvents ?? 10, 1, 100);
         var providerConfig = new
         {
             provider = "The Odds API",
@@ -10663,6 +10760,11 @@ public static partial class TheOddsApiDebugEndpoints
             competition = "World Cup",
             configuredSportKey = sportKey,
             configuredMarkets = markets,
+            configuredSportsbookRegion = NullIfWhiteSpace(options.SoccerWorldCupSportsbookRegion) ?? "us",
+            configuredDfsRegion = NullIfWhiteSpace(options.SoccerWorldCupDfsRegion) ?? "us_dfs",
+            effectiveRegion = region,
+            effectiveProviderCategory = requestedProviderCategory,
+            requestedBookmakers = bookmakers,
             requiredConfig = new[]
             {
                 "TheOddsApi:SoccerWorldCupSportKey",
@@ -10670,7 +10772,7 @@ public static partial class TheOddsApiDebugEndpoints
             }
         };
 
-        if (dryRun)
+        if (dryRun && !forceLive)
         {
             return Results.Ok(new
             {
@@ -10679,21 +10781,33 @@ public static partial class TheOddsApiDebugEndpoints
                 forceLive,
                 callsExternalApis = false,
                 wouldCallExternalApis = configured,
-                wouldWriteRows = configured,
+                wouldWriteRows = false,
                 sport = "SOCCER",
                 competition = "World Cup",
                 resultGradingSupported = false,
+                fromDate,
+                toDate,
+                maxEvents,
                 providerConfig,
+                eventsDiscovered = 0,
+                eventsEligible = 0,
+                eventsSkipped = 0,
+                eventsToFetch = 0,
+                estimatedApiCalls = configured ? 1 + maxEvents : 0,
+                estimatedBudgetImpact = configured
+                    ? $"At most {1 + maxEvents} The Odds API calls if rerun with forceLive=true: one event discovery call plus up to {maxEvents} event-odds calls."
+                    : "No estimate available until Soccer World Cup provider config is present.",
+                perEventExpectedRequests = Array.Empty<object>(),
                 soccerMarketsDiscovered = 0,
                 soccerMarketsMapped = 0,
                 soccerMarketsUnsupported = Array.Empty<object>(),
                 diagnostics = new
                 {
                     message = configured
-                        ? "Soccer / World Cup provider config is present, but dryRun=true prevented external calls and writes."
+                        ? "Soccer / World Cup provider config is present. dryRun=true with forceLive=false prevented external calls and writes."
                         : "Soccer / World Cup provider config is missing, so this dry run cannot resolve The Odds API request parameters.",
                     callsExternalApis = false,
-                    missingConfig = configured ? Array.Empty<string>() : providerConfig.requiredConfig
+                    missingConfig
                 }
             });
         }
@@ -10736,47 +10850,986 @@ public static partial class TheOddsApiDebugEndpoints
                 providerConfig,
                 diagnostics = new
                 {
-                    message = "The app does not have a configured The Odds API sport key for Soccer / World Cup. Configure TheOddsApi:SoccerWorldCupSportKey before running live.",
-                    missingConfig = providerConfig.requiredConfig,
+                    message = "The app does not have complete The Odds API Soccer / World Cup refresh config. Configure TheOddsApi:SoccerWorldCupSportKey and TheOddsApi:SoccerWorldCupMarkets, or pass markets explicitly, before running live.",
+                    missingConfig,
                     noGuessedProviderKeyUsed = true
                 }
             });
         }
 
-        return Results.Json(new
+        var providerCategory = requestedProviderCategory;
+        var isDfsContext = string.Equals(providerCategory, "DFS", StringComparison.OrdinalIgnoreCase);
+        var isActionableForUser = isDfsContext;
+        string? currentEventId = null;
+        TheOddsRefreshRun? refreshRun = null;
+        try
         {
-            success = false,
-            blocked = true,
-            blockReason = "SoccerWorldCupLiveIngestionNotImplemented",
-            callsExternalApis = false,
-            wouldCallExternalApis = true,
-            wouldWriteRows = true,
+            var eventFetch = await adapter.FetchSpikeAsync(
+                eventId: null,
+                markets: null,
+                bookmakers: null,
+                regions: null,
+                oddsFormat: null,
+                cancellationToken,
+                sportKey);
+            var discoveredEvents = eventFetch.Events
+                .Where(row => !string.IsNullOrWhiteSpace(row.EventId))
+                .OrderBy(row => row.EventStartTime)
+                .ThenBy(row => row.EventId)
+                .ToArray();
+            var eligibleEvents = discoveredEvents
+                .Where(row => row.EventStartTime.HasValue)
+                .Where(row =>
+                {
+                    var eventDate = DateOnly.FromDateTime(row.EventStartTime!.Value.UtcDateTime);
+                    return eventDate >= fromDate && eventDate <= toDate;
+                })
+                .OrderBy(row => row.EventStartTime)
+                .ThenBy(row => row.EventId)
+                .ToArray();
+            var events = eligibleEvents.Take(maxEvents).ToArray();
+            var skippedEvents = discoveredEvents.Length - events.Length;
+            var expectedRequests = events
+                .Select(row => new
+                {
+                    providerEventId = row.EventId,
+                    row.HomeTeam,
+                    row.AwayTeam,
+                    eventStartUtc = row.EventStartTime,
+                    eventDate = row.EventStartTime.HasValue ? DateOnly.FromDateTime(row.EventStartTime.Value.UtcDateTime) : (DateOnly?)null,
+                    sportKey,
+                    region,
+                    bookmakers,
+                    markets,
+                    providerCategory
+                })
+                .ToArray();
+
+            if (dryRun)
+            {
+                return Results.Ok(new
+                {
+                    success = true,
+                    dryRun = true,
+                    forceLive = true,
+                    callsExternalApis = true,
+                    wouldWriteRows = false,
+                    sport = "SOCCER",
+                    competition = "World Cup",
+                    resultGradingSupported = false,
+                    providerCategory,
+                    region,
+                    sportsbookContextResearchOnly = !isDfsContext,
+                    sportsbookContextNotDfsPlayable = !isDfsContext,
+                    fromDate,
+                    toDate,
+                    maxEvents,
+                    providerConfig,
+                    eventsDiscovered = discoveredEvents.Length,
+                    eventsEligible = eligibleEvents.Length,
+                    eventsSkipped = skippedEvents,
+                    eventsToFetch = events.Length,
+                    estimatedApiCalls = 1 + events.Length,
+                    estimatedBudgetImpact = $"{1 + events.Length} The Odds API calls for this dry run plan if rerun with dryRun=false: one event discovery call plus {events.Length} event-odds calls.",
+                    perEventExpectedRequests = expectedRequests,
+                    skipReasons = new
+                    {
+                        outsideDateWindow = discoveredEvents.Length - eligibleEvents.Length,
+                        maxEventsLimit = Math.Max(0, eligibleEvents.Length - events.Length)
+                    },
+                    diagnostics = new
+                    {
+                        message = "Dry run discovered Soccer / World Cup provider events and built the event-odds request plan. No market rows were written.",
+                        callsExternalApis = true,
+                        writesRows = false
+                    }
+                });
+            }
+
+            refreshRun = new TheOddsRefreshRun
+            {
+                Id = Guid.NewGuid(),
+                Provider = "The Odds API",
+                Sport = "SOCCER",
+                SlateDate = fromDate,
+                StartedAtUtc = DateTimeOffset.UtcNow,
+                Succeeded = false,
+                Failed = false,
+                Blocked = false,
+                DryRun = false,
+                ForceLive = true,
+                BookmakerPreset = request.BookmakerPreset ?? (isDfsContext ? "dfsOnly" : "soccerSportsbookContext"),
+                ProviderCategoriesIncluded = providerCategory,
+                SportsbookBookmakersRequested = isDfsContext ? string.Empty : (bookmakers ?? $"region:{region}"),
+                DfsBookmakersRequested = isDfsContext ? (bookmakers ?? $"region:{region}") : string.Empty,
+                MarketsRequested = markets ?? string.Empty,
+                EstimatedApiCalls = 1 + events.Length
+            };
+            dbContext.TheOddsRefreshRuns.Add(refreshRun);
+            await dbContext.SaveChangesAsync(cancellationToken);
+
+            var ingestionResults = new List<TheOddsApiMlbEventIngestionResult>();
+            foreach (var soccerEvent in events)
+            {
+                currentEventId = soccerEvent.EventId;
+                var result = await ingestionService.IngestEventAsync(
+                    new TheOddsApiMlbEventIngestionRequest(
+                        soccerEvent.EventId!,
+                        Bookmakers: bookmakers,
+                        Markets: markets,
+                        Region: region,
+                        ProviderCategory: providerCategory,
+                        IsActionableForUser: isActionableForUser,
+                        IsIndicativeOdds: isActionableForUser,
+                        ProviderSportKey: sportKey,
+                        SportCode: "SOCCER",
+                        SportName: "Soccer",
+                        LeagueCode: "WC2026",
+                        LeagueName: "World Cup",
+                        CompetitionName: "World Cup"),
+                    dryRun: false,
+                    cancellationToken);
+                ingestionResults.Add(result);
+            }
+
+            refreshRun.CompletedAtUtc = DateTimeOffset.UtcNow;
+            refreshRun.Succeeded = ingestionResults.All(row => row.Success);
+            refreshRun.Failed = ingestionResults.Any(row => !row.Success);
+            refreshRun.ActualApiCalls = 1 + events.Length;
+            refreshRun.PlatformPropsCreated = ingestionResults.Sum(row => row.Timing.RowsCreated);
+            refreshRun.PlatformPropsUpdated = ingestionResults.Sum(row => row.Timing.RowsUpdated);
+            refreshRun.PlatformPropsUpserted = ingestionResults.Sum(row => row.PlatformPropsUpserted);
+            refreshRun.PredictionCount = 0;
+            refreshRun.LineShoppingGroupCount = 0;
+            var soccerDiagnostics = BuildSoccerWorldCupRefreshDiagnostics(
+                eventFetch.Events.Count,
+                events,
+                ingestionResults,
+                markets,
+                region,
+                requestedBookmakers: bookmakers);
+            refreshRun.DiagnosticsJson = JsonSerializer.SerializeToDocument(new
+            {
+                sport = "SOCCER",
+                competition = "World Cup",
+                fromDate,
+                toDate,
+                maxEvents,
+                resultGradingSupported = false,
+                providerCategory,
+                region,
+                sportsbookContextResearchOnly = !isDfsContext,
+                sportsbookContextNotDfsPlayable = !isDfsContext,
+                eventsDiscovered = eventFetch.Events.Count,
+                eventsEligible = eligibleEvents.Length,
+                eventsSkipped = skippedEvents,
+                eventsFetched = events.Length,
+                eventsMatchedToSlate = events.Length,
+                diagnostics = soccerDiagnostics
+            });
+            await dbContext.SaveChangesAsync(cancellationToken);
+            var rowsByProviderEvent = ingestionResults
+                .GroupBy(row => row.EventId, StringComparer.OrdinalIgnoreCase)
+                .ToDictionary(group => group.Key, group => group.Sum(row => row.PlatformPropsUpserted), StringComparer.OrdinalIgnoreCase);
+            var rowsByBookmaker = ingestionResults
+                .SelectMany(row => row.ProviderDiagnostics.SelectMany(diagnostic => diagnostic.BookmakerKeys.Select(bookmaker => new { bookmaker, rows = row.PlatformPropsUpserted })))
+                .GroupBy(row => row.bookmaker, StringComparer.OrdinalIgnoreCase)
+                .ToDictionary(group => group.Key, group => group.Sum(row => row.rows), StringComparer.OrdinalIgnoreCase);
+            var rowsByMarket = ingestionResults
+                .SelectMany(row => row.ProviderDiagnostics.SelectMany(diagnostic => diagnostic.MarketKeys.Select(market => new { market, rows = row.PlatformPropsUpserted })))
+                .GroupBy(row => row.market, StringComparer.OrdinalIgnoreCase)
+                .ToDictionary(group => group.Key, group => group.Sum(row => row.rows), StringComparer.OrdinalIgnoreCase);
+
+            return Results.Ok(new
+            {
+                success = refreshRun.Succeeded,
+                dryRun = false,
+                forceLive = true,
+                callsExternalApis = true,
+                sport = "SOCCER",
+                competition = "World Cup",
+                resultGradingSupported = false,
+                providerCategory,
+                region,
+                sportsbookContextResearchOnly = !isDfsContext,
+                sportsbookContextNotDfsPlayable = !isDfsContext,
+                fromDate,
+                toDate,
+                maxEvents,
+                providerConfig,
+                eventsDiscovered = eventFetch.Events.Count,
+                eventsEligible = eligibleEvents.Length,
+                eventsFetched = events.Length,
+                eventsWithRows = ingestionResults.Count(row => row.PlatformPropsUpserted > 0),
+                eventsWithoutRows = ingestionResults.Count(row => row.PlatformPropsUpserted == 0),
+                providerEventsPersisted = ingestionResults.Count(row => row.PlatformPropsUpserted > 0),
+                oddsEventsFetched = events.Length,
+                platformPropsCreated = refreshRun.PlatformPropsCreated,
+                platformPropsUpdated = refreshRun.PlatformPropsUpdated,
+                platformPropsUnchanged = ingestionResults.Sum(row => row.Timing.RowsUnchanged),
+                platformPropsUpserted = refreshRun.PlatformPropsUpserted,
+                rowsByProviderEvent,
+                rowsByBookmaker,
+                rowsByMarket,
+                sportsbookContextRowsCreated = isDfsContext ? 0 : refreshRun.PlatformPropsCreated,
+                sportsbookContextRowsUpdated = isDfsContext ? 0 : refreshRun.PlatformPropsUpdated,
+                sportsbookContextRowsUnchanged = isDfsContext ? 0 : ingestionResults.Sum(row => row.Timing.RowsUnchanged),
+                dfsRowsCreated = isDfsContext ? refreshRun.PlatformPropsCreated : 0,
+                dfsRowsUpdated = isDfsContext ? refreshRun.PlatformPropsUpdated : 0,
+                dfsRowsUnchanged = isDfsContext ? ingestionResults.Sum(row => row.Timing.RowsUnchanged) : 0,
+                soccerMarketsDiscovered = ingestionResults.Sum(row => row.NormalizedRecords),
+                soccerMarketsMapped = ingestionResults.Sum(row => row.PlatformPropsUpserted),
+                soccerMarketsUnsupported = soccerDiagnostics.UnsupportedMarketsReturned,
+                diagnostics = soccerDiagnostics
+            });
+        }
+        catch (TheOddsApiProviderException exception)
+        {
+            if (refreshRun is not null)
+            {
+                refreshRun.CompletedAtUtc = DateTimeOffset.UtcNow;
+                refreshRun.Succeeded = false;
+                refreshRun.Failed = false;
+                refreshRun.Blocked = true;
+                refreshRun.ErrorMessage = exception.Message;
+                refreshRun.ActualApiCalls = Math.Max(1, refreshRun.ActualApiCalls);
+                refreshRun.DiagnosticsJson = JsonSerializer.SerializeToDocument(new
+                {
+                    sport = "SOCCER",
+                    competition = "World Cup",
+                    fromDate,
+                    toDate,
+                    providerRejectedRequest = true,
+                    providerError = BuildTheOddsProviderErrorDetails(exception),
+                    likelyRejectedInputs = BuildSoccerWorldCupLikelyRejectedInputs(
+                        sportKey,
+                        markets,
+                        bookmakers,
+                        region,
+                        currentEventId)
+                });
+                await dbContext.SaveChangesAsync(cancellationToken);
+            }
+
+            await LogTheOddsProviderFailureAsync(
+                errorLogger,
+                exception,
+                httpContext,
+                "RefreshCurrentSoccerWorldCupMarkets",
+                new
+                {
+                    sport = "SOCCER",
+                    competition = "World Cup",
+                    fromDate,
+                    toDate,
+                    sportKey,
+                    markets,
+                    bookmakers,
+                    regions = region,
+                    providerCategory,
+                    eventId = currentEventId
+                },
+                cancellationToken);
+
+            return Results.Json(new
+            {
+                success = false,
+                blocked = true,
+                providerRejectedRequest = true,
+                blockReason = "ProviderRejectedRequest",
+                callsExternalApis = true,
+                wouldWriteRows = false,
+                sport = "SOCCER",
+                competition = "World Cup",
+                resultGradingSupported = false,
+                providerConfig,
+                providerError = BuildTheOddsProviderErrorDetails(exception),
+                diagnostics = new
+                {
+                    message = "The Odds API rejected the Soccer / World Cup market request. Review the sanitized request URL, provider response body, and configured sport/market parameters before retrying.",
+                    likelyRejectedInputs = BuildSoccerWorldCupLikelyRejectedInputs(
+                        sportKey,
+                        markets,
+                        bookmakers,
+                        region,
+                        currentEventId)
+                }
+            }, statusCode: MapTheOddsProviderFailureStatusCode(exception));
+        }
+        catch
+        {
+            if (refreshRun is not null)
+            {
+                refreshRun.CompletedAtUtc = DateTimeOffset.UtcNow;
+                refreshRun.Succeeded = false;
+                refreshRun.Failed = true;
+                await dbContext.SaveChangesAsync(CancellationToken.None);
+            }
+
+            throw;
+        }
+    }
+
+    private static object BuildTheOddsProviderErrorDetails(TheOddsApiProviderException exception)
+    {
+        return new
+        {
+            statusCode = exception.StatusCodeNumber,
+            operation = exception.Operation,
+            sanitizedRequestUrl = exception.SanitizedRequestUrl,
+            rawProviderBody = exception.RawProviderBody
+        };
+    }
+
+    private static string ResolveSoccerWorldCupProviderCategory(TheOddsMarketRefreshRequest request)
+    {
+        if (string.Equals(request.ProviderCategory, "DFS", StringComparison.OrdinalIgnoreCase)
+            || request.IncludeDfs == true)
+        {
+            return "DFS";
+        }
+
+        if (string.Equals(request.ProviderCategory, "Sportsbook", StringComparison.OrdinalIgnoreCase)
+            || request.IncludeSportsbook == true)
+        {
+            return "Sportsbook";
+        }
+
+        return "Sportsbook";
+    }
+
+    private static string ResolveSoccerWorldCupRegion(
+        TheOddsMarketRefreshRequest request,
+        TheOddsApiOptions options,
+        string providerCategory)
+    {
+        var explicitRegion = NullIfWhiteSpace(request.Region)
+            ?? NullIfWhiteSpace(request.Regions);
+        if (!string.IsNullOrWhiteSpace(explicitRegion))
+        {
+            return explicitRegion;
+        }
+
+        if (string.Equals(providerCategory, "DFS", StringComparison.OrdinalIgnoreCase))
+        {
+            return NullIfWhiteSpace(options.SoccerWorldCupDfsRegion) ?? "us_dfs";
+        }
+
+        return NullIfWhiteSpace(options.SoccerWorldCupSportsbookRegion)
+            ?? NullIfWhiteSpace(options.Regions)
+            ?? "us";
+    }
+
+    private static async Task<IResult> BuildSoccerWorldCupProviderAvailabilityResponseAsync(
+        DateOnly? slateDate,
+        string? regions,
+        string? markets,
+        string? bookmakers,
+        int? maxEvents,
+        bool? forceLive,
+        TheOddsApiOptions options,
+        ITheOddsApiMlbPlayerPropsAdapter adapter,
+        CancellationToken cancellationToken)
+    {
+        var effectiveSlateDate = slateDate ?? DateOnly.FromDateTime(DateTimeOffset.UtcNow.UtcDateTime);
+        var sportKey = NullIfWhiteSpace(options.SoccerWorldCupSportKey);
+        var effectiveMarkets = NullIfWhiteSpace(markets) ?? NullIfWhiteSpace(options.SoccerWorldCupMarkets);
+        var regionList = ParseCommaSeparatedSet(NullIfWhiteSpace(regions) ?? "us_dfs");
+        var eventLimit = Math.Clamp(maxEvents ?? 3, 1, 10);
+        var providerConfig = new
+        {
+            configuredSportKey = sportKey,
+            configuredMarkets = effectiveMarkets,
+            requestedRegions = regionList,
+            requestedBookmakers = NullIfWhiteSpace(bookmakers),
+            requiredConfig = new[]
+            {
+                "TheOddsApi:SoccerWorldCupSportKey",
+                "TheOddsApi:SoccerWorldCupMarkets"
+            }
+        };
+        var missingConfig = new List<string>();
+        if (string.IsNullOrWhiteSpace(sportKey))
+        {
+            missingConfig.Add("TheOddsApi:SoccerWorldCupSportKey");
+        }
+
+        if (string.IsNullOrWhiteSpace(effectiveMarkets))
+        {
+            missingConfig.Add("TheOddsApi:SoccerWorldCupMarkets");
+        }
+
+        if (missingConfig.Count > 0)
+        {
+            return Results.BadRequest(new
+            {
+                success = false,
+                readOnly = true,
+                callsExternalApis = false,
+                wouldWriteRows = false,
+                sport = "SOCCER",
+                competition = "World Cup",
+                slateDate = effectiveSlateDate,
+                providerConfig,
+                blockReason = "MissingSoccerWorldCupProviderConfig",
+                diagnostics = new
+                {
+                    missingConfig,
+                    message = "Configure TheOddsApi:SoccerWorldCupSportKey and TheOddsApi:SoccerWorldCupMarkets before checking live provider availability."
+                }
+            });
+        }
+
+        var estimatedLiveCalls = 1 + eventLimit * Math.Max(1, regionList.Count);
+        if (forceLive != true)
+        {
+            return Results.Conflict(new
+            {
+                success = false,
+                blocked = true,
+                readOnly = true,
+                callsExternalApis = false,
+                wouldWriteRows = false,
+                requiresForceLive = true,
+                sport = "SOCCER",
+                competition = "World Cup",
+                slateDate = effectiveSlateDate,
+                providerConfig,
+                estimatedLiveCalls,
+                recommendedAction = "Pass forceLive=true only when you are ready to spend The Odds API credits for one event-list call plus one event-odds call per matched event and region."
+            });
+        }
+
+        var eventFetch = await adapter.FetchSpikeAsync(
+            eventId: null,
+            markets: null,
+            bookmakers: null,
+            regions: null,
+            oddsFormat: null,
+            cancellationToken,
+            sportKey);
+        var matchedEvents = eventFetch.Events
+            .Where(row => !string.IsNullOrWhiteSpace(row.EventId))
+            .Where(row => row.EventStartTime.HasValue && DateOnly.FromDateTime(row.EventStartTime.Value.UtcDateTime) == effectiveSlateDate)
+            .OrderBy(row => row.EventStartTime)
+            .ThenBy(row => row.EventId)
+            .Take(eventLimit)
+            .ToArray();
+        var availabilityRows = new List<SoccerWorldCupProviderAvailabilityEvent>();
+        var actualLiveCalls = 1;
+
+        foreach (var soccerEvent in matchedEvents)
+        {
+            foreach (var region in regionList)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                try
+                {
+                    var oddsFetch = await adapter.FetchSpikeAsync(
+                        soccerEvent.EventId,
+                        effectiveMarkets,
+                        bookmakers,
+                        region,
+                        oddsFormat: null,
+                        cancellationToken,
+                        sportKey);
+                    actualLiveCalls++;
+                    availabilityRows.Add(BuildSoccerWorldCupAvailabilityEvent(
+                        soccerEvent,
+                        region,
+                        bookmakers,
+                        effectiveMarkets,
+                        oddsFetch));
+                }
+                catch (TheOddsApiProviderException exception)
+                {
+                    actualLiveCalls++;
+                    availabilityRows.Add(BuildSoccerWorldCupProviderRejectedAvailabilityEvent(
+                        soccerEvent,
+                        region,
+                        bookmakers,
+                        effectiveMarkets,
+                        exception));
+                }
+            }
+        }
+
+        var eventsWithBookmakers = availabilityRows.Count(row => row.BookmakerCount > 0);
+        var eventsWithMarkets = availabilityRows.Count(row => row.MarketCount > 0);
+        var hasAnyProviderLines = availabilityRows.Any(row => row.BookmakerCount > 0 && row.MarketCount > 0 && row.OutcomeCount > 0);
+        var providerRejectedCount = availabilityRows.Count(row => row.ProviderRejectedRequest);
+
+        return Results.Ok(new
+        {
+            success = providerRejectedCount == 0,
+            readOnly = true,
+            callsExternalApis = true,
+            wouldWriteRows = false,
             sport = "SOCCER",
             competition = "World Cup",
+            resultGradingSupported = false,
+            slateDate = effectiveSlateDate,
             providerConfig,
-            diagnostics = new
-            {
-                message = "Soccer / World Cup provider config is present, but live Soccer ingestion has not been enabled because the provider sport key has not been validated against persisted snapshot mapping.",
-                noExternalApiCallMade = true,
-                noSnapshotsWritten = true
-            }
-        }, statusCode: StatusCodes.Status501NotImplemented);
+            estimatedLiveCalls = 1 + matchedEvents.Length * regionList.Count,
+            actualLiveCalls,
+            eventsFetched = eventFetch.Events.Count,
+            eventsMatchedToSlate = matchedEvents.Length,
+            eventsWithBookmakers,
+            eventsWithMarkets,
+            regionsChecked = regionList,
+            marketsChecked = ParseCommaSeparatedSet(effectiveMarkets),
+            hasAnyProviderLines,
+            providerRejectedCount,
+            recommendedAction = BuildSoccerWorldCupAvailabilityRecommendedAction(
+                matchedEvents.Length,
+                regionList,
+                hasAnyProviderLines,
+                providerRejectedCount),
+            events = availabilityRows
+        });
     }
+
+    private static SoccerWorldCupProviderAvailabilityEvent BuildSoccerWorldCupAvailabilityEvent(
+        TheOddsApiEventRecord soccerEvent,
+        string requestedRegion,
+        string? requestedBookmakers,
+        string? requestedMarkets,
+        TheOddsApiPlayerPropsSpikeResult oddsFetch)
+    {
+        var diagnostics = oddsFetch.EventOddsDiagnostics.FirstOrDefault();
+        var marketKeys = diagnostics?.MarketKeys ?? [];
+        var configuredMarkets = ParseCommaSeparatedSet(requestedMarkets);
+        var configuredMarketsReturned = configuredMarkets
+            .Where(configured => marketKeys.Contains(configured, StringComparer.OrdinalIgnoreCase))
+            .OrderBy(row => row, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        var configuredMarketsMissing = configuredMarkets
+            .Where(configured => !marketKeys.Contains(configured, StringComparer.OrdinalIgnoreCase))
+            .OrderBy(row => row, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        var unsupportedMarkets = marketKeys
+            .Where(returned => configuredMarkets.Count > 0
+                && !configuredMarkets.Contains(returned, StringComparer.OrdinalIgnoreCase))
+            .OrderBy(row => row, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+        return new SoccerWorldCupProviderAvailabilityEvent(
+            ProviderEventId: diagnostics?.ProviderEventId ?? soccerEvent.EventId,
+            HomeTeam: diagnostics?.HomeTeam ?? soccerEvent.HomeTeam,
+            AwayTeam: diagnostics?.AwayTeam ?? soccerEvent.AwayTeam,
+            CommenceTimeUtc: diagnostics?.CommenceTimeUtc ?? soccerEvent.EventStartTime,
+            RequestedRegions: requestedRegion,
+            RequestedBookmakers: requestedBookmakers,
+            RequestedMarkets: configuredMarkets,
+            EventOddsHttpSucceeded: diagnostics?.EventOddsHttpSucceeded ?? true,
+            ProviderRejectedRequest: false,
+            ProviderError: null,
+            BookmakerCount: diagnostics?.BookmakerCount ?? oddsFetch.Records.Select(row => row.BookmakerKey).Distinct(StringComparer.OrdinalIgnoreCase).Count(),
+            BookmakerKeysReturned: diagnostics?.BookmakerKeys ?? oddsFetch.Records.Select(row => row.BookmakerKey).Where(row => !string.IsNullOrWhiteSpace(row)).Select(row => row!).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(row => row, StringComparer.OrdinalIgnoreCase).ToArray(),
+            MarketCount: diagnostics?.MarketCount ?? oddsFetch.Records.Select(row => row.MarketKey).Distinct(StringComparer.OrdinalIgnoreCase).Count(),
+            MarketKeysReturned: marketKeys,
+            ConfiguredMarketsReturned: configuredMarketsReturned,
+            ConfiguredMarketsMissing: configuredMarketsMissing,
+            UnsupportedMarketsReturned: unsupportedMarkets,
+            OutcomeCount: diagnostics?.OutcomeCount ?? oddsFetch.Records.Count,
+            PlayerOutcomeCount: diagnostics?.PlayerOutcomeCount ?? oddsFetch.Records.Count(row => !string.IsNullOrWhiteSpace(row.PlayerName)));
+    }
+
+    private static SoccerWorldCupProviderAvailabilityEvent BuildSoccerWorldCupProviderRejectedAvailabilityEvent(
+        TheOddsApiEventRecord soccerEvent,
+        string requestedRegion,
+        string? requestedBookmakers,
+        string? requestedMarkets,
+        TheOddsApiProviderException exception)
+    {
+        return new SoccerWorldCupProviderAvailabilityEvent(
+            ProviderEventId: soccerEvent.EventId,
+            HomeTeam: soccerEvent.HomeTeam,
+            AwayTeam: soccerEvent.AwayTeam,
+            CommenceTimeUtc: soccerEvent.EventStartTime,
+            RequestedRegions: requestedRegion,
+            RequestedBookmakers: requestedBookmakers,
+            RequestedMarkets: ParseCommaSeparatedSet(requestedMarkets),
+            EventOddsHttpSucceeded: false,
+            ProviderRejectedRequest: true,
+            ProviderError: BuildTheOddsProviderErrorDetails(exception),
+            BookmakerCount: 0,
+            BookmakerKeysReturned: [],
+            MarketCount: 0,
+            MarketKeysReturned: [],
+            ConfiguredMarketsReturned: [],
+            ConfiguredMarketsMissing: ParseCommaSeparatedSet(requestedMarkets),
+            UnsupportedMarketsReturned: [],
+            OutcomeCount: 0,
+            PlayerOutcomeCount: 0);
+    }
+
+    private static string BuildSoccerWorldCupAvailabilityRecommendedAction(
+        int eventsMatchedToSlate,
+        IReadOnlyList<string> regionsChecked,
+        bool hasAnyProviderLines,
+        int providerRejectedCount)
+    {
+        if (providerRejectedCount > 0)
+        {
+            return "Review providerRejectedRequest entries, sanitized URLs, and raw provider bodies before retrying.";
+        }
+
+        if (eventsMatchedToSlate == 0)
+        {
+            return "No World Cup events matched the requested slate date. Try a different slateDate before checking regions.";
+        }
+
+        if (!hasAnyProviderLines && regionsChecked.Count == 1 && string.Equals(regionsChecked[0], "us_dfs", StringComparison.OrdinalIgnoreCase))
+        {
+            return "No provider lines were found for us_dfs. Try a read-only availability check for regions=us,us2,uk,eu,au before changing refresh configuration.";
+        }
+
+        if (!hasAnyProviderLines)
+        {
+            return "The checked region/bookmaker selection has no returned provider lines for the matched events.";
+        }
+
+        return "At least one checked region/bookmaker selection returned provider lines. Review returned bookmaker and market keys before changing write refresh configuration.";
+    }
+
+    private static SoccerWorldCupRefreshDiagnostics BuildSoccerWorldCupRefreshDiagnostics(
+        int eventsFetched,
+        IReadOnlyList<TheOddsApiEventRecord> slateEvents,
+        IReadOnlyList<TheOddsApiMlbEventIngestionResult> ingestionResults,
+        string? requestedMarkets,
+        string? requestedRegions,
+        string? requestedBookmakers)
+    {
+        var configuredMarkets = ParseCommaSeparatedSet(requestedMarkets);
+        var events = ingestionResults
+            .Select(result => BuildSoccerWorldCupEventRefreshDiagnostics(
+                result,
+                slateEvents.FirstOrDefault(row => string.Equals(row.EventId, result.EventId, StringComparison.OrdinalIgnoreCase)),
+                configuredMarkets,
+                requestedRegions,
+                requestedBookmakers))
+            .ToArray();
+        var returnedMarkets = events
+            .SelectMany(row => row.MarketKeysReturned)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(row => row, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        var mappedMarkets = ingestionResults
+            .SelectMany(row => row.NormalizedMarketKeys)
+            .Where(row => !string.IsNullOrWhiteSpace(row))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(row => row, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        var configuredReturned = configuredMarkets
+            .Where(configured => returnedMarkets.Contains(configured, StringComparer.OrdinalIgnoreCase))
+            .OrderBy(row => row, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        var configuredMissing = configuredMarkets
+            .Where(configured => !returnedMarkets.Contains(configured, StringComparer.OrdinalIgnoreCase))
+            .OrderBy(row => row, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        var unsupportedMarkets = returnedMarkets
+            .Where(returned => configuredMarkets.Count > 0
+                && !configuredMarkets.Contains(returned, StringComparer.OrdinalIgnoreCase))
+            .OrderBy(row => row, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        var marketsReturned = events.Sum(row => row.MarketCount);
+        var normalizedPropsCount = ingestionResults.Sum(row => row.Timing.NormalizedPropsCount);
+        var noProviderMarketsReturned = events.Length > 0 && marketsReturned == 0;
+        var providerMarketsReturnedButNoRowsMapped = marketsReturned > 0
+            && ingestionResults.Sum(row => row.PlatformPropsUpserted) == 0
+            && normalizedPropsCount == 0;
+
+        return new SoccerWorldCupRefreshDiagnostics(
+            ContextSchemaVersion: "the-odds-provider-context-v2",
+            ProviderEventIdPersisted: true,
+            EventTeamContextPersisted: true,
+            ProviderPlayerIdAvailable: false,
+            PlayerTeamAvailable: false,
+            EventsFetched: eventsFetched,
+            EventsMatchedToSlate: slateEvents.Count,
+            EventsWithBookmakers: events.Count(row => row.BookmakerCount > 0),
+            EventsWithMarkets: events.Count(row => row.MarketCount > 0),
+            MarketsReturned: marketsReturned,
+            ConfiguredMarketsRequested: configuredMarkets,
+            ConfiguredMarketsReturned: configuredReturned,
+            ConfiguredMarketsMissing: configuredMissing,
+            UnsupportedMarketsReturned: unsupportedMarkets,
+            MappedMarketsReturned: mappedMarkets,
+            NormalizedPropsCount: normalizedPropsCount,
+            NoProviderMarketsReturned: noProviderMarketsReturned,
+            ProviderMarketsReturnedButNoRowsMapped: providerMarketsReturnedButNoRowsMapped,
+            LikelyReason: BuildSoccerWorldCupZeroRowLikelyReason(
+                events,
+                noProviderMarketsReturned,
+                providerMarketsReturnedButNoRowsMapped,
+                configuredMissing,
+                unsupportedMarkets),
+            Message: "Soccer / World Cup market rows were refreshed with persisted provider event/team context. Public Soccer grading remains disabled.",
+            Events: events);
+    }
+
+    private static SoccerWorldCupEventRefreshDiagnostics BuildSoccerWorldCupEventRefreshDiagnostics(
+        TheOddsApiMlbEventIngestionResult result,
+        TheOddsApiEventRecord? slateEvent,
+        IReadOnlyList<string> configuredMarkets,
+        string? requestedRegions,
+        string? requestedBookmakers)
+    {
+        var providerDiagnostics = result.ProviderDiagnostics.FirstOrDefault();
+        var marketKeys = providerDiagnostics?.MarketKeys ?? [];
+        var returnedConfiguredMarkets = configuredMarkets
+            .Where(configured => marketKeys.Contains(configured, StringComparer.OrdinalIgnoreCase))
+            .OrderBy(row => row, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        var missingConfiguredMarkets = configuredMarkets
+            .Where(configured => !marketKeys.Contains(configured, StringComparer.OrdinalIgnoreCase))
+            .OrderBy(row => row, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        var unsupportedMarkets = marketKeys
+            .Where(returned => configuredMarkets.Count > 0
+                && !configuredMarkets.Contains(returned, StringComparer.OrdinalIgnoreCase))
+            .OrderBy(row => row, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        var skipReasons = BuildSoccerWorldCupEventSkipReasons(
+            result,
+            providerDiagnostics,
+            returnedConfiguredMarkets,
+            missingConfiguredMarkets,
+            unsupportedMarkets);
+
+        return new SoccerWorldCupEventRefreshDiagnostics(
+            ProviderEventId: providerDiagnostics?.ProviderEventId ?? result.EventId,
+            HomeTeam: providerDiagnostics?.HomeTeam ?? result.HomeTeam ?? slateEvent?.HomeTeam,
+            AwayTeam: providerDiagnostics?.AwayTeam ?? result.AwayTeam ?? slateEvent?.AwayTeam,
+            CommenceTimeUtc: providerDiagnostics?.CommenceTimeUtc ?? result.EventStartTime ?? slateEvent?.EventStartTime,
+            RequestedMarkets: configuredMarkets,
+            RequestedRegions: requestedRegions,
+            RequestedBookmakers: requestedBookmakers,
+            EventOddsHttpSucceeded: providerDiagnostics?.EventOddsHttpSucceeded ?? result.Success,
+            BookmakerCount: providerDiagnostics?.BookmakerCount ?? result.BookmakersParsed,
+            BookmakerKeysReturned: providerDiagnostics?.BookmakerKeys ?? [],
+            MarketCount: providerDiagnostics?.MarketCount ?? result.MarketsParsed,
+            MarketKeysReturned: marketKeys,
+            ConfiguredMarketsReturned: returnedConfiguredMarkets,
+            ConfiguredMarketsMissing: missingConfiguredMarkets,
+            UnsupportedMarketsReturned: unsupportedMarkets,
+            OutcomeCount: providerDiagnostics?.OutcomeCount ?? result.NormalizedRecords,
+            PlayerOutcomeCount: providerDiagnostics?.PlayerOutcomeCount ?? result.NormalizedRecords,
+            NormalizedPropsCount: result.Timing.NormalizedPropsCount,
+            RowsCreated: result.Timing.RowsCreated,
+            RowsUpdated: result.Timing.RowsUpdated,
+            RowsUnchanged: result.Timing.RowsUnchanged,
+            RowsSkipped: result.Timing.RowsSkipped,
+            SkipReasons: skipReasons,
+            Warnings: result.Warnings,
+            Errors: result.Errors);
+    }
+
+    private static IReadOnlyList<string> BuildSoccerWorldCupEventSkipReasons(
+        TheOddsApiMlbEventIngestionResult result,
+        TheOddsApiEventOddsDiagnostics? providerDiagnostics,
+        IReadOnlyList<string> returnedConfiguredMarkets,
+        IReadOnlyList<string> missingConfiguredMarkets,
+        IReadOnlyList<string> unsupportedMarkets)
+    {
+        var reasons = new List<string>();
+        if ((providerDiagnostics?.BookmakerCount ?? result.BookmakersParsed) == 0)
+        {
+            reasons.Add("NoBookmakersReturned");
+        }
+
+        if ((providerDiagnostics?.MarketCount ?? result.MarketsParsed) == 0)
+        {
+            reasons.Add("NoMarketsReturned");
+        }
+
+        if (missingConfiguredMarkets.Count > 0)
+        {
+            reasons.Add("ConfiguredMarketsMissing");
+        }
+
+        if (unsupportedMarkets.Count > 0)
+        {
+            reasons.Add("UnsupportedMarketsReturned");
+        }
+
+        if (returnedConfiguredMarkets.Count > 0
+            && (providerDiagnostics?.OutcomeCount ?? result.NormalizedRecords) == 0)
+        {
+            reasons.Add("ConfiguredMarketsReturnedWithNoOutcomes");
+        }
+
+        if ((providerDiagnostics?.OutcomeCount ?? result.NormalizedRecords) > 0
+            && (providerDiagnostics?.PlayerOutcomeCount ?? result.NormalizedRecords) == 0)
+        {
+            reasons.Add("NoPlayerOutcomesReturned");
+        }
+
+        if (result.NormalizedRecords > 0 && result.Timing.NormalizedPropsCount == 0)
+        {
+            reasons.Add("OutcomesSkippedDuringNormalization");
+        }
+
+        reasons.AddRange(result.Warnings);
+        reasons.AddRange(result.Errors);
+        return reasons
+            .Where(reason => !string.IsNullOrWhiteSpace(reason))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+    }
+
+    private static string? BuildSoccerWorldCupZeroRowLikelyReason(
+        IReadOnlyList<SoccerWorldCupEventRefreshDiagnostics> events,
+        bool noProviderMarketsReturned,
+        bool providerMarketsReturnedButNoRowsMapped,
+        IReadOnlyList<string> configuredMarketsMissing,
+        IReadOnlyList<string> unsupportedMarkets)
+    {
+        if (events.Count == 0)
+        {
+            return "No Soccer / World Cup events matched the requested slate date.";
+        }
+
+        if (events.All(row => row.BookmakerCount == 0))
+        {
+            return "The Odds returned the event but no bookmakers for the requested region/bookmaker selection.";
+        }
+
+        if (noProviderMarketsReturned)
+        {
+            return "The Odds returned the event but no requested player prop markets for region/bookmaker selection.";
+        }
+
+        if (configuredMarketsMissing.Count > 0 && events.All(row => row.ConfiguredMarketsReturned.Count == 0))
+        {
+            return "The Odds returned market data, but none of the configured Soccer market keys were present.";
+        }
+
+        if (unsupportedMarkets.Count > 0 && providerMarketsReturnedButNoRowsMapped)
+        {
+            return "The Odds returned market keys that are not in the configured Soccer market list, and no rows were mapped.";
+        }
+
+        if (providerMarketsReturnedButNoRowsMapped)
+        {
+            return "The Odds returned markets, but no provider rows were mapped. Review per-event skip reasons and returned market keys.";
+        }
+
+        return null;
+    }
+
+    private static object BuildSoccerWorldCupLikelyRejectedInputs(
+        string? sportKey,
+        string? markets,
+        string? bookmakers,
+        string? regions,
+        string? eventId)
+    {
+        return new
+        {
+            sportKey,
+            markets,
+            bookmakers,
+            regions,
+            eventId
+        };
+    }
+
+    private sealed record SoccerWorldCupRefreshDiagnostics(
+        string ContextSchemaVersion,
+        bool ProviderEventIdPersisted,
+        bool EventTeamContextPersisted,
+        bool ProviderPlayerIdAvailable,
+        bool PlayerTeamAvailable,
+        int EventsFetched,
+        int EventsMatchedToSlate,
+        int EventsWithBookmakers,
+        int EventsWithMarkets,
+        int MarketsReturned,
+        IReadOnlyList<string> ConfiguredMarketsRequested,
+        IReadOnlyList<string> ConfiguredMarketsReturned,
+        IReadOnlyList<string> ConfiguredMarketsMissing,
+        IReadOnlyList<string> UnsupportedMarketsReturned,
+        IReadOnlyList<string> MappedMarketsReturned,
+        int NormalizedPropsCount,
+        bool NoProviderMarketsReturned,
+        bool ProviderMarketsReturnedButNoRowsMapped,
+        string? LikelyReason,
+        string Message,
+        IReadOnlyList<SoccerWorldCupEventRefreshDiagnostics> Events);
+
+    private sealed record SoccerWorldCupEventRefreshDiagnostics(
+        string? ProviderEventId,
+        string? HomeTeam,
+        string? AwayTeam,
+        DateTimeOffset? CommenceTimeUtc,
+        IReadOnlyList<string> RequestedMarkets,
+        string? RequestedRegions,
+        string? RequestedBookmakers,
+        bool EventOddsHttpSucceeded,
+        int BookmakerCount,
+        IReadOnlyList<string> BookmakerKeysReturned,
+        int MarketCount,
+        IReadOnlyList<string> MarketKeysReturned,
+        IReadOnlyList<string> ConfiguredMarketsReturned,
+        IReadOnlyList<string> ConfiguredMarketsMissing,
+        IReadOnlyList<string> UnsupportedMarketsReturned,
+        int OutcomeCount,
+        int PlayerOutcomeCount,
+        int NormalizedPropsCount,
+        int RowsCreated,
+        int RowsUpdated,
+        int RowsUnchanged,
+        int RowsSkipped,
+        IReadOnlyList<string> SkipReasons,
+        IReadOnlyList<string> Warnings,
+        IReadOnlyList<string> Errors);
+
+    private sealed record SoccerWorldCupProviderAvailabilityEvent(
+        string? ProviderEventId,
+        string? HomeTeam,
+        string? AwayTeam,
+        DateTimeOffset? CommenceTimeUtc,
+        string RequestedRegions,
+        string? RequestedBookmakers,
+        IReadOnlyList<string> RequestedMarkets,
+        bool EventOddsHttpSucceeded,
+        bool ProviderRejectedRequest,
+        object? ProviderError,
+        int BookmakerCount,
+        IReadOnlyList<string> BookmakerKeysReturned,
+        int MarketCount,
+        IReadOnlyList<string> MarketKeysReturned,
+        IReadOnlyList<string> ConfiguredMarketsReturned,
+        IReadOnlyList<string> ConfiguredMarketsMissing,
+        IReadOnlyList<string> UnsupportedMarketsReturned,
+        int OutcomeCount,
+        int PlayerOutcomeCount);
 }
 
 public sealed record TheOddsMarketRefreshRequest(
     string? Sport,
     string? Competition,
     DateOnly? Date,
+    DateOnly? FromDate,
+    DateOnly? ToDate,
     bool? DryRun,
     bool? ForceLive,
     string? BookmakerPreset,
     bool? IncludeDfs,
+    bool? IncludeSportsbook,
     bool? IncludeCandidates,
     bool? IncludeLineShopping,
     bool? IncludeFullDiagnostics,
     int? FreshnessMinutes,
-    string? Markets);
+    JsonElement? Markets,
+    string? ProviderCategory,
+    string? Region,
+    string? Regions,
+    JsonElement? Bookmakers,
+    int? MaxEvents);
 
 public sealed record TheOddsApiMlbIngestEventRequest(
     string EventId,

@@ -1,3 +1,5 @@
+using SportsBetting.Api.Integrations.TheOddsApi;
+
 namespace SportsBetting.Api.Diagnostics;
 
 public sealed class ApplicationErrorMiddleware(RequestDelegate next)
@@ -44,11 +46,12 @@ public sealed class ApplicationErrorMiddleware(RequestDelegate next)
                 context.Request.Method,
                 StatusCodes.Status500InternalServerError,
                 correlationId,
-                new
-                {
-                    queryString = context.Request.QueryString.Value,
-                    traceIdentifier = context.TraceIdentifier
-                }), CancellationToken.None);
+                    new
+                    {
+                        queryString = context.Request.QueryString.Value,
+                        traceIdentifier = context.TraceIdentifier,
+                        providerException = BuildProviderExceptionMetadata(exception, correlationId)
+                    }), CancellationToken.None);
 
             if (!context.Response.HasStarted)
             {
@@ -80,5 +83,23 @@ public sealed class ApplicationErrorMiddleware(RequestDelegate next)
     {
         return context.RequestAborted.IsCancellationRequested
             && exception is OperationCanceledException;
+    }
+
+    private static object? BuildProviderExceptionMetadata(Exception exception, string correlationId)
+    {
+        return exception is not TheOddsApiProviderException providerException
+            ? null
+            : new
+            {
+                providerName = providerException.ProviderName,
+                statusCode = providerException.StatusCodeNumber,
+                operation = providerException.Operation,
+                sanitizedRequestUrl = providerException.SanitizedRequestUrl,
+                rawProviderBody = providerException.RawProviderBody,
+                providerException.ErrorCode,
+                providerException.RecommendedAction,
+                providerException.CreditUsage,
+                correlationId
+            };
     }
 }

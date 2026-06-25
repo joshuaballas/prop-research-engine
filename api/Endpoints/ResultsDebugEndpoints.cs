@@ -6,6 +6,7 @@ using SportsBetting.Api.Predictions;
 using SportsBetting.Api.Utilities;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
+using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
@@ -15,6 +16,7 @@ public static class ResultsDebugEndpoints
 {
     private const string ApiSportsFootballResultSource = "api-sports-football";
     private const string ApiSportsFootballPlayerRefProvider = "api-sports-football";
+    private const string TheOddsSoccerAliasProviderKey = "the-odds-soccer";
     private const int ApiSportsWorldCupLeagueId = 1;
     private const int ApiSportsWorldCupSeason = 2026;
     private static readonly DateOnly ApiSportsWorldCup2026StartDate = new(2026, 6, 11);
@@ -1462,6 +1464,763 @@ public static class ResultsDebugEndpoints
         .WithName("ApiSportsSoccerWorldCupCoverageDebug")
         .WithSummary("Read-only local coverage diagnostics for imported API-Sports World Cup Soccer prop_results.");
 
+        endpoints.MapGet("/api/debug/soccer/results/api-sports/world-cup/market-join-preview", async (
+            DateOnly? fromDate,
+            DateOnly? toDate,
+            string? fixtureId,
+            string? providerEventId,
+            bool? includeSamples,
+            int? maxSamples,
+            ApplicationDbContext dbContext,
+            CancellationToken cancellationToken) =>
+        {
+            var range = NormalizeApiSportsWorldCupDateRange(fromDate, toDate);
+            var normalizedFixtureId = string.IsNullOrWhiteSpace(fixtureId) ? null : fixtureId.Trim();
+            var normalizedProviderEventId = string.IsNullOrWhiteSpace(providerEventId) ? null : providerEventId.Trim();
+            var sampleLimit = Math.Clamp(maxSamples ?? 50, 1, 250);
+            var resultRows = await LoadApiSportsMarketJoinResultRowsAsync(dbContext, range, normalizedFixtureId, cancellationToken);
+            var platformRows = await LoadApiSportsMarketJoinPlatformRowsAsync(dbContext, range, normalizedProviderEventId, cancellationToken);
+            var preview = BuildApiSportsMarketJoinPreview(resultRows, platformRows, sampleLimit);
+
+            return Results.Ok(new
+            {
+                generatedAtUtc = DateTimeOffset.UtcNow,
+                callsExternalApis = false,
+                readOnly = true,
+                writesRows = false,
+                publicSoccerGradingEnabled = false,
+                scope = new
+                {
+                    range.FromDate,
+                    range.ToDate,
+                    fixtureId = normalizedFixtureId,
+                    providerEventId = normalizedProviderEventId
+                },
+                summary = preview.Summary,
+                blockers = preview.Blockers,
+                samples = includeSamples != false ? preview.Samples : null,
+                recommendation = preview.Recommendation
+            });
+        })
+        .WithName("ApiSportsSoccerWorldCupMarketJoinPreviewDebug")
+        .WithSummary("Read-only bridge diagnostic comparing API-Sports World Cup result rows to The Odds Soccer platform props by event, player, and prop.");
+
+        endpoints.MapGet("/api/debug/soccer/results/api-sports/world-cup/grading-preview", async (
+            DateOnly? fromDate,
+            DateOnly? toDate,
+            string? fixtureId,
+            string? providerEventId,
+            bool? includeSamples,
+            int? maxSamples,
+            ApplicationDbContext dbContext,
+            CancellationToken cancellationToken) =>
+        {
+            var range = NormalizeApiSportsWorldCupDateRange(fromDate, toDate);
+            var normalizedFixtureId = string.IsNullOrWhiteSpace(fixtureId) ? null : fixtureId.Trim();
+            var normalizedProviderEventId = string.IsNullOrWhiteSpace(providerEventId) ? null : providerEventId.Trim();
+            var sampleLimit = Math.Clamp(maxSamples ?? 50, 1, 250);
+            var resultRows = await LoadApiSportsMarketJoinResultRowsAsync(dbContext, range, normalizedFixtureId, cancellationToken);
+            var platformRows = await LoadApiSportsMarketJoinPlatformRowsAsync(dbContext, range, normalizedProviderEventId, cancellationToken);
+            var preview = BuildApiSportsSoccerGradingPreview(resultRows, platformRows, sampleLimit);
+
+            return Results.Ok(new
+            {
+                generatedAtUtc = DateTimeOffset.UtcNow,
+                callsExternalApis = false,
+                readOnly = true,
+                writesRows = false,
+                publicSoccerGradingEnabled = false,
+                scope = new
+                {
+                    range.FromDate,
+                    range.ToDate,
+                    fixtureId = normalizedFixtureId,
+                    providerEventId = normalizedProviderEventId
+                },
+                summary = preview.Summary,
+                blockers = preview.Blockers,
+                samples = includeSamples != false ? preview.Samples : null,
+                recommendation = preview.Recommendation
+            });
+        })
+        .WithName("ApiSportsSoccerWorldCupGradingPreviewDebug")
+        .WithSummary("Read-only debug-only Soccer grading preview for joinable API-Sports result rows and The Odds platform props.");
+
+        endpoints.MapGet("/api/debug/soccer/results/api-sports/world-cup/grading-coverage-summary", async (
+            DateOnly? fromDate,
+            DateOnly? toDate,
+            bool? includeFixtureDetails,
+            bool? includeSamples,
+            int? maxFixtures,
+            int? maxSamplesPerFixture,
+            ApplicationDbContext dbContext,
+            CancellationToken cancellationToken) =>
+        {
+            var range = NormalizeApiSportsWorldCupDateRange(fromDate, toDate);
+            var fixtureLimit = Math.Clamp(maxFixtures ?? 50, 1, 250);
+            var sampleLimit = Math.Clamp(maxSamplesPerFixture ?? 5, 0, 25);
+            var resultRows = await LoadApiSportsMarketJoinResultRowsAsync(dbContext, range, null, cancellationToken);
+            var platformRows = await LoadApiSportsMarketJoinPlatformRowsAsync(dbContext, range, null, cancellationToken);
+            var coverage = BuildApiSportsSoccerGradingCoverageSummary(
+                resultRows,
+                platformRows,
+                includeFixtureDetails != false,
+                includeSamples != false,
+                fixtureLimit,
+                sampleLimit);
+
+            return Results.Ok(new
+            {
+                generatedAtUtc = DateTimeOffset.UtcNow,
+                callsExternalApis = false,
+                readOnly = true,
+                writesRows = false,
+                publicSoccerGradingEnabled = false,
+                scope = new
+                {
+                    range.FromDate,
+                    range.ToDate,
+                    maxFixtures = fixtureLimit,
+                    maxSamplesPerFixture = sampleLimit
+                },
+                summary = coverage.Summary,
+                topBlockersAggregated = coverage.TopBlockersAggregated,
+                bestCoverageFixtures = coverage.BestCoverageFixtures,
+                worstCoverageFixtures = coverage.WorstCoverageFixtures,
+                fixtureDetails = includeFixtureDetails != false ? coverage.FixtureDetails : null,
+                unresolvedProviderEvents = coverage.UnresolvedProviderEvents,
+                resultOnlyFixtures = coverage.ResultOnlyFixtures,
+                platformOnlyEvents = coverage.PlatformOnlyEvents,
+                knownWorkingPairDetected = coverage.KnownWorkingPairDetected,
+                recommendedNextAction = coverage.RecommendedNextAction
+            });
+        })
+        .WithName("ApiSportsSoccerWorldCupGradingCoverageSummaryDebug")
+        .WithSummary("Read-only Soccer World Cup grading coverage summary across persisted completed fixture/provider event pairs.");
+
+        endpoints.MapGet("/api/debug/soccer/results/api-sports/world-cup/prop-mapping-gap", async (
+            DateOnly? fromDate,
+            DateOnly? toDate,
+            bool? includeSamples,
+            int? maxSamples,
+            ApplicationDbContext dbContext,
+            CancellationToken cancellationToken) =>
+        {
+            var range = NormalizeApiSportsWorldCupDateRange(fromDate, toDate);
+            var sampleLimit = Math.Clamp(maxSamples ?? 100, 1, 500);
+            var resultRows = await LoadApiSportsMarketJoinResultRowsAsync(dbContext, range, null, cancellationToken);
+            var platformRows = await LoadApiSportsMarketJoinPlatformRowsAsync(dbContext, range, null, cancellationToken);
+            var apiSportsMappings = await LoadApiSportsSoccerProviderStatMappingRowsAsync(dbContext, cancellationToken);
+            var diagnostic = BuildApiSportsSoccerPropMappingGapDiagnostic(
+                resultRows,
+                platformRows,
+                apiSportsMappings,
+                includeSamples != false,
+                sampleLimit);
+
+            return Results.Ok(new
+            {
+                generatedAtUtc = DateTimeOffset.UtcNow,
+                callsExternalApis = false,
+                readOnly = true,
+                writesRows = false,
+                publicSoccerGradingEnabled = false,
+                scope = new
+                {
+                    range.FromDate,
+                    range.ToDate,
+                    maxSamples = sampleLimit
+                },
+                summary = diagnostic.Summary,
+                theOddsMarketGaps = diagnostic.TheOddsMarketGaps,
+                apiSportsStatGaps = diagnostic.ApiSportsStatGaps,
+                gapsByCategory = diagnostic.GapsByCategory,
+                lowRiskMappingCandidates = diagnostic.LowRiskMappingCandidates,
+                needsReviewMappingCandidates = diagnostic.NeedsReviewMappingCandidates,
+                ignoredNoise = diagnostic.IgnoredNoise,
+                recommendedNextAction = diagnostic.RecommendedNextAction
+            });
+        })
+        .WithName("ApiSportsSoccerWorldCupPropMappingGapDebug")
+        .WithSummary("Read-only Soccer World Cup prop/stat mapping gap diagnostic across resolved The Odds/API-Sports fixture pairs.");
+
+        endpoints.MapGet("/api/debug/soccer/the-odds/api-sports/fixture-mapping-coverage", async (
+            DateOnly? fromDate,
+            DateOnly? toDate,
+            bool? includeResolved,
+            bool? includeUnresolved,
+            bool? includeSamples,
+            int? maxSamples,
+            ApplicationDbContext dbContext,
+            CancellationToken cancellationToken) =>
+        {
+            var range = NormalizeApiSportsWorldCupDateRange(fromDate, toDate);
+            var sampleLimit = Math.Clamp(maxSamples ?? 100, 1, 500);
+            var resultRows = await LoadApiSportsMarketJoinResultRowsAsync(dbContext, range, null, cancellationToken);
+            var platformRows = await LoadApiSportsMarketJoinPlatformRowsAsync(dbContext, range, null, cancellationToken);
+            var coverage = BuildApiSportsSoccerFixtureMappingCoverage(
+                resultRows,
+                platformRows,
+                includeResolved != false,
+                includeUnresolved != false,
+                includeSamples != false,
+                sampleLimit);
+
+            return Results.Ok(new
+            {
+                generatedAtUtc = DateTimeOffset.UtcNow,
+                callsExternalApis = false,
+                readOnly = true,
+                writesRows = false,
+                publicSoccerGradingEnabled = false,
+                scope = new
+                {
+                    range.FromDate,
+                    range.ToDate,
+                    maxSamples = sampleLimit
+                },
+                summary = coverage.Summary,
+                resolvedEvents = includeResolved != false ? coverage.ResolvedEvents : null,
+                unresolvedEvents = includeUnresolved != false ? coverage.UnresolvedEvents : null,
+                excludedEvents = coverage.ExcludedEvents,
+                knownWorkingPairDetected = coverage.KnownWorkingPairDetected,
+                recommendedNextAction = coverage.RecommendedNextAction
+            });
+        })
+        .WithName("TheOddsApiSportsSoccerFixtureMappingCoverageDebug")
+        .WithSummary("Read-only diagnostic for persisted The Odds Soccer provider event to API-Sports fixture mapping coverage.");
+
+        endpoints.MapGet("/api/debug/soccer/the-odds/world-cup/ingestion-coverage", async (
+            DateOnly? fromDate,
+            DateOnly? toDate,
+            bool? includeSamples,
+            int? maxSamples,
+            ApplicationDbContext dbContext,
+            CancellationToken cancellationToken) =>
+        {
+            var range = NormalizeApiSportsWorldCupDateRange(fromDate, toDate);
+            var sampleLimit = Math.Clamp(maxSamples ?? 100, 1, 500);
+            var resultRows = await LoadApiSportsMarketJoinResultRowsAsync(dbContext, range, null, cancellationToken);
+            var platformRows = await LoadApiSportsMarketJoinPlatformRowsAsync(dbContext, range, null, cancellationToken);
+            var mappingCoverage = BuildApiSportsSoccerFixtureMappingCoverage(
+                resultRows,
+                platformRows,
+                includeResolved: true,
+                includeUnresolved: true,
+                includeSamples != false,
+                sampleLimit);
+            var coverage = await BuildTheOddsSoccerWorldCupIngestionCoverageAsync(
+                dbContext,
+                range,
+                resultRows,
+                platformRows,
+                mappingCoverage,
+                includeSamples != false,
+                sampleLimit,
+                cancellationToken);
+
+            return Results.Ok(new
+            {
+                generatedAtUtc = DateTimeOffset.UtcNow,
+                callsExternalApis = false,
+                readOnly = true,
+                writesRows = false,
+                publicSoccerGradingEnabled = false,
+                scope = new
+                {
+                    range.FromDate,
+                    range.ToDate,
+                    maxSamples = sampleLimit
+                },
+                summary = coverage.Summary,
+                realProviderEvents = coverage.RealProviderEvents,
+                syntheticOrLegacySoccerRows = coverage.SyntheticOrLegacySoccerRows,
+                apiSportsFixtureResultCoverage = coverage.ApiSportsFixtureResultCoverage,
+                latestSoccerRefreshRun = coverage.LatestSoccerRefreshRun,
+                gapAnalysis = coverage.GapAnalysis,
+                recommendedNextAction = coverage.RecommendedNextAction
+            });
+        })
+        .WithName("TheOddsSoccerWorldCupIngestionCoverageDebug")
+        .WithSummary("Read-only diagnostic for persisted The Odds Soccer World Cup provider event ingestion coverage.");
+
+        endpoints.MapGet("/api/debug/soccer/player-identity/the-odds/api-sports/alias-candidates", async (
+            string? fixtureId,
+            string? providerEventId,
+            bool? includeSamples,
+            int? maxSamples,
+            ApplicationDbContext dbContext,
+            CancellationToken cancellationToken) =>
+        {
+            var normalizedFixtureId = string.IsNullOrWhiteSpace(fixtureId) ? null : fixtureId.Trim();
+            var normalizedProviderEventId = string.IsNullOrWhiteSpace(providerEventId) ? null : providerEventId.Trim();
+            if (string.IsNullOrWhiteSpace(normalizedFixtureId) || string.IsNullOrWhiteSpace(normalizedProviderEventId))
+            {
+                return Results.BadRequest(new
+                {
+                    generatedAtUtc = DateTimeOffset.UtcNow,
+                    callsExternalApis = false,
+                    readOnly = true,
+                    writesRows = false,
+                    publicSoccerGradingEnabled = false,
+                    error = "fixtureId and providerEventId are required."
+                });
+            }
+
+            var sampleLimit = Math.Clamp(maxSamples ?? 50, 1, 250);
+            var resultPlayers = await LoadApiSportsAliasFixturePlayersAsync(dbContext, normalizedFixtureId, cancellationToken);
+            var platformPlayers = await LoadTheOddsAliasPlatformPlayersAsync(dbContext, normalizedProviderEventId, cancellationToken);
+            var preview = BuildTheOddsApiSportsAliasCandidatePreview(resultPlayers, platformPlayers, sampleLimit);
+
+            return Results.Ok(new
+            {
+                generatedAtUtc = DateTimeOffset.UtcNow,
+                callsExternalApis = false,
+                readOnly = true,
+                writesRows = false,
+                publicSoccerGradingEnabled = false,
+                scope = new
+                {
+                    fixtureId = normalizedFixtureId,
+                    providerEventId = normalizedProviderEventId
+                },
+                summary = preview.Summary,
+                blockers = preview.Blockers,
+                samples = includeSamples != false ? preview.Samples : null,
+                recommendation = preview.Recommendation
+            });
+        })
+        .WithName("TheOddsApiSportsSoccerAliasCandidatesDebug")
+        .WithSummary("Read-only Soccer player alias candidate diagnostic for The Odds platform context rows against API-Sports fixture result players.");
+
+        endpoints.MapPost("/api/debug/soccer/player-identity/the-odds/api-sports/alias-link", async (
+            TheOddsApiSportsAliasLinkRequest request,
+            ApplicationDbContext dbContext,
+            CancellationToken cancellationToken) =>
+        {
+            var normalizedFixtureId = string.IsNullOrWhiteSpace(request.FixtureId) ? null : request.FixtureId.Trim();
+            var normalizedProviderEventId = string.IsNullOrWhiteSpace(request.ProviderEventId) ? null : request.ProviderEventId.Trim();
+            if (string.IsNullOrWhiteSpace(normalizedFixtureId) || string.IsNullOrWhiteSpace(normalizedProviderEventId))
+            {
+                return Results.BadRequest(new
+                {
+                    generatedAtUtc = DateTimeOffset.UtcNow,
+                    callsExternalApis = false,
+                    readOnly = true,
+                    writesRows = false,
+                    publicSoccerGradingEnabled = false,
+                    error = "fixtureId and providerEventId are required."
+                });
+            }
+
+            var dryRun = request.DryRun != false;
+            var minConfidence = Math.Clamp(request.MinConfidence ?? 0.94m, 0m, 1m);
+            var maxLinks = Math.Clamp(request.MaxLinks ?? 50, 1, 250);
+            var includeExactNormalizedMatches = request.IncludeExactNormalizedMatches != false;
+            var includeTokenSubsetMatches = request.IncludeTokenSubsetMatches != false;
+            var resultPlayers = await LoadApiSportsAliasFixturePlayersAsync(dbContext, normalizedFixtureId, cancellationToken);
+            var platformPlayers = await LoadTheOddsAliasPlatformPlayersAsync(dbContext, normalizedProviderEventId, cancellationToken);
+            var candidateRows = platformPlayers
+                .Select(platformPlayer => BuildTheOddsApiSportsAliasCandidateRow(platformPlayer, resultPlayers))
+                .ToArray();
+            var plan = await BuildTheOddsApiSportsAliasLinkPlanAsync(
+                dbContext,
+                candidateRows,
+                normalizedFixtureId,
+                normalizedProviderEventId,
+                minConfidence,
+                includeExactNormalizedMatches,
+                includeTokenSubsetMatches,
+                maxLinks,
+                cancellationToken);
+            var insertedLinks = Array.Empty<TheOddsApiSportsAliasLinkAuditRow>();
+
+            if (!dryRun && plan.ProposedLinks.Count > 0)
+            {
+                insertedLinks = await WriteTheOddsApiSportsAliasLinksAsync(
+                    dbContext,
+                    normalizedFixtureId,
+                    normalizedProviderEventId,
+                    plan.ProposedLinks,
+                    cancellationToken);
+            }
+
+            var linksInserted = insertedLinks.Length;
+            var summary = new
+            {
+                candidatesEvaluated = candidateRows.Length,
+                safeCandidates = candidateRows.Count(row => row.SuggestedAction == "SafeAliasCandidate"),
+                linksProposed = plan.ProposedLinks.Count,
+                linksInserted,
+                linksAlreadyExisting = plan.LinksAlreadyExisting,
+                linksSkipped = plan.Skipped.Count,
+                skippedAmbiguous = plan.Skipped.Count(row => row.Reason == "Ambiguous"),
+                skippedNeedsReview = plan.Skipped.Count(row => row.Reason == "NeedsReview"),
+                skippedNoCandidate = plan.Skipped.Count(row => row.Reason == "NoCandidate"),
+                skippedBelowConfidence = plan.Skipped.Count(row => row.Reason == "BelowMinimumConfidence"),
+                skippedExistingConflict = plan.Skipped.Count(row => row.Reason == "ExistingLinkConflict"),
+                skippedExcludedByRequest = plan.Skipped.Count(row => row.Reason == "ExactNormalizedMatchExcluded" || row.Reason == "TokenSubsetMatchExcluded"),
+                dryRun
+            };
+
+            return Results.Ok(new
+            {
+                generatedAtUtc = DateTimeOffset.UtcNow,
+                callsExternalApis = false,
+                readOnly = dryRun,
+                writesRows = !dryRun && linksInserted > 0,
+                publicSoccerGradingEnabled = false,
+                scope = new
+                {
+                    fixtureId = normalizedFixtureId,
+                    providerEventId = normalizedProviderEventId,
+                    minConfidence,
+                    includeExactNormalizedMatches,
+                    includeTokenSubsetMatches,
+                    maxLinks
+                },
+                summary,
+                proposedLinks = plan.ProposedLinks,
+                writtenLinks = insertedLinks,
+                skipped = plan.Skipped,
+                recommendation = BuildTheOddsApiSportsAliasLinkRecommendation(dryRun, plan.ProposedLinks.Count, linksInserted, plan.Skipped)
+            });
+        })
+        .WithName("TheOddsApiSportsSoccerAliasLinkDebug")
+        .WithSummary("Debug-only dry-run-first persistence for approved The Odds Soccer player aliases to API-Sports/local player identities.");
+
+        endpoints.MapPost("/api/debug/soccer/player-identity/the-odds/api-sports/alias-link/manual-approve", async (
+            TheOddsApiSportsAliasManualApprovalRequest request,
+            ApplicationDbContext dbContext,
+            CancellationToken cancellationToken) =>
+        {
+            var normalizedFixtureId = string.IsNullOrWhiteSpace(request.FixtureId) ? null : request.FixtureId.Trim();
+            var normalizedProviderEventId = string.IsNullOrWhiteSpace(request.ProviderEventId) ? null : request.ProviderEventId.Trim();
+            var normalizedPlatformPlayerName = NormalizeResultPlayerName(request.PlatformPlayerName);
+            var normalizedApiSportsPlayerId = string.IsNullOrWhiteSpace(request.ApiSportsPlayerId) ? null : request.ApiSportsPlayerId.Trim();
+            if (string.IsNullOrWhiteSpace(normalizedFixtureId)
+                || string.IsNullOrWhiteSpace(normalizedProviderEventId)
+                || string.IsNullOrWhiteSpace(normalizedPlatformPlayerName)
+                || string.IsNullOrWhiteSpace(normalizedApiSportsPlayerId)
+                || request.LocalPlayerId is null)
+            {
+                return Results.BadRequest(new
+                {
+                    generatedAtUtc = DateTimeOffset.UtcNow,
+                    callsExternalApis = false,
+                    readOnly = true,
+                    writesRows = false,
+                    publicSoccerGradingEnabled = false,
+                    error = "fixtureId, providerEventId, platformPlayerName, apiSportsPlayerId, and localPlayerId are required."
+                });
+            }
+
+            var dryRun = request.DryRun != false;
+            var resultPlayers = await LoadApiSportsAliasFixturePlayersAsync(dbContext, normalizedFixtureId, cancellationToken);
+            var platformPlayers = await LoadTheOddsAliasPlatformPlayersAsync(dbContext, normalizedProviderEventId, cancellationToken);
+            var platformPlayer = platformPlayers
+                .SingleOrDefault(row => string.Equals(row.NormalizedPlayerName, normalizedPlatformPlayerName, StringComparison.OrdinalIgnoreCase));
+            TheOddsApiSportsAliasCandidateRow? candidateRow = platformPlayer is null
+                ? null
+                : BuildTheOddsApiSportsAliasCandidateRow(platformPlayer, resultPlayers);
+            var skipped = new List<TheOddsApiSportsAliasLinkSkippedRow>();
+            TheOddsApiSportsAliasLinkAuditRow[] proposed = [];
+            TheOddsApiSportsAliasLinkAuditRow[] written = [];
+
+            if (candidateRow is null)
+            {
+                skipped.Add(new TheOddsApiSportsAliasLinkSkippedRow(
+                    request.PlatformPlayerName ?? string.Empty,
+                    normalizedPlatformPlayerName,
+                    normalizedProviderEventId,
+                    0,
+                    "PlatformPlayerNotFound",
+                    ["NoPlatformPlayerCandidate"],
+                    null,
+                    null,
+                    null));
+            }
+            else if (candidateRow.SuggestedAction != "NeedsReview")
+            {
+                skipped.Add(BuildTheOddsApiSportsAliasSkippedRow(candidateRow, candidateRow.SuggestedAction));
+            }
+            else if (candidateRow.Candidates.Count != 1)
+            {
+                skipped.Add(BuildTheOddsApiSportsAliasSkippedRow(candidateRow, "Ambiguous"));
+            }
+            else
+            {
+                var candidate = candidateRow.Candidates[0];
+                if (!string.Equals(candidate.ApiSportsPlayerId, normalizedApiSportsPlayerId, StringComparison.OrdinalIgnoreCase)
+                    || candidate.LocalPlayerId != request.LocalPlayerId.Value)
+                {
+                    skipped.Add(new TheOddsApiSportsAliasLinkSkippedRow(
+                        candidateRow.PlatformPlayerName,
+                        candidateRow.NormalizedPlatformPlayerName,
+                        candidateRow.ProviderEventId,
+                        candidateRow.Confidence,
+                        "CandidateIdMismatch",
+                        candidateRow.Blockers,
+                        candidate.ApiSportsPlayerName,
+                        candidate.LocalPlayerId,
+                        null));
+                }
+                else
+                {
+                    var auditRow = BuildTheOddsApiSportsAliasLinkAuditRow(candidateRow, candidate, normalizedProviderEventId);
+                    var existingLink = await dbContext.ProviderEntityLinks
+                        .AsNoTracking()
+                        .Where(link => link.ProviderKey == TheOddsSoccerAliasProviderKey
+                            && link.EntityType == "Player"
+                            && link.ProviderEntityId == auditRow.ProviderEntityId)
+                        .Select(link => new
+                        {
+                            link.CanonicalEntityId,
+                            link.CanonicalEntityName,
+                            link.LinkStatus
+                        })
+                        .FirstOrDefaultAsync(cancellationToken);
+
+                    if (existingLink is not null
+                        && string.Equals(existingLink.LinkStatus, "Approved", StringComparison.OrdinalIgnoreCase)
+                        && existingLink.CanonicalEntityId == auditRow.LocalPlayerId)
+                    {
+                        skipped.Add(new TheOddsApiSportsAliasLinkSkippedRow(
+                            auditRow.PlatformPlayerName,
+                            auditRow.NormalizedPlatformPlayerName,
+                            auditRow.ProviderEventId,
+                            auditRow.Confidence,
+                            "AlreadyLinked",
+                            auditRow.Blockers,
+                            auditRow.CandidateApiSportsPlayerName,
+                            auditRow.LocalPlayerId,
+                            existingLink.CanonicalEntityName));
+                    }
+                    else if (existingLink is not null)
+                    {
+                        skipped.Add(new TheOddsApiSportsAliasLinkSkippedRow(
+                            auditRow.PlatformPlayerName,
+                            auditRow.NormalizedPlatformPlayerName,
+                            auditRow.ProviderEventId,
+                            auditRow.Confidence,
+                            "ExistingLinkConflict",
+                            auditRow.Blockers,
+                            auditRow.CandidateApiSportsPlayerName,
+                            auditRow.LocalPlayerId,
+                            existingLink.CanonicalEntityName));
+                    }
+                    else
+                    {
+                        proposed = [auditRow];
+                        if (!dryRun)
+                        {
+                            written = await WriteTheOddsApiSportsAliasLinksAsync(
+                                dbContext,
+                                normalizedFixtureId,
+                                normalizedProviderEventId,
+                                proposed,
+                                cancellationToken,
+                                approvalReason: FirstNonBlank(request.Reason),
+                                linkSource: "DebugTheOddsApiSportsManualAliasApproval",
+                                dryRunFirstEndpoint: "/api/debug/soccer/player-identity/the-odds/api-sports/alias-link/manual-approve",
+                                approvedBy: "debug/manual-approve");
+                        }
+                    }
+                }
+            }
+
+            var summary = new
+            {
+                candidateFound = candidateRow is not null,
+                suggestedAction = candidateRow?.SuggestedAction,
+                confidence = candidateRow?.Confidence,
+                candidateCount = candidateRow?.Candidates.Count ?? 0,
+                linksProposed = proposed.Length,
+                linksInserted = written.Length,
+                linksSkipped = skipped.Count,
+                dryRun
+            };
+
+            return Results.Ok(new
+            {
+                generatedAtUtc = DateTimeOffset.UtcNow,
+                callsExternalApis = false,
+                readOnly = dryRun,
+                writesRows = !dryRun && written.Length > 0,
+                publicSoccerGradingEnabled = false,
+                scope = new
+                {
+                    fixtureId = normalizedFixtureId,
+                    providerEventId = normalizedProviderEventId,
+                    platformPlayerName = request.PlatformPlayerName,
+                    apiSportsPlayerId = normalizedApiSportsPlayerId,
+                    localPlayerId = request.LocalPlayerId,
+                    reason = FirstNonBlank(request.Reason)
+                },
+                candidate = candidateRow,
+                summary,
+                proposedLink = proposed.FirstOrDefault(),
+                writtenLink = written.FirstOrDefault(),
+                skipped = skipped.FirstOrDefault(),
+                recommendation = BuildTheOddsApiSportsManualAliasApprovalRecommendation(dryRun, proposed.Length, written.Length, skipped)
+            });
+        })
+        .WithName("TheOddsApiSportsSoccerAliasManualApprovalDebug")
+        .WithSummary("Debug-only manual one-at-a-time approval for reviewed The Odds Soccer NeedsReview aliases.");
+
+        endpoints.MapGet("/api/debug/soccer/player-identity/the-odds/api-sports/alias-candidates-batch", async (
+            DateOnly? fromDate,
+            DateOnly? toDate,
+            bool? includeSamples,
+            int? maxFixtures,
+            int? maxSamples,
+            decimal? minConfidence,
+            ApplicationDbContext dbContext,
+            CancellationToken cancellationToken) =>
+        {
+            var range = NormalizeApiSportsWorldCupDateRange(fromDate, toDate);
+            var fixtureLimit = Math.Clamp(maxFixtures ?? 50, 1, 250);
+            var sampleLimit = Math.Clamp(maxSamples ?? 200, 1, 1000);
+            var minimumConfidence = Math.Clamp(minConfidence ?? 0.94m, 0m, 1m);
+            var batch = await BuildTheOddsApiSportsAliasBatchAsync(
+                dbContext,
+                range,
+                fixtureLimit,
+                sampleLimit,
+                minimumConfidence,
+                includeExactNormalizedMatches: true,
+                includeTokenSubsetMatches: true,
+                maxLinks: sampleLimit,
+                includePlan: true,
+                cancellationToken);
+
+            return Results.Ok(new
+            {
+                generatedAtUtc = DateTimeOffset.UtcNow,
+                callsExternalApis = false,
+                readOnly = true,
+                writesRows = false,
+                publicSoccerGradingEnabled = false,
+                scope = new
+                {
+                    range.FromDate,
+                    range.ToDate,
+                    maxFixtures = fixtureLimit,
+                    maxSamples = sampleLimit,
+                    minConfidence = minimumConfidence
+                },
+                summary = batch.CandidateSummary,
+                estimatedCoverageImpact = batch.EstimatedCoverageImpact,
+                candidateGroups = includeSamples != false ? batch.CandidateGroups.Take(sampleLimit).ToArray() : null,
+                deduplicatedCandidates = includeSamples != false ? batch.DeduplicatedCandidates.Take(sampleLimit).ToArray() : null,
+                blockers = batch.Blockers,
+                recommendation = batch.CandidateRecommendation
+            });
+        })
+        .WithName("TheOddsApiSportsSoccerAliasCandidatesBatchDebug")
+        .WithSummary("Read-only batch Soccer alias candidate diagnostic across resolved The Odds/API-Sports World Cup fixture pairs.");
+
+        endpoints.MapPost("/api/debug/soccer/player-identity/the-odds/api-sports/alias-link-batch", async (
+            TheOddsApiSportsAliasLinkBatchRequest request,
+            ApplicationDbContext dbContext,
+            CancellationToken cancellationToken) =>
+        {
+            var range = NormalizeApiSportsWorldCupDateRange(request.FromDate, request.ToDate);
+            var dryRun = request.DryRun != false;
+            var minimumConfidence = Math.Clamp(request.MinConfidence ?? 0.94m, 0m, 1m);
+            var maxLinks = Math.Clamp(request.MaxLinks ?? 200, 1, 1000);
+            var includeExactNormalizedMatches = request.IncludeExactNormalizedMatches != false;
+            var includeTokenSubsetMatches = request.IncludeTokenSubsetMatches != false;
+            var batch = await BuildTheOddsApiSportsAliasBatchAsync(
+                dbContext,
+                range,
+                maxFixtures: 250,
+                sampleLimit: maxLinks,
+                minimumConfidence,
+                includeExactNormalizedMatches,
+                includeTokenSubsetMatches,
+                maxLinks,
+                includePlan: true,
+                cancellationToken);
+            var writtenLinks = new List<TheOddsApiSportsAliasLinkAuditRow>();
+
+            if (!dryRun)
+            {
+                foreach (var group in batch.LinkPlans)
+                {
+                    if (writtenLinks.Count >= maxLinks)
+                    {
+                        break;
+                    }
+
+                    var remaining = maxLinks - writtenLinks.Count;
+                    var proposed = group.Plan.ProposedLinks.Take(remaining).ToArray();
+                    if (proposed.Length == 0)
+                    {
+                        continue;
+                    }
+
+                    var inserted = await WriteTheOddsApiSportsAliasLinksAsync(
+                        dbContext,
+                        group.FixtureId,
+                        group.ProviderEventId,
+                        proposed,
+                        cancellationToken);
+                    writtenLinks.AddRange(inserted);
+                }
+            }
+
+            var linksInserted = writtenLinks.Count;
+            var proposedLinks = batch.LinkPlans
+                .SelectMany(group => group.Plan.ProposedLinks)
+                .Take(maxLinks)
+                .ToArray();
+            var skipped = batch.LinkPlans
+                .SelectMany(group => group.Plan.Skipped)
+                .ToArray();
+            var summary = new
+            {
+                resolvedPairsEvaluated = batch.ResolvedPairsEvaluated,
+                candidatesEvaluated = batch.CandidatesEvaluated,
+                safeCandidates = batch.SafeCandidates,
+                linksProposed = proposedLinks.Length,
+                linksInserted,
+                linksAlreadyExisting = batch.LinkPlans.Sum(group => group.Plan.LinksAlreadyExisting),
+                skippedNoCandidate = skipped.Count(row => row.Reason == "NoCandidate"),
+                skippedAmbiguous = skipped.Count(row => row.Reason == "Ambiguous"),
+                skippedNeedsReview = skipped.Count(row => row.Reason == "NeedsReview"),
+                skippedBelowConfidence = skipped.Count(row => row.Reason == "BelowMinimumConfidence"),
+                skippedConflictingExisting = skipped.Count(row => row.Reason == "ExistingLinkConflict"),
+                skippedExcludedByRequest = skipped.Count(row => row.Reason == "ExactNormalizedMatchExcluded" || row.Reason == "TokenSubsetMatchExcluded"),
+                dryRun
+            };
+
+            return Results.Ok(new
+            {
+                generatedAtUtc = DateTimeOffset.UtcNow,
+                callsExternalApis = false,
+                readOnly = dryRun,
+                writesRows = !dryRun && linksInserted > 0,
+                publicSoccerGradingEnabled = false,
+                scope = new
+                {
+                    range.FromDate,
+                    range.ToDate,
+                    minConfidence = minimumConfidence,
+                    maxLinks,
+                    includeExactNormalizedMatches,
+                    includeTokenSubsetMatches
+                },
+                summary,
+                proposedLinks,
+                writtenLinks,
+                skipped,
+                recommendation = BuildTheOddsApiSportsAliasLinkRecommendation(dryRun, proposedLinks.Length, linksInserted, skipped)
+            });
+        })
+        .WithName("TheOddsApiSportsSoccerAliasLinkBatchDebug")
+        .WithSummary("Debug-only dry-run-first batch persistence for safe The Odds Soccer aliases across resolved API-Sports fixture pairs.");
+
         endpoints.MapGet("/api/debug/soccer/player-identity/api-sports/world-cup/coverage", async (
             DateOnly? fromDate,
             DateOnly? toDate,
@@ -1877,6 +2636,12 @@ public static class ResultsDebugEndpoints
             var platformRows = contextRows.Where(row => row.SourceName == "platform_props").ToArray();
             var snapshotRows = contextRows.Where(row => row.SourceName != "platform_props").ToArray();
             var fieldAvailability = BuildApiSportsSoccerPlatformContextAvailability(contextRows);
+            var contextEnrichedRows = contextRows.Count(row =>
+                !string.IsNullOrWhiteSpace(row.ProviderEventId)
+                && !string.IsNullOrWhiteSpace(row.EventName)
+                && !string.IsNullOrWhiteSpace(row.HomeTeamName)
+                && !string.IsNullOrWhiteSpace(row.AwayTeamName)
+                && row.StartTime.HasValue);
             var contextBySource = contextRows
                 .GroupBy(row => new { row.SourceName, row.TableName })
                 .OrderBy(group => group.Key.SourceName)
@@ -1904,6 +2669,18 @@ public static class ResultsDebugEndpoints
                 soccerPlatformPlayers = platformRows.Select(row => row.CanonicalPlayerId).Where(id => id.HasValue).Distinct().Count(),
                 soccerSnapshots = snapshotRows.Length,
                 fieldAvailability,
+                contextEnrichment = new
+                {
+                    enrichedRows = contextEnrichedRows,
+                    preContextOrPartialRows = Math.Max(0, contextRows.Count - contextEnrichedRows),
+                    status = contextRows.Count == 0
+                        ? "NoRows"
+                        : contextEnrichedRows == contextRows.Count
+                            ? "ContextEnriched"
+                            : contextEnrichedRows == 0
+                                ? "PreContextOrMissingContext"
+                                : "Mixed"
+                },
                 contextBySource,
                 samples = includeSamples == true
                     ? contextRows
@@ -3333,12 +4110,12 @@ public static class ResultsDebugEndpoints
                     opponent,
                     eventName,
                     row.StartTime,
-                    ExtractApiSportsContextMetadataString(row.Metadata, "eventInfo", "eventId"),
+                    FirstNonBlank(
+                        ExtractApiSportsContextMetadataString(row.Metadata, "eventInfo", "providerEventId"),
+                        ExtractApiSportsContextMetadataString(row.Metadata, "eventInfo", "eventId")),
                     FirstNonBlank(
                         ExtractApiSportsContextMetadataString(row.Metadata, "player", "id"),
-                        ExtractApiSportsContextMetadataString(row.Metadata, "participant", "id"),
-                        row.ExternalStableKey,
-                        row.PlatformPropId),
+                        ExtractApiSportsContextMetadataString(row.Metadata, "participant", "id")),
                     row.Provider,
                     row.Bookmaker,
                     homeTeam,
@@ -3346,6 +4123,9 @@ public static class ResultsDebugEndpoints
                     FirstNonBlank(
                         ExtractApiSportsContextMetadataRootString(row.Metadata, "competition"),
                         ExtractApiSportsContextMetadataRootString(row.Metadata, "league"),
+                        ExtractApiSportsContextMetadataString(row.Metadata, "sport", "competition"),
+                        ExtractApiSportsContextMetadataString(row.Metadata, "sport", "leagueName"),
+                        ExtractApiSportsContextMetadataString(row.Metadata, "sport", "providerSportKey"),
                         ExtractApiSportsContextMetadataString(row.Metadata, "eventInfo", "competition"),
                         ExtractApiSportsContextMetadataString(row.Metadata, "eventInfo", "league")));
             })
@@ -3544,6 +4324,42 @@ public static class ResultsDebugEndpoints
         {
             JsonValueKind.String => property.GetString(),
             JsonValueKind.Number => property.GetRawText(),
+            _ => null
+        };
+    }
+
+    private static bool? ExtractApiSportsContextMetadataBool(JsonDocument? metadata, string propertyName)
+    {
+        if (metadata?.RootElement.ValueKind != JsonValueKind.Object
+            || !metadata.RootElement.TryGetProperty(propertyName, out var property))
+        {
+            return null;
+        }
+
+        return property.ValueKind switch
+        {
+            JsonValueKind.True => true,
+            JsonValueKind.False => false,
+            JsonValueKind.String when bool.TryParse(property.GetString(), out var parsed) => parsed,
+            _ => null
+        };
+    }
+
+    private static bool? ExtractApiSportsContextMetadataBool(JsonDocument? metadata, string sectionName, string propertyName)
+    {
+        if (metadata?.RootElement.ValueKind != JsonValueKind.Object
+            || !metadata.RootElement.TryGetProperty(sectionName, out var section)
+            || section.ValueKind != JsonValueKind.Object
+            || !section.TryGetProperty(propertyName, out var property))
+        {
+            return null;
+        }
+
+        return property.ValueKind switch
+        {
+            JsonValueKind.True => true,
+            JsonValueKind.False => false,
+            JsonValueKind.String when bool.TryParse(property.GetString(), out var parsed) => parsed,
             _ => null
         };
     }
@@ -4285,6 +5101,2825 @@ public static class ResultsDebugEndpoints
 
         return ApiSportsCoverageMatchDiagnostic.FromResult(result, false, false, "Unknown", "No safe local join path was identified.");
     }
+
+    private static async Task<IReadOnlyList<ApiSportsMarketJoinResultRow>> LoadApiSportsMarketJoinResultRowsAsync(
+        ApplicationDbContext dbContext,
+        ApiSportsWorldCupDateRange range,
+        string? fixtureId,
+        CancellationToken cancellationToken)
+    {
+        var rows = await dbContext.PropResults
+            .AsNoTracking()
+            .Include(result => result.Player)!.ThenInclude(player => player!.Team)
+            .Include(result => result.PropType)
+            .Where(result => result.ExternalSource == ApiSportsFootballResultSource
+                && result.EventDate >= range.FromDate
+                && result.EventDate <= range.ToDate
+                && result.ExternalSourceIdentifier.StartsWith($"{ApiSportsFootballResultSource}:"))
+            .Select(result => new
+            {
+                result.Id,
+                result.EventDate,
+                result.ExternalSourceIdentifier,
+                result.ActualResultValue,
+                result.PlayerId,
+                PlayerName = result.Player == null ? string.Empty : result.Player.DisplayName,
+                TeamName = result.Player == null || result.Player.Team == null ? null : result.Player.Team.Name,
+                PropTypeName = result.PropType == null ? string.Empty : result.PropType.Name,
+                StatKey = result.PropType == null ? string.Empty : result.PropType.StatKey
+            })
+            .ToListAsync(cancellationToken);
+
+        return rows
+            .Select(row => new ApiSportsMarketJoinResultRow(
+                row.Id,
+                row.EventDate,
+                ExtractApiSportsFixtureId(row.ExternalSourceIdentifier),
+                ExtractApiSportsPlayerId(row.ExternalSourceIdentifier),
+                row.PlayerId,
+                row.PlayerName,
+                NormalizeResultPlayerName(row.PlayerName),
+                row.TeamName,
+                NormalizeResultPlayerName(row.TeamName),
+                row.PropTypeName,
+                NormalizeApiSportsResultStatKey(row.StatKey, row.PropTypeName),
+                row.ActualResultValue,
+                row.ExternalSourceIdentifier))
+            .Where(row => string.IsNullOrWhiteSpace(fixtureId)
+                || string.Equals(row.ApiSportsFixtureId, fixtureId, StringComparison.OrdinalIgnoreCase))
+            .ToArray();
+    }
+
+    private static async Task<IReadOnlyList<ApiSportsMarketJoinPlatformRow>> LoadApiSportsMarketJoinPlatformRowsAsync(
+        ApplicationDbContext dbContext,
+        ApiSportsWorldCupDateRange range,
+        string? providerEventId,
+        CancellationToken cancellationToken)
+    {
+        var fromUtc = new DateTimeOffset(range.FromDate.ToDateTime(TimeOnly.MinValue), TimeSpan.Zero);
+        var toUtc = new DateTimeOffset(range.ToDate.ToDateTime(TimeOnly.MaxValue), TimeSpan.Zero);
+        var rows = await dbContext.PlatformProps
+            .AsNoTracking()
+            .Include(platformProp => platformProp.Platform)
+            .Include(platformProp => platformProp.Prop)!.ThenInclude(prop => prop!.Player)
+            .Include(platformProp => platformProp.Prop)!.ThenInclude(prop => prop!.PropType)
+            .Include(platformProp => platformProp.Prop)!.ThenInclude(prop => prop!.Game)!.ThenInclude(game => game!.HomeTeam)
+            .Include(platformProp => platformProp.Prop)!.ThenInclude(prop => prop!.Game)!.ThenInclude(game => game!.AwayTeam)
+            .Include(platformProp => platformProp.Prop)!.ThenInclude(prop => prop!.League)!.ThenInclude(league => league!.Sport)
+            .Where(platformProp => platformProp.Prop != null
+                && platformProp.Prop.League != null
+                && platformProp.Prop.League.Sport != null
+                && platformProp.Prop.League.Sport.Code == "SOCCER"
+                && platformProp.Prop.StartsAt >= fromUtc
+                && platformProp.Prop.StartsAt <= toUtc)
+            .Select(platformProp => new
+            {
+                platformProp.Id,
+                platformProp.PlatformPropId,
+                platformProp.ExternalStableKey,
+                platformProp.CurrentLine,
+                platformProp.OverAvailable,
+                platformProp.UnderAvailable,
+                platformProp.Metadata,
+                Provider = platformProp.Platform == null ? null : platformProp.Platform.Name,
+                Bookmaker = platformProp.Platform == null ? null : platformProp.Platform.Slug,
+                PlayerName = platformProp.Prop!.Player == null ? string.Empty : platformProp.Prop.Player.DisplayName,
+                PropTypeName = platformProp.Prop.PropType == null ? string.Empty : platformProp.Prop.PropType.Name,
+                StatKey = platformProp.Prop.PropType == null ? string.Empty : platformProp.Prop.PropType.StatKey,
+                EventStartTime = platformProp.Prop.StartsAt,
+                GameHomeTeam = platformProp.Prop.Game == null || platformProp.Prop.Game.HomeTeam == null ? null : platformProp.Prop.Game.HomeTeam.Name,
+                GameAwayTeam = platformProp.Prop.Game == null || platformProp.Prop.Game.AwayTeam == null ? null : platformProp.Prop.Game.AwayTeam.Name
+            })
+            .ToListAsync(cancellationToken);
+
+        var platformRows = rows
+            .Select(row =>
+            {
+                var metadataProviderEventId = FirstNonBlank(
+                    ExtractApiSportsContextMetadataString(row.Metadata, "eventInfo", "providerEventId"),
+                    ExtractApiSportsContextMetadataString(row.Metadata, "eventInfo", "eventId"),
+                    row.ExternalStableKey);
+                var marketKey = ExtractApiSportsContextMetadataString(row.Metadata, "market", "key");
+                var homeTeam = FirstNonBlank(row.GameHomeTeam, ExtractApiSportsContextMetadataString(row.Metadata, "eventInfo", "homeTeam"));
+                var awayTeam = FirstNonBlank(row.GameAwayTeam, ExtractApiSportsContextMetadataString(row.Metadata, "eventInfo", "awayTeam"));
+                return new ApiSportsMarketJoinPlatformRow(
+                    row.Id,
+                    row.PlatformPropId,
+                    metadataProviderEventId,
+                    ExtractApiSportsContextMetadataRootString(row.Metadata, "dataProvider"),
+                    ExtractApiSportsContextMetadataRootString(row.Metadata, "contextSchemaVersion"),
+                    row.Provider,
+                    row.Bookmaker,
+                    row.PlayerName,
+                    NormalizeResultPlayerName(row.PlayerName),
+                    row.PropTypeName,
+                    NormalizeApiSportsResultStatKey(row.StatKey, row.PropTypeName),
+                    marketKey,
+                    NormalizeTheOddsSoccerMarketKeyToStatKey(marketKey),
+                    row.CurrentLine,
+                    ResolveApiSportsMarketJoinSide(row.OverAvailable, row.UnderAvailable),
+                    DateOnly.FromDateTime(row.EventStartTime.UtcDateTime),
+                    row.EventStartTime,
+                    BuildApiSportsContextEventName(awayTeam, homeTeam),
+                    homeTeam,
+                    awayTeam,
+                    ExtractApiSportsContextMetadataString(row.Metadata, "player", "providerPlayerId"),
+                    ExtractApiSportsContextMetadataString(row.Metadata, "player", "teamName"),
+                    FirstNonBlank(
+                        ExtractApiSportsContextMetadataRootString(row.Metadata, "providerCategory"),
+                        ExtractApiSportsContextMetadataString(row.Metadata, "entry", "providerCategory")),
+                    ExtractApiSportsContextMetadataString(row.Metadata, "sport", "providerSportKey"),
+                    ExtractApiSportsContextMetadataString(row.Metadata, "sport", "competition"),
+                    ExtractApiSportsContextMetadataBool(row.Metadata, "isActionableForUser")
+                        ?? ExtractApiSportsContextMetadataBool(row.Metadata, "entry", "actionableForUser"),
+                    ExtractApiSportsContextMetadataBool(row.Metadata, "sportsbookContextResearchOnly")
+                        ?? string.Equals(
+                            FirstNonBlank(
+                                ExtractApiSportsContextMetadataRootString(row.Metadata, "providerCategory"),
+                                ExtractApiSportsContextMetadataString(row.Metadata, "entry", "providerCategory")),
+                            "Sportsbook",
+                            StringComparison.OrdinalIgnoreCase),
+                    AliasCanonicalPlayerId: null);
+            })
+            .Where(row => string.IsNullOrWhiteSpace(providerEventId)
+                || string.Equals(row.ProviderEventId, providerEventId, StringComparison.OrdinalIgnoreCase))
+            .ToArray();
+        var aliasProviderEntityIds = platformRows
+            .Where(row => !string.IsNullOrWhiteSpace(row.ProviderEventId))
+            .Select(row => BuildTheOddsSoccerAliasProviderEntityId(row.ProviderEventId!, row.NormalizedPlayerName))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        if (aliasProviderEntityIds.Length == 0)
+        {
+            return platformRows;
+        }
+
+        var aliasLinks = await dbContext.ProviderEntityLinks
+            .AsNoTracking()
+            .Where(link => link.ProviderKey == TheOddsSoccerAliasProviderKey
+                && link.EntityType == "Player"
+                && link.LinkStatus == "Approved"
+                && link.CanonicalEntityId.HasValue
+                && aliasProviderEntityIds.Contains(link.ProviderEntityId))
+            .Select(link => new { link.ProviderEntityId, link.CanonicalEntityId })
+            .ToListAsync(cancellationToken);
+        var aliasesByProviderEntityId = aliasLinks
+            .GroupBy(link => link.ProviderEntityId, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(group => group.Key, group => group.First().CanonicalEntityId, StringComparer.OrdinalIgnoreCase);
+
+        return platformRows
+            .Select(row =>
+            {
+                if (string.IsNullOrWhiteSpace(row.ProviderEventId))
+                {
+                    return row;
+                }
+
+                var providerEntityId = BuildTheOddsSoccerAliasProviderEntityId(row.ProviderEventId, row.NormalizedPlayerName);
+                return aliasesByProviderEntityId.TryGetValue(providerEntityId, out var canonicalPlayerId)
+                    ? row with { AliasCanonicalPlayerId = canonicalPlayerId }
+                    : row;
+            })
+            .ToArray();
+    }
+
+    private static async Task<IReadOnlyList<ApiSportsProviderStatMappingDiagnosticRow>> LoadApiSportsSoccerProviderStatMappingRowsAsync(
+        ApplicationDbContext dbContext,
+        CancellationToken cancellationToken)
+    {
+        return await dbContext.ProviderStatMappings
+            .AsNoTracking()
+            .Include(mapping => mapping.Sport)
+            .Where(mapping => mapping.IsActive
+                && mapping.ProviderKey == ApiSportsFootballResultSource
+                && mapping.Sport != null
+                && mapping.Sport.Code == "SOCCER"
+                && mapping.CompetitionScope == "World Cup"
+                && mapping.Season == ApiSportsWorldCupSeason)
+            .Select(mapping => new ApiSportsProviderStatMappingDiagnosticRow(
+                mapping.CanonicalStatKey,
+                mapping.DisplayName,
+                mapping.RuleConfidence,
+                mapping.IsGradeable,
+                mapping.PublicGradingEnabled,
+                mapping.ProviderStatKey,
+                mapping.ValueTransform))
+            .ToArrayAsync(cancellationToken);
+    }
+
+    private static ApiSportsMarketJoinPreview BuildApiSportsMarketJoinPreview(
+        IReadOnlyList<ApiSportsMarketJoinResultRow> resultRows,
+        IReadOnlyList<ApiSportsMarketJoinPlatformRow> platformRows,
+        int sampleLimit)
+    {
+        var eventMatches = resultRows.ToDictionary(
+            row => row.ResultId,
+            row => platformRows.Where(platform => IsApiSportsMarketJoinEventMatch(row, platform)).ToArray());
+        var playerMatches = resultRows.ToDictionary(
+            row => row.ResultId,
+            row => eventMatches[row.ResultId].Where(platform => IsApiSportsMarketJoinPlayerMatch(row, platform)).ToArray());
+        var propMatches = resultRows.ToDictionary(
+            row => row.ResultId,
+            row => eventMatches[row.ResultId].Where(platform => ApiSportsSoccerStatKeysMatch(row.StatKey, platform.CanonicalStatKey)).ToArray());
+        var fullMatches = resultRows
+            .SelectMany(result => eventMatches[result.ResultId]
+                .Where(platform => IsApiSportsMarketJoinPlayerMatch(result, platform)
+                    && ApiSportsSoccerStatKeysMatch(result.StatKey, platform.CanonicalStatKey))
+                .Select(platform => BuildApiSportsMarketJoinMatchedSample(result, platform)))
+            .ToArray();
+        var fullyJoinableResultIds = fullMatches.Select(row => row.ResultId).Distinct().ToHashSet();
+        var matchedPlatformIds = fullMatches.Select(row => row.PlatformPropId).Distinct().ToHashSet();
+        var unmatchedResults = resultRows
+            .Where(row => !fullyJoinableResultIds.Contains(row.ResultId))
+            .Select(row => BuildApiSportsMarketJoinUnmatchedResultSample(row, eventMatches[row.ResultId], playerMatches[row.ResultId], propMatches[row.ResultId]))
+            .ToArray();
+        var unmatchedPlatforms = platformRows
+            .Where(row => !matchedPlatformIds.Contains(row.PlatformPropId))
+            .Select(BuildApiSportsMarketJoinUnmatchedPlatformSample)
+            .ToArray();
+        var eventMatchedRows = eventMatches.Count(pair => pair.Value.Length > 0);
+        var playerNameMatchedRows = playerMatches.Count(pair => pair.Value.Length > 0);
+        var propTypeMatchedRows = propMatches.Count(pair => pair.Value.Length > 0);
+        var playerAndPropMatchedRows = resultRows.Count(row => playerMatches[row.ResultId]
+            .Any(platform => ApiSportsSoccerStatKeysMatch(row.StatKey, platform.CanonicalStatKey)));
+        var fullyJoinableRows = fullyJoinableResultIds.Count;
+        var blockerSummary = BuildApiSportsMarketJoinBlockers(resultRows, platformRows, unmatchedResults);
+        var summary = new
+        {
+            importedResultRows = resultRows.Count,
+            candidatePlatformRows = platformRows.Count,
+            eventMatchedRows,
+            playerNameMatchedRows,
+            propTypeMatchedRows,
+            playerAndPropMatchedRows,
+            fullyJoinableRows,
+            unmatchedResultRows = unmatchedResults.Length,
+            unmatchedPlatformRows = unmatchedPlatforms.Length,
+            joinRate = resultRows.Count == 0 ? 0 : decimal.Round((decimal)fullyJoinableRows / resultRows.Count, 4)
+        };
+
+        return new ApiSportsMarketJoinPreview(
+            summary,
+            blockerSummary,
+            new
+            {
+                matched = fullMatches.Take(sampleLimit).ToArray(),
+                unmatchedResults = unmatchedResults.Take(sampleLimit).ToArray(),
+                unmatchedPlatformRows = unmatchedPlatforms.Take(sampleLimit).ToArray()
+            },
+            BuildApiSportsMarketJoinRecommendation(resultRows.Count, eventMatchedRows, fullyJoinableRows, blockerSummary));
+    }
+
+    private static bool IsApiSportsMarketJoinEventMatch(ApiSportsMarketJoinResultRow result, ApiSportsMarketJoinPlatformRow platform)
+    {
+        if (result.EventDate != platform.EventDate)
+        {
+            return false;
+        }
+
+        if (NamesMatch(result.NormalizedTeamName, NormalizeResultPlayerName(platform.HomeTeamName))
+            || NamesMatch(result.NormalizedTeamName, NormalizeResultPlayerName(platform.AwayTeamName)))
+        {
+            return true;
+        }
+
+        return !string.IsNullOrWhiteSpace(platform.ProviderEventId)
+            && string.IsNullOrWhiteSpace(result.TeamName);
+    }
+
+    private static bool IsApiSportsMarketJoinPlayerMatch(ApiSportsMarketJoinResultRow result, ApiSportsMarketJoinPlatformRow platform)
+    {
+        return string.Equals(platform.NormalizedPlayerName, result.NormalizedPlayerName, StringComparison.OrdinalIgnoreCase)
+            || (platform.AliasCanonicalPlayerId.HasValue && platform.AliasCanonicalPlayerId.Value == result.PlayerId);
+    }
+
+    private static bool ApiSportsSoccerStatKeysMatch(string? resultStatKey, string? platformStatKey)
+    {
+        return !string.IsNullOrWhiteSpace(resultStatKey)
+            && !string.IsNullOrWhiteSpace(platformStatKey)
+            && string.Equals(resultStatKey, platformStatKey, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string NormalizeApiSportsResultStatKey(string? statKey, string? propTypeName)
+    {
+        var compact = NormalizeResultPropTypeName(FirstNonBlank(statKey, propTypeName));
+        return compact switch
+        {
+            "GOAL" or "GOALS" => "GOALS",
+            "ASSIST" or "ASSISTS" => "ASSISTS",
+            "SHOT" or "SHOTS" => "SHOTS",
+            "SHOTSONTARGET" or "SHOTONTARGET" or "SHOTS_ON_TARGET" or "PLAYERSHOTSONTARGET" => "SHOTS_ON_TARGET",
+            "TACKLE" or "TACKLES" => "TACKLES",
+            "GOALIESAVES" or "GOALKEEPERSAVES" or "SAVES" => "GOALIE_SAVES",
+            "PASSESATTEMPTED" or "PASSES" or "PASSATTEMPTS" => "PASSES_ATTEMPTED",
+            "GOALASSIST" or "GOALSASSISTS" or "GOALPLUSASSIST" => "GOAL_ASSIST",
+            "ATTEMPTEDDRIBBLES" or "DRIBBLESATTEMPTED" => "ATTEMPTED_DRIBBLES",
+            "FOULSDRAWN" or "DRAWNFOULS" => "FOULS_DRAWN",
+            "SHOTSASSISTED" or "ASSISTEDSHOTS" => "SHOTS_ASSISTED",
+            _ => compact
+        };
+    }
+
+    private static string? NormalizeTheOddsSoccerMarketKeyToStatKey(string? marketKey)
+    {
+        return marketKey?.Trim().ToLowerInvariant() switch
+        {
+            "player_goals" => "GOALS",
+            "player_assists" => "ASSISTS",
+            "player_shots" => "SHOTS",
+            "player_shots_on_target" => "SHOTS_ON_TARGET",
+            "player_tackles" => "TACKLES",
+            "player_goalkeeper_saves" => "GOALIE_SAVES",
+            _ => null
+        };
+    }
+
+    private static string BuildTheOddsSoccerAliasProviderEntityId(string providerEventId, string normalizedPlatformPlayerName)
+    {
+        return $"soccer_fifa_world_cup:{providerEventId.Trim()}:{normalizedPlatformPlayerName.Trim().ToUpperInvariant()}";
+    }
+
+    private static string ResolveApiSportsMarketJoinSide(bool overAvailable, bool underAvailable)
+    {
+        return (overAvailable, underAvailable) switch
+        {
+            (true, false) => "Over",
+            (false, true) => "Under",
+            (true, true) => "Both",
+            _ => "Unavailable"
+        };
+    }
+
+    private static ApiSportsMarketJoinMatchedSample BuildApiSportsMarketJoinMatchedSample(
+        ApiSportsMarketJoinResultRow result,
+        ApiSportsMarketJoinPlatformRow platform)
+    {
+        var joinBasis = new List<string> { "EventDate", "NormalizedPlayerName", "CanonicalStatKey" };
+        if (platform.AliasCanonicalPlayerId.HasValue && platform.AliasCanonicalPlayerId.Value == result.PlayerId)
+        {
+            joinBasis.Add("ApprovedTheOddsAliasLink");
+        }
+
+        if (!string.IsNullOrWhiteSpace(platform.ProviderEventId))
+        {
+            joinBasis.Add("ProviderEventIdPresent");
+        }
+
+        if (!string.IsNullOrWhiteSpace(result.TeamName)
+            && (NamesMatch(result.NormalizedTeamName, NormalizeResultPlayerName(platform.HomeTeamName))
+                || NamesMatch(result.NormalizedTeamName, NormalizeResultPlayerName(platform.AwayTeamName))))
+        {
+            joinBasis.Add("TeamContext");
+        }
+
+        return new ApiSportsMarketJoinMatchedSample(
+            result.ResultId,
+            platform.PlatformPropId,
+            result.ApiSportsFixtureId,
+            result.PlayerName,
+            result.TeamName,
+            result.PropTypeName,
+            result.StatKey,
+            result.ActualResultValue,
+            platform.ProviderEventId,
+            platform.PlayerName,
+            platform.Bookmaker,
+            platform.Provider,
+            platform.MarketKey,
+            platform.PropTypeName,
+            platform.Line,
+            platform.Side,
+            platform.EventName,
+            platform.EventDate,
+            platform.EventStartTimeUtc,
+            platform.HomeTeamName,
+            platform.AwayTeamName,
+            joinBasis);
+    }
+
+    private static ApiSportsMarketJoinUnmatchedResultSample BuildApiSportsMarketJoinUnmatchedResultSample(
+        ApiSportsMarketJoinResultRow result,
+        IReadOnlyList<ApiSportsMarketJoinPlatformRow> eventCandidates,
+        IReadOnlyList<ApiSportsMarketJoinPlatformRow> playerCandidates,
+        IReadOnlyList<ApiSportsMarketJoinPlatformRow> propCandidates)
+    {
+        var reason = eventCandidates.Count == 0
+            ? "EventDateMismatch"
+            : playerCandidates.Count == 0
+                ? "PlayerNameMismatch"
+                : propCandidates.Count == 0
+                    ? "PropTypeMappingMissing"
+                    : "PlayerAndPropMismatch";
+
+        return new ApiSportsMarketJoinUnmatchedResultSample(
+            reason,
+            result.ApiSportsFixtureId,
+            result.PlayerName,
+            result.TeamName,
+            result.PropTypeName,
+            result.StatKey,
+            result.ActualResultValue,
+            result.EventDate,
+            eventCandidates.Count,
+            playerCandidates.Count,
+            propCandidates.Count);
+    }
+
+    private static ApiSportsMarketJoinUnmatchedPlatformSample BuildApiSportsMarketJoinUnmatchedPlatformSample(ApiSportsMarketJoinPlatformRow platform)
+    {
+        return new ApiSportsMarketJoinUnmatchedPlatformSample(
+            platform.ProviderEventId,
+            platform.PlayerName,
+            platform.Bookmaker,
+            platform.Provider,
+            platform.MarketKey,
+            platform.CanonicalStatKey,
+            platform.PropTypeName,
+            platform.Line,
+            platform.Side,
+            platform.EventName,
+            platform.EventDate,
+            platform.EventStartTimeUtc,
+            platform.HomeTeamName,
+            platform.AwayTeamName);
+    }
+
+    private static ApiSportsMarketJoinBlockerSummary BuildApiSportsMarketJoinBlockers(
+        IReadOnlyList<ApiSportsMarketJoinResultRow> resultRows,
+        IReadOnlyList<ApiSportsMarketJoinPlatformRow> platformRows,
+        IReadOnlyList<ApiSportsMarketJoinUnmatchedResultSample> unmatchedResults)
+    {
+        var missingProviderEventId = platformRows.Count(row => string.IsNullOrWhiteSpace(row.ProviderEventId));
+        var missingProviderPlayerId = platformRows.Count(row => string.IsNullOrWhiteSpace(row.ProviderPlayerId));
+        var missingPlayerTeam = resultRows.Count(row => string.IsNullOrWhiteSpace(row.TeamName))
+            + platformRows.Count(row => string.IsNullOrWhiteSpace(row.PlayerTeamName));
+        var propTypeMappingMissing = platformRows.Count(row => string.IsNullOrWhiteSpace(row.CanonicalStatKey))
+            + unmatchedResults.Count(row => row.Reason == "PropTypeMappingMissing");
+        var playerNameMismatch = unmatchedResults.Count(row => row.Reason == "PlayerNameMismatch");
+        var eventDateMismatch = unmatchedResults.Count(row => row.Reason == "EventDateMismatch");
+        var notes = new List<string>();
+
+        if (platformRows.Count > 0)
+        {
+            notes.Add("The Odds platform rows do not currently store API-Sports fixture ids; event joins rely on provider event context plus date/team context.");
+        }
+
+        if (missingProviderPlayerId > 0 || platformRows.Any(row => string.IsNullOrWhiteSpace(row.PlayerTeamName)))
+        {
+            notes.Add("The Odds Soccer player outcomes do not include provider player ids or player team names, so player joins are normalized-name diagnostics only.");
+        }
+
+        return new ApiSportsMarketJoinBlockerSummary(
+            missingProviderEventId,
+            platformRows.Count,
+            missingPlayerTeam,
+            missingProviderPlayerId,
+            propTypeMappingMissing,
+            playerNameMismatch,
+            eventDateMismatch,
+            notes);
+    }
+
+    private static string BuildApiSportsMarketJoinRecommendation(
+        int resultRows,
+        int eventMatchedRows,
+        int fullyJoinableRows,
+        ApiSportsMarketJoinBlockerSummary blockers)
+    {
+        if (resultRows == 0)
+        {
+            return "No imported API-Sports result rows were found for this scope. Import completed fixture results before evaluating the market join.";
+        }
+
+        if (fullyJoinableRows > 0)
+        {
+            return "Persisted API-Sports results and The Odds sportsbook context overlap by event, player name, and prop stat key. A debug-only Soccer grading preview can be built next while public Soccer grading remains disabled.";
+        }
+
+        if (eventMatchedRows > 0 && blockers.PlayerNameMismatch > 0)
+        {
+            return "Event context overlaps, but player names do not join cleanly. Continue manual identity review or add safer provider player/team context before grading.";
+        }
+
+        if (blockers.PropTypeMappingMissing > 0)
+        {
+            return "Event/player context exists, but one or more market/stat mappings are missing. Update provider stat mapping support before attempting a grading preview.";
+        }
+
+        return "No safe event/player/prop join was proven. Review event date/team context and provider event ids before building any Soccer grading preview.";
+    }
+
+    private static ApiSportsSoccerGradingPreview BuildApiSportsSoccerGradingPreview(
+        IReadOnlyList<ApiSportsMarketJoinResultRow> resultRows,
+        IReadOnlyList<ApiSportsMarketJoinPlatformRow> platformRows,
+        int sampleLimit)
+    {
+        var computation = BuildApiSportsSoccerGradingComputation(resultRows, platformRows, sampleLimit);
+
+        return new ApiSportsSoccerGradingPreview(
+            computation.Summary,
+            computation.Blockers,
+            new
+            {
+                graded = computation.GradedSamples,
+                unjoinableResults = computation.UnjoinableResultSamples,
+                unjoinablePlatformRows = computation.UnjoinablePlatformSamples
+            },
+            BuildApiSportsSoccerGradingPreviewRecommendation(computation.Summary.GradedPreviewRows, computation.Blockers));
+    }
+
+    private static ApiSportsSoccerGradingCoverageSummary BuildApiSportsSoccerGradingCoverageSummary(
+        IReadOnlyList<ApiSportsMarketJoinResultRow> resultRows,
+        IReadOnlyList<ApiSportsMarketJoinPlatformRow> platformRows,
+        bool includeFixtureDetails,
+        bool includeSamples,
+        int maxFixtures,
+        int maxSamplesPerFixture)
+    {
+        var resolvedDetails = new List<ApiSportsSoccerGradingCoverageFixtureDetail>();
+        var resultGroups = resultRows
+            .Where(row => !string.IsNullOrWhiteSpace(row.ApiSportsFixtureId))
+            .GroupBy(row => row.ApiSportsFixtureId!, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(group => group.Key, group => group.ToArray(), StringComparer.OrdinalIgnoreCase);
+        var platformGroups = platformRows
+            .Where(row => !string.IsNullOrWhiteSpace(row.ProviderEventId))
+            .GroupBy(row => row.ProviderEventId!, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(group => group.Key, group => group.ToArray(), StringComparer.OrdinalIgnoreCase);
+        var mappingCoverage = BuildApiSportsSoccerFixtureMappingCoverage(resultRows, platformRows, true, true, false, int.MaxValue);
+
+        foreach (var mapping in mappingCoverage.ResolvedEvents)
+        {
+            if (!string.IsNullOrWhiteSpace(mapping.ResolvedFixtureId)
+                && !string.IsNullOrWhiteSpace(mapping.ProviderEventId)
+                && resultGroups.TryGetValue(mapping.ResolvedFixtureId, out var fixtureResults)
+                && platformGroups.TryGetValue(mapping.ProviderEventId, out var eventPlatforms))
+            {
+                resolvedDetails.Add(BuildApiSportsSoccerGradingCoverageFixtureDetail(
+                    mapping.ResolvedFixtureId,
+                    mapping.ProviderEventId,
+                    fixtureResults,
+                    eventPlatforms,
+                    includeSamples,
+                    maxSamplesPerFixture));
+            }
+        }
+
+        var resultOnlyFixtures = resultGroups
+            .Where(pair => !mappingCoverage.ResolvedEvents.Any(mapping => string.Equals(mapping.ResolvedFixtureId, pair.Key, StringComparison.OrdinalIgnoreCase)))
+            .OrderBy(pair => pair.Value.Min(row => row.EventDate))
+            .ThenBy(pair => pair.Key)
+            .Select(pair => BuildApiSportsSoccerGradingCoverageResultOnlyFixture(pair.Key, pair.Value))
+            .ToArray();
+        var platformOnlyEvents = mappingCoverage.UnresolvedEvents
+            .Concat(mappingCoverage.ExcludedEvents)
+            .Select(row => new ApiSportsSoccerGradingCoverageUnresolvedEvent(
+                row.ResolvedFixtureId,
+                row.ProviderEventId,
+                row.EventName,
+                row.EventDate,
+                row.HomeTeam,
+                row.AwayTeam,
+                row.PlatformRowCount,
+                row.UniquePlatformPlayers,
+                row.ResolutionStatus == "Excluded"
+                    ? row.Blockers.FirstOrDefault() ?? row.ResolutionStatus
+                    : row.ResolutionStatus))
+            .OrderBy(row => row.EventDate)
+            .ThenBy(row => row.ProviderEventId)
+            .ToArray();
+
+        var limitedDetails = resolvedDetails
+            .OrderBy(detail => detail.EventDate)
+            .ThenBy(detail => detail.EventName)
+            .ThenBy(detail => detail.FixtureId)
+            .ThenBy(detail => detail.ProviderEventId)
+            .Take(maxFixtures)
+            .ToArray();
+        var aggregatedBlockers = new ApiSportsSoccerGradingPreviewBlockers(
+            limitedDetails.Sum(detail => detail.TopBlockers.MissingApiSportsFixtureIdOnMarketRows),
+            limitedDetails.Sum(detail => detail.TopBlockers.MissingProviderPlayerId),
+            limitedDetails.Sum(detail => detail.TopBlockers.MissingPlayerTeam),
+            limitedDetails.Sum(detail => detail.TopBlockers.PlayerNameMismatch),
+            limitedDetails.Sum(detail => detail.TopBlockers.PropTypeMappingMissing),
+            limitedDetails.Sum(detail => detail.TopBlockers.EventDateMismatch),
+            limitedDetails.Sum(detail => detail.TopBlockers.NoLineRows),
+            limitedDetails.Sum(detail => detail.TopBlockers.UnjoinableRows));
+        var totalCandidatePlatformRows = limitedDetails.Sum(detail => detail.CandidatePlatformRows);
+        var totalGradedPreviewRows = limitedDetails.Sum(detail => detail.GradedPreviewRows);
+        var summary = new ApiSportsSoccerGradingCoverageTopLevelSummary(
+            limitedDetails.Length,
+            mappingCoverage.UnresolvedEvents.Count,
+            resultOnlyFixtures.Length,
+            platformOnlyEvents.Length,
+            limitedDetails.Count(detail => detail.GradedPreviewRows > 0),
+            totalCandidatePlatformRows,
+            limitedDetails.Sum(detail => detail.ImportedResultRows),
+            limitedDetails.Sum(detail => detail.FullyJoinableRowsAfterAlias),
+            totalGradedPreviewRows,
+            limitedDetails.Sum(detail => detail.NoLineRows),
+            limitedDetails.Sum(detail => detail.UngradedRows),
+            totalCandidatePlatformRows == 0 ? 0 : decimal.Round((decimal)totalGradedPreviewRows / totalCandidatePlatformRows, 4));
+
+        var fixtureSummaries = limitedDetails
+            .Where(detail => detail.CandidatePlatformRows > 0 || detail.ImportedResultRows > 0)
+            .Select(detail => new ApiSportsSoccerGradingCoverageFixtureRank(
+                detail.FixtureId,
+                detail.ProviderEventId,
+                detail.EventName,
+                detail.EventDate,
+                detail.CandidatePlatformRows,
+                detail.ImportedResultRows,
+                detail.GradedPreviewRows,
+                detail.GradeCoverageRate))
+            .ToArray();
+        var best = fixtureSummaries
+            .Where(detail => detail.CandidatePlatformRows > 0)
+            .OrderByDescending(detail => detail.GradeCoverageRate)
+            .ThenByDescending(detail => detail.GradedPreviewRows)
+            .ThenBy(detail => detail.EventName)
+            .Take(5)
+            .ToArray();
+        var worst = fixtureSummaries
+            .Where(detail => detail.CandidatePlatformRows > 0)
+            .OrderBy(detail => detail.GradeCoverageRate)
+            .ThenByDescending(detail => detail.CandidatePlatformRows)
+            .ThenBy(detail => detail.EventName)
+            .Take(5)
+            .ToArray();
+
+        return new ApiSportsSoccerGradingCoverageSummary(
+            summary,
+            aggregatedBlockers,
+            best,
+            worst,
+            includeFixtureDetails ? limitedDetails : [],
+            mappingCoverage.UnresolvedEvents
+                .Select(row => new ApiSportsSoccerGradingCoverageUnresolvedEvent(
+                    row.ResolvedFixtureId,
+                    row.ProviderEventId,
+                    row.EventName,
+                    row.EventDate,
+                    row.HomeTeam,
+                    row.AwayTeam,
+                    row.PlatformRowCount,
+                    row.UniquePlatformPlayers,
+                    row.ResolutionStatus))
+                .Take(maxFixtures)
+                .ToArray(),
+            resultOnlyFixtures.Take(maxFixtures).ToArray(),
+            platformOnlyEvents.Take(maxFixtures).ToArray(),
+            mappingCoverage.KnownWorkingPairDetected,
+            BuildApiSportsSoccerGradingCoverageRecommendation(summary, aggregatedBlockers));
+    }
+
+    private static ApiSportsSoccerPropMappingGapDiagnostic BuildApiSportsSoccerPropMappingGapDiagnostic(
+        IReadOnlyList<ApiSportsMarketJoinResultRow> resultRows,
+        IReadOnlyList<ApiSportsMarketJoinPlatformRow> platformRows,
+        IReadOnlyList<ApiSportsProviderStatMappingDiagnosticRow> apiSportsMappings,
+        bool includeSamples,
+        int sampleLimit)
+    {
+        var mappingCoverage = BuildApiSportsSoccerFixtureMappingCoverage(resultRows, platformRows, true, false, false, int.MaxValue);
+        var resultGroups = resultRows
+            .Where(row => !string.IsNullOrWhiteSpace(row.ApiSportsFixtureId))
+            .GroupBy(row => row.ApiSportsFixtureId!, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(group => group.Key, group => group.ToArray(), StringComparer.OrdinalIgnoreCase);
+        var platformGroups = platformRows
+            .Where(row => !string.IsNullOrWhiteSpace(row.ProviderEventId))
+            .GroupBy(row => row.ProviderEventId!, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(group => group.Key, group => group.ToArray(), StringComparer.OrdinalIgnoreCase);
+        var mappingsByStatKey = apiSportsMappings
+            .GroupBy(mapping => mapping.CanonicalStatKey, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(group => group.Key, group => group.First(), StringComparer.OrdinalIgnoreCase);
+        var platformGapRows = new List<ApiSportsSoccerPlatformMappingGapRow>();
+        var resultGapRows = new List<ApiSportsSoccerResultMappingGapRow>();
+        var resolvedPairsEvaluated = 0;
+
+        foreach (var mapping in mappingCoverage.ResolvedEvents)
+        {
+            if (string.IsNullOrWhiteSpace(mapping.ResolvedFixtureId)
+                || string.IsNullOrWhiteSpace(mapping.ProviderEventId)
+                || !resultGroups.TryGetValue(mapping.ResolvedFixtureId, out var fixtureResults)
+                || !platformGroups.TryGetValue(mapping.ProviderEventId, out var eventPlatforms))
+            {
+                continue;
+            }
+
+            resolvedPairsEvaluated++;
+            foreach (var platform in eventPlatforms)
+            {
+                var playerMatchedResults = fixtureResults
+                    .Where(result => IsApiSportsMarketJoinPlayerMatch(result, platform))
+                    .ToArray();
+                var isFullyJoinable = playerMatchedResults
+                    .Any(result => ApiSportsSoccerStatKeysMatch(result.StatKey, platform.CanonicalStatKey));
+                if (isFullyJoinable)
+                {
+                    continue;
+                }
+
+                var category = string.IsNullOrWhiteSpace(platform.CanonicalStatKey)
+                    ? "TheOddsMarketKeyMissingCanonicalMapping"
+                    : playerMatchedResults.Length > 0
+                        ? "PlayerMatchedButStatMissing"
+                        : fixtureResults.Any(result => ApiSportsSoccerStatKeysMatch(result.StatKey, platform.CanonicalStatKey))
+                            ? "Other"
+                            : "CanonicalKeyMismatch";
+                var suggested = BuildApiSportsSoccerPlatformSuggestedCanonicalStatKey(platform);
+                var recommendation = BuildApiSportsSoccerPlatformMappingRecommendation(category, suggested);
+                platformGapRows.Add(new ApiSportsSoccerPlatformMappingGapRow(
+                    mapping.ResolvedFixtureId,
+                    mapping.ProviderEventId,
+                    platform.PlatformPropId,
+                    platform.PlayerName,
+                    platform.PropTypeName,
+                    platform.MarketKey,
+                    platform.CanonicalStatKey,
+                    platform.EventName,
+                    platform.EventDate,
+                    platform.Bookmaker,
+                    platform.Provider,
+                    category,
+                    recommendation,
+                    BuildApiSportsSoccerPlatformMappingRisk(category, suggested),
+                    suggested));
+            }
+
+            foreach (var result in fixtureResults)
+            {
+                var playerMatchedPlatforms = eventPlatforms
+                    .Where(platform => IsApiSportsMarketJoinPlayerMatch(result, platform))
+                    .ToArray();
+                if (playerMatchedPlatforms.Length == 0
+                    || playerMatchedPlatforms.Any(platform => ApiSportsSoccerStatKeysMatch(result.StatKey, platform.CanonicalStatKey)))
+                {
+                    continue;
+                }
+
+                var mappingExists = mappingsByStatKey.TryGetValue(result.StatKey, out var statMapping);
+                var category = !mappingExists
+                    ? "ApiSportsStatKeyMissingProviderMapping"
+                    : !statMapping!.IsGradeable
+                        ? "MappingExistsButNotGradeable"
+                        : playerMatchedPlatforms.Any(platform => string.IsNullOrWhiteSpace(platform.CanonicalStatKey))
+                            ? "CanonicalKeyMismatch"
+                            : "ImportedStatNotRequestedByTheOdds";
+                var recommendation = BuildApiSportsSoccerResultMappingRecommendation(category);
+                resultGapRows.Add(new ApiSportsSoccerResultMappingGapRow(
+                    result.ApiSportsFixtureId,
+                    result.ResultId,
+                    result.PlayerName,
+                    result.TeamName,
+                    result.PropTypeName,
+                    result.StatKey,
+                    result.EventDate,
+                    statMapping?.RuleConfidence,
+                    statMapping?.IsGradeable,
+                    category,
+                    recommendation,
+                    BuildApiSportsSoccerResultMappingRisk(category),
+                    result.ActualResultValue));
+            }
+        }
+
+        var theOddsMarketGaps = platformGapRows
+            .GroupBy(row => new
+            {
+                ProviderMarketKey = row.ProviderMarketKey ?? string.Empty,
+                row.PlatformPropType,
+                CanonicalMarketStatKey = row.CanonicalMarketStatKey ?? string.Empty,
+                row.Category
+            })
+            .Select(group =>
+            {
+                var first = group.First();
+                return new ApiSportsSoccerTheOddsMarketGap(
+                    string.IsNullOrWhiteSpace(first.ProviderMarketKey) ? null : first.ProviderMarketKey,
+                    first.PlatformPropType,
+                    string.IsNullOrWhiteSpace(first.CanonicalMarketStatKey) ? null : first.CanonicalMarketStatKey,
+                    group.Count(),
+                    group.Select(row => row.PlayerName).Distinct(StringComparer.OrdinalIgnoreCase).Count(),
+                    group.Select(row => row.ProviderEventId).Where(value => !string.IsNullOrWhiteSpace(value)).Distinct(StringComparer.OrdinalIgnoreCase).Count(),
+                    first.Category,
+                    !string.IsNullOrWhiteSpace(first.CanonicalMarketStatKey),
+                    first.CanFixWithProviderStatMapping,
+                    first.SuggestedCanonicalStatKey,
+                    first.RiskLevel,
+                    first.Recommendation,
+                    includeSamples ? group.Take(sampleLimit).ToArray() : []);
+            })
+            .OrderByDescending(row => row.RowCount)
+            .ThenBy(row => row.ProviderMarketKey)
+            .ThenBy(row => row.PlatformPropType)
+            .ToArray();
+        var apiSportsStatGaps = resultGapRows
+            .GroupBy(row => new
+            {
+                row.ApiSportsPropType,
+                row.ApiSportsStatKey,
+                row.Category
+            })
+            .Select(group =>
+            {
+                var first = group.First();
+                return new ApiSportsSoccerApiSportsStatGap(
+                    first.ApiSportsPropType,
+                    first.ApiSportsStatKey,
+                    first.RuleConfidence,
+                    first.IsGradeable,
+                    group.Count(),
+                    group.Select(row => row.PlayerName).Distinct(StringComparer.OrdinalIgnoreCase).Count(),
+                    group.Select(row => row.FixtureId).Where(value => !string.IsNullOrWhiteSpace(value)).Distinct(StringComparer.OrdinalIgnoreCase).Count(),
+                    first.Category,
+                    first.CanFixWithProviderStatMapping,
+                    first.SuggestedCanonicalStatKey,
+                    first.RiskLevel,
+                    first.Recommendation,
+                    includeSamples ? group.Take(sampleLimit).ToArray() : []);
+            })
+            .OrderByDescending(row => row.RowCount)
+            .ThenBy(row => row.ApiSportsStatKey)
+            .ToArray();
+        var gapsByCategory = platformGapRows
+            .Select(row => row.Category)
+            .Concat(resultGapRows.Select(row => row.Category))
+            .GroupBy(category => category, StringComparer.OrdinalIgnoreCase)
+            .Select(group => new { category = group.Key, rows = group.Count() })
+            .OrderByDescending(row => row.rows)
+            .ThenBy(row => row.category)
+            .ToArray();
+        var gapsByProviderMarketKey = platformGapRows
+            .GroupBy(row => row.ProviderMarketKey ?? "(missing)", StringComparer.OrdinalIgnoreCase)
+            .Select(group => new { providerMarketKey = group.Key, rows = group.Count() })
+            .OrderByDescending(row => row.rows)
+            .ThenBy(row => row.providerMarketKey)
+            .ToArray();
+        var gapsByApiSportsStatKey = resultGapRows
+            .GroupBy(row => row.ApiSportsStatKey, StringComparer.OrdinalIgnoreCase)
+            .Select(group => new { apiSportsStatKey = group.Key, rows = group.Count() })
+            .OrderByDescending(row => row.rows)
+            .ThenBy(row => row.apiSportsStatKey)
+            .ToArray();
+        var lowRiskMappingCandidates = theOddsMarketGaps
+            .Where(row => row.RiskLevel == "Low" && row.CanFixWithProviderStatMapping)
+            .Cast<object>()
+            .Concat(apiSportsStatGaps.Where(row => row.RiskLevel == "Low" && row.CanFixWithProviderStatMapping))
+            .Take(25)
+            .ToArray();
+        var needsReviewMappingCandidates = theOddsMarketGaps
+            .Where(row => row.Recommendation is "AddNeedsConfirmationMapping" or "NeedsManualReview")
+            .Cast<object>()
+            .Concat(apiSportsStatGaps.Where(row => row.Recommendation is "AddNeedsConfirmationMapping" or "NeedsManualReview"))
+            .Take(25)
+            .ToArray();
+        var ignoredNoise = apiSportsStatGaps
+            .Where(row => row.Recommendation == "IgnoreImportedStatNoise")
+            .ToArray();
+        var propTypeMappingMissingRows = platformGapRows.Count(row => row.Category is "TheOddsMarketKeyMissingCanonicalMapping" or "CanonicalKeyMismatch")
+            + resultGapRows.Count(row => row.Category is "ApiSportsStatKeyMissingProviderMapping" or "MappingExistsButNotGradeable");
+        var totalUngradedRows = platformGapRows.Count + resultGapRows.Count;
+        var summary = new ApiSportsSoccerPropMappingGapSummary(
+            resolvedPairsEvaluated,
+            totalUngradedRows,
+            propTypeMappingMissingRows,
+            gapsByCategory,
+            gapsByProviderMarketKey,
+            gapsByApiSportsStatKey,
+            lowRiskMappingCandidates.Length,
+            needsReviewMappingCandidates.Length,
+            ignoredNoise.Sum(row => row.RowCount),
+            BuildApiSportsSoccerPropMappingGapRecommendation(propTypeMappingMissingRows, lowRiskMappingCandidates.Length, needsReviewMappingCandidates.Length, ignoredNoise.Sum(row => row.RowCount)));
+
+        return new ApiSportsSoccerPropMappingGapDiagnostic(
+            summary,
+            theOddsMarketGaps,
+            apiSportsStatGaps,
+            gapsByCategory,
+            gapsByProviderMarketKey,
+            gapsByApiSportsStatKey,
+            lowRiskMappingCandidates,
+            needsReviewMappingCandidates,
+            ignoredNoise,
+            summary.RecommendedNextAction);
+    }
+
+    private static string? BuildApiSportsSoccerPlatformSuggestedCanonicalStatKey(ApiSportsMarketJoinPlatformRow platform)
+    {
+        return FirstNonBlank(platform.CanonicalStatKey, NormalizeApiSportsResultStatKey(platform.StatKey, platform.PropTypeName));
+    }
+
+    private static string BuildApiSportsSoccerPlatformMappingRecommendation(string category, string? suggestedCanonicalStatKey)
+    {
+        return category switch
+        {
+            "TheOddsMarketKeyMissingCanonicalMapping" when !string.IsNullOrWhiteSpace(suggestedCanonicalStatKey) => "AddKnownMapping",
+            "TheOddsMarketKeyMissingCanonicalMapping" => "NeedsManualReview",
+            "PlayerMatchedButStatMissing" => "IgnoreImportedStatNoise",
+            "CanonicalKeyMismatch" => "NeedsManualReview",
+            _ => "NeedsManualReview"
+        };
+    }
+
+    private static string BuildApiSportsSoccerPlatformMappingRisk(string category, string? suggestedCanonicalStatKey)
+    {
+        return category switch
+        {
+            "TheOddsMarketKeyMissingCanonicalMapping" when !string.IsNullOrWhiteSpace(suggestedCanonicalStatKey) => "Low",
+            "PlayerMatchedButStatMissing" => "Medium",
+            "CanonicalKeyMismatch" => "High",
+            _ => "High"
+        };
+    }
+
+    private static string BuildApiSportsSoccerResultMappingRecommendation(string category)
+    {
+        return category switch
+        {
+            "ApiSportsStatKeyMissingProviderMapping" => "AddNeedsConfirmationMapping",
+            "MappingExistsButNotGradeable" => "NeedsManualReview",
+            "ImportedStatNotRequestedByTheOdds" => "IgnoreImportedStatNoise",
+            "CanonicalKeyMismatch" => "NeedsManualReview",
+            _ => "NeedsManualReview"
+        };
+    }
+
+    private static string BuildApiSportsSoccerResultMappingRisk(string category)
+    {
+        return category switch
+        {
+            "ImportedStatNotRequestedByTheOdds" => "Low",
+            "ApiSportsStatKeyMissingProviderMapping" => "Medium",
+            "MappingExistsButNotGradeable" => "High",
+            _ => "High"
+        };
+    }
+
+    private static string BuildApiSportsSoccerPropMappingGapRecommendation(
+        int propTypeMappingMissingRows,
+        int lowRiskMappingCandidates,
+        int needsReviewMappingCandidates,
+        int ignoredNoiseRows)
+    {
+        if (propTypeMappingMissingRows == 0 && ignoredNoiseRows > 0)
+        {
+            return "Remaining unmapped rows look like imported stat noise outside requested The Odds markets.";
+        }
+
+        if (lowRiskMappingCandidates > 0)
+        {
+            return "Review low-risk provider stat mapping candidates before adding any Soccer grading workflow.";
+        }
+
+        if (needsReviewMappingCandidates > 0)
+        {
+            return "Review provider stat mapping candidates manually; do not enable public Soccer grading yet.";
+        }
+
+        return propTypeMappingMissingRows == 0
+            ? "No prop/stat mapping gaps were detected for resolved Soccer fixture pairs."
+            : "Mapping gaps remain but require manual review before any Soccer grading expansion.";
+    }
+
+    private static bool IsRealTheOddsSoccerWorldCupProviderEvent(IReadOnlyList<ApiSportsMarketJoinPlatformRow> rows)
+    {
+        return rows.Any(row =>
+            string.Equals(row.DataProvider, "The Odds API", StringComparison.OrdinalIgnoreCase)
+            && string.Equals(row.ContextSchemaVersion, "the-odds-provider-context-v2", StringComparison.OrdinalIgnoreCase)
+            && string.Equals(row.ProviderSportKey, "soccer_fifa_world_cup", StringComparison.OrdinalIgnoreCase)
+            && string.Equals(row.Competition, "World Cup", StringComparison.OrdinalIgnoreCase)
+            && string.Equals(row.ProviderCategory, "Sportsbook", StringComparison.OrdinalIgnoreCase)
+            && !string.IsNullOrWhiteSpace(row.ProviderEventId)
+            && !IsSyntheticTheOddsSoccerProviderEventId(row.ProviderEventId));
+    }
+
+    private static bool IsSyntheticTheOddsSoccerProviderEventId(string? providerEventId)
+    {
+        return string.IsNullOrWhiteSpace(providerEventId)
+            || providerEventId.Contains('|', StringComparison.Ordinal)
+            || providerEventId.Contains("SCR_game", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static ApiSportsSoccerFixtureMappingCoverage BuildApiSportsSoccerFixtureMappingCoverage(
+        IReadOnlyList<ApiSportsMarketJoinResultRow> resultRows,
+        IReadOnlyList<ApiSportsMarketJoinPlatformRow> platformRows,
+        bool includeResolved,
+        bool includeUnresolved,
+        bool includeSamples,
+        int maxSamples)
+    {
+        var resultGroups = resultRows
+            .Where(row => !string.IsNullOrWhiteSpace(row.ApiSportsFixtureId))
+            .GroupBy(row => row.ApiSportsFixtureId!, StringComparer.OrdinalIgnoreCase)
+            .Select(group => BuildApiSportsFixtureMappingResultFixture(group.Key, group.ToArray()))
+            .ToArray();
+        var platformGroups = platformRows
+            .Where(row => !string.IsNullOrWhiteSpace(row.ProviderEventId))
+            .GroupBy(row => row.ProviderEventId!, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        var resolved = new List<ApiSportsSoccerFixtureMappingEvent>();
+        var unresolved = new List<ApiSportsSoccerFixtureMappingEvent>();
+        var excluded = new List<ApiSportsSoccerFixtureMappingEvent>();
+
+        foreach (var platformGroup in platformGroups.OrderBy(group => group.Min(row => row.EventStartTimeUtc)).ThenBy(group => group.Key))
+        {
+            var platformEventRows = platformGroup.ToArray();
+            var eventSummary = BuildApiSportsFixtureMappingProviderEvent(platformGroup.Key, platformEventRows);
+            if (!IsRealTheOddsSoccerWorldCupProviderEvent(platformEventRows))
+            {
+                excluded.Add(BuildApiSportsFixtureMappingEvent(eventSummary, [], null, "Excluded", 0, [], ["NotTheOddsSoccerWorldCupProviderEvent"], includeSamples, maxSamples));
+                continue;
+            }
+
+            var candidates = resultGroups
+                .Select(resultGroup => ScoreApiSportsFixtureCandidate(eventSummary, resultGroup))
+                .Where(candidate => candidate.Confidence > 0)
+                .OrderByDescending(candidate => candidate.Confidence)
+                .ThenBy(candidate => candidate.FixtureId)
+                .ToArray();
+            var highConfidence = candidates.Where(candidate => candidate.Confidence >= 0.80m).ToArray();
+            ApiSportsSoccerFixtureMappingEvent row;
+            if (resultGroups.Length == 0)
+            {
+                row = BuildApiSportsFixtureMappingEvent(eventSummary, candidates, null, "MissingApiSportsResults", 0, [], ["NoApiSportsResults"], includeSamples, maxSamples);
+            }
+            else if (highConfidence.Length == 1)
+            {
+                row = BuildApiSportsFixtureMappingEvent(eventSummary, candidates, highConfidence[0].FixtureId, "Resolved", highConfidence[0].Confidence, highConfidence[0].MatchReasons, highConfidence[0].Blockers, includeSamples, maxSamples);
+            }
+            else if (highConfidence.Length > 1)
+            {
+                row = BuildApiSportsFixtureMappingEvent(eventSummary, candidates, null, "Ambiguous", highConfidence[0].Confidence, highConfidence.SelectMany(candidate => candidate.MatchReasons).Distinct(StringComparer.OrdinalIgnoreCase).ToArray(), ["MultipleHighConfidenceFixtures"], includeSamples, maxSamples);
+            }
+            else if (candidates.Length == 0)
+            {
+                row = BuildApiSportsFixtureMappingEvent(eventSummary, candidates, null, "NoCandidate", 0, [], ["NoFixtureCandidates"], includeSamples, maxSamples);
+            }
+            else
+            {
+                var hasDateCandidate = candidates.Any(candidate => candidate.MatchReasons.Contains("DateWithinTolerance", StringComparer.OrdinalIgnoreCase));
+                var hasTeamCandidate = candidates.Any(candidate => candidate.MatchReasons.Any(reason => reason is "BothTeamsMatch" or "OneTeamMatch"));
+                var status = !hasDateCandidate
+                    ? "DateMismatch"
+                    : !hasTeamCandidate
+                        ? "TeamMismatch"
+                        : "NoCandidate";
+                var blockers = candidates.Length == 0
+                    ? new[] { "NoFixtureCandidates" }
+                    : candidates.SelectMany(candidate => candidate.Blockers).DefaultIfEmpty(status).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+                row = BuildApiSportsFixtureMappingEvent(eventSummary, candidates, null, status, candidates.FirstOrDefault()?.Confidence ?? 0, candidates.FirstOrDefault()?.MatchReasons ?? [], blockers, includeSamples, maxSamples);
+            }
+
+            if (row.ResolutionStatus == "Resolved")
+            {
+                resolved.Add(row);
+            }
+            else
+            {
+                unresolved.Add(row);
+            }
+        }
+
+        var resolvedPlatformRows = resolved.Sum(row => row.PlatformRowCount);
+        var unresolvedPlatformRows = unresolved.Sum(row => row.PlatformRowCount);
+        var summary = new ApiSportsSoccerFixtureMappingCoverageSummary(
+            resolved.Count + unresolved.Count,
+            resolved.Count,
+            unresolved.Count,
+            unresolved.Count(row => row.ResolutionStatus == "Ambiguous"),
+            unresolved.Count(row => row.ResolutionStatus is "NoCandidate" or "DateMismatch" or "TeamMismatch" or "MissingApiSportsResults"),
+            resolved.Count + unresolved.Count,
+            resultGroups.Length,
+            platformGroups.Sum(group => group.Count()),
+            resolvedPlatformRows,
+            unresolvedPlatformRows);
+
+        return new ApiSportsSoccerFixtureMappingCoverage(
+            summary,
+            includeResolved ? resolved.Take(maxSamples).ToArray() : [],
+            includeUnresolved ? unresolved.Take(maxSamples).ToArray() : [],
+            excluded.Take(maxSamples).ToArray(),
+            resolved.Any(row => string.Equals(row.ResolvedFixtureId, "1489398", StringComparison.OrdinalIgnoreCase)
+                && string.Equals(row.ProviderEventId, "852a3abe6d46820720febc0fedebff9a", StringComparison.OrdinalIgnoreCase)),
+            BuildApiSportsSoccerFixtureMappingRecommendation(summary));
+    }
+
+    private static ApiSportsSoccerFixtureMappingProviderEvent BuildApiSportsFixtureMappingProviderEvent(
+        string providerEventId,
+        IReadOnlyList<ApiSportsMarketJoinPlatformRow> rows)
+    {
+        var first = rows.OrderBy(row => row.EventStartTimeUtc).First();
+        return new ApiSportsSoccerFixtureMappingProviderEvent(
+            providerEventId,
+            first.EventName,
+            first.EventStartTimeUtc,
+            first.EventDate,
+            first.HomeTeamName,
+            first.AwayTeamName,
+            NormalizeSoccerFixtureTeamName(first.HomeTeamName),
+            NormalizeSoccerFixtureTeamName(first.AwayTeamName),
+            rows.Count,
+            rows.Select(row => row.NormalizedPlayerName).Where(value => !string.IsNullOrWhiteSpace(value)).Distinct(StringComparer.OrdinalIgnoreCase).Count());
+    }
+
+    private static ApiSportsSoccerFixtureMappingResultFixture BuildApiSportsFixtureMappingResultFixture(
+        string fixtureId,
+        IReadOnlyList<ApiSportsMarketJoinResultRow> rows)
+    {
+        var first = rows.OrderBy(row => row.EventDate).First();
+        var teams = rows
+            .Select(row => row.TeamName)
+            .Where(value => !string.IsNullOrWhiteSpace(value))
+            .Select(value => value!)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Order()
+            .ToArray();
+        var normalizedTeams = teams
+            .Select(NormalizeSoccerFixtureTeamName)
+            .Where(value => !string.IsNullOrWhiteSpace(value))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        return new ApiSportsSoccerFixtureMappingResultFixture(
+            fixtureId,
+            first.EventDate,
+            rows.Count,
+            rows.Select(row => FirstNonBlank(row.ApiSportsPlayerId, row.NormalizedPlayerName)).Where(value => !string.IsNullOrWhiteSpace(value)).Distinct(StringComparer.OrdinalIgnoreCase).Count(),
+            teams,
+            normalizedTeams);
+    }
+
+    private static ApiSportsSoccerFixtureCandidate ScoreApiSportsFixtureCandidate(
+        ApiSportsSoccerFixtureMappingProviderEvent providerEvent,
+        ApiSportsSoccerFixtureMappingResultFixture fixture)
+    {
+        var reasons = new List<string>();
+        var blockers = new List<string>();
+        var dateDelta = Math.Abs(fixture.EventDate.DayNumber - providerEvent.EventDate.DayNumber);
+        decimal confidence = 0;
+        if (dateDelta == 0)
+        {
+            confidence += 0.45m;
+            reasons.Add("ExactEventDate");
+            reasons.Add("DateWithinTolerance");
+        }
+        else if (dateDelta <= 1)
+        {
+            confidence += 0.30m;
+            reasons.Add("DateWithinTolerance");
+        }
+        else
+        {
+            blockers.Add("DateMismatch");
+        }
+
+        var providerTeams = new[] { providerEvent.NormalizedHomeTeam, providerEvent.NormalizedAwayTeam }
+            .Where(value => !string.IsNullOrWhiteSpace(value))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        var matchedTeams = providerTeams.Count(team => fixture.NormalizedTeamNames.Contains(team, StringComparer.OrdinalIgnoreCase));
+        if (providerTeams.Length >= 2 && matchedTeams >= 2)
+        {
+            confidence += 0.55m;
+            reasons.Add("BothTeamsMatch");
+        }
+        else if (matchedTeams == 1)
+        {
+            confidence += 0.40m;
+            reasons.Add("OneTeamMatch");
+            if (dateDelta == 0 && fixture.NormalizedTeamNames.Count <= 2)
+            {
+                confidence += 0.05m;
+                reasons.Add("UniqueDateTeamCandidate");
+            }
+        }
+        else
+        {
+            blockers.Add("TeamMismatch");
+        }
+
+        return new ApiSportsSoccerFixtureCandidate(
+            fixture.FixtureId,
+            fixture.EventDate,
+            fixture.TeamNames,
+            fixture.ResultRowCount,
+            fixture.UniqueApiSportsPlayers,
+            Math.Min(1m, confidence),
+            reasons,
+            blockers);
+    }
+
+    private static ApiSportsSoccerFixtureMappingEvent BuildApiSportsFixtureMappingEvent(
+        ApiSportsSoccerFixtureMappingProviderEvent providerEvent,
+        IReadOnlyList<ApiSportsSoccerFixtureCandidate> candidates,
+        string? resolvedFixtureId,
+        string status,
+        decimal confidence,
+        IReadOnlyList<string> matchReasons,
+        IReadOnlyList<string> blockers,
+        bool includeSamples,
+        int maxSamples)
+    {
+        return new ApiSportsSoccerFixtureMappingEvent(
+            providerEvent.ProviderEventId,
+            providerEvent.EventName,
+            providerEvent.EventStartUtc,
+            providerEvent.EventDate,
+            providerEvent.HomeTeam,
+            providerEvent.AwayTeam,
+            providerEvent.PlatformRowCount,
+            providerEvent.UniquePlatformPlayers,
+            includeSamples ? candidates.Take(maxSamples).ToArray() : [],
+            resolvedFixtureId,
+            status,
+            confidence,
+            matchReasons,
+            blockers);
+    }
+
+    private static string NormalizeSoccerFixtureTeamName(string? value)
+    {
+        var normalized = NormalizeResultPlayerName(value);
+        return normalized switch
+        {
+            "CAPEVERDEISLANDS" => "CAPEVERDE",
+            "UNITEDSTATES" => "USA",
+            "CONGODR" => "DRCONGO",
+            "COTEDIVOIRE" => "IVORYCOAST",
+            "CZECHREPUBLIC" => "CZECHIA",
+            _ => normalized
+        };
+    }
+
+    private static string BuildApiSportsSoccerFixtureMappingRecommendation(ApiSportsSoccerFixtureMappingCoverageSummary summary)
+    {
+        if (summary.ProviderEventsEvaluated == 0)
+        {
+            return "No real The Odds Soccer World Cup sportsbook provider events were found in persisted platform rows for this range.";
+        }
+
+        if (summary.ResolvedEvents == 0 && summary.UnresolvedEvents > 0)
+        {
+            return "No The Odds Soccer provider events resolved to API-Sports fixtures. Review unresolvedEvents blockers and recover event/team mapping before expanding grading coverage.";
+        }
+
+        if (summary.UnresolvedEvents > summary.ResolvedEvents)
+        {
+            return "Some provider events resolve, but unresolved event mapping is still the main blocker. Review DateMismatch and TeamMismatch rows before broader Soccer grading diagnostics.";
+        }
+
+        return "The Odds provider events are resolving to API-Sports fixtures. Use grading-coverage-summary to inspect player/stat coverage next.";
+    }
+
+    private static async Task<TheOddsSoccerWorldCupIngestionCoverage> BuildTheOddsSoccerWorldCupIngestionCoverageAsync(
+        ApplicationDbContext dbContext,
+        ApiSportsWorldCupDateRange range,
+        IReadOnlyList<ApiSportsMarketJoinResultRow> resultRows,
+        IReadOnlyList<ApiSportsMarketJoinPlatformRow> platformRows,
+        ApiSportsSoccerFixtureMappingCoverage mappingCoverage,
+        bool includeSamples,
+        int sampleLimit,
+        CancellationToken cancellationToken)
+    {
+        var groups = platformRows
+            .Where(row => !string.IsNullOrWhiteSpace(row.ProviderEventId))
+            .GroupBy(row => row.ProviderEventId!, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        var realGroups = groups.Where(group => IsRealTheOddsSoccerWorldCupProviderEvent(group.ToArray())).ToArray();
+        var syntheticGroups = groups.Where(group => !IsRealTheOddsSoccerWorldCupProviderEvent(group.ToArray())).ToArray();
+        var realEvents = realGroups
+            .Select(group => BuildTheOddsSoccerWorldCupRealProviderEvent(group.Key, group.ToArray()))
+            .OrderBy(row => row.EventStartUtc)
+            .ThenBy(row => row.ProviderEventId)
+            .Take(includeSamples ? sampleLimit : 0)
+            .ToArray();
+        var syntheticSamples = syntheticGroups
+            .Select(group => BuildTheOddsSoccerWorldCupSyntheticProviderEvent(group.Key, group.ToArray()))
+            .OrderBy(row => row.EventDate)
+            .ThenBy(row => row.ProviderEventId)
+            .Take(includeSamples ? sampleLimit : 0)
+            .ToArray();
+        var resultFixtures = resultRows
+            .Where(row => !string.IsNullOrWhiteSpace(row.ApiSportsFixtureId))
+            .GroupBy(row => row.ApiSportsFixtureId!, StringComparer.OrdinalIgnoreCase)
+            .Select(group => BuildTheOddsSoccerWorldCupApiSportsFixtureSample(group.Key, group.ToArray()))
+            .OrderBy(row => row.EventDate)
+            .ThenBy(row => row.FixtureId)
+            .ToArray();
+        var resolvedFixtureIds = mappingCoverage.ResolvedEvents
+            .Select(row => row.ResolvedFixtureId)
+            .Where(value => !string.IsNullOrWhiteSpace(value))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var apiSportsFixturesWithResultsButNoRealTheOddsEvent = resultFixtures
+            .Where(row => !resolvedFixtureIds.Contains(row.FixtureId))
+            .Take(includeSamples ? sampleLimit : 0)
+            .ToArray();
+        var realTheOddsEventsWithoutApiSportsResults = mappingCoverage.UnresolvedEvents
+            .Where(row => row.ResolutionStatus is "MissingApiSportsResults" or "NoCandidate" or "DateMismatch" or "TeamMismatch")
+            .Take(includeSamples ? sampleLimit : 0)
+            .ToArray();
+        var latestRefreshRun = await LoadLatestTheOddsSoccerWorldCupRefreshRunAsync(dbContext, range, cancellationToken);
+        var realPlatformRows = realGroups.Sum(group => group.Count());
+        var syntheticPlatformRows = syntheticGroups.Sum(group => group.Count());
+        var latestRefreshEventCount = ExtractJsonInt(latestRefreshRun?.Diagnostics, "eventsFetched")
+            ?? ExtractJsonInt(latestRefreshRun?.Diagnostics, "oddsEventsFetched")
+            ?? latestRefreshRun?.LineShoppingGroupCount;
+        var likelyReason = BuildTheOddsSoccerWorldCupIngestionLikelyReason(
+            realGroups.Length,
+            syntheticPlatformRows,
+            latestRefreshRun,
+            resultFixtures.Length,
+            mappingCoverage.Summary.ResolvedEvents);
+        var summary = new TheOddsSoccerWorldCupIngestionCoverageSummary(
+            realGroups.Length,
+            realPlatformRows,
+            syntheticPlatformRows,
+            resultFixtures.Length,
+            mappingCoverage.Summary.ResolvedEvents,
+            mappingCoverage.Summary.UnresolvedEvents,
+            latestRefreshRun?.Id,
+            latestRefreshRun?.Succeeded,
+            latestRefreshEventCount,
+            latestRefreshRun?.PlatformPropsUpserted);
+        var gapAnalysis = new TheOddsSoccerWorldCupIngestionGapAnalysis(
+            resultFixtures.Count(row => !resolvedFixtureIds.Contains(row.FixtureId)),
+            mappingCoverage.UnresolvedEvents.Count(row => !string.IsNullOrWhiteSpace(row.ProviderEventId)),
+            mappingCoverage.Summary.ResolvedEvents,
+            mappingCoverage.Summary.UnresolvedEvents,
+            likelyReason,
+            apiSportsFixturesWithResultsButNoRealTheOddsEvent,
+            realTheOddsEventsWithoutApiSportsResults);
+
+        return new TheOddsSoccerWorldCupIngestionCoverage(
+            summary,
+            realEvents,
+            new TheOddsSoccerWorldCupSyntheticCoverage(syntheticPlatformRows, syntheticSamples),
+            new TheOddsSoccerWorldCupApiSportsResultCoverage(
+                resultFixtures.Length,
+                resultFixtures.Length,
+                range.FromDate,
+                range.ToDate,
+                resultFixtures.Take(includeSamples ? sampleLimit : 0).ToArray()),
+            latestRefreshRun,
+            gapAnalysis,
+            BuildTheOddsSoccerWorldCupIngestionRecommendation(summary, gapAnalysis));
+    }
+
+    private static TheOddsSoccerWorldCupRealProviderEvent BuildTheOddsSoccerWorldCupRealProviderEvent(
+        string providerEventId,
+        IReadOnlyList<ApiSportsMarketJoinPlatformRow> rows)
+    {
+        var first = rows.OrderBy(row => row.EventStartTimeUtc).First();
+        return new TheOddsSoccerWorldCupRealProviderEvent(
+            providerEventId,
+            first.EventName,
+            first.EventStartTimeUtc,
+            first.EventDate,
+            first.HomeTeamName,
+            first.AwayTeamName,
+            rows.Count,
+            rows.Select(row => row.NormalizedPlayerName).Where(value => !string.IsNullOrWhiteSpace(value)).Distinct(StringComparer.OrdinalIgnoreCase).Count(),
+            rows.Select(row => FirstNonBlank(row.Bookmaker, row.Provider)).Where(value => !string.IsNullOrWhiteSpace(value)).Select(value => value!).Distinct(StringComparer.OrdinalIgnoreCase).Order().ToArray(),
+            rows.Select(row => FirstNonBlank(row.MarketKey, row.PropTypeName)).Where(value => !string.IsNullOrWhiteSpace(value)).Select(value => value!).Distinct(StringComparer.OrdinalIgnoreCase).Order().ToArray(),
+            first.ProviderCategory,
+            first.ContextSchemaVersion,
+            first.ProviderSportKey,
+            first.Competition);
+    }
+
+    private static TheOddsSoccerWorldCupSyntheticProviderEvent BuildTheOddsSoccerWorldCupSyntheticProviderEvent(
+        string providerEventId,
+        IReadOnlyList<ApiSportsMarketJoinPlatformRow> rows)
+    {
+        var first = rows.OrderBy(row => row.EventStartTimeUtc).First();
+        return new TheOddsSoccerWorldCupSyntheticProviderEvent(
+            providerEventId,
+            first.EventDate,
+            rows.Count,
+            BuildTheOddsSoccerWorldCupExclusionReasons(rows));
+    }
+
+    private static IReadOnlyList<string> BuildTheOddsSoccerWorldCupExclusionReasons(IReadOnlyList<ApiSportsMarketJoinPlatformRow> rows)
+    {
+        var first = rows.OrderBy(row => row.EventStartTimeUtc).FirstOrDefault();
+        if (first is null)
+        {
+            return ["EmptyProviderEventGroup"];
+        }
+
+        var reasons = new List<string>();
+        if (!string.Equals(first.DataProvider, "The Odds API", StringComparison.OrdinalIgnoreCase))
+        {
+            reasons.Add("DataProviderNotTheOddsApi");
+        }
+
+        if (!string.Equals(first.ContextSchemaVersion, "the-odds-provider-context-v2", StringComparison.OrdinalIgnoreCase))
+        {
+            reasons.Add("MissingContextSchemaV2");
+        }
+
+        if (!string.Equals(first.ProviderSportKey, "soccer_fifa_world_cup", StringComparison.OrdinalIgnoreCase))
+        {
+            reasons.Add("ProviderSportKeyMismatch");
+        }
+
+        if (!string.Equals(first.Competition, "World Cup", StringComparison.OrdinalIgnoreCase))
+        {
+            reasons.Add("CompetitionMismatch");
+        }
+
+        if (!string.Equals(first.ProviderCategory, "Sportsbook", StringComparison.OrdinalIgnoreCase))
+        {
+            reasons.Add("ProviderCategoryNotSportsbook");
+        }
+
+        if (IsSyntheticTheOddsSoccerProviderEventId(first.ProviderEventId))
+        {
+            reasons.Add("SyntheticProviderEventId");
+        }
+
+        return reasons.Count == 0 ? ["UnknownLegacyOrSyntheticRow"] : reasons.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+    }
+
+    private static TheOddsSoccerWorldCupApiSportsFixtureSample BuildTheOddsSoccerWorldCupApiSportsFixtureSample(
+        string fixtureId,
+        IReadOnlyList<ApiSportsMarketJoinResultRow> rows)
+    {
+        var first = rows.OrderBy(row => row.EventDate).First();
+        return new TheOddsSoccerWorldCupApiSportsFixtureSample(
+            fixtureId,
+            first.EventDate,
+            rows.Count,
+            rows.Select(row => FirstNonBlank(row.ApiSportsPlayerId, row.NormalizedPlayerName)).Where(value => !string.IsNullOrWhiteSpace(value)).Distinct(StringComparer.OrdinalIgnoreCase).Count(),
+            rows.Select(row => row.TeamName).Where(value => !string.IsNullOrWhiteSpace(value)).Select(value => value!).Distinct(StringComparer.OrdinalIgnoreCase).Order().ToArray());
+    }
+
+    private static async Task<TheOddsSoccerWorldCupRefreshRun?> LoadLatestTheOddsSoccerWorldCupRefreshRunAsync(
+        ApplicationDbContext dbContext,
+        ApiSportsWorldCupDateRange range,
+        CancellationToken cancellationToken)
+    {
+        var row = await dbContext.TheOddsRefreshRuns
+            .AsNoTracking()
+            .Where(refresh => refresh.Provider == "The Odds API"
+                && refresh.Sport == "SOCCER"
+                && refresh.SlateDate >= range.FromDate
+                && refresh.SlateDate <= range.ToDate)
+            .OrderByDescending(refresh => refresh.CompletedAtUtc ?? refresh.StartedAtUtc)
+            .Select(refresh => new
+            {
+                refresh.Id,
+                refresh.Sport,
+                refresh.SlateDate,
+                refresh.StartedAtUtc,
+                refresh.CompletedAtUtc,
+                refresh.Succeeded,
+                refresh.Failed,
+                refresh.Blocked,
+                refresh.DryRun,
+                refresh.ForceLive,
+                refresh.BookmakerPreset,
+                refresh.ProviderCategoriesIncluded,
+                refresh.SportsbookBookmakersRequested,
+                refresh.DfsBookmakersRequested,
+                refresh.MarketsRequested,
+                refresh.EstimatedApiCalls,
+                refresh.ActualApiCalls,
+                refresh.PlatformPropsCreated,
+                refresh.PlatformPropsUpdated,
+                refresh.PlatformPropsUpserted,
+                refresh.PredictionCount,
+                refresh.LineShoppingGroupCount,
+                refresh.ErrorMessage,
+                refresh.DiagnosticsJson
+            })
+            .FirstOrDefaultAsync(cancellationToken);
+        if (row is null)
+        {
+            return null;
+        }
+
+        var diagnostics = row.DiagnosticsJson?.RootElement.Clone();
+        return new TheOddsSoccerWorldCupRefreshRun(
+            row.Id,
+            row.Sport,
+            row.SlateDate,
+            row.StartedAtUtc,
+            row.CompletedAtUtc,
+            row.Succeeded,
+            row.Failed,
+            row.Blocked,
+            row.DryRun,
+            row.ForceLive,
+            row.BookmakerPreset,
+            row.ProviderCategoriesIncluded,
+            row.SportsbookBookmakersRequested,
+            row.DfsBookmakersRequested,
+            row.MarketsRequested,
+            row.EstimatedApiCalls,
+            row.ActualApiCalls,
+            row.PlatformPropsCreated,
+            row.PlatformPropsUpdated,
+            row.PlatformPropsUpserted,
+            row.PredictionCount,
+            row.LineShoppingGroupCount,
+            row.ErrorMessage,
+            diagnostics);
+    }
+
+    private static int? ExtractJsonInt(JsonElement? element, string propertyName)
+    {
+        if (element is not { ValueKind: JsonValueKind.Object } json)
+        {
+            return null;
+        }
+
+        if (!TryGetJsonPropertyIgnoreCase(json, propertyName, out var property)
+            && (!TryGetJsonPropertyIgnoreCase(json, "diagnostics", out var diagnostics)
+                || diagnostics.ValueKind != JsonValueKind.Object
+                || !TryGetJsonPropertyIgnoreCase(diagnostics, propertyName, out property)))
+        {
+            return null;
+        }
+
+        return property.ValueKind switch
+        {
+            JsonValueKind.Number when property.TryGetInt32(out var value) => value,
+            JsonValueKind.String when int.TryParse(property.GetString(), NumberStyles.Integer, CultureInfo.InvariantCulture, out var value) => value,
+            _ => null
+        };
+    }
+
+    private static bool TryGetJsonPropertyIgnoreCase(JsonElement element, string propertyName, out JsonElement property)
+    {
+        foreach (var candidate in element.EnumerateObject())
+        {
+            if (string.Equals(candidate.Name, propertyName, StringComparison.OrdinalIgnoreCase))
+            {
+                property = candidate.Value;
+                return true;
+            }
+        }
+
+        property = default;
+        return false;
+    }
+
+    private static string BuildTheOddsSoccerWorldCupIngestionLikelyReason(
+        int realProviderEvents,
+        int syntheticPlatformRows,
+        TheOddsSoccerWorldCupRefreshRun? latestRefreshRun,
+        int apiSportsFixturesWithResults,
+        int resolvedProviderEvents)
+    {
+        if (realProviderEvents == 0 && syntheticPlatformRows > 0)
+        {
+            return "Persisted Soccer platform rows exist, but they are legacy/synthetic or missing The Odds context-v2 World Cup sportsbook metadata.";
+        }
+
+        var eventsMatchedToSlate = ExtractJsonInt(latestRefreshRun?.Diagnostics, "eventsMatchedToSlate");
+        if (realProviderEvents <= 1 && latestRefreshRun is not null && eventsMatchedToSlate <= 1)
+        {
+            return "Latest Soccer refresh discovered provider events but matched or targeted only one slate event for persisted sportsbook context.";
+        }
+
+        if (realProviderEvents <= 1 && latestRefreshRun is not null && latestRefreshRun.PlatformPropsUpserted <= realProviderEvents)
+        {
+            return "Only one real The Odds Soccer provider event appears to have been ingested in the latest persisted Soccer refresh run.";
+        }
+
+        if (realProviderEvents <= 1 && latestRefreshRun is not null && latestRefreshRun.Succeeded && latestRefreshRun.PlatformPropsUpserted == 0)
+        {
+            return "Latest Soccer refresh succeeded but upserted zero provider rows, likely because no sportsbook rows were returned or events were skipped.";
+        }
+
+        if (realProviderEvents <= 1 && apiSportsFixturesWithResults > resolvedProviderEvents)
+        {
+            return "API-Sports has results for more fixtures than the number of real The Odds provider events persisted locally.";
+        }
+
+        return "The Odds Soccer provider event ingestion appears proportional to persisted API-Sports fixture coverage.";
+    }
+
+    private static string BuildTheOddsSoccerWorldCupIngestionRecommendation(
+        TheOddsSoccerWorldCupIngestionCoverageSummary summary,
+        TheOddsSoccerWorldCupIngestionGapAnalysis gapAnalysis)
+    {
+        if (summary.RealTheOddsProviderEvents == 0)
+        {
+            return "No real The Odds Soccer World Cup sportsbook provider events are persisted. Inspect Soccer refresh diagnostics and rerun the guarded manual refresh only after confirming provider availability.";
+        }
+
+        if (summary.ApiSportsFixturesWithResults > summary.RealTheOddsProviderEvents)
+        {
+            return "The Odds provider-event ingestion is the current scale blocker. Review latest refresh diagnostics, event targeting, region/bookmaker filters, and provider returned markets before expanding grading coverage.";
+        }
+
+        if (gapAnalysis.RealTheOddsEventsUnresolved > 0)
+        {
+            return "Some real The Odds provider events are persisted but unresolved. Use fixture-mapping-coverage blockers before grading coverage.";
+        }
+
+        return "Provider event ingestion and fixture mapping are aligned. Continue with grading coverage and alias expansion diagnostics.";
+    }
+
+    private static ApiSportsSoccerGradingCoverageUnresolvedEvent BuildApiSportsSoccerGradingCoverageUnresolvedEvent(
+        string? fixtureId,
+        string? providerEventId,
+        IReadOnlyList<ApiSportsMarketJoinPlatformRow> rows,
+        string reason)
+    {
+        var first = rows.OrderBy(row => row.EventStartTimeUtc).FirstOrDefault();
+        return new ApiSportsSoccerGradingCoverageUnresolvedEvent(
+            fixtureId,
+            providerEventId,
+            first?.EventName,
+            first?.EventDate,
+            first?.HomeTeamName,
+            first?.AwayTeamName,
+            rows.Count,
+            rows.Select(row => row.NormalizedPlayerName).Where(value => !string.IsNullOrWhiteSpace(value)).Distinct(StringComparer.OrdinalIgnoreCase).Count(),
+            reason);
+    }
+
+    private static ApiSportsSoccerGradingCoverageResultOnlyFixture BuildApiSportsSoccerGradingCoverageResultOnlyFixture(
+        string fixtureId,
+        IReadOnlyList<ApiSportsMarketJoinResultRow> rows)
+    {
+        var first = rows.OrderBy(row => row.EventDate).FirstOrDefault();
+        return new ApiSportsSoccerGradingCoverageResultOnlyFixture(
+            fixtureId,
+            first?.EventDate,
+            rows.Count,
+            rows.Select(row => FirstNonBlank(row.ApiSportsPlayerId, row.NormalizedPlayerName)).Where(value => !string.IsNullOrWhiteSpace(value)).Distinct(StringComparer.OrdinalIgnoreCase).Count(),
+            "NoResolvedTheOddsProviderEvent");
+    }
+
+    private static ApiSportsSoccerGradingCoverageFixtureDetail BuildApiSportsSoccerGradingCoverageFixtureDetail(
+        string? fixtureId,
+        string? providerEventId,
+        IReadOnlyList<ApiSportsMarketJoinResultRow> resultRows,
+        IReadOnlyList<ApiSportsMarketJoinPlatformRow> platformRows,
+        bool includeSamples,
+        int sampleLimit)
+    {
+        var beforeAliasPlatformRows = platformRows
+            .Select(row => row with { AliasCanonicalPlayerId = null })
+            .ToArray();
+        var beforeAlias = BuildApiSportsSoccerGradingComputation(resultRows, beforeAliasPlatformRows, sampleLimit);
+        var afterAlias = BuildApiSportsSoccerGradingComputation(resultRows, platformRows, sampleLimit);
+        var firstPlatform = platformRows.OrderBy(row => row.EventStartTimeUtc).FirstOrDefault();
+        var firstResult = resultRows.OrderBy(row => row.EventDate).FirstOrDefault();
+        var sampleAliasLinkedRows = afterAlias.GradedSamples
+            .Where(row => row.JoinMethod.Contains("approvedTheOddsAliasLink", StringComparison.OrdinalIgnoreCase))
+            .Take(sampleLimit)
+            .ToArray();
+
+        return new ApiSportsSoccerGradingCoverageFixtureDetail(
+            fixtureId,
+            providerEventId,
+            firstPlatform?.EventName,
+            firstPlatform?.EventDate ?? firstResult?.EventDate,
+            firstPlatform?.HomeTeamName,
+            firstPlatform?.AwayTeamName,
+            afterAlias.Summary.CandidatePlatformRows,
+            afterAlias.Summary.ImportedResultRows,
+            platformRows.Select(row => row.NormalizedPlayerName).Where(value => !string.IsNullOrWhiteSpace(value)).Distinct(StringComparer.OrdinalIgnoreCase).Count(),
+            resultRows.Select(row => FirstNonBlank(row.ApiSportsPlayerId, row.NormalizedPlayerName)).Where(value => !string.IsNullOrWhiteSpace(value)).Distinct(StringComparer.OrdinalIgnoreCase).Count(),
+            platformRows.Where(row => row.AliasCanonicalPlayerId.HasValue).Select(row => row.AliasCanonicalPlayerId!.Value).Distinct().Count(),
+            beforeAlias.Summary.FullyJoinableRows,
+            afterAlias.Summary.FullyJoinableRows,
+            afterAlias.Summary.GradedPreviewRows,
+            afterAlias.Summary.OverWins,
+            afterAlias.Summary.UnderWins,
+            afterAlias.Summary.Pushes,
+            afterAlias.Summary.NoLineRows,
+            afterAlias.Summary.UngradedRows,
+            afterAlias.Summary.GradeCoverageRate,
+            afterAlias.Blockers,
+            includeSamples ? afterAlias.GradedSamples.Take(sampleLimit).ToArray() : [],
+            includeSamples ? afterAlias.UnjoinablePlatformSamples.Take(sampleLimit).ToArray() : [],
+            includeSamples ? sampleAliasLinkedRows : []);
+    }
+
+    private static ApiSportsSoccerGradingComputation BuildApiSportsSoccerGradingComputation(
+        IReadOnlyList<ApiSportsMarketJoinResultRow> resultRows,
+        IReadOnlyList<ApiSportsMarketJoinPlatformRow> platformRows,
+        int sampleLimit)
+    {
+        var eventMatches = resultRows.ToDictionary(
+            row => row.ResultId,
+            row => platformRows.Where(platform => IsApiSportsMarketJoinEventMatch(row, platform)).ToArray());
+        var playerMatches = resultRows.ToDictionary(
+            row => row.ResultId,
+            row => eventMatches[row.ResultId].Where(platform => IsApiSportsMarketJoinPlayerMatch(row, platform)).ToArray());
+        var propMatches = resultRows.ToDictionary(
+            row => row.ResultId,
+            row => eventMatches[row.ResultId].Where(platform => ApiSportsSoccerStatKeysMatch(row.StatKey, platform.CanonicalStatKey)).ToArray());
+        var fullMatches = resultRows
+            .SelectMany(result => eventMatches[result.ResultId]
+                .Where(platform => IsApiSportsMarketJoinPlayerMatch(result, platform)
+                    && ApiSportsSoccerStatKeysMatch(result.StatKey, platform.CanonicalStatKey))
+                .Select(platform => BuildApiSportsSoccerGradingSample(result, platform)))
+            .ToArray();
+        var fullyJoinableResultIds = fullMatches.Select(row => row.ResultId).Distinct().ToHashSet();
+        var matchedPlatformIds = fullMatches.Select(row => row.PlatformPropId).Distinct().ToHashSet();
+        var unmatchedResults = resultRows
+            .Where(row => !fullyJoinableResultIds.Contains(row.ResultId))
+            .Select(row => BuildApiSportsMarketJoinUnmatchedResultSample(row, eventMatches[row.ResultId], playerMatches[row.ResultId], propMatches[row.ResultId]))
+            .ToArray();
+        var noLineRows = fullMatches.Count(row => row.GradeResult == "NoLine");
+        var gradedRows = fullMatches.Where(row => row.GradeResult is "OverWin" or "UnderWin" or "Push").ToArray();
+        var blockers = new ApiSportsSoccerGradingPreviewBlockers(
+            platformRows.Count,
+            platformRows.Count(row => string.IsNullOrWhiteSpace(row.ProviderPlayerId)),
+            resultRows.Count(row => string.IsNullOrWhiteSpace(row.TeamName))
+                + platformRows.Count(row => string.IsNullOrWhiteSpace(row.PlayerTeamName)),
+            unmatchedResults.Count(row => row.Reason == "PlayerNameMismatch"),
+            platformRows.Count(row => string.IsNullOrWhiteSpace(row.CanonicalStatKey))
+                + unmatchedResults.Count(row => row.Reason == "PropTypeMappingMissing"),
+            unmatchedResults.Count(row => row.Reason == "EventDateMismatch"),
+            noLineRows,
+            unmatchedResults.Length + platformRows.Count(row => !matchedPlatformIds.Contains(row.PlatformPropId)));
+        var summary = new ApiSportsSoccerGradingPreviewSummary(
+            platformRows.Count,
+            resultRows.Count,
+            fullyJoinableResultIds.Count,
+            gradedRows.Length,
+            fullMatches.Count(row => row.GradeResult == "OverWin"),
+            fullMatches.Count(row => row.GradeResult == "UnderWin"),
+            fullMatches.Count(row => row.GradeResult == "Push"),
+            noLineRows,
+            fullMatches.Count(row => row.GradeResult is "NoLine" or "Unjoinable") + unmatchedResults.Length,
+            platformRows.Count == 0 ? 0 : decimal.Round((decimal)gradedRows.Length / platformRows.Count, 4),
+            fullMatches
+                .GroupBy(row => string.IsNullOrWhiteSpace(row.Bookmaker) ? "Unknown" : row.Bookmaker, StringComparer.OrdinalIgnoreCase)
+                .OrderByDescending(group => group.Count())
+                .ThenBy(group => group.Key)
+                .Select(group => new
+                {
+                    bookmaker = group.Key,
+                    rows = group.Count(),
+                    overWins = group.Count(row => row.GradeResult == "OverWin"),
+                    underWins = group.Count(row => row.GradeResult == "UnderWin"),
+                    pushes = group.Count(row => row.GradeResult == "Push"),
+                    noLineRows = group.Count(row => row.GradeResult == "NoLine")
+                })
+                .ToArray(),
+            fullMatches
+                .GroupBy(row => string.IsNullOrWhiteSpace(row.ProviderMarketKey) ? "Unknown" : row.ProviderMarketKey, StringComparer.OrdinalIgnoreCase)
+                .OrderByDescending(group => group.Count())
+                .ThenBy(group => group.Key)
+                .Select(group => new
+                {
+                    market = group.Key,
+                    rows = group.Count(),
+                    overWins = group.Count(row => row.GradeResult == "OverWin"),
+                    underWins = group.Count(row => row.GradeResult == "UnderWin"),
+                    pushes = group.Count(row => row.GradeResult == "Push"),
+                    noLineRows = group.Count(row => row.GradeResult == "NoLine")
+                })
+                .ToArray(),
+            fullMatches
+                .GroupBy(row => string.IsNullOrWhiteSpace(row.PropType) ? "Unknown" : row.PropType, StringComparer.OrdinalIgnoreCase)
+                .OrderByDescending(group => group.Count())
+                .ThenBy(group => group.Key)
+                .Select(group => new
+                {
+                    propType = group.Key,
+                    rows = group.Count(),
+                    overWins = group.Count(row => row.GradeResult == "OverWin"),
+                    underWins = group.Count(row => row.GradeResult == "UnderWin"),
+                    pushes = group.Count(row => row.GradeResult == "Push"),
+                    noLineRows = group.Count(row => row.GradeResult == "NoLine")
+                })
+                .ToArray());
+
+        return new ApiSportsSoccerGradingComputation(
+            summary,
+            blockers,
+            fullMatches.Take(sampleLimit).ToArray(),
+            unmatchedResults.Take(sampleLimit).ToArray(),
+            platformRows
+                .Where(row => !matchedPlatformIds.Contains(row.PlatformPropId))
+                .Select(BuildApiSportsMarketJoinUnmatchedPlatformSample)
+                .Take(sampleLimit)
+                .ToArray());
+    }
+
+    private static ApiSportsSoccerGradingPreviewSample BuildApiSportsSoccerGradingSample(
+        ApiSportsMarketJoinResultRow result,
+        ApiSportsMarketJoinPlatformRow platform)
+    {
+        var gradeResult = ResolveApiSportsSoccerPreviewGrade(platform.Side, platform.Line, result.ActualResultValue);
+        var notes = new List<string>
+        {
+            "Debug-only preview. No grade was written.",
+            "Sportsbook context rows are research-only and not Entry Builder playable."
+        };
+        if (gradeResult == "NoLine")
+        {
+            notes.Add("No usable Over/Under side was available for this platform row.");
+        }
+
+        return new ApiSportsSoccerGradingPreviewSample(
+            result.ResultId,
+            platform.PlatformPropId,
+            platform.ProviderEventId,
+            result.ApiSportsFixtureId,
+            platform.EventName,
+            platform.EventDate,
+            platform.Bookmaker,
+            platform.Provider,
+            string.IsNullOrWhiteSpace(platform.ProviderCategory) ? "Sportsbook" : platform.ProviderCategory,
+            platform.SportsbookContextResearchOnly ?? true,
+            platform.EntryActionableForUser ?? false,
+            platform.PlayerName,
+            result.PlayerName,
+            result.NormalizedPlayerName,
+            result.PropTypeName,
+            platform.MarketKey,
+            platform.Line,
+            platform.Side == "Unavailable" ? null : platform.Side,
+            result.ActualResultValue,
+            gradeResult,
+            BuildApiSportsSoccerPreviewJoinMethod(result, platform),
+            gradeResult == "NoLine" ? "Low" : "DiagnosticOnly",
+            notes);
+    }
+
+    private static string ResolveApiSportsSoccerPreviewGrade(string side, decimal line, decimal actualValue)
+    {
+        if (side == "Unavailable")
+        {
+            return "NoLine";
+        }
+
+        if (actualValue == line)
+        {
+            return "Push";
+        }
+
+        return actualValue > line ? "OverWin" : "UnderWin";
+    }
+
+    private static string BuildApiSportsSoccerPreviewJoinMethod(ApiSportsMarketJoinResultRow result, ApiSportsMarketJoinPlatformRow platform)
+    {
+        var parts = new List<string> { "eventDate", "normalizedPlayerName", "canonicalStatKey" };
+        if (platform.AliasCanonicalPlayerId.HasValue && platform.AliasCanonicalPlayerId.Value == result.PlayerId)
+        {
+            parts.Add("approvedTheOddsAliasLink");
+        }
+
+        if (!string.IsNullOrWhiteSpace(platform.ProviderEventId))
+        {
+            parts.Add("providerEventContext");
+        }
+
+        if (!string.IsNullOrWhiteSpace(result.TeamName)
+            && (NamesMatch(result.NormalizedTeamName, NormalizeResultPlayerName(platform.HomeTeamName))
+                || NamesMatch(result.NormalizedTeamName, NormalizeResultPlayerName(platform.AwayTeamName))))
+        {
+            parts.Add("teamContext");
+        }
+
+        return string.Join("+", parts);
+    }
+
+    private static string BuildApiSportsSoccerGradingCoverageRecommendation(
+        ApiSportsSoccerGradingCoverageTopLevelSummary summary,
+        ApiSportsSoccerGradingPreviewBlockers blockers)
+    {
+        if (summary.ResolvedPairsEvaluated == 0
+            && summary.UnresolvedProviderEvents == 0
+            && summary.ResultOnlyFixtures == 0)
+        {
+            return "No persisted API-Sports results or The Odds Soccer platform rows were found for this date range. Import results and ingest sportsbook context before reviewing Soccer grading coverage.";
+        }
+
+        if (summary.UnresolvedProviderEvents > 0 && summary.ResolvedPairsEvaluated == 0)
+        {
+            return "Persisted The Odds Soccer provider events exist, but none resolved to API-Sports fixtures. Recover provider event-to-fixture mapping before expanding Soccer grading diagnostics.";
+        }
+
+        if (summary.ResultOnlyFixtures > 0 && summary.ResolvedPairsEvaluated == 0)
+        {
+            return "Imported API-Sports results exist, but no resolved The Odds Soccer provider events were found for those fixtures. Ingest or recover Soccer sportsbook context before reviewing grading coverage.";
+        }
+
+        if (blockers.PlayerNameMismatch > blockers.PropTypeMappingMissing
+            && blockers.PlayerNameMismatch > blockers.EventDateMismatch)
+        {
+            return "Many persisted rows fail at player-name matching. Expand reviewed The Odds to API-Sports alias links before considering broader Soccer grading diagnostics.";
+        }
+
+        if (blockers.EventDateMismatch > 0
+            && blockers.EventDateMismatch >= blockers.PropTypeMappingMissing
+            || blockers.MissingApiSportsFixtureIdOnMarketRows > 0
+            && blockers.MissingApiSportsFixtureIdOnMarketRows >= blockers.PropTypeMappingMissing)
+        {
+            return "Coverage is limited by fixture/date mapping. Recover provider event-to-fixture mapping before expanding Soccer grading diagnostics.";
+        }
+
+        if (blockers.PropTypeMappingMissing > 0
+            && blockers.PropTypeMappingMissing >= blockers.PlayerNameMismatch)
+        {
+            return "Many persisted rows fail at prop/stat mapping. Expand Soccer provider stat mappings before considering broader Soccer grading diagnostics.";
+        }
+
+        if (summary.FixturesWithGradedPreviewRows >= 2 && summary.OverallGradeCoverageRate >= 0.50m)
+        {
+            return "Debug-only Soccer grading coverage is promising across multiple fixtures. Consider a debug-only Soccer performance summary next. Public Soccer grading should remain disabled until explicitly promoted.";
+        }
+
+        if (summary.TotalGradedPreviewRows > 0)
+        {
+            return "Some Soccer rows are gradeable in debug preview, but coverage is still uneven. Review worstCoverageFixtures and topBlockersAggregated before promoting any broader workflow.";
+        }
+
+        return "No gradeable Soccer preview rows were found. Review fixture matching, alias coverage, and stat mappings before building any Soccer performance summary.";
+    }
+
+    private static string BuildApiSportsSoccerGradingPreviewRecommendation(
+        int gradedPreviewRows,
+        ApiSportsSoccerGradingPreviewBlockers blockers)
+    {
+        if (gradedPreviewRows > 0)
+        {
+            return "Debug-only Soccer grading preview is available. Public Soccer grading remains disabled.";
+        }
+
+        var largestBlocker = new[]
+            {
+                ("unjoinable rows", blockers.UnjoinableRows),
+                ("missing provider player ids", blockers.MissingProviderPlayerId),
+                ("missing player team context", blockers.MissingPlayerTeam),
+                ("player-name mismatches", blockers.PlayerNameMismatch),
+                ("prop mapping gaps", blockers.PropTypeMappingMissing),
+                ("event-date mismatches", blockers.EventDateMismatch),
+                ("no-line rows", blockers.NoLineRows)
+            }
+            .OrderByDescending(row => row.Item2)
+            .First();
+
+        return largestBlocker.Item2 > 0
+            ? $"No graded preview rows are available. Largest blocker: {largestBlocker.Item1} ({largestBlocker.Item2})."
+            : "No graded preview rows are available for this scope.";
+    }
+
+    private static async Task<IReadOnlyList<TheOddsAliasPlatformPlayer>> LoadTheOddsAliasPlatformPlayersAsync(
+        ApplicationDbContext dbContext,
+        string providerEventId,
+        CancellationToken cancellationToken)
+    {
+        var rows = await dbContext.PlatformProps
+            .AsNoTracking()
+            .Include(platformProp => platformProp.Platform)
+            .Include(platformProp => platformProp.Prop)!.ThenInclude(prop => prop!.Player)
+            .Include(platformProp => platformProp.Prop)!.ThenInclude(prop => prop!.Game)!.ThenInclude(game => game!.HomeTeam)
+            .Include(platformProp => platformProp.Prop)!.ThenInclude(prop => prop!.Game)!.ThenInclude(game => game!.AwayTeam)
+            .Include(platformProp => platformProp.Prop)!.ThenInclude(prop => prop!.League)!.ThenInclude(league => league!.Sport)
+            .Where(platformProp => platformProp.Prop != null
+                && platformProp.Prop.League != null
+                && platformProp.Prop.League.Sport != null
+                && platformProp.Prop.League.Sport.Code == "SOCCER")
+            .Select(platformProp => new
+            {
+                platformProp.Id,
+                platformProp.PlatformPropId,
+                platformProp.ExternalStableKey,
+                platformProp.Metadata,
+                Provider = platformProp.Platform == null ? null : platformProp.Platform.Name,
+                Bookmaker = platformProp.Platform == null ? null : platformProp.Platform.Slug,
+                PlayerName = platformProp.Prop!.Player == null ? string.Empty : platformProp.Prop.Player.DisplayName,
+                EventStartTime = platformProp.Prop.StartsAt,
+                HomeTeamName = platformProp.Prop.Game == null || platformProp.Prop.Game.HomeTeam == null ? null : platformProp.Prop.Game.HomeTeam.Name,
+                AwayTeamName = platformProp.Prop.Game == null || platformProp.Prop.Game.AwayTeam == null ? null : platformProp.Prop.Game.AwayTeam.Name
+            })
+            .ToListAsync(cancellationToken);
+
+        return rows
+            .Select(row =>
+            {
+                var rowProviderEventId = FirstNonBlank(
+                    ExtractApiSportsContextMetadataString(row.Metadata, "eventInfo", "providerEventId"),
+                    ExtractApiSportsContextMetadataString(row.Metadata, "eventInfo", "eventId"),
+                    row.ExternalStableKey);
+                var homeTeam = FirstNonBlank(row.HomeTeamName, ExtractApiSportsContextMetadataString(row.Metadata, "eventInfo", "homeTeam"));
+                var awayTeam = FirstNonBlank(row.AwayTeamName, ExtractApiSportsContextMetadataString(row.Metadata, "eventInfo", "awayTeam"));
+                return new
+                {
+                    row.Id,
+                    row.PlatformPropId,
+                    ProviderEventId = rowProviderEventId,
+                    row.Provider,
+                    row.Bookmaker,
+                    row.PlayerName,
+                    NormalizedPlayerName = NormalizeResultPlayerName(row.PlayerName),
+                    Tokens = PlayerNameNormalizer.Tokenize(row.PlayerName),
+                    row.EventStartTime,
+                    EventName = BuildApiSportsContextEventName(awayTeam, homeTeam),
+                    HomeTeamName = homeTeam,
+                    AwayTeamName = awayTeam,
+                    ProviderPlayerId = ExtractApiSportsContextMetadataString(row.Metadata, "player", "providerPlayerId"),
+                    PlayerTeamName = ExtractApiSportsContextMetadataString(row.Metadata, "player", "teamName")
+                };
+            })
+            .Where(row => string.Equals(row.ProviderEventId, providerEventId, StringComparison.OrdinalIgnoreCase))
+            .GroupBy(row => row.NormalizedPlayerName, StringComparer.OrdinalIgnoreCase)
+            .Select(group =>
+            {
+                var first = group
+                    .OrderBy(row => string.IsNullOrWhiteSpace(row.PlayerName))
+                    .ThenBy(row => row.PlayerName)
+                    .First();
+                return new TheOddsAliasPlatformPlayer(
+                    first.PlayerName,
+                    first.NormalizedPlayerName,
+                    first.Tokens,
+                    first.ProviderEventId,
+                    first.EventName,
+                    first.EventStartTime,
+                    first.HomeTeamName,
+                    first.AwayTeamName,
+                    first.ProviderPlayerId,
+                    first.PlayerTeamName,
+                    group.Select(row => row.Provider).Where(value => !string.IsNullOrWhiteSpace(value)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray()!,
+                    group.Select(row => row.Bookmaker).Where(value => !string.IsNullOrWhiteSpace(value)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray()!,
+                    group.Count());
+            })
+            .OrderBy(row => row.PlatformPlayerName)
+            .ToArray();
+    }
+
+    private static async Task<IReadOnlyList<ApiSportsAliasFixturePlayer>> LoadApiSportsAliasFixturePlayersAsync(
+        ApplicationDbContext dbContext,
+        string fixtureId,
+        CancellationToken cancellationToken)
+    {
+        var rows = await dbContext.PropResults
+            .AsNoTracking()
+            .Include(result => result.Player)!.ThenInclude(player => player!.Team)
+            .Where(result => result.ExternalSource == ApiSportsFootballResultSource
+                && result.ExternalSourceIdentifier.StartsWith($"{ApiSportsFootballResultSource}:"))
+            .Select(result => new
+            {
+                result.PlayerId,
+                result.ExternalSourceIdentifier,
+                PlayerName = result.Player == null ? string.Empty : result.Player.DisplayName,
+                TeamName = result.Player == null || result.Player.Team == null ? null : result.Player.Team.Name
+            })
+            .ToListAsync(cancellationToken);
+
+        return rows
+            .Where(row => string.Equals(ExtractApiSportsFixtureId(row.ExternalSourceIdentifier), fixtureId, StringComparison.OrdinalIgnoreCase))
+            .Select(row => new
+            {
+                ApiSportsPlayerId = ExtractApiSportsPlayerId(row.ExternalSourceIdentifier),
+                row.PlayerId,
+                row.PlayerName,
+                NormalizedPlayerName = NormalizeResultPlayerName(row.PlayerName),
+                Tokens = PlayerNameNormalizer.Tokenize(row.PlayerName),
+                row.TeamName,
+                NormalizedTeamName = NormalizeResultPlayerName(row.TeamName)
+            })
+            .GroupBy(
+                row => string.IsNullOrWhiteSpace(row.ApiSportsPlayerId)
+                    ? $"local:{row.PlayerId}"
+                    : row.ApiSportsPlayerId!,
+                StringComparer.OrdinalIgnoreCase)
+            .Select(group =>
+            {
+                var first = group
+                    .OrderBy(row => string.IsNullOrWhiteSpace(row.PlayerName))
+                    .ThenBy(row => row.PlayerName)
+                    .First();
+                return new ApiSportsAliasFixturePlayer(
+                    group.Key,
+                    first.PlayerId,
+                    first.PlayerName,
+                    first.NormalizedPlayerName,
+                    first.Tokens,
+                    first.TeamName,
+                    first.NormalizedTeamName,
+                    group.Count());
+            })
+            .OrderBy(row => row.ApiSportsPlayerName)
+            .ToArray();
+    }
+
+    private static TheOddsApiSportsAliasCandidatePreview BuildTheOddsApiSportsAliasCandidatePreview(
+        IReadOnlyList<ApiSportsAliasFixturePlayer> resultPlayers,
+        IReadOnlyList<TheOddsAliasPlatformPlayer> platformPlayers,
+        int sampleLimit)
+    {
+        var candidateRows = platformPlayers
+            .Select(platformPlayer => BuildTheOddsApiSportsAliasCandidateRow(platformPlayer, resultPlayers))
+            .ToArray();
+        var summary = new
+        {
+            totalUnjoinedPlatformPlayers = candidateRows.Count(row => !row.ExactNormalizedMatch),
+            platformPlayerCount = platformPlayers.Count,
+            apiSportsFixturePlayerCount = resultPlayers.Count,
+            candidateCount = candidateRows.Count(row => row.SuggestedAction is "SafeAliasCandidate" or "NeedsReview" or "Ambiguous"),
+            safeCandidateCount = candidateRows.Count(row => row.SuggestedAction == "SafeAliasCandidate"),
+            needsReviewCount = candidateRows.Count(row => row.SuggestedAction == "NeedsReview"),
+            ambiguousCount = candidateRows.Count(row => row.SuggestedAction == "Ambiguous"),
+            noCandidateCount = candidateRows.Count(row => row.SuggestedAction == "NoCandidate")
+        };
+        var blockers = new
+        {
+            missingProviderPlayerId = platformPlayers.Count(row => string.IsNullOrWhiteSpace(row.ProviderPlayerId)),
+            missingPlayerTeam = platformPlayers.Count(row => string.IsNullOrWhiteSpace(row.PlayerTeamName)),
+            exactAlreadyJoined = candidateRows.Count(row => row.ExactNormalizedMatch),
+            ambiguous = candidateRows.Count(row => row.SuggestedAction == "Ambiguous"),
+            noCandidate = candidateRows.Count(row => row.SuggestedAction == "NoCandidate"),
+            insufficientTokenOverlap = candidateRows.Count(row => row.Blockers.Contains("InsufficientTokenOverlap", StringComparer.OrdinalIgnoreCase))
+        };
+
+        return new TheOddsApiSportsAliasCandidatePreview(
+            summary,
+            blockers,
+            new
+            {
+                aliasCandidates = candidateRows
+                    .Where(row => row.SuggestedAction != "NoCandidate")
+                    .Take(sampleLimit)
+                    .ToArray(),
+                noCandidate = candidateRows
+                    .Where(row => row.SuggestedAction == "NoCandidate")
+                    .Take(sampleLimit)
+                    .ToArray()
+            },
+            BuildTheOddsApiSportsAliasRecommendation(candidateRows));
+    }
+
+    private static TheOddsApiSportsAliasCandidateRow BuildTheOddsApiSportsAliasCandidateRow(
+        TheOddsAliasPlatformPlayer platformPlayer,
+        IReadOnlyList<ApiSportsAliasFixturePlayer> resultPlayers)
+    {
+        var candidates = resultPlayers
+            .Select(resultPlayer => ScoreTheOddsApiSportsAliasCandidate(platformPlayer, resultPlayer))
+            .Where(candidate => candidate.Confidence > 0)
+            .OrderByDescending(candidate => candidate.Confidence)
+            .ThenBy(candidate => candidate.ApiSportsPlayerName)
+            .ToArray();
+        var bestConfidence = candidates.Length == 0 ? 0 : candidates[0].Confidence;
+        var topCandidates = candidates
+            .Where(candidate => candidate.Confidence == bestConfidence)
+            .ToArray();
+        var exactNormalizedMatch = candidates.Any(candidate => candidate.MatchReasons.Contains("ExactNormalizedName", StringComparer.OrdinalIgnoreCase));
+        var blockers = new List<string>();
+        string suggestedAction;
+
+        if (topCandidates.Length == 0)
+        {
+            suggestedAction = "NoCandidate";
+            blockers.Add("InsufficientTokenOverlap");
+        }
+        else if (topCandidates.Length > 1 && bestConfidence < 1m)
+        {
+            suggestedAction = "Ambiguous";
+            blockers.Add("AmbiguousCandidate");
+        }
+        else if (bestConfidence >= 0.92m)
+        {
+            suggestedAction = "SafeAliasCandidate";
+        }
+        else if (bestConfidence >= 0.70m)
+        {
+            suggestedAction = "NeedsReview";
+            if (string.IsNullOrWhiteSpace(platformPlayer.PlayerTeamName))
+            {
+                blockers.Add("MissingTeamContext");
+            }
+        }
+        else
+        {
+            suggestedAction = "NoCandidate";
+            blockers.Add("InsufficientTokenOverlap");
+        }
+
+        return new TheOddsApiSportsAliasCandidateRow(
+            platformPlayer.PlatformPlayerName,
+            platformPlayer.NormalizedPlayerName,
+            platformPlayer.ProviderEventId,
+            platformPlayer.EventName,
+            platformPlayer.EventStartUtc,
+            platformPlayer.HomeTeamName,
+            platformPlayer.AwayTeamName,
+            platformPlayer.ProviderPlayerId,
+            platformPlayer.PlayerTeamName,
+            platformPlayer.Providers,
+            platformPlayer.Bookmakers,
+            platformPlayer.PlatformRowCount,
+            exactNormalizedMatch,
+            suggestedAction,
+            bestConfidence,
+            blockers,
+            topCandidates);
+    }
+
+    private static TheOddsApiSportsAliasCandidateScore ScoreTheOddsApiSportsAliasCandidate(
+        TheOddsAliasPlatformPlayer platformPlayer,
+        ApiSportsAliasFixturePlayer resultPlayer)
+    {
+        var reasons = new List<string>();
+        var platformTokens = platformPlayer.Tokens.ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var resultTokens = resultPlayer.Tokens.ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var sharedTokens = resultTokens.Intersect(platformTokens, StringComparer.OrdinalIgnoreCase).ToArray();
+        decimal confidence = 0;
+
+        if (string.Equals(platformPlayer.NormalizedPlayerName, resultPlayer.NormalizedPlayerName, StringComparison.OrdinalIgnoreCase))
+        {
+            confidence = 1.0m;
+            reasons.Add("ExactNormalizedName");
+        }
+        else if (resultTokens.Count > 0 && resultTokens.All(token => platformTokens.Contains(token)) && sharedTokens.Length >= 2)
+        {
+            confidence = 0.94m;
+            reasons.Add("ApiSportsTokensSubsetOfTheOddsName");
+        }
+        else if (platformTokens.Count > 0 && platformTokens.All(token => resultTokens.Contains(token)) && sharedTokens.Length >= 2)
+        {
+            confidence = 0.90m;
+            reasons.Add("TheOddsTokensSubsetOfApiSportsName");
+        }
+        else if (!string.IsNullOrWhiteSpace(platformPlayer.NormalizedPlayerName)
+            && !string.IsNullOrWhiteSpace(resultPlayer.NormalizedPlayerName)
+            && (platformPlayer.NormalizedPlayerName.Contains(resultPlayer.NormalizedPlayerName, StringComparison.OrdinalIgnoreCase)
+                || resultPlayer.NormalizedPlayerName.Contains(platformPlayer.NormalizedPlayerName, StringComparison.OrdinalIgnoreCase)))
+        {
+            confidence = 0.84m;
+            reasons.Add("NormalizedContainment");
+        }
+        else if (sharedTokens.Length >= 2)
+        {
+            confidence = 0.78m;
+            reasons.Add("SharedTwoOrMoreNameTokens");
+        }
+        else if (sharedTokens.Length == 1 && platformTokens.Count <= 2 && resultTokens.Count <= 2)
+        {
+            confidence = 0.58m;
+            reasons.Add("SingleSharedToken");
+        }
+
+        var teamMatch = !string.IsNullOrWhiteSpace(resultPlayer.TeamName)
+            && (NamesMatch(resultPlayer.NormalizedTeamName, NormalizeResultPlayerName(platformPlayer.PlayerTeamName))
+                || NamesMatch(resultPlayer.NormalizedTeamName, NormalizeResultPlayerName(platformPlayer.HomeTeamName))
+                || NamesMatch(resultPlayer.NormalizedTeamName, NormalizeResultPlayerName(platformPlayer.AwayTeamName)));
+        if (teamMatch)
+        {
+            reasons.Add("EventTeamContext");
+        }
+
+        return new TheOddsApiSportsAliasCandidateScore(
+            resultPlayer.ApiSportsPlayerId,
+            resultPlayer.LocalPlayerId,
+            resultPlayer.ApiSportsPlayerName,
+            resultPlayer.NormalizedPlayerName,
+            resultPlayer.TeamName,
+            confidence,
+            sharedTokens,
+            reasons);
+    }
+
+    private static string BuildTheOddsApiSportsAliasRecommendation(IReadOnlyList<TheOddsApiSportsAliasCandidateRow> rows)
+    {
+        if (rows.Any(row => row.SuggestedAction == "SafeAliasCandidate"))
+        {
+            return "Safe alias candidates are available for manual review. This endpoint does not write aliases, approve links, or enable public Soccer grading.";
+        }
+
+        if (rows.Any(row => row.SuggestedAction == "Ambiguous"))
+        {
+            return "Ambiguous aliases need manual review before any identity link approval.";
+        }
+
+        if (rows.Any(row => row.SuggestedAction == "NeedsReview"))
+        {
+            return "Potential aliases need manual review because team/provider player context is incomplete.";
+        }
+
+        return "No likely aliases were found for this fixture/provider event.";
+    }
+
+    private static async Task<TheOddsApiSportsAliasBatch> BuildTheOddsApiSportsAliasBatchAsync(
+        ApplicationDbContext dbContext,
+        ApiSportsWorldCupDateRange range,
+        int maxFixtures,
+        int sampleLimit,
+        decimal minimumConfidence,
+        bool includeExactNormalizedMatches,
+        bool includeTokenSubsetMatches,
+        int maxLinks,
+        bool includePlan,
+        CancellationToken cancellationToken)
+    {
+        var resultRows = await LoadApiSportsMarketJoinResultRowsAsync(dbContext, range, null, cancellationToken);
+        var platformRows = await LoadApiSportsMarketJoinPlatformRowsAsync(dbContext, range, null, cancellationToken);
+        var mappingCoverage = BuildApiSportsSoccerFixtureMappingCoverage(
+            resultRows,
+            platformRows,
+            includeResolved: true,
+            includeUnresolved: false,
+            includeSamples: false,
+            maxFixtures);
+        var coverage = BuildApiSportsSoccerGradingCoverageSummary(
+            resultRows,
+            platformRows,
+            includeFixtureDetails: false,
+            includeSamples: false,
+            maxFixtures,
+            maxSamplesPerFixture: 0);
+        var resolvedPairs = mappingCoverage.ResolvedEvents
+            .Where(row => string.Equals(row.ResolutionStatus, "Resolved", StringComparison.OrdinalIgnoreCase)
+                && !string.IsNullOrWhiteSpace(row.ProviderEventId)
+                && !string.IsNullOrWhiteSpace(row.ResolvedFixtureId))
+            .OrderBy(row => row.EventDate)
+            .ThenBy(row => row.EventName)
+            .ThenBy(row => row.ProviderEventId)
+            .Take(maxFixtures)
+            .ToArray();
+        var candidateGroups = new List<TheOddsApiSportsAliasBatchCandidateGroup>();
+        var linkPlans = new List<TheOddsApiSportsAliasBatchLinkPlan>();
+        var flattenedRows = new List<(ApiSportsSoccerFixtureMappingEvent Pair, TheOddsApiSportsAliasCandidateRow Row)>();
+
+        foreach (var pair in resolvedPairs)
+        {
+            var fixtureId = pair.ResolvedFixtureId!;
+            var providerEventId = pair.ProviderEventId;
+            var resultPlayers = await LoadApiSportsAliasFixturePlayersAsync(dbContext, fixtureId, cancellationToken);
+            var platformPlayers = await LoadTheOddsAliasPlatformPlayersAsync(dbContext, providerEventId, cancellationToken);
+            var candidateRows = platformPlayers
+                .Select(platformPlayer => BuildTheOddsApiSportsAliasCandidateRow(platformPlayer, resultPlayers))
+                .ToArray();
+            flattenedRows.AddRange(candidateRows.Select(row => (pair, row)));
+
+            TheOddsApiSportsAliasLinkPlan? plan = null;
+            if (includePlan)
+            {
+                plan = await BuildTheOddsApiSportsAliasLinkPlanAsync(
+                    dbContext,
+                    candidateRows,
+                    fixtureId,
+                    providerEventId,
+                    minimumConfidence,
+                    includeExactNormalizedMatches,
+                    includeTokenSubsetMatches,
+                    maxLinks,
+                    cancellationToken);
+                linkPlans.Add(new TheOddsApiSportsAliasBatchLinkPlan(fixtureId, providerEventId, plan));
+            }
+
+            candidateGroups.Add(new TheOddsApiSportsAliasBatchCandidateGroup(
+                providerEventId,
+                fixtureId,
+                pair.EventName,
+                pair.EventDate,
+                pair.HomeTeam,
+                pair.AwayTeam,
+                platformPlayers.Count,
+                resultPlayers.Count,
+                candidateRows.Length,
+                candidateRows.Count(row => row.SuggestedAction == "SafeAliasCandidate"),
+                candidateRows.Count(row => row.SuggestedAction == "NeedsReview"),
+                candidateRows.Count(row => row.SuggestedAction == "Ambiguous"),
+                candidateRows.Count(row => row.SuggestedAction == "NoCandidate"),
+                plan?.LinksAlreadyExisting ?? 0,
+                plan?.ProposedLinks.Count ?? candidateRows.Count(row => row.SuggestedAction == "SafeAliasCandidate" && row.Confidence >= minimumConfidence),
+                candidateRows
+                    .Where(row => row.SuggestedAction != "NoCandidate")
+                    .OrderByDescending(row => row.Confidence)
+                    .ThenBy(row => row.PlatformPlayerName)
+                    .Take(sampleLimit)
+                    .ToArray()));
+        }
+
+        var candidateRowsAll = flattenedRows.Select(row => row.Row).ToArray();
+        var proposedLinks = linkPlans
+            .SelectMany(group => group.Plan.ProposedLinks)
+            .Take(maxLinks)
+            .ToArray();
+        var deduplicatedCandidates = BuildTheOddsApiSportsAliasBatchDeduplicatedCandidates(flattenedRows, sampleLimit);
+        var currentSummary = coverage.Summary;
+        var projectedAdditionalJoinableRows = proposedLinks.Sum(link =>
+            candidateRowsAll
+                .Where(row => string.Equals(row.ProviderEventId, link.ProviderEventId, StringComparison.OrdinalIgnoreCase)
+                    && string.Equals(row.NormalizedPlatformPlayerName, link.NormalizedPlatformPlayerName, StringComparison.OrdinalIgnoreCase))
+                .Select(row => row.PlatformRowCount)
+                .DefaultIfEmpty(1)
+                .First());
+        var estimatedCoverageImpact = new
+        {
+            currentFullyJoinableRows = currentSummary.TotalFullyJoinableRows,
+            currentGradedPreviewRows = currentSummary.TotalGradedPreviewRows,
+            projectedAdditionalJoinableRows,
+            projectedAdditionalGradedRows = projectedAdditionalJoinableRows
+        };
+        var candidateSummary = new
+        {
+            resolvedPairsEvaluated = resolvedPairs.Length,
+            platformPlayerNamesEvaluated = candidateRowsAll.Length,
+            candidateCount = candidateRowsAll.Count(row => row.SuggestedAction is "SafeAliasCandidate" or "NeedsReview" or "Ambiguous"),
+            safeCandidateCount = candidateRowsAll.Count(row => row.SuggestedAction == "SafeAliasCandidate"),
+            needsReviewCount = candidateRowsAll.Count(row => row.SuggestedAction == "NeedsReview"),
+            ambiguousCount = candidateRowsAll.Count(row => row.SuggestedAction == "Ambiguous"),
+            noCandidateCount = candidateRowsAll.Count(row => row.SuggestedAction == "NoCandidate"),
+            alreadyLinkedCount = linkPlans.Sum(group => group.Plan.LinksAlreadyExisting),
+            newSafeCandidateCount = proposedLinks.Length
+        };
+        var blockers = new
+        {
+            missingProviderPlayerId = candidateRowsAll.Count(row => string.IsNullOrWhiteSpace(row.ProviderPlayerId)),
+            missingPlayerTeam = candidateRowsAll.Count(row => string.IsNullOrWhiteSpace(row.PlayerTeamName)),
+            ambiguous = candidateRowsAll.Count(row => row.SuggestedAction == "Ambiguous"),
+            noCandidate = candidateRowsAll.Count(row => row.SuggestedAction == "NoCandidate"),
+            insufficientTokenOverlap = candidateRowsAll.Count(row => row.Blockers.Contains("InsufficientTokenOverlap", StringComparer.OrdinalIgnoreCase)),
+            belowMinimumConfidence = candidateRowsAll.Count(row => row.SuggestedAction == "SafeAliasCandidate" && row.Confidence < minimumConfidence),
+            existingConflicts = linkPlans.SelectMany(group => group.Plan.Skipped).Count(row => row.Reason == "ExistingLinkConflict")
+        };
+
+        return new TheOddsApiSportsAliasBatch(
+            resolvedPairs.Length,
+            candidateRowsAll.Length,
+            candidateRowsAll.Count(row => row.SuggestedAction == "SafeAliasCandidate"),
+            candidateSummary,
+            estimatedCoverageImpact,
+            candidateGroups
+                .OrderBy(group => group.EventDate)
+                .ThenBy(group => group.EventName)
+                .ThenBy(group => group.ProviderEventId)
+                .Take(sampleLimit)
+                .ToArray(),
+            deduplicatedCandidates,
+            blockers,
+            linkPlans,
+            BuildTheOddsApiSportsAliasBatchRecommendation(candidateRowsAll, proposedLinks.Length));
+    }
+
+    private static IReadOnlyList<object> BuildTheOddsApiSportsAliasBatchDeduplicatedCandidates(
+        IReadOnlyList<(ApiSportsSoccerFixtureMappingEvent Pair, TheOddsApiSportsAliasCandidateRow Row)> rows,
+        int sampleLimit)
+    {
+        return rows
+            .Where(row => row.Row.Candidates.Count == 1 && row.Row.SuggestedAction != "NoCandidate")
+            .GroupBy(
+                row => new
+                {
+                    row.Row.NormalizedPlatformPlayerName,
+                    row.Row.Candidates[0].LocalPlayerId
+                })
+            .OrderByDescending(group => group.Max(row => row.Row.Confidence))
+            .ThenBy(group => group.First().Row.PlatformPlayerName)
+            .Take(sampleLimit)
+            .Select(group =>
+            {
+                var first = group.OrderByDescending(row => row.Row.Confidence).First();
+                var candidate = first.Row.Candidates[0];
+                return new
+                {
+                    platformPlayerName = first.Row.PlatformPlayerName,
+                    normalizedPlatformPlayerName = first.Row.NormalizedPlatformPlayerName,
+                    candidateApiSportsPlayerName = candidate.ApiSportsPlayerName,
+                    candidateLocalPlayerId = candidate.LocalPlayerId,
+                    candidateTeamName = candidate.TeamName,
+                    confidence = group.Max(row => row.Row.Confidence),
+                    suggestedActions = group.Select(row => row.Row.SuggestedAction).Distinct(StringComparer.OrdinalIgnoreCase).Order().ToArray(),
+                    occurrences = group.Count(),
+                    fixtureIds = group.Select(row => row.Pair.ResolvedFixtureId).Where(value => !string.IsNullOrWhiteSpace(value)).Distinct(StringComparer.OrdinalIgnoreCase).Order().ToArray(),
+                    providerEventIds = group.Select(row => row.Pair.ProviderEventId).Distinct(StringComparer.OrdinalIgnoreCase).Order().ToArray(),
+                    matchReasons = group.SelectMany(row => row.Row.Candidates[0].MatchReasons).Distinct(StringComparer.OrdinalIgnoreCase).Order().ToArray(),
+                    blockers = group.SelectMany(row => row.Row.Blockers).Distinct(StringComparer.OrdinalIgnoreCase).Order().ToArray()
+                };
+            })
+            .ToArray();
+    }
+
+    private static string BuildTheOddsApiSportsAliasBatchRecommendation(
+        IReadOnlyList<TheOddsApiSportsAliasCandidateRow> rows,
+        int proposedLinks)
+    {
+        if (proposedLinks > 0)
+        {
+            return "Batch safe alias candidates are available. Run alias-link-batch with dryRun=true first, review proposedLinks, then rerun with dryRun=false only for safe candidates.";
+        }
+
+        if (rows.Any(row => row.SuggestedAction == "Ambiguous"))
+        {
+            return "Ambiguous aliases remain blocked. Do not bulk approve these without stronger team/player context.";
+        }
+
+        if (rows.Any(row => row.SuggestedAction == "NeedsReview"))
+        {
+            return "NeedsReview aliases remain blocked from batch persistence. Continue manual review or improve provider team/player context.";
+        }
+
+        return "No new safe batch alias candidates were found for the resolved fixture pairs.";
+    }
+
+    private static string BuildTheOddsApiSportsManualAliasApprovalRecommendation(
+        bool dryRun,
+        int proposedCount,
+        int insertedCount,
+        IReadOnlyList<TheOddsApiSportsAliasLinkSkippedRow> skipped)
+    {
+        if (dryRun && proposedCount == 1)
+        {
+            return "Dry run validated one NeedsReview alias candidate. Review proposedLink and rerun with dryRun=false only if the identity was manually confirmed.";
+        }
+
+        if (!dryRun && insertedCount == 1)
+        {
+            return "Manual alias approval was written. Rerun Soccer grading coverage to confirm player-name mismatch decreased. Public Soccer grading remains disabled.";
+        }
+
+        var reason = skipped.FirstOrDefault()?.Reason;
+        return reason switch
+        {
+            "AlreadyLinked" => "This alias is already approved for the requested player.",
+            "CandidateIdMismatch" => "The supplied API-Sports/local player ids do not match the current diagnostic candidate. Re-run alias-candidates before approving.",
+            "Ambiguous" => "Ambiguous aliases cannot be manually approved through this endpoint.",
+            "NoCandidate" => "No-candidate rows cannot be approved.",
+            "SafeAliasCandidate" => "This row is already safe; use the normal dry-run-first alias-link endpoint.",
+            "ExistingLinkConflict" => "An existing provider link points at a different canonical player. Resolve the conflict before approving.",
+            _ => "No manual alias approval was written."
+        };
+    }
+
+    private static async Task<TheOddsApiSportsAliasLinkPlan> BuildTheOddsApiSportsAliasLinkPlanAsync(
+        ApplicationDbContext dbContext,
+        IReadOnlyList<TheOddsApiSportsAliasCandidateRow> candidateRows,
+        string fixtureId,
+        string providerEventId,
+        decimal minConfidence,
+        bool includeExactNormalizedMatches,
+        bool includeTokenSubsetMatches,
+        int maxLinks,
+        CancellationToken cancellationToken)
+    {
+        var skipped = new List<TheOddsApiSportsAliasLinkSkippedRow>();
+        var eligible = new List<TheOddsApiSportsAliasLinkAuditRow>();
+
+        foreach (var row in candidateRows)
+        {
+            if (row.SuggestedAction != "SafeAliasCandidate")
+            {
+                skipped.Add(BuildTheOddsApiSportsAliasSkippedRow(row, row.SuggestedAction));
+                continue;
+            }
+
+            if (row.Confidence < minConfidence)
+            {
+                skipped.Add(BuildTheOddsApiSportsAliasSkippedRow(row, "BelowMinimumConfidence"));
+                continue;
+            }
+
+            if (row.ExactNormalizedMatch && !includeExactNormalizedMatches)
+            {
+                skipped.Add(BuildTheOddsApiSportsAliasSkippedRow(row, "ExactNormalizedMatchExcluded"));
+                continue;
+            }
+
+            var candidate = row.Candidates.Count == 1 ? row.Candidates[0] : null;
+            if (candidate is null)
+            {
+                skipped.Add(BuildTheOddsApiSportsAliasSkippedRow(row, "Ambiguous"));
+                continue;
+            }
+
+            if (!row.ExactNormalizedMatch
+                && !includeTokenSubsetMatches
+                && candidate.MatchReasons.Any(reason => reason is "ApiSportsTokensSubsetOfTheOddsName" or "TheOddsTokensSubsetOfApiSportsName" or "NormalizedContainment"))
+            {
+                skipped.Add(BuildTheOddsApiSportsAliasSkippedRow(row, "TokenSubsetMatchExcluded"));
+                continue;
+            }
+
+            eligible.Add(BuildTheOddsApiSportsAliasLinkAuditRow(row, candidate, providerEventId));
+        }
+
+        var providerEntityIds = eligible
+            .Select(row => row.ProviderEntityId)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        var existingLinks = providerEntityIds.Length == 0
+            ? []
+            : await dbContext.ProviderEntityLinks
+                .AsNoTracking()
+                .Where(link => link.ProviderKey == TheOddsSoccerAliasProviderKey
+                    && link.EntityType == "Player"
+                    && providerEntityIds.Contains(link.ProviderEntityId))
+                .Select(link => new
+                {
+                    link.ProviderEntityId,
+                    link.CanonicalEntityId,
+                    link.CanonicalEntityName,
+                    link.LinkStatus
+                })
+                .ToListAsync(cancellationToken);
+        var existingByProviderEntityId = existingLinks
+            .GroupBy(link => link.ProviderEntityId, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(group => group.Key, group => group.ToArray(), StringComparer.OrdinalIgnoreCase);
+        var proposed = new List<TheOddsApiSportsAliasLinkAuditRow>();
+        var alreadyExisting = 0;
+
+        foreach (var row in eligible)
+        {
+            if (existingByProviderEntityId.TryGetValue(row.ProviderEntityId, out var links))
+            {
+                var approved = links.FirstOrDefault(link => string.Equals(link.LinkStatus, "Approved", StringComparison.OrdinalIgnoreCase));
+                if (approved is not null && approved.CanonicalEntityId == row.LocalPlayerId)
+                {
+                    alreadyExisting++;
+                    continue;
+                }
+
+                skipped.Add(new TheOddsApiSportsAliasLinkSkippedRow(
+                    row.PlatformPlayerName,
+                    row.NormalizedPlatformPlayerName,
+                    row.ProviderEventId,
+                    row.Confidence,
+                    "ExistingLinkConflict",
+                    row.Blockers,
+                    row.CandidateApiSportsPlayerName,
+                    row.LocalPlayerId,
+                    approved?.CanonicalEntityName));
+                continue;
+            }
+
+            proposed.Add(row);
+            if (proposed.Count >= maxLinks)
+            {
+                break;
+            }
+        }
+
+        return new TheOddsApiSportsAliasLinkPlan(proposed, skipped, alreadyExisting);
+    }
+
+    private static TheOddsApiSportsAliasLinkSkippedRow BuildTheOddsApiSportsAliasSkippedRow(
+        TheOddsApiSportsAliasCandidateRow row,
+        string reason)
+    {
+        var candidate = row.Candidates.FirstOrDefault();
+        return new TheOddsApiSportsAliasLinkSkippedRow(
+            row.PlatformPlayerName,
+            row.NormalizedPlatformPlayerName,
+            row.ProviderEventId,
+            row.Confidence,
+            reason,
+            row.Blockers,
+            candidate?.ApiSportsPlayerName,
+            candidate?.LocalPlayerId,
+            null);
+    }
+
+    private static TheOddsApiSportsAliasLinkAuditRow BuildTheOddsApiSportsAliasLinkAuditRow(
+        TheOddsApiSportsAliasCandidateRow row,
+        TheOddsApiSportsAliasCandidateScore candidate,
+        string providerEventId)
+    {
+        var providerEntityId = BuildTheOddsSoccerAliasProviderEntityId(providerEventId, row.NormalizedPlatformPlayerName);
+        return new TheOddsApiSportsAliasLinkAuditRow(
+            providerEntityId,
+            row.PlatformPlayerName,
+            row.NormalizedPlatformPlayerName,
+            providerEventId,
+            row.EventName,
+            row.EventStartUtc,
+            row.HomeTeamName,
+            row.AwayTeamName,
+            row.PlayerTeamName,
+            candidate.ApiSportsPlayerId,
+            candidate.LocalPlayerId,
+            candidate.ApiSportsPlayerName,
+            candidate.NormalizedPlayerName,
+            candidate.TeamName,
+            row.Confidence,
+            row.ExactNormalizedMatch,
+            candidate.MatchReasons,
+            row.Blockers);
+    }
+
+    private static async Task<TheOddsApiSportsAliasLinkAuditRow[]> WriteTheOddsApiSportsAliasLinksAsync(
+        ApplicationDbContext dbContext,
+        string fixtureId,
+        string providerEventId,
+        IReadOnlyList<TheOddsApiSportsAliasLinkAuditRow> proposedLinks,
+        CancellationToken cancellationToken,
+        string? approvalReason = null,
+        string linkSource = "DebugTheOddsApiSportsAliasLink",
+        string dryRunFirstEndpoint = "/api/debug/soccer/player-identity/the-odds/api-sports/alias-link",
+        string approvedBy = "debug/alias-link")
+    {
+        if (proposedLinks.Count == 0)
+        {
+            return [];
+        }
+
+        var sport = await dbContext.Sports.SingleAsync(sport => sport.Code == "SOCCER", cancellationToken);
+        var now = DateTimeOffset.UtcNow;
+        var providerEntityIds = proposedLinks.Select(link => link.ProviderEntityId).ToArray();
+        var existingProviderEntityIds = await dbContext.ProviderEntityLinks
+            .AsNoTracking()
+            .Where(link => link.ProviderKey == TheOddsSoccerAliasProviderKey
+                && link.EntityType == "Player"
+                && providerEntityIds.Contains(link.ProviderEntityId))
+            .Select(link => link.ProviderEntityId)
+            .ToListAsync(cancellationToken);
+        var existing = existingProviderEntityIds.ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var inserted = new List<TheOddsApiSportsAliasLinkAuditRow>();
+
+        foreach (var link in proposedLinks.Where(link => !existing.Contains(link.ProviderEntityId)))
+        {
+            dbContext.ProviderEntityLinks.Add(new ProviderEntityLink
+            {
+                Id = Guid.NewGuid(),
+                SportId = sport.Id,
+                EntityType = "Player",
+                CanonicalEntityId = link.LocalPlayerId,
+                CanonicalEntityKind = "Player",
+                CanonicalEntityName = link.CandidateApiSportsPlayerName,
+                ProviderKey = TheOddsSoccerAliasProviderKey,
+                ProviderEntityId = link.ProviderEntityId,
+                ProviderEntityName = link.PlatformPlayerName,
+                ProviderTeamName = link.PlayerTeamName,
+                ProviderCompetitionId = "soccer_fifa_world_cup",
+                ProviderCompetitionName = "World Cup",
+                ProviderEventId = providerEventId,
+                EventStartUtc = link.EventStartUtc,
+                Confidence = link.Confidence,
+                LinkStatus = "Approved",
+                LinkSource = linkSource,
+                MetadataJson = JsonSerializer.SerializeToDocument(new
+                {
+                    sourceProvider = "The Odds API",
+                    sourceProviderKey = TheOddsSoccerAliasProviderKey,
+                    sourceSportKey = "soccer_fifa_world_cup",
+                    sourceProviderEventId = providerEventId,
+                    sourcePlatformPlayerName = link.PlatformPlayerName,
+                    sourceNormalizedPlatformPlayerName = link.NormalizedPlatformPlayerName,
+                    targetProvider = "API-Sports",
+                    targetProduct = "API-Sports Football",
+                    targetFixtureId = fixtureId,
+                    targetApiSportsPlayerId = link.ApiSportsPlayerId,
+                    targetLocalPlayerId = link.LocalPlayerId,
+                    targetPlayerName = link.CandidateApiSportsPlayerName,
+                    confidence = link.Confidence,
+                    exactNormalizedMatch = link.ExactNormalizedMatch,
+                    matchReasons = link.MatchReasons,
+                    blockers = link.Blockers,
+                    approvalReason,
+                    manualApproval = !string.IsNullOrWhiteSpace(approvalReason)
+                        || string.Equals(linkSource, "DebugTheOddsApiSportsManualAliasApproval", StringComparison.OrdinalIgnoreCase),
+                    publicSoccerGradingEnabled = false,
+                    dryRunFirstEndpoint,
+                    approvedAtUtc = now
+                }),
+                CreatedAtUtc = now,
+                UpdatedAtUtc = now,
+                ApprovedAtUtc = now,
+                ApprovedBy = approvedBy
+            });
+            inserted.Add(link);
+        }
+
+        if (inserted.Count > 0)
+        {
+            await dbContext.SaveChangesAsync(cancellationToken);
+        }
+
+        return inserted.ToArray();
+    }
+
+    private static string BuildTheOddsApiSportsAliasLinkRecommendation(
+        bool dryRun,
+        int proposedCount,
+        int insertedCount,
+        IReadOnlyList<TheOddsApiSportsAliasLinkSkippedRow> skipped)
+    {
+        if (dryRun && proposedCount > 0)
+        {
+            return "Dry run found safe alias links. Review proposedLinks, then rerun with dryRun=false to persist approved debug links.";
+        }
+
+        if (!dryRun && insertedCount > 0)
+        {
+            return "Approved alias links were written. Rerun the Soccer grading preview to verify join coverage improved. Public Soccer grading remains disabled.";
+        }
+
+        if (skipped.Any(row => row.Reason == "BelowMinimumConfidence"))
+        {
+            return "No links were written because candidates were below the requested minimum confidence.";
+        }
+
+        if (skipped.Any(row => row.Reason is "Ambiguous" or "NeedsReview"))
+        {
+            return "Only SafeAliasCandidate rows can be persisted. Review skipped rows manually before explicit single-link approval.";
+        }
+
+        return "No new alias links were available to persist.";
+    }
+
 
     private static async Task<ApiSportsSoccerResultMappingSet> LoadApiSportsSoccerResultMappingsAsync(
         ApplicationDbContext dbContext,
@@ -5614,6 +9249,686 @@ public static class ResultsDebugEndpoints
         string? EventId,
         string? Bookmaker,
         string? ProviderCategory);
+
+    private sealed record ApiSportsMarketJoinResultRow(
+        Guid ResultId,
+        DateOnly EventDate,
+        string? ApiSportsFixtureId,
+        string? ApiSportsPlayerId,
+        Guid PlayerId,
+        string PlayerName,
+        string NormalizedPlayerName,
+        string? TeamName,
+        string NormalizedTeamName,
+        string PropTypeName,
+        string StatKey,
+        decimal ActualResultValue,
+        string ExternalSourceIdentifier);
+
+    private sealed record ApiSportsMarketJoinPlatformRow(
+        Guid PlatformPropId,
+        string PlatformPropExternalId,
+        string? ProviderEventId,
+        string? DataProvider,
+        string? ContextSchemaVersion,
+        string? Provider,
+        string? Bookmaker,
+        string PlayerName,
+        string NormalizedPlayerName,
+        string PropTypeName,
+        string StatKey,
+        string? MarketKey,
+        string? CanonicalStatKey,
+        decimal Line,
+        string Side,
+        DateOnly EventDate,
+        DateTimeOffset EventStartTimeUtc,
+        string? EventName,
+        string? HomeTeamName,
+        string? AwayTeamName,
+        string? ProviderPlayerId,
+        string? PlayerTeamName,
+        string? ProviderCategory,
+        string? ProviderSportKey,
+        string? Competition,
+        bool? EntryActionableForUser,
+        bool? SportsbookContextResearchOnly,
+        Guid? AliasCanonicalPlayerId);
+
+    private sealed record ApiSportsMarketJoinMatchedSample(
+        Guid ResultId,
+        Guid PlatformPropId,
+        string? ApiSportsFixtureId,
+        string ApiSportsPlayerName,
+        string? ApiSportsTeamName,
+        string ApiSportsPropType,
+        string ApiSportsStatKey,
+        decimal ApiSportsValue,
+        string? ProviderEventId,
+        string MarketPlayerName,
+        string? Bookmaker,
+        string? Provider,
+        string? ProviderMarketKey,
+        string PlatformPropType,
+        decimal Line,
+        string Side,
+        string? EventName,
+        DateOnly EventDate,
+        DateTimeOffset EventStartTimeUtc,
+        string? HomeTeam,
+        string? AwayTeam,
+        IReadOnlyList<string> JoinBasis);
+
+    private sealed record ApiSportsMarketJoinUnmatchedResultSample(
+        string Reason,
+        string? ApiSportsFixtureId,
+        string ApiSportsPlayerName,
+        string? ApiSportsTeamName,
+        string ApiSportsPropType,
+        string ApiSportsStatKey,
+        decimal ApiSportsValue,
+        DateOnly EventDate,
+        int EventCandidateCount,
+        int PlayerNameCandidateCount,
+        int PropCandidateCount);
+
+    private sealed record ApiSportsMarketJoinUnmatchedPlatformSample(
+        string? ProviderEventId,
+        string MarketPlayerName,
+        string? Bookmaker,
+        string? Provider,
+        string? ProviderMarketKey,
+        string? CanonicalMarketStatKey,
+        string PlatformPropType,
+        decimal Line,
+        string Side,
+        string? EventName,
+        DateOnly EventDate,
+        DateTimeOffset EventStartTimeUtc,
+        string? HomeTeam,
+        string? AwayTeam);
+
+    private sealed record ApiSportsMarketJoinBlockerSummary(
+        int MissingProviderEventId,
+        int MissingApiSportsFixtureIdOnMarketRows,
+        int MissingPlayerTeam,
+        int MissingProviderPlayerId,
+        int PropTypeMappingMissing,
+        int PlayerNameMismatch,
+        int EventDateMismatch,
+        IReadOnlyList<string> Notes);
+
+    private sealed record ApiSportsMarketJoinPreview(
+        object Summary,
+        ApiSportsMarketJoinBlockerSummary Blockers,
+        object Samples,
+        string Recommendation);
+
+    private sealed record ApiSportsSoccerGradingPreview(
+        object Summary,
+        ApiSportsSoccerGradingPreviewBlockers Blockers,
+        object Samples,
+        string Recommendation);
+
+    private sealed record ApiSportsSoccerGradingComputation(
+        ApiSportsSoccerGradingPreviewSummary Summary,
+        ApiSportsSoccerGradingPreviewBlockers Blockers,
+        IReadOnlyList<ApiSportsSoccerGradingPreviewSample> GradedSamples,
+        IReadOnlyList<ApiSportsMarketJoinUnmatchedResultSample> UnjoinableResultSamples,
+        IReadOnlyList<ApiSportsMarketJoinUnmatchedPlatformSample> UnjoinablePlatformSamples);
+
+    private sealed record ApiSportsSoccerGradingPreviewSummary(
+        int CandidatePlatformRows,
+        int ImportedResultRows,
+        int FullyJoinableRows,
+        int GradedPreviewRows,
+        int OverWins,
+        int UnderWins,
+        int Pushes,
+        int NoLineRows,
+        int UngradedRows,
+        decimal GradeCoverageRate,
+        object RowsByBookmaker,
+        object RowsByMarket,
+        object RowsByPropType);
+
+    private sealed record ApiSportsSoccerGradingPreviewBlockers(
+        int MissingApiSportsFixtureIdOnMarketRows,
+        int MissingProviderPlayerId,
+        int MissingPlayerTeam,
+        int PlayerNameMismatch,
+        int PropTypeMappingMissing,
+        int EventDateMismatch,
+        int NoLineRows,
+        int UnjoinableRows);
+
+    private sealed record ApiSportsSoccerGradingPreviewSample(
+        Guid ResultId,
+        Guid PlatformPropId,
+        string? ProviderEventId,
+        string? FixtureId,
+        string? EventName,
+        DateOnly EventDate,
+        string? Bookmaker,
+        string? Provider,
+        string ProviderCategory,
+        bool SportsbookContextResearchOnly,
+        bool EntryActionableForUser,
+        string MarketPlayerName,
+        string ResultPlayerName,
+        string NormalizedPlayerName,
+        string PropType,
+        string? ProviderMarketKey,
+        decimal Line,
+        string? Side,
+        decimal ActualValue,
+        string GradeResult,
+        string JoinMethod,
+        string Confidence,
+        IReadOnlyList<string> Notes);
+
+    private sealed record ApiSportsSoccerGradingCoverageSummary(
+        ApiSportsSoccerGradingCoverageTopLevelSummary Summary,
+        ApiSportsSoccerGradingPreviewBlockers TopBlockersAggregated,
+        IReadOnlyList<ApiSportsSoccerGradingCoverageFixtureRank> BestCoverageFixtures,
+        IReadOnlyList<ApiSportsSoccerGradingCoverageFixtureRank> WorstCoverageFixtures,
+        IReadOnlyList<ApiSportsSoccerGradingCoverageFixtureDetail> FixtureDetails,
+        IReadOnlyList<ApiSportsSoccerGradingCoverageUnresolvedEvent> UnresolvedProviderEvents,
+        IReadOnlyList<ApiSportsSoccerGradingCoverageResultOnlyFixture> ResultOnlyFixtures,
+        IReadOnlyList<ApiSportsSoccerGradingCoverageUnresolvedEvent> PlatformOnlyEvents,
+        bool KnownWorkingPairDetected,
+        string RecommendedNextAction);
+
+    private sealed record ApiSportsSoccerGradingCoverageTopLevelSummary(
+        int ResolvedPairsEvaluated,
+        int UnresolvedProviderEvents,
+        int ResultOnlyFixtures,
+        int PlatformOnlyEvents,
+        int FixturesWithGradedPreviewRows,
+        int TotalCandidatePlatformRows,
+        int TotalImportedResultRows,
+        int TotalFullyJoinableRows,
+        int TotalGradedPreviewRows,
+        int TotalNoLineRows,
+        int TotalUngradedRows,
+        decimal OverallGradeCoverageRate);
+
+    private sealed record ApiSportsSoccerGradingCoverageFixtureRank(
+        string? FixtureId,
+        string? ProviderEventId,
+        string? EventName,
+        DateOnly? EventDate,
+        int CandidatePlatformRows,
+        int ImportedResultRows,
+        int GradedPreviewRows,
+        decimal GradeCoverageRate);
+
+    private sealed record ApiSportsSoccerGradingCoverageFixtureDetail(
+        string? FixtureId,
+        string? ProviderEventId,
+        string? EventName,
+        DateOnly? EventDate,
+        string? HomeTeam,
+        string? AwayTeam,
+        int CandidatePlatformRows,
+        int ImportedResultRows,
+        int UniquePlatformPlayers,
+        int UniqueApiSportsPlayers,
+        int AliasLinkedPlayers,
+        int FullyJoinableRowsBeforeAlias,
+        int FullyJoinableRowsAfterAlias,
+        int GradedPreviewRows,
+        int OverWins,
+        int UnderWins,
+        int Pushes,
+        int NoLineRows,
+        int UngradedRows,
+        decimal GradeCoverageRate,
+        ApiSportsSoccerGradingPreviewBlockers TopBlockers,
+        IReadOnlyList<ApiSportsSoccerGradingPreviewSample> SampleGradedRows,
+        IReadOnlyList<ApiSportsMarketJoinUnmatchedPlatformSample> SampleUnjoinablePlatformRows,
+        IReadOnlyList<ApiSportsSoccerGradingPreviewSample> SampleAliasLinkedRows);
+
+    private sealed record ApiSportsSoccerGradingCoverageUnresolvedEvent(
+        string? FixtureId,
+        string? ProviderEventId,
+        string? EventName,
+        DateOnly? EventDate,
+        string? HomeTeam,
+        string? AwayTeam,
+        int CandidatePlatformRows,
+        int UniquePlatformPlayers,
+        string Reason);
+
+    private sealed record ApiSportsSoccerGradingCoverageResultOnlyFixture(
+        string FixtureId,
+        DateOnly? EventDate,
+        int ImportedResultRows,
+        int UniqueApiSportsPlayers,
+        string Reason);
+
+    private sealed record ApiSportsSoccerPropMappingGapDiagnostic(
+        ApiSportsSoccerPropMappingGapSummary Summary,
+        IReadOnlyList<ApiSportsSoccerTheOddsMarketGap> TheOddsMarketGaps,
+        IReadOnlyList<ApiSportsSoccerApiSportsStatGap> ApiSportsStatGaps,
+        object GapsByCategory,
+        object GapsByProviderMarketKey,
+        object GapsByApiSportsStatKey,
+        IReadOnlyList<object> LowRiskMappingCandidates,
+        IReadOnlyList<object> NeedsReviewMappingCandidates,
+        IReadOnlyList<ApiSportsSoccerApiSportsStatGap> IgnoredNoise,
+        string RecommendedNextAction);
+
+    private sealed record ApiSportsSoccerPropMappingGapSummary(
+        int ResolvedPairsEvaluated,
+        int TotalUngradedRows,
+        int PropTypeMappingMissingRows,
+        object GapsByCategory,
+        object GapsByProviderMarketKey,
+        object GapsByApiSportsStatKey,
+        int LowRiskMappingCandidates,
+        int NeedsReviewMappingCandidates,
+        int IgnoredNoiseRows,
+        string RecommendedNextAction);
+
+    private sealed record ApiSportsSoccerTheOddsMarketGap(
+        string? ProviderMarketKey,
+        string PlatformPropType,
+        string? CanonicalMarketStatKey,
+        int RowCount,
+        int DistinctPlayers,
+        int DistinctEvents,
+        string Category,
+        bool ProviderStatMappingExists,
+        bool CanFixWithProviderStatMapping,
+        string? SuggestedCanonicalStatKey,
+        string RiskLevel,
+        string Recommendation,
+        IReadOnlyList<ApiSportsSoccerPlatformMappingGapRow> SampleRows);
+
+    private sealed record ApiSportsSoccerApiSportsStatGap(
+        string ApiSportsPropType,
+        string ApiSportsStatKey,
+        string? RuleConfidence,
+        bool? IsGradeable,
+        int RowCount,
+        int DistinctPlayers,
+        int DistinctFixtures,
+        string Category,
+        bool CanFixWithProviderStatMapping,
+        string? SuggestedCanonicalStatKey,
+        string RiskLevel,
+        string Recommendation,
+        IReadOnlyList<ApiSportsSoccerResultMappingGapRow> SampleRows);
+
+    private sealed record ApiSportsSoccerPlatformMappingGapRow(
+        string? FixtureId,
+        string? ProviderEventId,
+        Guid PlatformPropId,
+        string PlayerName,
+        string PlatformPropType,
+        string? ProviderMarketKey,
+        string? CanonicalMarketStatKey,
+        string? EventName,
+        DateOnly EventDate,
+        string? Bookmaker,
+        string? Provider,
+        string Category,
+        string Recommendation,
+        string RiskLevel,
+        string? SuggestedCanonicalStatKey)
+    {
+        public bool CanFixWithProviderStatMapping => Recommendation is "AddKnownMapping" or "AddNeedsConfirmationMapping";
+    }
+
+    private sealed record ApiSportsSoccerResultMappingGapRow(
+        string? FixtureId,
+        Guid ResultId,
+        string PlayerName,
+        string? TeamName,
+        string ApiSportsPropType,
+        string ApiSportsStatKey,
+        DateOnly EventDate,
+        string? RuleConfidence,
+        bool? IsGradeable,
+        string Category,
+        string Recommendation,
+        string RiskLevel,
+        decimal ActualValue)
+    {
+        public bool CanFixWithProviderStatMapping => Recommendation is "AddKnownMapping" or "AddNeedsConfirmationMapping";
+
+        public string? SuggestedCanonicalStatKey => CanFixWithProviderStatMapping ? ApiSportsStatKey : null;
+    }
+
+    private sealed record ApiSportsProviderStatMappingDiagnosticRow(
+        string CanonicalStatKey,
+        string DisplayName,
+        string RuleConfidence,
+        bool IsGradeable,
+        bool PublicGradingEnabled,
+        string? ProviderStatKey,
+        string ValueTransform);
+
+    private sealed record ApiSportsSoccerFixtureMappingCoverage(
+        ApiSportsSoccerFixtureMappingCoverageSummary Summary,
+        IReadOnlyList<ApiSportsSoccerFixtureMappingEvent> ResolvedEvents,
+        IReadOnlyList<ApiSportsSoccerFixtureMappingEvent> UnresolvedEvents,
+        IReadOnlyList<ApiSportsSoccerFixtureMappingEvent> ExcludedEvents,
+        bool KnownWorkingPairDetected,
+        string RecommendedNextAction);
+
+    private sealed record ApiSportsSoccerFixtureMappingCoverageSummary(
+        int ProviderEventsEvaluated,
+        int ResolvedEvents,
+        int UnresolvedEvents,
+        int AmbiguousEvents,
+        int NoCandidateEvents,
+        int EventsWithPlatformRows,
+        int EventsWithApiSportsResults,
+        int TotalPlatformRows,
+        int ResolvedPlatformRows,
+        int UnresolvedPlatformRows);
+
+    private sealed record ApiSportsSoccerFixtureMappingEvent(
+        string ProviderEventId,
+        string? EventName,
+        DateTimeOffset EventStartUtc,
+        DateOnly EventDate,
+        string? HomeTeam,
+        string? AwayTeam,
+        int PlatformRowCount,
+        int UniquePlatformPlayers,
+        IReadOnlyList<ApiSportsSoccerFixtureCandidate> CandidateApiSportsFixtures,
+        string? ResolvedFixtureId,
+        string ResolutionStatus,
+        decimal Confidence,
+        IReadOnlyList<string> MatchReasons,
+        IReadOnlyList<string> Blockers);
+
+    private sealed record ApiSportsSoccerFixtureCandidate(
+        string FixtureId,
+        DateOnly EventDate,
+        IReadOnlyList<string> TeamNames,
+        int ResultRowCount,
+        int UniqueApiSportsPlayers,
+        decimal Confidence,
+        IReadOnlyList<string> MatchReasons,
+        IReadOnlyList<string> Blockers);
+
+    private sealed record ApiSportsSoccerFixtureMappingProviderEvent(
+        string ProviderEventId,
+        string? EventName,
+        DateTimeOffset EventStartUtc,
+        DateOnly EventDate,
+        string? HomeTeam,
+        string? AwayTeam,
+        string NormalizedHomeTeam,
+        string NormalizedAwayTeam,
+        int PlatformRowCount,
+        int UniquePlatformPlayers);
+
+    private sealed record ApiSportsSoccerFixtureMappingResultFixture(
+        string FixtureId,
+        DateOnly EventDate,
+        int ResultRowCount,
+        int UniqueApiSportsPlayers,
+        IReadOnlyList<string> TeamNames,
+        IReadOnlyList<string> NormalizedTeamNames);
+
+    private sealed record TheOddsSoccerWorldCupIngestionCoverage(
+        TheOddsSoccerWorldCupIngestionCoverageSummary Summary,
+        IReadOnlyList<TheOddsSoccerWorldCupRealProviderEvent> RealProviderEvents,
+        TheOddsSoccerWorldCupSyntheticCoverage SyntheticOrLegacySoccerRows,
+        TheOddsSoccerWorldCupApiSportsResultCoverage ApiSportsFixtureResultCoverage,
+        TheOddsSoccerWorldCupRefreshRun? LatestSoccerRefreshRun,
+        TheOddsSoccerWorldCupIngestionGapAnalysis GapAnalysis,
+        string RecommendedNextAction);
+
+    private sealed record TheOddsSoccerWorldCupIngestionCoverageSummary(
+        int RealTheOddsProviderEvents,
+        int RealTheOddsPlatformRows,
+        int SyntheticOrLegacySoccerRows,
+        int ApiSportsFixturesWithResults,
+        int ResolvedProviderEvents,
+        int UnresolvedProviderEvents,
+        Guid? LatestSoccerRefreshRunId,
+        bool? LatestSoccerRefreshSucceeded,
+        int? LatestSoccerRefreshEventCount,
+        int? LatestSoccerRefreshPlatformRowsUpserted);
+
+    private sealed record TheOddsSoccerWorldCupRealProviderEvent(
+        string ProviderEventId,
+        string? EventName,
+        DateTimeOffset EventStartUtc,
+        DateOnly EventDate,
+        string? HomeTeam,
+        string? AwayTeam,
+        int PlatformRowCount,
+        int UniquePlayerCount,
+        IReadOnlyList<string> Bookmakers,
+        IReadOnlyList<string> Markets,
+        string? ProviderCategory,
+        string? ContextSchemaVersion,
+        string? ProviderSportKey,
+        string? Competition);
+
+    private sealed record TheOddsSoccerWorldCupSyntheticCoverage(
+        int Count,
+        IReadOnlyList<TheOddsSoccerWorldCupSyntheticProviderEvent> Samples);
+
+    private sealed record TheOddsSoccerWorldCupSyntheticProviderEvent(
+        string ProviderEventId,
+        DateOnly EventDate,
+        int PlatformRowCount,
+        IReadOnlyList<string> ExclusionReasons);
+
+    private sealed record TheOddsSoccerWorldCupApiSportsResultCoverage(
+        int FixtureCountWithResults,
+        int CompletedFixturesWithResults,
+        DateOnly FromDate,
+        DateOnly ToDate,
+        IReadOnlyList<TheOddsSoccerWorldCupApiSportsFixtureSample> SampleFixtures);
+
+    private sealed record TheOddsSoccerWorldCupApiSportsFixtureSample(
+        string FixtureId,
+        DateOnly EventDate,
+        int ImportedResultRows,
+        int UniqueApiSportsPlayers,
+        IReadOnlyList<string> Teams);
+
+    private sealed record TheOddsSoccerWorldCupRefreshRun(
+        Guid Id,
+        string Sport,
+        DateOnly SlateDate,
+        DateTimeOffset StartedAtUtc,
+        DateTimeOffset? CompletedAtUtc,
+        bool Succeeded,
+        bool Failed,
+        bool Blocked,
+        bool DryRun,
+        bool ForceLive,
+        string BookmakerPreset,
+        string ProviderCategoriesIncluded,
+        string SportsbookBookmakersRequested,
+        string DfsBookmakersRequested,
+        string MarketsRequested,
+        int EstimatedApiCalls,
+        int ActualApiCalls,
+        int PlatformPropsCreated,
+        int PlatformPropsUpdated,
+        int PlatformPropsUpserted,
+        int PredictionCount,
+        int LineShoppingGroupCount,
+        string? ErrorMessage,
+        JsonElement? Diagnostics);
+
+    private sealed record TheOddsSoccerWorldCupIngestionGapAnalysis(
+        int ApiSportsFixturesWithResultsButNoRealTheOddsEvent,
+        int RealTheOddsEventsWithoutApiSportsResults,
+        int RealTheOddsEventsResolvedToFixture,
+        int RealTheOddsEventsUnresolved,
+        string LikelyReasonOnlyOneRealEventExists,
+        IReadOnlyList<TheOddsSoccerWorldCupApiSportsFixtureSample> ApiSportsFixtureSamplesWithoutRealTheOddsEvent,
+        IReadOnlyList<ApiSportsSoccerFixtureMappingEvent> RealTheOddsEventSamplesWithoutApiSportsResults);
+
+    private sealed record TheOddsAliasPlatformPlayer(
+        string PlatformPlayerName,
+        string NormalizedPlayerName,
+        IReadOnlyList<string> Tokens,
+        string? ProviderEventId,
+        string? EventName,
+        DateTimeOffset EventStartUtc,
+        string? HomeTeamName,
+        string? AwayTeamName,
+        string? ProviderPlayerId,
+        string? PlayerTeamName,
+        IReadOnlyList<string> Providers,
+        IReadOnlyList<string> Bookmakers,
+        int PlatformRowCount);
+
+    private sealed record ApiSportsAliasFixturePlayer(
+        string ApiSportsPlayerId,
+        Guid LocalPlayerId,
+        string ApiSportsPlayerName,
+        string NormalizedPlayerName,
+        IReadOnlyList<string> Tokens,
+        string? TeamName,
+        string NormalizedTeamName,
+        int ResultRowCount);
+
+    private sealed record TheOddsApiSportsAliasCandidateScore(
+        string ApiSportsPlayerId,
+        Guid LocalPlayerId,
+        string ApiSportsPlayerName,
+        string NormalizedPlayerName,
+        string? TeamName,
+        decimal Confidence,
+        IReadOnlyList<string> SharedTokens,
+        IReadOnlyList<string> MatchReasons);
+
+    private sealed record TheOddsApiSportsAliasCandidateRow(
+        string PlatformPlayerName,
+        string NormalizedPlatformPlayerName,
+        string? ProviderEventId,
+        string? EventName,
+        DateTimeOffset EventStartUtc,
+        string? HomeTeamName,
+        string? AwayTeamName,
+        string? ProviderPlayerId,
+        string? PlayerTeamName,
+        IReadOnlyList<string> Providers,
+        IReadOnlyList<string> Bookmakers,
+        int PlatformRowCount,
+        bool ExactNormalizedMatch,
+        string SuggestedAction,
+        decimal Confidence,
+        IReadOnlyList<string> Blockers,
+        IReadOnlyList<TheOddsApiSportsAliasCandidateScore> Candidates);
+
+    private sealed record TheOddsApiSportsAliasCandidatePreview(
+        object Summary,
+        object Blockers,
+        object Samples,
+        string Recommendation);
+
+    private sealed record TheOddsApiSportsAliasLinkRequest(
+        string? FixtureId,
+        string? ProviderEventId,
+        bool? DryRun,
+        decimal? MinConfidence,
+        bool? IncludeExactNormalizedMatches,
+        bool? IncludeTokenSubsetMatches,
+        int? MaxLinks);
+
+    private sealed record TheOddsApiSportsAliasLinkBatchRequest(
+        DateOnly? FromDate,
+        DateOnly? ToDate,
+        bool? DryRun,
+        decimal? MinConfidence,
+        int? MaxLinks,
+        bool? IncludeExactNormalizedMatches,
+        bool? IncludeTokenSubsetMatches);
+
+    private sealed record TheOddsApiSportsAliasManualApprovalRequest(
+        string? ProviderEventId,
+        string? FixtureId,
+        string? PlatformPlayerName,
+        string? ApiSportsPlayerId,
+        Guid? LocalPlayerId,
+        bool? DryRun,
+        string? Reason);
+
+    private sealed record TheOddsApiSportsAliasBatch(
+        int ResolvedPairsEvaluated,
+        int CandidatesEvaluated,
+        int SafeCandidates,
+        object CandidateSummary,
+        object EstimatedCoverageImpact,
+        IReadOnlyList<TheOddsApiSportsAliasBatchCandidateGroup> CandidateGroups,
+        IReadOnlyList<object> DeduplicatedCandidates,
+        object Blockers,
+        IReadOnlyList<TheOddsApiSportsAliasBatchLinkPlan> LinkPlans,
+        string CandidateRecommendation);
+
+    private sealed record TheOddsApiSportsAliasBatchCandidateGroup(
+        string ProviderEventId,
+        string FixtureId,
+        string? EventName,
+        DateOnly EventDate,
+        string? HomeTeam,
+        string? AwayTeam,
+        int PlatformPlayerCount,
+        int ApiSportsFixturePlayerCount,
+        int CandidateCount,
+        int SafeCandidateCount,
+        int NeedsReviewCount,
+        int AmbiguousCount,
+        int NoCandidateCount,
+        int AlreadyLinkedCount,
+        int NewSafeCandidateCount,
+        IReadOnlyList<TheOddsApiSportsAliasCandidateRow> Candidates);
+
+    private sealed record TheOddsApiSportsAliasBatchLinkPlan(
+        string FixtureId,
+        string ProviderEventId,
+        TheOddsApiSportsAliasLinkPlan Plan);
+
+    private sealed record TheOddsApiSportsAliasLinkPlan(
+        IReadOnlyList<TheOddsApiSportsAliasLinkAuditRow> ProposedLinks,
+        IReadOnlyList<TheOddsApiSportsAliasLinkSkippedRow> Skipped,
+        int LinksAlreadyExisting);
+
+    private sealed record TheOddsApiSportsAliasLinkAuditRow(
+        string ProviderEntityId,
+        string PlatformPlayerName,
+        string NormalizedPlatformPlayerName,
+        string ProviderEventId,
+        string? EventName,
+        DateTimeOffset EventStartUtc,
+        string? HomeTeamName,
+        string? AwayTeamName,
+        string? PlayerTeamName,
+        string ApiSportsPlayerId,
+        Guid LocalPlayerId,
+        string CandidateApiSportsPlayerName,
+        string CandidateNormalizedPlayerName,
+        string? CandidateTeamName,
+        decimal Confidence,
+        bool ExactNormalizedMatch,
+        IReadOnlyList<string> MatchReasons,
+        IReadOnlyList<string> Blockers);
+
+    private sealed record TheOddsApiSportsAliasLinkSkippedRow(
+        string PlatformPlayerName,
+        string NormalizedPlatformPlayerName,
+        string? ProviderEventId,
+        decimal Confidence,
+        string Reason,
+        IReadOnlyList<string> Blockers,
+        string? CandidateApiSportsPlayerName,
+        Guid? CandidateLocalPlayerId,
+        string? ExistingCanonicalEntityName);
 
     private sealed record ApiSportsCoverageMatchDiagnostic(
         Guid ResultId,

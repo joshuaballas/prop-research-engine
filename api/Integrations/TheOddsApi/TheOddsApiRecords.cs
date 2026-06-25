@@ -32,10 +32,24 @@ public sealed record TheOddsApiPlayerPropSpikeRecord(
     string PlatformPropIdCandidate,
     object MetadataSample);
 
+public sealed record TheOddsApiEventOddsDiagnostics(
+    string? ProviderEventId,
+    string? HomeTeam,
+    string? AwayTeam,
+    DateTimeOffset? CommenceTimeUtc,
+    bool EventOddsHttpSucceeded,
+    int BookmakerCount,
+    IReadOnlyList<string> BookmakerKeys,
+    int MarketCount,
+    IReadOnlyList<string> MarketKeys,
+    int OutcomeCount,
+    int PlayerOutcomeCount);
+
 public sealed record TheOddsApiPlayerPropsSpikeResult(
     IReadOnlyList<TheOddsApiEventRecord> Events,
     string? SelectedEventId,
     IReadOnlyList<TheOddsApiPlayerPropSpikeRecord> Records,
+    IReadOnlyList<TheOddsApiEventOddsDiagnostics> EventOddsDiagnostics,
     TheOddsApiCreditUsage CreditUsage,
     string RequestUrl,
     string RawJson);

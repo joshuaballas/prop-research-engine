@@ -7,7 +7,13 @@ public sealed record TheOddsApiMlbEventIngestionRequest(
     string? Region = null,
     string ProviderCategory = "Sportsbook",
     bool IsActionableForUser = false,
-    bool IsIndicativeOdds = false);
+    bool IsIndicativeOdds = false,
+    string? ProviderSportKey = null,
+    string SportCode = "BASEBALL",
+    string SportName = "Baseball",
+    string LeagueCode = "MLB",
+    string LeagueName = "MLB",
+    string? CompetitionName = null);
 
 public sealed record TheOddsApiMlbEventIngestionResult(
     bool Success,
@@ -19,6 +25,7 @@ public sealed record TheOddsApiMlbEventIngestionResult(
     int BookmakersParsed,
     int MarketsParsed,
     int NormalizedRecords,
+    IReadOnlyList<string> NormalizedMarketKeys,
     int PropsUpserted,
     int PlatformPropsUpserted,
     int SnapshotsCreated,
@@ -29,6 +36,7 @@ public sealed record TheOddsApiMlbEventIngestionResult(
     IReadOnlyList<string> Warnings,
     IReadOnlyList<string> Errors,
     TheOddsApiCreditUsage CreditUsage,
+    IReadOnlyList<TheOddsApiEventOddsDiagnostics> ProviderDiagnostics,
     TheOddsApiMlbEventIngestionTiming Timing);
 
 public sealed record TheOddsApiMlbEventIngestionTiming(

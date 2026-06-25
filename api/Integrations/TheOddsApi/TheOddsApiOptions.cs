@@ -9,6 +9,8 @@ public sealed class TheOddsApiOptions
     public string SportKey { get; set; } = "baseball_mlb";
     public string SoccerWorldCupSportKey { get; set; } = string.Empty;
     public string SoccerWorldCupMarkets { get; set; } = string.Empty;
+    public string SoccerWorldCupSportsbookRegion { get; set; } = "us";
+    public string SoccerWorldCupDfsRegion { get; set; } = "us_dfs";
     public string Regions { get; set; } = "us";
     public string OddsFormat { get; set; } = "american";
     public int MaxConcurrentRequests { get; set; } = 3;
