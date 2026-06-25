@@ -33,6 +33,11 @@ export interface MarketOpportunity {
   line: number;
   provider: string;
   providerCategory: ProviderCategory;
+  isDfs?: boolean;
+  isSportsbook?: boolean;
+  showExpectedValue?: boolean;
+  displayExpectedValue?: number | null;
+  expectedValueUnavailableReason?: string | null;
   entryCompatibilityGroup: string;
   entryProvider: string;
   canAddToEntry: boolean;

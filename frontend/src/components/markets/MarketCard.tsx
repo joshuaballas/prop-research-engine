@@ -21,6 +21,7 @@ import {
 } from '../ui/OpportunityCard';
 import { marketTagLabel } from '../../utils/marketTags';
 import { CautionLabels } from './CautionLabels';
+import { getDisplayExpectedValue } from '../../utils/expectedValueDisplay';
 
 export function MarketCard({ market }: { market: MarketOpportunity }) {
   const [detailsOpen, setDetailsOpen] = useState(false);
@@ -30,6 +31,7 @@ export function MarketCard({ market }: { market: MarketOpportunity }) {
   const incompatible = !selected && !builder.isCompatible(market);
   const canAddFromScanner = addable && !incompatible;
   const cautions = getOperationalMarketCautions(market, { locked: incompatible && addable });
+  const displayEv = getDisplayExpectedValue(market);
   const actions = (
     <>
       {canAddFromScanner || selected ? (
@@ -59,10 +61,10 @@ export function MarketCard({ market }: { market: MarketOpportunity }) {
         value={
           <Stack spacing={0.1} alignItems="flex-end">
             <Typography variant="caption" color="text.secondary" fontWeight={850} lineHeight={1}>
-              EV
+              {displayEv === null ? 'Edge' : 'EV'}
             </Typography>
-            <Typography color={market.estimatedEv > 0 ? 'success.main' : 'error.main'} fontWeight={950} whiteSpace="nowrap" lineHeight={1.1}>
-              {formatPercent(market.estimatedEv, { signed: true })}
+            <Typography color={(displayEv ?? market.probabilityEdge) > 0 ? 'success.main' : 'error.main'} fontWeight={950} whiteSpace="nowrap" lineHeight={1.1}>
+              {formatPercent(displayEv ?? market.probabilityEdge, { signed: true })}
             </Typography>
           </Stack>
         }

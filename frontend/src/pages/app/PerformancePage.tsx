@@ -373,7 +373,7 @@ function ProviderResultDetails({ rows }: { rows: PerformanceResultRowDto[] }) {
           >
             <Box component="thead">
               <Box component="tr">
-                {['Target', 'Result', 'Provider', 'EV'].map((label) => (
+                {['Target', 'Result', 'Provider', 'Edge'].map((label) => (
                   <Box
                     key={label}
                     component="th"

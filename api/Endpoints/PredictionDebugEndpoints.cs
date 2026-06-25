@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
 using SportsBetting.Api.Data;
 using SportsBetting.Api.Ingestion;
 using SportsBetting.Api.Models;
@@ -91,6 +92,267 @@ public static class PredictionDebugEndpoints
         })
         .WithName("PredictionProbabilitiesDebug")
         .WithSummary("Returns read-only prototype probability estimates for persisted predictions.");
+
+        endpoints.MapGet("/api/debug/predictions/mlb/side-selection-audit", async (
+            DateOnly? date,
+            DateOnly? fromDate,
+            DateOnly? toDate,
+            bool? latestRunOnly,
+            bool? includeSamples,
+            int? maxSamples,
+            string? provider,
+            string? propType,
+            bool? excludeSampleRuns,
+            IPredictionProbabilityService probabilityService,
+            IOptions<PredictionGenerationOptions> predictionGenerationOptions,
+            ApplicationDbContext dbContext,
+            CancellationToken cancellationToken) =>
+        {
+            var effectiveFromDate = date ?? fromDate;
+            var effectiveToDate = date ?? toDate;
+            var useLatestRunOnly = latestRunOnly ?? true;
+            var shouldExcludeSampleRuns = excludeSampleRuns ?? true;
+            var shouldIncludeSamples = includeSamples ?? true;
+            var requestedMaxSamples = Math.Clamp(maxSamples.GetValueOrDefault(200) <= 0 ? 200 : maxSamples.GetValueOrDefault(200), 1, 500);
+            var generatedAtUtc = DateTimeOffset.UtcNow;
+            var latestRunId = useLatestRunOnly
+                ? await FindLatestMlbPredictionRunIdAsync(dbContext, shouldExcludeSampleRuns, cancellationToken)
+                : null;
+            var latestPredictionRun = latestRunId.HasValue
+                ? await dbContext.PredictionRuns
+                    .AsNoTracking()
+                    .Where(run => run.Id == latestRunId.Value)
+                    .Select(run => new { run.Id, run.ModelName, run.ModelVersion, run.CreatedAt, run.CompletedAt, run.Notes })
+                    .SingleOrDefaultAsync(cancellationToken)
+                : null;
+            var probabilityAnalysis = latestRunId.HasValue
+                ? await probabilityService.AnalyzeRunAsync(latestRunId.Value, cancellationToken)
+                : null;
+            var predictionAuditRows = BuildPredictionStageAuditRows(
+                probabilityAnalysis,
+                effectiveFromDate,
+                effectiveToDate,
+                propType,
+                predictionGenerationOptions.Value);
+            var predictionStageSummary = BuildPredictionStageSummary(
+                predictionAuditRows,
+                latestPredictionRun?.Id,
+                latestPredictionRun?.CreatedAt);
+            var passGateSummary = BuildPredictionPassGateSummary(predictionAuditRows);
+            var hitProbabilityDiagnostics = BuildPredictionHitProbabilityDiagnostics(predictionAuditRows, predictionGenerationOptions.Value);
+
+            var predictionStage = await BuildPredictionSideDistributionAsync(
+                dbContext,
+                latestRunId,
+                effectiveFromDate,
+                effectiveToDate,
+                propType,
+                cancellationToken);
+            var recommendationStage = await BuildRecommendationSideDistributionAsync(
+                dbContext,
+                latestRunId,
+                effectiveFromDate,
+                effectiveToDate,
+                provider,
+                propType,
+                cancellationToken);
+            var topPickStage = await BuildTopPickSideDistributionAsync(
+                dbContext,
+                latestRunId,
+                effectiveFromDate,
+                effectiveToDate,
+                provider,
+                propType,
+                cancellationToken);
+            var lineShoppingStage = await BuildLineShoppingSideDistributionAsync(
+                dbContext,
+                latestRunId,
+                effectiveFromDate,
+                effectiveToDate,
+                provider,
+                propType,
+                cancellationToken);
+
+            var lineShoppingRows = await BuildLineShoppingAuditQuery(
+                    dbContext,
+                    latestRunId,
+                    effectiveFromDate,
+                    effectiveToDate,
+                    provider,
+                    propType)
+                .OrderByDescending(row => row.BestEstimatedEv)
+                .ThenBy(row => row.Player)
+                .ToListAsync(cancellationToken);
+
+            var auditRows = lineShoppingRows
+                .Select(ToSideSelectionAuditRow)
+                .ToList();
+            var rowSummaries = auditRows.Select(row => row.Summary).ToList();
+            var suspiciousUnderCount = rowSummaries.Count(row => row.SelectedSide.Equals("Under", StringComparison.OrdinalIgnoreCase) && row.ReasonCodes.Count > 0);
+            var suspiciousOverCount = rowSummaries.Count(row => row.SelectedSide.Equals("Over", StringComparison.OrdinalIgnoreCase) && row.ReasonCodes.Count > 0);
+            var possibleSideInversionCount = rowSummaries.Count(row => row.ReasonCodes.Contains("PossibleSideInversion"));
+            var possibleEvProbabilityMismatchCount = rowSummaries.Count(row => row.ReasonCodes.Contains("PositiveEvButSelectedProbabilityBelowBreakEven")
+                || row.ReasonCodes.Contains("ProbabilityEdgeDoesNotMatchSelectedProbability"));
+            var missingSideDefaultedCount = rowSummaries.Count(row => row.ReasonCodes.Contains("MissingSideSelection"));
+
+            var sideLabelChangedCount = await CountSideLabelChangesAsync(
+                dbContext,
+                latestRunId,
+                effectiveFromDate,
+                effectiveToDate,
+                provider,
+                propType,
+                cancellationToken);
+
+            var samples = shouldIncludeSamples
+                ? auditRows
+                    .OrderByDescending(row => row.Summary.ReasonCodes.Count)
+                    .ThenByDescending(row => row.Summary.EstimatedEv)
+                    .Take(requestedMaxSamples)
+                    .Select(row => row.Detail)
+                    .ToArray()
+                : [];
+
+            var totalRowsEvaluated = rowSummaries.Count;
+            var overSelections = rowSummaries.Count(row => row.SelectedSide.Equals("Over", StringComparison.OrdinalIgnoreCase));
+            var underSelections = rowSummaries.Count(row => row.SelectedSide.Equals("Under", StringComparison.OrdinalIgnoreCase));
+            var missingSideSelections = rowSummaries.Count(row => string.IsNullOrWhiteSpace(row.SelectedSide)
+                || row.SelectedSide.Equals("Missing", StringComparison.OrdinalIgnoreCase)
+                || row.SelectedSide.Equals("None", StringComparison.OrdinalIgnoreCase));
+
+            return Results.Ok(new
+            {
+                generatedAtUtc,
+                callsExternalApis = false,
+                readOnly = true,
+                writesRows = false,
+                sport = "MLB",
+                latestPredictionRunId = latestPredictionRun?.Id,
+                latestPredictionRunModelName = latestPredictionRun?.ModelName,
+                latestPredictionRunModelVersion = latestPredictionRun?.ModelVersion,
+                latestPredictionRunCreatedAtUtc = latestPredictionRun?.CreatedAt,
+                latestPredictionRunCompletedAtUtc = latestPredictionRun?.CompletedAt,
+                latestPredictionRunNotes = latestPredictionRun?.Notes,
+                filters = new
+                {
+                    date,
+                    fromDate = effectiveFromDate,
+                    toDate = effectiveToDate,
+                    latestRunOnly = useLatestRunOnly,
+                    excludeSampleRuns = shouldExcludeSampleRuns,
+                    latestPredictionRunId = latestRunId,
+                    provider,
+                    propType,
+                    includeSamples = shouldIncludeSamples,
+                    maxSamples = requestedMaxSamples
+                },
+                totalRowsEvaluated,
+                predictionStageSummary,
+                passGateSummary,
+                hitProbabilityDiagnostics,
+                minimumPickHitProbability = predictionGenerationOptions.Value.MinimumPickHitProbability,
+                strongPickHitProbability = predictionGenerationOptions.Value.StrongPickHitProbability,
+                researchOnlyBelowHitProbability = predictionGenerationOptions.Value.ResearchOnlyBelowHitProbability,
+                selectedRowsBelow50Count = hitProbabilityDiagnostics.SelectedRowsBelow50Count,
+                selectedRowsBelowMinimumHitProbabilityCount = hitProbabilityDiagnostics.SelectedRowsBelowMinimumHitProbabilityCount,
+                overRowsRejectedByHitProbability = hitProbabilityDiagnostics.OverRowsRejectedByHitProbability,
+                underRowsRejectedByHitProbability = hitProbabilityDiagnostics.UnderRowsRejectedByHitProbability,
+                overRowsRejectedByProjectionThreshold = hitProbabilityDiagnostics.OverRowsRejectedByProjectionThreshold,
+                underRowsRejectedByProjectionThreshold = hitProbabilityDiagnostics.UnderRowsRejectedByProjectionThreshold,
+                candidateSideDistributionAfterFix = hitProbabilityDiagnostics.CandidateSideDistributionAfterFix,
+                passReasonsByCount = passGateSummary.PassReasonsByCount,
+                failedGatesByCount = passGateSummary.FailedGatesByCount,
+                predictionRowsEvaluated = predictionStageSummary.PredictionRowsEvaluated,
+                predictionRowsWithLine = predictionStageSummary.PredictionRowsWithLine,
+                predictionRowsMissingLine = predictionStageSummary.PredictionRowsMissingLine,
+                predictionOverSelections = predictionStageSummary.PredictionOverSelections,
+                predictionUnderSelections = predictionStageSummary.PredictionUnderSelections,
+                predictionPassSelections = predictionStageSummary.PredictionPassSelections,
+                predictionOverSelectionRate = predictionStageSummary.PredictionOverSelectionRate,
+                predictionUnderSelectionRate = predictionStageSummary.PredictionUnderSelectionRate,
+                predictionPassRate = predictionStageSummary.PredictionPassRate,
+                predictionRowsWhereProjectionAboveLine = predictionStageSummary.PredictionRowsWhereProjectionAboveLine,
+                predictionRowsWhereProjectionBelowLine = predictionStageSummary.PredictionRowsWhereProjectionBelowLine,
+                predictionRowsWhereProjectionEqualsLine = predictionStageSummary.PredictionRowsWhereProjectionEqualsLine,
+                projectionAboveLineButSelectedUnderCount = predictionStageSummary.ProjectionAboveLineButSelectedUnderCount,
+                projectionBelowLineButSelectedOverCount = predictionStageSummary.ProjectionBelowLineButSelectedOverCount,
+                overProbabilityGreaterThanUnderCount = predictionStageSummary.OverProbabilityGreaterThanUnderCount,
+                underProbabilityGreaterThanOverCount = predictionStageSummary.UnderProbabilityGreaterThanOverCount,
+                overEvGreaterThanUnderEvCount = predictionStageSummary.OverEvGreaterThanUnderEvCount,
+                underEvGreaterThanOverEvCount = predictionStageSummary.UnderEvGreaterThanOverEvCount,
+                overEvPositiveCount = predictionStageSummary.OverEvPositiveCount,
+                underEvPositiveCount = predictionStageSummary.UnderEvPositiveCount,
+                overEvPositiveButPassedCount = predictionStageSummary.OverEvPositiveButPassedCount,
+                underEvPositiveButPassedCount = predictionStageSummary.UnderEvPositiveButPassedCount,
+                overEvPositiveButSelectedUnderCount = predictionStageSummary.OverEvPositiveButSelectedUnderCount,
+                selectedUnderWithModelUnderBelowBreakEvenCount = predictionStageSummary.SelectedUnderWithModelUnderBelowBreakEvenCount,
+                selectedUnderWithModelOverAboveModelUnderCount = predictionStageSummary.SelectedUnderWithModelOverAboveModelUnderCount,
+                selectedUnderWithProjectionAboveLineCount = predictionStageSummary.SelectedUnderWithProjectionAboveLineCount,
+                possibleProbabilityOrientationIssueCount = predictionStageSummary.PossibleProbabilityOrientationIssueCount,
+                overEligibleButPassedCount = predictionStageSummary.OverEligibleButPassedCount,
+                passReasonMissingCount = predictionStageSummary.PassReasonMissingCount,
+                overSelections,
+                underSelections,
+                missingSideSelections,
+                overSelectionRate = CalculateRate(overSelections, totalRowsEvaluated),
+                underSelectionRate = CalculateRate(underSelections, totalRowsEvaluated),
+                rowsWithModelProbability = rowSummaries.Count(row => row.ModelProbabilityOver.HasValue || row.ModelProbabilityUnder.HasValue),
+                rowsWithModelOverProbability = rowSummaries.Count(row => row.ModelProbabilityOver.HasValue),
+                rowsWithModelUnderProbability = rowSummaries.Count(row => row.ModelProbabilityUnder.HasValue),
+                suspiciousUnderCount,
+                suspiciousOverCount,
+                possibleSideInversionCount,
+                possibleEvProbabilityMismatchCount,
+                missingSideDefaultedCount,
+                sideLabelChangedCount,
+                sideDistributionByStage = new
+                {
+                    predictions = predictionStage,
+                    recommendationSnapshots = recommendationStage,
+                    topPicks = topPickStage,
+                    lineShoppingGroups = lineShoppingStage,
+                    publicResponseRows = lineShoppingStage,
+                    performanceLedgerRows = recommendationStage
+                },
+                samples,
+                selectedUnderSamples = BuildPredictionSamples(predictionAuditRows.Where(row => row.SelectedSide.Equals("Under", StringComparison.OrdinalIgnoreCase)), shouldIncludeSamples, requestedMaxSamples),
+                passSamples = BuildPredictionSamples(predictionAuditRows.Where(row => row.SelectedSide.Equals("Pass", StringComparison.OrdinalIgnoreCase)), shouldIncludeSamples, requestedMaxSamples),
+                selectedOverSamples = BuildPredictionSamples(predictionAuditRows.Where(row => row.SelectedSide.Equals("Over", StringComparison.OrdinalIgnoreCase)), shouldIncludeSamples, requestedMaxSamples),
+                actualSelectedOverSamples = BuildPredictionSamples(predictionAuditRows.Where(row => row.SelectedSide.Equals("Over", StringComparison.OrdinalIgnoreCase)), shouldIncludeSamples, requestedMaxSamples),
+                overEligibleButPassedSamples = BuildPredictionSamples(predictionAuditRows.Where(row => row.SelectedSide.Equals("Pass", StringComparison.OrdinalIgnoreCase) && row.OverCandidateAfterGates.IncludedAfterProductionGates), shouldIncludeSamples, requestedMaxSamples),
+                passReasonMissingSamples = BuildPredictionSamples(predictionAuditRows.Where(row => row.SuspiciousReasons.Contains("PassReasonMissing")), shouldIncludeSamples, requestedMaxSamples),
+                overPositivePassSamples = BuildPredictionSamples(predictionAuditRows.Where(row => row.SuspiciousReasons.Contains("OverEvPositiveButPassed")), shouldIncludeSamples, requestedMaxSamples),
+                overBeatsUnderButPassSamples = BuildPredictionSamples(predictionAuditRows.Where(row => row.SuspiciousReasons.Contains("OverEvGreaterThanUnderEvButPassed")), shouldIncludeSamples, requestedMaxSamples),
+                projectionAboveLinePassSamples = BuildPredictionSamples(predictionAuditRows.Where(row => row.SuspiciousReasons.Contains("ProjectionAboveLineButPassed")), shouldIncludeSamples, requestedMaxSamples),
+                rejectedByMinProbabilitySamples = BuildPredictionSamples(predictionAuditRows.Where(row => row.FailedGates.Contains("MinProbability")), shouldIncludeSamples, requestedMaxSamples),
+                rejectedByHitProbabilitySamples = BuildPredictionSamples(predictionAuditRows.Where(row => row.FailedGates.Contains("MinProbability")), shouldIncludeSamples, requestedMaxSamples),
+                positiveEdgeRejectedByHitProbabilitySamples = BuildPredictionSamples(predictionAuditRows.Where(row => row.SuspiciousReasons.Contains("PositiveEdgeRejectedByHitProbability")), shouldIncludeSamples, requestedMaxSamples),
+                passesHitProbabilityButFailsProjectionEdgeSamples = BuildPredictionSamples(predictionAuditRows.Where(row => row.SuspiciousReasons.Contains("PassesHitProbabilityButFailsProjectionEdge")), shouldIncludeSamples, requestedMaxSamples),
+                passesProjectionEdgeButFailsHitProbabilitySamples = BuildPredictionSamples(predictionAuditRows.Where(row => row.SuspiciousReasons.Contains("PassesProjectionEdgeButFailsHitProbability")), shouldIncludeSamples, requestedMaxSamples),
+                rejectedByMinEdgeSamples = BuildPredictionSamples(predictionAuditRows.Where(row => row.FailedGates.Contains("GenerationProjectionEdgeThreshold")), shouldIncludeSamples, requestedMaxSamples),
+                rejectedByMinEvSamples = BuildPredictionSamples(predictionAuditRows.Where(row => row.FailedGates.Contains("MinExpectedValue")), shouldIncludeSamples, requestedMaxSamples),
+                rejectedByTrustSamples = BuildPredictionSamples(predictionAuditRows.Where(row => row.FailedGates.Contains("TrustLevel")), shouldIncludeSamples, requestedMaxSamples),
+                rejectedBySampleSamples = BuildPredictionSamples(predictionAuditRows.Where(row => row.FailedGates.Contains("SampleSize")), shouldIncludeSamples, requestedMaxSamples),
+                rejectedByUnknownGateSamples = BuildPredictionSamples(predictionAuditRows.Where(row => row.FailedGates.Contains("UnknownGate") || row.SuspiciousReasons.Contains("PassReasonMissing")), shouldIncludeSamples, requestedMaxSamples),
+                projectionAboveLineButSelectedUnderSamples = BuildPredictionSamples(predictionAuditRows.Where(row => row.SuspiciousReasons.Contains("ProjectionAboveLineButSelectedUnder")), shouldIncludeSamples, requestedMaxSamples),
+                overEvPositiveButPassedSamples = BuildPredictionSamples(predictionAuditRows.Where(row => row.SuspiciousReasons.Contains("OverEvPositiveButPassed")), shouldIncludeSamples, requestedMaxSamples),
+                overEvPositiveButSelectedUnderSamples = BuildPredictionSamples(predictionAuditRows.Where(row => row.SuspiciousReasons.Contains("OverEvPositiveButSelectedUnder")), shouldIncludeSamples, requestedMaxSamples),
+                highestOverEvSamples = BuildPredictionSamples(predictionAuditRows.Where(row => row.OverEstimatedEv.HasValue).OrderByDescending(row => row.OverEstimatedEv), shouldIncludeSamples, requestedMaxSamples),
+                highestUnderEvSamples = BuildPredictionSamples(predictionAuditRows.Where(row => row.UnderEstimatedEv.HasValue).OrderByDescending(row => row.UnderEstimatedEv), shouldIncludeSamples, requestedMaxSamples),
+                rowsWhereOverProbabilityGreaterThanUnderSamples = BuildPredictionSamples(predictionAuditRows.Where(row => row.ModelOverProbability > row.ModelUnderProbability), shouldIncludeSamples, requestedMaxSamples),
+                recommendedNextAction = BuildSideSelectionAuditRecommendation(
+                    totalRowsEvaluated,
+                    predictionStageSummary,
+                    possibleSideInversionCount,
+                    possibleEvProbabilityMismatchCount,
+                    missingSideDefaultedCount,
+                    sideLabelChangedCount,
+                    underSelections,
+                    overSelections)
+            });
+        })
+        .WithName("MlbSideSelectionAuditDebug")
+        .WithSummary("Read-only audit of MLB recommendation side selection from persisted prediction, snapshot, and ledger rows.");
 
         endpoints.MapPost("/api/debug/predictions/sample", async (
             IPredictionRepository predictionRepository,
@@ -3157,8 +3419,13 @@ public static class PredictionDebugEndpoints
         return summaries;
     }
 
-    private static string NormalizePlayerName(string displayName)
+    private static string NormalizePlayerName(string? displayName)
     {
+        if (string.IsNullOrWhiteSpace(displayName))
+        {
+            return string.Empty;
+        }
+
         var builder = new System.Text.StringBuilder(displayName.Length);
 
         foreach (var character in displayName.Trim().ToUpperInvariant())
@@ -3170,6 +3437,1436 @@ public static class PredictionDebugEndpoints
         }
 
         return builder.ToString();
+    }
+
+    private static async Task<Guid?> FindLatestMlbPredictionRunIdAsync(
+        ApplicationDbContext dbContext,
+        bool excludeSampleRuns,
+        CancellationToken cancellationToken)
+    {
+        var query = dbContext.PredictionRuns
+            .AsNoTracking()
+            .Where(run => run.Predictions.Any(prediction => prediction.Prop != null
+                && prediction.Prop.League != null
+                && prediction.Prop.League.Code == "MLB"));
+
+        if (excludeSampleRuns)
+        {
+            query = query.Where(run => run.ModelName != "SampleModel"
+                && (run.Notes == null || !run.Notes.ToLower().Contains("fake predictions")));
+        }
+
+        return await query
+            .OrderByDescending(run => run.CompletedAt)
+            .ThenByDescending(run => run.CreatedAt)
+            .Select(run => (Guid?)run.Id)
+            .FirstOrDefaultAsync(cancellationToken);
+    }
+
+    private static IQueryable<Prediction> BuildPredictionAuditQuery(
+        ApplicationDbContext dbContext,
+        Guid? predictionRunId,
+        DateOnly? fromDate,
+        DateOnly? toDate,
+        string? propType)
+    {
+        var query = dbContext.Predictions
+            .AsNoTracking()
+            .Where(row => row.Prop != null
+                && row.Prop.League != null
+                && row.Prop.League.Code == "MLB");
+
+        if (predictionRunId.HasValue)
+        {
+            query = query.Where(row => row.PredictionRunId == predictionRunId.Value);
+        }
+
+        if (fromDate.HasValue)
+        {
+            var fromDateTime = new DateTimeOffset(fromDate.Value.ToDateTime(TimeOnly.MinValue), TimeSpan.Zero);
+            query = query.Where(row => row.Prop!.StartsAt >= fromDateTime);
+        }
+
+        if (toDate.HasValue)
+        {
+            var nextDateTime = new DateTimeOffset(toDate.Value.AddDays(1).ToDateTime(TimeOnly.MinValue), TimeSpan.Zero);
+            query = query.Where(row => row.Prop!.StartsAt < nextDateTime);
+        }
+
+        if (!string.IsNullOrWhiteSpace(propType))
+        {
+            query = query.Where(row => row.Prop!.PropType != null && row.Prop.PropType.Name == propType);
+        }
+
+        return query;
+    }
+
+    private static IQueryable<RecommendationSnapshot> BuildRecommendationAuditQuery(
+        ApplicationDbContext dbContext,
+        Guid? predictionRunId,
+        DateOnly? fromDate,
+        DateOnly? toDate,
+        string? provider,
+        string? propType)
+    {
+        var query = dbContext.RecommendationSnapshots
+            .AsNoTracking()
+            .Where(row => row.Sport == "MLB");
+
+        if (predictionRunId.HasValue)
+        {
+            query = query.Where(row => row.PredictionRunId == predictionRunId.Value);
+        }
+
+        if (fromDate.HasValue)
+        {
+            query = query.Where(row => row.ExpectedResultDate >= fromDate.Value);
+        }
+
+        if (toDate.HasValue)
+        {
+            query = query.Where(row => row.ExpectedResultDate <= toDate.Value);
+        }
+
+        if (!string.IsNullOrWhiteSpace(provider))
+        {
+            query = query.Where(row => row.Provider == provider || row.Bookmaker == provider || row.EntryProvider == provider);
+        }
+
+        if (!string.IsNullOrWhiteSpace(propType))
+        {
+            query = query.Where(row => row.PropType == propType);
+        }
+
+        return query;
+    }
+
+    private static IQueryable<MarketTopPickSnapshot> BuildTopPickAuditQuery(
+        ApplicationDbContext dbContext,
+        Guid? predictionRunId,
+        DateOnly? fromDate,
+        DateOnly? toDate,
+        string? provider,
+        string? propType)
+    {
+        var query = dbContext.MarketTopPickSnapshots
+            .AsNoTracking()
+            .Where(row => row.Sport == "MLB");
+
+        if (predictionRunId.HasValue)
+        {
+            query = query.Where(row => row.PredictionRunId == predictionRunId.Value);
+        }
+
+        if (fromDate.HasValue)
+        {
+            query = query.Where(row => row.SlateDate >= fromDate.Value);
+        }
+
+        if (toDate.HasValue)
+        {
+            query = query.Where(row => row.SlateDate <= toDate.Value);
+        }
+
+        if (!string.IsNullOrWhiteSpace(provider))
+        {
+            query = query.Where(row => row.Provider == provider || row.Bookmaker == provider || row.EntryProvider == provider);
+        }
+
+        if (!string.IsNullOrWhiteSpace(propType))
+        {
+            query = query.Where(row => row.PropType == propType);
+        }
+
+        return query;
+    }
+
+    private static IQueryable<MarketLineShoppingSnapshot> BuildLineShoppingAuditQuery(
+        ApplicationDbContext dbContext,
+        Guid? predictionRunId,
+        DateOnly? fromDate,
+        DateOnly? toDate,
+        string? provider,
+        string? propType)
+    {
+        var query = dbContext.MarketLineShoppingSnapshots
+            .AsNoTracking()
+            .Where(row => row.Sport == "MLB");
+
+        if (predictionRunId.HasValue)
+        {
+            query = query.Where(row => row.PredictionRunId == predictionRunId.Value);
+        }
+
+        if (fromDate.HasValue)
+        {
+            query = query.Where(row => row.SlateDate >= fromDate.Value);
+        }
+
+        if (toDate.HasValue)
+        {
+            query = query.Where(row => row.SlateDate <= toDate.Value);
+        }
+
+        if (!string.IsNullOrWhiteSpace(provider))
+        {
+            query = query.Where(row => row.Provider == provider || row.Bookmaker == provider || row.EntryProvider == provider);
+        }
+
+        if (!string.IsNullOrWhiteSpace(propType))
+        {
+            query = query.Where(row => row.PropType == propType);
+        }
+
+        return query;
+    }
+
+    private static async Task<object> BuildPredictionSideDistributionAsync(
+        ApplicationDbContext dbContext,
+        Guid? predictionRunId,
+        DateOnly? fromDate,
+        DateOnly? toDate,
+        string? propType,
+        CancellationToken cancellationToken)
+    {
+        var rows = await BuildPredictionAuditQuery(dbContext, predictionRunId, fromDate, toDate, propType)
+            .GroupBy(row => row.Recommendation)
+            .Select(group => new { Side = group.Key, Count = group.Count() })
+            .ToListAsync(cancellationToken);
+
+        return BuildSideDistribution(rows.Select(row => ((string?)row.Side, row.Count)));
+    }
+
+    private static async Task<object> BuildRecommendationSideDistributionAsync(
+        ApplicationDbContext dbContext,
+        Guid? predictionRunId,
+        DateOnly? fromDate,
+        DateOnly? toDate,
+        string? provider,
+        string? propType,
+        CancellationToken cancellationToken)
+    {
+        var rows = await BuildRecommendationAuditQuery(dbContext, predictionRunId, fromDate, toDate, provider, propType)
+            .GroupBy(row => row.Side)
+            .Select(group => new { Side = group.Key, Count = group.Count() })
+            .ToListAsync(cancellationToken);
+
+        return BuildSideDistribution(rows.Select(row => ((string?)row.Side, row.Count)));
+    }
+
+    private static async Task<object> BuildTopPickSideDistributionAsync(
+        ApplicationDbContext dbContext,
+        Guid? predictionRunId,
+        DateOnly? fromDate,
+        DateOnly? toDate,
+        string? provider,
+        string? propType,
+        CancellationToken cancellationToken)
+    {
+        var rows = await BuildTopPickAuditQuery(dbContext, predictionRunId, fromDate, toDate, provider, propType)
+            .GroupBy(row => row.BestSide)
+            .Select(group => new { Side = group.Key, Count = group.Count() })
+            .ToListAsync(cancellationToken);
+
+        return BuildSideDistribution(rows.Select(row => ((string?)row.Side, row.Count)));
+    }
+
+    private static async Task<object> BuildLineShoppingSideDistributionAsync(
+        ApplicationDbContext dbContext,
+        Guid? predictionRunId,
+        DateOnly? fromDate,
+        DateOnly? toDate,
+        string? provider,
+        string? propType,
+        CancellationToken cancellationToken)
+    {
+        var rows = await BuildLineShoppingAuditQuery(dbContext, predictionRunId, fromDate, toDate, provider, propType)
+            .GroupBy(row => row.BestSide)
+            .Select(group => new { Side = group.Key, Count = group.Count() })
+            .ToListAsync(cancellationToken);
+
+        return BuildSideDistribution(rows.Select(row => ((string?)row.Side, row.Count)));
+    }
+
+    private static object BuildSideDistribution(IEnumerable<(string? Side, int Count)> rows)
+    {
+        var counts = rows
+            .GroupBy(row => NormalizeSide(row.Side))
+            .ToDictionary(group => group.Key, group => group.Sum(row => row.Count), StringComparer.OrdinalIgnoreCase);
+        var total = counts.Values.Sum();
+        counts.TryGetValue("Over", out var over);
+        counts.TryGetValue("Under", out var under);
+        counts.TryGetValue("None", out var none);
+        counts.TryGetValue("Missing", out var missing);
+        counts.TryGetValue("Pass", out var pass);
+
+        return new
+        {
+            total,
+            over,
+            under,
+            none,
+            pass,
+            missing,
+            overRate = CalculateRate(over, total),
+            underRate = CalculateRate(under, total),
+            bySide = counts
+                .OrderBy(pair => pair.Key, StringComparer.OrdinalIgnoreCase)
+                .Select(pair => new { side = pair.Key, count = pair.Value })
+                .ToArray()
+        };
+    }
+
+    private static IReadOnlyList<PredictionStageAuditRow> BuildPredictionStageAuditRows(
+        PredictionProbabilityRunAnalysis? probabilityAnalysis,
+        DateOnly? fromDate,
+        DateOnly? toDate,
+        string? propType,
+        PredictionGenerationOptions generationOptions)
+    {
+        if (probabilityAnalysis is null)
+        {
+            return [];
+        }
+
+        return probabilityAnalysis.Results
+            .Where(row => !fromDate.HasValue || row.EventDate >= fromDate.Value)
+            .Where(row => !toDate.HasValue || row.EventDate <= toDate.Value)
+            .Where(row => string.IsNullOrWhiteSpace(propType) || row.PropType == propType)
+            .Select(result => ToPredictionStageAuditRow(result, generationOptions))
+            .ToArray();
+    }
+
+    private static PredictionStageAuditRow ToPredictionStageAuditRow(
+        PredictionProbabilityResult result,
+        PredictionGenerationOptions generationOptions)
+    {
+        const decimal diagnosticDecimalPrice = 1.909091m;
+        var overImpliedProbability = CalculateImpliedProbability(diagnosticDecimalPrice);
+        var underImpliedProbability = CalculateImpliedProbability(diagnosticDecimalPrice);
+        var overBreakEvenProbability = CalculateBreakEvenProbability(overImpliedProbability, result.ProbabilityPush);
+        var underBreakEvenProbability = CalculateBreakEvenProbability(underImpliedProbability, result.ProbabilityPush);
+        var overEstimatedEv = CalculateEstimatedEv(result.ProbabilityOver, result.ProbabilityUnder, diagnosticDecimalPrice);
+        var underEstimatedEv = CalculateEstimatedEv(result.ProbabilityUnder, result.ProbabilityOver, diagnosticDecimalPrice);
+        var selectedSide = NormalizeSide(result.Recommendation);
+        var selectedSideProbability = selectedSide.Equals("Over", StringComparison.OrdinalIgnoreCase)
+            ? result.ProbabilityOver
+            : selectedSide.Equals("Under", StringComparison.OrdinalIgnoreCase)
+                ? result.ProbabilityUnder
+                : null;
+        var selectedSideEv = selectedSide.Equals("Over", StringComparison.OrdinalIgnoreCase)
+            ? overEstimatedEv
+            : selectedSide.Equals("Under", StringComparison.OrdinalIgnoreCase)
+                ? underEstimatedEv
+                : null;
+        var thresholdsApplied = BuildPredictionThresholdsApplied(generationOptions);
+        var overCandidate = BuildPredictionSideCandidate("Over", result, overBreakEvenProbability, overEstimatedEv, generationOptions);
+        var underCandidate = BuildPredictionSideCandidate("Under", result, underBreakEvenProbability, underEstimatedEv, generationOptions);
+        var passReasonCodes = BuildPredictionPassReasonCodes(result, selectedSide, overCandidate, underCandidate, generationOptions);
+        var failedGates = passReasonCodes
+            .Select(MapPassReasonToFailedGate)
+            .Where(reason => !string.IsNullOrWhiteSpace(reason))
+            .Select(reason => reason!)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        var suspiciousReasons = BuildPredictionStageSuspiciousReasons(
+            result,
+            selectedSide,
+            overBreakEvenProbability,
+            underBreakEvenProbability,
+            overEstimatedEv,
+            underEstimatedEv,
+            overCandidate,
+            underCandidate,
+            passReasonCodes);
+
+        return new PredictionStageAuditRow(
+            result.PredictionId,
+            result.PlayerName,
+            result.PropType,
+            Provider: null,
+            Bookmaker: null,
+            result.EventDate,
+            result.SportsbookLine,
+            result.PredictedValue,
+            result.ProbabilityOver,
+            result.ProbabilityUnder,
+            result.ProbabilityPush,
+            overBreakEvenProbability,
+            underBreakEvenProbability,
+            overEstimatedEv,
+            underEstimatedEv,
+            overEstimatedEv,
+            overEstimatedEv,
+            0m,
+            underEstimatedEv,
+            underEstimatedEv,
+            0m,
+            selectedSide,
+            selectedSideProbability,
+            selectedSideEv,
+            BuildPredictionSelectionReason(result, selectedSide, overEstimatedEv, underEstimatedEv, passReasonCodes),
+            passReasonCodes,
+            failedGates,
+            thresholdsApplied,
+            overCandidate,
+            underCandidate,
+            overCandidate with { IncludedAfterProductionGates = overCandidate.IncludedAfterProductionGates },
+            underCandidate with { IncludedAfterProductionGates = underCandidate.IncludedAfterProductionGates },
+            suspiciousReasons,
+            result.ConfidenceScore,
+            result.RankingScore,
+            result.SampleSize,
+            result.MethodUsed,
+            result.Edge);
+    }
+
+    private static IReadOnlyList<string> BuildPredictionStageSuspiciousReasons(
+        PredictionProbabilityResult result,
+        string selectedSide,
+        decimal? overBreakEvenProbability,
+        decimal? underBreakEvenProbability,
+        decimal? overEstimatedEv,
+        decimal? underEstimatedEv,
+        PredictionSideCandidate overCandidate,
+        PredictionSideCandidate underCandidate,
+        IReadOnlyList<string> passReasonCodes)
+    {
+        var reasons = new List<string>();
+
+        if (result.PredictedValue.HasValue && result.SportsbookLine.HasValue)
+        {
+            if (result.PredictedValue.Value > result.SportsbookLine.Value && selectedSide.Equals("Under", StringComparison.OrdinalIgnoreCase))
+            {
+                reasons.Add("ProjectionAboveLineButSelectedUnder");
+            }
+
+            if (result.PredictedValue.Value < result.SportsbookLine.Value && selectedSide.Equals("Over", StringComparison.OrdinalIgnoreCase))
+            {
+                reasons.Add("ProjectionBelowLineButSelectedOver");
+            }
+
+            if (result.PredictedValue.Value > result.SportsbookLine.Value
+                && result.ProbabilityUnder.HasValue
+                && result.ProbabilityOver.HasValue
+                && result.ProbabilityUnder.Value > result.ProbabilityOver.Value)
+            {
+                reasons.Add("ProjectionAboveLineButUnderProbabilityHigher");
+            }
+
+            if (result.PredictedValue.Value < result.SportsbookLine.Value
+                && result.ProbabilityOver.HasValue
+                && result.ProbabilityUnder.HasValue
+                && result.ProbabilityOver.Value > result.ProbabilityUnder.Value)
+            {
+                reasons.Add("ProjectionBelowLineButOverProbabilityHigher");
+            }
+        }
+
+        if (overEstimatedEv.HasValue && overEstimatedEv.Value > 0m && selectedSide.Equals("Pass", StringComparison.OrdinalIgnoreCase))
+        {
+            reasons.Add("OverEvPositiveButPassed");
+        }
+
+        if (selectedSide.Equals("Pass", StringComparison.OrdinalIgnoreCase)
+            && overEstimatedEv.HasValue
+            && underEstimatedEv.HasValue
+            && overEstimatedEv.Value > underEstimatedEv.Value)
+        {
+            reasons.Add("OverEvGreaterThanUnderEvButPassed");
+        }
+
+        if (selectedSide.Equals("Pass", StringComparison.OrdinalIgnoreCase)
+            && result.PredictedValue.HasValue
+            && result.SportsbookLine.HasValue
+            && result.PredictedValue.Value > result.SportsbookLine.Value)
+        {
+            reasons.Add("ProjectionAboveLineButPassed");
+        }
+
+        if (underEstimatedEv.HasValue && underEstimatedEv.Value > 0m && selectedSide.Equals("Pass", StringComparison.OrdinalIgnoreCase))
+        {
+            reasons.Add("UnderEvPositiveButPassed");
+        }
+
+        if (overEstimatedEv.HasValue && overEstimatedEv.Value > 0m && selectedSide.Equals("Under", StringComparison.OrdinalIgnoreCase))
+        {
+            reasons.Add("OverEvPositiveButSelectedUnder");
+        }
+
+        if (selectedSide.Equals("Under", StringComparison.OrdinalIgnoreCase)
+            && result.ProbabilityUnder.HasValue
+            && underBreakEvenProbability.HasValue
+            && result.ProbabilityUnder.Value < underBreakEvenProbability.Value)
+        {
+            reasons.Add("SelectedUnderWithModelUnderBelowBreakEven");
+        }
+
+        if (selectedSide.Equals("Under", StringComparison.OrdinalIgnoreCase)
+            && result.ProbabilityOver.HasValue
+            && result.ProbabilityUnder.HasValue
+            && result.ProbabilityOver.Value > result.ProbabilityUnder.Value)
+        {
+            reasons.Add("SelectedUnderWithModelOverAboveModelUnder");
+        }
+
+        if (selectedSide.Equals("Pass", StringComparison.OrdinalIgnoreCase)
+            && result.ProbabilityOver.HasValue
+            && result.ProbabilityUnder.HasValue
+            && result.ProbabilityOver.Value > result.ProbabilityUnder.Value)
+        {
+            reasons.Add("PassWithModelOverAboveModelUnder");
+        }
+
+        if (selectedSide.Equals("Pass", StringComparison.OrdinalIgnoreCase)
+            && overEstimatedEv.HasValue
+            && overEstimatedEv.Value > 0m
+            && passReasonCodes.Count == 0)
+        {
+            reasons.Add("PositiveOverEvButFailedUnknownGate");
+        }
+
+        if (selectedSide.Equals("Pass", StringComparison.OrdinalIgnoreCase)
+            && passReasonCodes.Count == 0)
+        {
+            reasons.Add("PassReasonMissing");
+        }
+
+        if (selectedSide.Equals("Pass", StringComparison.OrdinalIgnoreCase)
+            && result.ProbabilityOver.HasValue
+            && overBreakEvenProbability.HasValue
+            && result.ProbabilityOver.Value >= overBreakEvenProbability.Value)
+        {
+            reasons.Add("OverProbabilityAboveThresholdButPassed");
+        }
+
+        if (selectedSide.Equals("Pass", StringComparison.OrdinalIgnoreCase)
+            && overCandidate.ProbabilityEdge.HasValue
+            && overCandidate.ProbabilityEdge.Value > 0m)
+        {
+            reasons.Add("OverEdgeAboveThresholdButPassed");
+        }
+
+        if (selectedSide.Equals("Pass", StringComparison.OrdinalIgnoreCase)
+            && result.PredictedValue.HasValue
+            && result.SportsbookLine.HasValue
+            && result.PredictedValue.Value > result.SportsbookLine.Value
+            && !overCandidate.IncludedBeforeProductionGates)
+        {
+            reasons.Add("OverProjectionAboveLineButNoOverCandidate");
+        }
+
+        if (overEstimatedEv.HasValue
+            && underEstimatedEv.HasValue
+            && (overEstimatedEv.Value - underEstimatedEv.Value) != 0m
+            && Math.Abs(overCandidate.DiagnosticProductionEvDelta ?? 0m) > 0.0001m)
+        {
+            reasons.Add("DiagnosticProductionEvMismatch");
+        }
+
+        if (selectedSide.Equals("Under", StringComparison.OrdinalIgnoreCase)
+            && underCandidate.Gates.Any(gate => gate.Name.Contains("Under", StringComparison.OrdinalIgnoreCase) && !gate.Passed)
+            && overCandidate.Gates.All(gate => !gate.Name.Contains("Under", StringComparison.OrdinalIgnoreCase)))
+        {
+            reasons.Add("AsymmetricUnderGateApplied");
+        }
+
+        if ((overCandidate.EstimatedEv > 0m && overCandidate.GateFailureReasons.Contains("BelowMinimumUserFacingHitProbability"))
+            || (underCandidate.EstimatedEv > 0m && underCandidate.GateFailureReasons.Contains("BelowMinimumUserFacingHitProbability")))
+        {
+            reasons.Add("PositiveEdgeRejectedByHitProbability");
+        }
+
+        var overPassesHitProbability = overCandidate.Gates.Any(gate => gate.Name == "MinProbability" && gate.Passed);
+        var underPassesHitProbability = underCandidate.Gates.Any(gate => gate.Name == "MinProbability" && gate.Passed);
+        if ((overPassesHitProbability && overCandidate.GateFailureReasons.Contains("OverProjectionEdgeBelowConfiguredThreshold"))
+            || (underPassesHitProbability && underCandidate.GateFailureReasons.Contains("UnderProjectionEdgeBelowConfiguredThreshold")))
+        {
+            reasons.Add("PassesHitProbabilityButFailsProjectionEdge");
+        }
+
+        if ((overCandidate.GateFailureReasons.Contains("BelowMinimumUserFacingHitProbability")
+                && !overCandidate.GateFailureReasons.Contains("OverProjectionEdgeBelowConfiguredThreshold"))
+            || (underCandidate.GateFailureReasons.Contains("BelowMinimumUserFacingHitProbability")
+                && !underCandidate.GateFailureReasons.Contains("UnderProjectionEdgeBelowConfiguredThreshold")))
+        {
+            reasons.Add("PassesProjectionEdgeButFailsHitProbability");
+        }
+
+        return reasons
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+    }
+
+    private static PredictionThresholdsApplied BuildPredictionThresholdsApplied(PredictionGenerationOptions generationOptions)
+    {
+        var enabledPropTypes = generationOptions.EnabledPropTypes
+            .Where(value => !string.IsNullOrWhiteSpace(value))
+            .Select(value => value.Trim())
+            .ToArray();
+
+        return new PredictionThresholdsApplied(
+            GenerationSelectionSource: "PredictionGenerationService.GetRecommendation",
+            ProductionSelectionRule: "Prediction generation selects from projection edge thresholds plus selected-side hit probability. Public DFS recommendations keep the same MinimumPickHitProbability gate; 0.50-0.55 stays research/watchlist.",
+            OverProjectionEdgeThreshold: generationOptions.OverProjectionEdgeThreshold,
+            UnderProjectionEdgeThreshold: generationOptions.UnderProjectionEdgeThreshold,
+            EnabledPropTypes: enabledPropTypes,
+            MinimumPickHitProbability: generationOptions.MinimumPickHitProbability,
+            StrongPickHitProbability: generationOptions.StrongPickHitProbability,
+            ResearchOnlyBelowHitProbability: generationOptions.ResearchOnlyBelowHitProbability,
+            MinExpectedValueThreshold: null,
+            MinTrustLevel: null,
+            MinSampleSize: null);
+    }
+
+    private static PredictionSideCandidate BuildPredictionSideCandidate(
+        string side,
+        PredictionProbabilityResult result,
+        decimal? breakEvenProbability,
+        decimal? estimatedEv,
+        PredictionGenerationOptions generationOptions)
+    {
+        var edge = result.Edge;
+        var isOver = side.Equals("Over", StringComparison.OrdinalIgnoreCase);
+        var modelProbability = isOver ? result.ProbabilityOver : result.ProbabilityUnder;
+        var projectionDelta = result.PredictedValue.HasValue && result.SportsbookLine.HasValue
+            ? Math.Round(result.PredictedValue.Value - result.SportsbookLine.Value, 4)
+            : (decimal?)null;
+        var productionEdgeGatePassed = edge.HasValue && (isOver
+            ? edge.Value >= generationOptions.OverProjectionEdgeThreshold
+            : edge.Value <= -generationOptions.UnderProjectionEdgeThreshold);
+        var hitProbabilityGatePassed = modelProbability.HasValue && modelProbability.Value >= generationOptions.MinimumPickHitProbability;
+        var researchProbabilityGatePassed = modelProbability.HasValue && modelProbability.Value >= generationOptions.ResearchOnlyBelowHitProbability;
+        var directionSupportsSide = projectionDelta.HasValue && (isOver
+            ? projectionDelta.Value > 0m
+            : projectionDelta.Value < 0m);
+        var propTypeEnabled = IsPropTypeEnabledForPredictionGeneration(result.PropType, generationOptions);
+        var includedBeforeGates = directionSupportsSide || (estimatedEv.HasValue && estimatedEv.Value > 0m);
+        var gateFailures = new List<string>();
+        if (!edge.HasValue)
+        {
+            gateFailures.Add("MissingProjectionEdge");
+        }
+        else if (!productionEdgeGatePassed)
+        {
+            gateFailures.Add(isOver ? "OverProjectionEdgeBelowConfiguredThreshold" : "UnderProjectionEdgeBelowConfiguredThreshold");
+        }
+
+        if (!hitProbabilityGatePassed)
+        {
+            gateFailures.Add("BelowMinimumUserFacingHitProbability");
+        }
+
+        if (!propTypeEnabled)
+        {
+            gateFailures.Add("PropTypeDisabledForPredictionGeneration");
+        }
+
+        var gates = new[]
+        {
+            new PredictionCandidateGate(
+                isOver ? "OverProjectionEdgeThreshold" : "UnderProjectionEdgeThreshold",
+                productionEdgeGatePassed,
+                edge,
+                isOver ? generationOptions.OverProjectionEdgeThreshold : -generationOptions.UnderProjectionEdgeThreshold,
+                isOver ? ">=" : "<=",
+                "Production generation gate."),
+            new PredictionCandidateGate(
+                "PropTypeEnabled",
+                propTypeEnabled,
+                null,
+                null,
+                "contains",
+                "Production generation prop-type allowlist gate."),
+            new PredictionCandidateGate(
+                "MinProbability",
+                hitProbabilityGatePassed,
+                modelProbability,
+                generationOptions.MinimumPickHitProbability,
+                ">=",
+                "User-facing DFS candidate gate."),
+            new PredictionCandidateGate(
+                "MinExpectedValue",
+                true,
+                estimatedEv,
+                null,
+                "not_applied",
+                "Production generation does not use diagnostic EV."),
+            new PredictionCandidateGate(
+                "SampleSize",
+                true,
+                result.SampleSize,
+                null,
+                "not_applied",
+                "Production generation does not gate on probability sample size.")
+        };
+
+        return new PredictionSideCandidate(
+            Side: side,
+            ModelProbability: modelProbability,
+            BreakEvenProbability: breakEvenProbability,
+            ProbabilityEdge: modelProbability.HasValue && breakEvenProbability.HasValue ? Math.Round(modelProbability.Value - breakEvenProbability.Value, 6) : null,
+            EstimatedEv: estimatedEv,
+            DiagnosticEv: estimatedEv,
+            ProductionEv: estimatedEv,
+            DiagnosticProductionEvDelta: 0m,
+            ModelProjection: result.PredictedValue,
+            Line: result.SportsbookLine,
+            ProjectionDelta: projectionDelta,
+            SampleSize: result.SampleSize,
+            TrustLevel: BuildPredictionTrustLevel(result.ConfidenceScore),
+            ConfidenceScore: result.ConfidenceScore,
+            IncludedBeforeProductionGates: includedBeforeGates && researchProbabilityGatePassed,
+            IncludedAfterProductionGates: includedBeforeGates && productionEdgeGatePassed && propTypeEnabled && hitProbabilityGatePassed,
+            Gates: gates,
+            GateFailureReasons: gateFailures);
+    }
+
+    private static IReadOnlyList<string> BuildPredictionPassReasonCodes(
+        PredictionProbabilityResult result,
+        string selectedSide,
+        PredictionSideCandidate overCandidate,
+        PredictionSideCandidate underCandidate,
+        PredictionGenerationOptions generationOptions)
+    {
+        if (!selectedSide.Equals("Pass", StringComparison.OrdinalIgnoreCase))
+        {
+            return [];
+        }
+
+        var reasons = new List<string>();
+        if (!result.SportsbookLine.HasValue)
+        {
+            reasons.Add("MissingSportsbookLine");
+        }
+
+        var propTypeEnabled = IsPropTypeEnabledForPredictionGeneration(result.PropType, generationOptions);
+        var overClearedProjectionGate = result.Edge.HasValue && result.Edge.Value >= generationOptions.OverProjectionEdgeThreshold;
+        var underClearedProjectionGate = result.Edge.HasValue && result.Edge.Value <= -generationOptions.UnderProjectionEdgeThreshold;
+        if (!overClearedProjectionGate && !underClearedProjectionGate)
+        {
+            reasons.Add("RecommendationSuppressedByThreshold");
+        }
+
+        if ((overClearedProjectionGate || underClearedProjectionGate) && !propTypeEnabled)
+        {
+            reasons.Add("RecommendationSuppressedByPropTypeFilter");
+        }
+
+        if (overCandidate.EstimatedEv.HasValue
+            && overCandidate.EstimatedEv.Value > 0m
+            && !overClearedProjectionGate)
+        {
+            reasons.Add("DiagnosticOverEvPositiveButProductionOverEdgeBelowThreshold");
+        }
+
+        if ((overClearedProjectionGate && !overCandidate.IncludedAfterProductionGates)
+            || (underClearedProjectionGate && !underCandidate.IncludedAfterProductionGates))
+        {
+            reasons.Add("BelowMinimumUserFacingHitProbability");
+        }
+
+        if (overCandidate.EstimatedEv.HasValue
+            && underCandidate.EstimatedEv.HasValue
+            && overCandidate.EstimatedEv.Value > underCandidate.EstimatedEv.Value
+            && !overClearedProjectionGate)
+        {
+            reasons.Add("DiagnosticOverEvBeatsUnderButProductionOverEdgeBelowThreshold");
+        }
+
+        return reasons
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+    }
+
+    private static string? MapPassReasonToFailedGate(string passReason)
+    {
+        return passReason switch
+        {
+            "MissingSportsbookLine" => "SportsbookLine",
+            "RecommendationSuppressedByThreshold" => "GenerationProjectionEdgeThreshold",
+            "RecommendationSuppressedByPropTypeFilter" => "PropTypeAllowlist",
+            "RecommendationSuppressedByHitProbability" => "MinProbability",
+            "RecommendationSuppressedByMissingProbability" => "ModelProbability",
+            "BelowMinimumUserFacingHitProbability" => "MinProbability",
+            "DiagnosticOverEvPositiveButProductionOverEdgeBelowThreshold" => "GenerationProjectionEdgeThreshold",
+            "DiagnosticOverEvBeatsUnderButProductionOverEdgeBelowThreshold" => "GenerationProjectionEdgeThreshold",
+            _ => "UnknownGate"
+        };
+    }
+
+    private static bool IsPropTypeEnabledForPredictionGeneration(string propType, PredictionGenerationOptions generationOptions)
+    {
+        if (generationOptions.EnabledPropTypes.Length == 0)
+        {
+            return true;
+        }
+
+        var normalized = NormalizePredictionPropTypeName(propType);
+        return generationOptions.EnabledPropTypes
+            .Select(NormalizePredictionPropTypeName)
+            .Contains(normalized, StringComparer.OrdinalIgnoreCase);
+    }
+
+    private static string NormalizePredictionPropTypeName(string propType)
+    {
+        return new string(propType.Trim().ToUpperInvariant().Where(char.IsLetterOrDigit).ToArray());
+    }
+
+    private static string BuildPredictionTrustLevel(decimal confidenceScore)
+    {
+        if (confidenceScore >= 0.75m)
+        {
+            return "High";
+        }
+
+        if (confidenceScore >= 0.55m)
+        {
+            return "Medium";
+        }
+
+        return "Low";
+    }
+
+    private static string BuildPredictionSelectionReason(
+        PredictionProbabilityResult result,
+        string selectedSide,
+        decimal? overEstimatedEv,
+        decimal? underEstimatedEv,
+        IReadOnlyList<string> passReasonCodes)
+    {
+        if (!result.SportsbookLine.HasValue)
+        {
+            return "Missing sportsbook line.";
+        }
+
+        if (selectedSide.Equals("Pass", StringComparison.OrdinalIgnoreCase))
+        {
+            var reasons = passReasonCodes.Count == 0 ? "PassReasonMissing" : string.Join(", ", passReasonCodes);
+            return $"Production generation returned Pass because {reasons}. Projection edge={result.Edge?.ToString("0.####") ?? "n/a"}. Diagnostic over EV={overEstimatedEv?.ToString("0.####") ?? "n/a"}, under EV={underEstimatedEv?.ToString("0.####") ?? "n/a"}. Diagnostic EV is read-only and is not a production selection gate.";
+        }
+
+        return $"Prediction generation selected {selectedSide} from projection edge {result.Edge?.ToString("0.####") ?? "n/a"}; diagnostic EV is estimated from neutral -110 pricing.";
+    }
+
+    private static PredictionStageSummary BuildPredictionStageSummary(
+        IReadOnlyCollection<PredictionStageAuditRow> rows,
+        Guid? latestPredictionRunId,
+        DateTimeOffset? latestPredictionRunCreatedAtUtc)
+    {
+        var total = rows.Count;
+        var withLine = rows.Count(row => row.Line.HasValue);
+        var missingLine = rows.Count(row => !row.Line.HasValue);
+        var overSelections = rows.Count(row => row.SelectedSide.Equals("Over", StringComparison.OrdinalIgnoreCase));
+        var underSelections = rows.Count(row => row.SelectedSide.Equals("Under", StringComparison.OrdinalIgnoreCase));
+        var passSelections = rows.Count(row => row.SelectedSide.Equals("Pass", StringComparison.OrdinalIgnoreCase));
+        var aboveLine = rows.Count(row => row.Projection.HasValue && row.Line.HasValue && row.Projection.Value > row.Line.Value);
+        var belowLine = rows.Count(row => row.Projection.HasValue && row.Line.HasValue && row.Projection.Value < row.Line.Value);
+        var equalsLine = rows.Count(row => row.Projection.HasValue && row.Line.HasValue && row.Projection.Value == row.Line.Value);
+
+        return new PredictionStageSummary(
+            latestPredictionRunId,
+            latestPredictionRunCreatedAtUtc,
+            total,
+            withLine,
+            missingLine,
+            overSelections,
+            underSelections,
+            passSelections,
+            CalculateRate(overSelections, total),
+            CalculateRate(underSelections, total),
+            CalculateRate(passSelections, total),
+            aboveLine,
+            belowLine,
+            equalsLine,
+            rows.Count(row => row.SuspiciousReasons.Contains("ProjectionAboveLineButSelectedUnder")),
+            rows.Count(row => row.SuspiciousReasons.Contains("ProjectionBelowLineButSelectedOver")),
+            rows.Count(row => row.ModelOverProbability > row.ModelUnderProbability),
+            rows.Count(row => row.ModelUnderProbability > row.ModelOverProbability),
+            rows.Count(row => row.OverEstimatedEv > row.UnderEstimatedEv),
+            rows.Count(row => row.UnderEstimatedEv > row.OverEstimatedEv),
+            rows.Count(row => row.OverEstimatedEv > 0m),
+            rows.Count(row => row.UnderEstimatedEv > 0m),
+            rows.Count(row => row.SuspiciousReasons.Contains("OverEvPositiveButPassed")),
+            rows.Count(row => row.SuspiciousReasons.Contains("UnderEvPositiveButPassed")),
+            rows.Count(row => row.SuspiciousReasons.Contains("OverEvPositiveButSelectedUnder")),
+            rows.Count(row => row.SuspiciousReasons.Contains("SelectedUnderWithModelUnderBelowBreakEven")),
+            rows.Count(row => row.SuspiciousReasons.Contains("SelectedUnderWithModelOverAboveModelUnder")),
+            rows.Count(row => row.SuspiciousReasons.Contains("ProjectionAboveLineButSelectedUnder")),
+            rows.Count(row => row.SuspiciousReasons.Contains("ProjectionAboveLineButUnderProbabilityHigher")
+                || row.SuspiciousReasons.Contains("ProjectionBelowLineButOverProbabilityHigher")
+                || row.SuspiciousReasons.Contains("SelectedUnderWithModelOverAboveModelUnder")),
+            rows.Count(row => row.SelectedSide.Equals("Pass", StringComparison.OrdinalIgnoreCase)
+                && row.OverCandidateAfterGates.IncludedAfterProductionGates),
+            rows.Count(row => row.SuspiciousReasons.Contains("PassReasonMissing")));
+    }
+
+    private static PredictionPassGateSummary BuildPredictionPassGateSummary(IReadOnlyCollection<PredictionStageAuditRow> rows)
+    {
+        var passRows = rows
+            .Where(row => row.SelectedSide.Equals("Pass", StringComparison.OrdinalIgnoreCase))
+            .ToArray();
+        var overPositivePassRows = passRows
+            .Where(row => row.OverEstimatedEv > 0m)
+            .ToArray();
+
+        return new PredictionPassGateSummary(
+            PassRows: passRows.Length,
+            PassRowsWithPositiveOverEv: overPositivePassRows.Length,
+            PassRowsWhereOverEvBeatsUnderEv: passRows.Count(row => row.OverEstimatedEv > row.UnderEstimatedEv),
+            PassRowsWhereProjectionAboveLine: passRows.Count(row => row.Projection.HasValue && row.Line.HasValue && row.Projection.Value > row.Line.Value),
+            PassRowsRejectedByGenerationProjectionEdgeThreshold: passRows.Count(row => row.FailedGates.Contains("GenerationProjectionEdgeThreshold")),
+            PassRowsRejectedByPropTypeAllowlist: passRows.Count(row => row.FailedGates.Contains("PropTypeAllowlist")),
+            PassRowsRejectedByUnknownGate: passRows.Count(row => row.FailedGates.Contains("UnknownGate") || row.SuspiciousReasons.Contains("PassReasonMissing")),
+            OverPositivePassRowsRejectedByGenerationProjectionEdgeThreshold: overPositivePassRows.Count(row => row.FailedGates.Contains("GenerationProjectionEdgeThreshold")),
+            OverPositivePassRowsRejectedByPropTypeAllowlist: overPositivePassRows.Count(row => row.FailedGates.Contains("PropTypeAllowlist")),
+            OverPositivePassRowsRejectedByUnknownGate: overPositivePassRows.Count(row => row.FailedGates.Contains("UnknownGate") || row.SuspiciousReasons.Contains("PassReasonMissing")),
+            DiagnosticOverEvPositiveButProductionOverEdgeBelowThresholdCount: passRows.Count(row => row.PassReasonCodes.Contains("DiagnosticOverEvPositiveButProductionOverEdgeBelowThreshold")),
+            DiagnosticOverEvBeatsUnderButProductionOverEdgeBelowThresholdCount: passRows.Count(row => row.PassReasonCodes.Contains("DiagnosticOverEvBeatsUnderButProductionOverEdgeBelowThreshold")),
+            PassReasonsByCount: CountStrings(passRows.SelectMany(row => row.PassReasonCodes)),
+            FailedGatesByCount: CountStrings(passRows.SelectMany(row => row.FailedGates)));
+    }
+
+    private static PredictionHitProbabilityDiagnostics BuildPredictionHitProbabilityDiagnostics(
+        IReadOnlyCollection<PredictionStageAuditRow> rows,
+        PredictionGenerationOptions options)
+    {
+        var selectedRows = rows.Where(row => row.SelectedSide is "Over" or "Under").ToArray();
+        var overRejectedByHitProbability = rows.Count(row => row.OverCandidateBeforeGates.IncludedBeforeProductionGates
+            && row.OverCandidateBeforeGates.GateFailureReasons.Contains("BelowMinimumUserFacingHitProbability"));
+        var underRejectedByHitProbability = rows.Count(row => row.UnderCandidateBeforeGates.IncludedBeforeProductionGates
+            && row.UnderCandidateBeforeGates.GateFailureReasons.Contains("BelowMinimumUserFacingHitProbability"));
+        var overRejectedByProjection = rows.Count(row => row.OverCandidateBeforeGates.GateFailureReasons.Contains("OverProjectionEdgeBelowConfiguredThreshold"));
+        var underRejectedByProjection = rows.Count(row => row.UnderCandidateBeforeGates.GateFailureReasons.Contains("UnderProjectionEdgeBelowConfiguredThreshold"));
+        var projectedSelections = rows
+            .Select(row => SelectProjectedDfsCandidateSide(row.OverCandidateAfterGates, row.UnderCandidateAfterGates))
+            .GroupBy(side => side, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(group => group.Key, group => group.Count(), StringComparer.OrdinalIgnoreCase);
+
+        return new PredictionHitProbabilityDiagnostics(
+            MinimumPickHitProbability: options.MinimumPickHitProbability,
+            StrongPickHitProbability: options.StrongPickHitProbability,
+            ResearchOnlyBelowHitProbability: options.ResearchOnlyBelowHitProbability,
+            SelectedRowsBelow50Count: selectedRows.Count(row => row.SelectedSideProbability < 0.50m),
+            SelectedRowsBelowMinimumHitProbabilityCount: selectedRows.Count(row => row.SelectedSideProbability < options.MinimumPickHitProbability),
+            OverRowsRejectedByHitProbability: overRejectedByHitProbability,
+            UnderRowsRejectedByHitProbability: underRejectedByHitProbability,
+            OverRowsRejectedByProjectionThreshold: overRejectedByProjection,
+            UnderRowsRejectedByProjectionThreshold: underRejectedByProjection,
+            CandidateSideDistributionAfterFix: projectedSelections);
+    }
+
+    private static string SelectProjectedDfsCandidateSide(
+        PredictionSideCandidate overCandidate,
+        PredictionSideCandidate underCandidate)
+    {
+        var candidates = new[] { overCandidate, underCandidate }
+            .Where(candidate => candidate.IncludedAfterProductionGates)
+            .OrderByDescending(candidate => candidate.ModelProbability ?? decimal.MinValue)
+            .ThenByDescending(candidate => candidate.ProjectionDelta.HasValue ? Math.Abs(candidate.ProjectionDelta.Value) : decimal.MinValue)
+            .ThenByDescending(candidate => candidate.ConfidenceScore)
+            .ToArray();
+
+        return candidates.FirstOrDefault()?.Side ?? "Pass";
+    }
+
+    private static IReadOnlyDictionary<string, int> CountStrings(IEnumerable<string> values)
+    {
+        return values
+            .Where(value => !string.IsNullOrWhiteSpace(value))
+            .GroupBy(value => value, StringComparer.OrdinalIgnoreCase)
+            .OrderByDescending(group => group.Count())
+            .ThenBy(group => group.Key, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(group => group.Key, group => group.Count(), StringComparer.OrdinalIgnoreCase);
+    }
+
+    private static object[] BuildPredictionSamples(
+        IEnumerable<PredictionStageAuditRow> rows,
+        bool includeSamples,
+        int maxSamples)
+    {
+        if (!includeSamples)
+        {
+            return [];
+        }
+
+        return rows
+            .Take(maxSamples)
+            .Select(row => new
+            {
+                predictionId = row.PredictionId,
+                playerName = row.PlayerName,
+                propType = row.PropType,
+                provider = row.Provider,
+                bookmaker = row.Bookmaker,
+                eventDate = row.EventDate,
+                line = row.Line,
+                projection = row.Projection,
+                predictedMean = row.Projection,
+                modelProjection = row.Projection,
+                modelOverProbability = row.ModelOverProbability,
+                modelUnderProbability = row.ModelUnderProbability,
+                modelPushProbability = row.ModelPushProbability,
+                overBreakEvenProbability = row.OverBreakEvenProbability,
+                underBreakEvenProbability = row.UnderBreakEvenProbability,
+                overEstimatedEv = row.OverEstimatedEv,
+                underEstimatedEv = row.UnderEstimatedEv,
+                diagnosticOverEv = row.DiagnosticOverEv,
+                productionOverEv = row.ProductionOverEv,
+                diagnosticUnderEv = row.DiagnosticUnderEv,
+                productionUnderEv = row.ProductionUnderEv,
+                diagnosticProductionEvDeltaOver = row.DiagnosticProductionEvDeltaOver,
+                diagnosticProductionEvDeltaUnder = row.DiagnosticProductionEvDeltaUnder,
+                selectedSide = row.SelectedSide,
+                selectedSideProbability = row.SelectedSideProbability,
+                selectedSideEv = row.SelectedSideEv,
+                passReason = row.SelectedSide.Equals("Pass", StringComparison.OrdinalIgnoreCase) ? row.SelectionReason : null,
+                passReasonCodes = row.PassReasonCodes,
+                failedGates = row.FailedGates,
+                thresholdsApplied = row.ThresholdsApplied,
+                overCandidateBeforeGates = row.OverCandidateBeforeGates,
+                underCandidateBeforeGates = row.UnderCandidateBeforeGates,
+                overCandidateAfterGates = row.OverCandidateAfterGates,
+                underCandidateAfterGates = row.UnderCandidateAfterGates,
+                selectionReason = row.SelectionReason,
+                suspiciousReasons = row.SuspiciousReasons,
+                row.ConfidenceScore,
+                row.RankingScore,
+                row.SampleSize,
+                row.ProbabilityMethod,
+                row.Edge
+            })
+            .ToArray();
+    }
+
+    private static SideSelectionAuditProjection ToSideSelectionAuditRow(MarketLineShoppingSnapshot row)
+    {
+        var details = row.DetailsJson.RootElement;
+        var modelProbabilityOver = GetDecimal(details, "modelProbabilityOver");
+        var modelProbabilityUnder = GetDecimal(details, "modelProbabilityUnder")
+            ?? (modelProbabilityOver.HasValue ? Math.Round(1m - modelProbabilityOver.Value, 6) : null);
+        var modelProbabilityPush = GetDecimal(details, "modelProbabilityPush");
+        var selectedSide = NormalizeSide(row.BestSide);
+        var selectedSideProbability = row.BestProbability
+            ?? (selectedSide.Equals("Under", StringComparison.OrdinalIgnoreCase)
+                ? modelProbabilityUnder
+                : selectedSide.Equals("Over", StringComparison.OrdinalIgnoreCase)
+                    ? modelProbabilityOver
+                    : null);
+        var impliedProbability = row.BestImpliedProbability ?? GetDecimal(details, "bestImpliedProbability");
+        var probabilityEdge = row.BestProbabilityEdge ?? GetDecimal(details, "bestProbabilityEdge");
+        var estimatedEv = row.BestEstimatedEv ?? GetDecimal(details, "bestEstimatedEv");
+        var breakEvenProbability = CalculateBreakEvenProbability(impliedProbability, modelProbabilityPush);
+        var reasonCodes = BuildSideSelectionReasonCodes(
+            row,
+            selectedSide,
+            modelProbabilityOver,
+            modelProbabilityUnder,
+            modelProbabilityPush,
+            selectedSideProbability,
+            breakEvenProbability,
+            probabilityEdge,
+            estimatedEv);
+        var selectedSideSource = string.IsNullOrWhiteSpace(row.BestSide) || selectedSide is "Missing" or "None"
+            ? "MissingOrNone"
+            : "MarketLineShoppingSnapshot.BestSide";
+
+        var summary = new SideSelectionAuditSummary(
+            selectedSide,
+            modelProbabilityOver,
+            modelProbabilityUnder,
+            estimatedEv,
+            reasonCodes);
+        var detail = new
+        {
+            snapshotId = row.Id,
+            row.PredictionRunId,
+            row.TheOddsRefreshRunId,
+            player = row.Player,
+            propType = row.PropType,
+            provider = row.Provider,
+            bookmaker = row.Bookmaker,
+            eventDate = row.SlateDate,
+            eventStartTimeUtc = row.EventStartTime,
+            line = row.Line,
+            selectedSide,
+            selectedSideSource,
+            modelOverProbability = modelProbabilityOver,
+            modelUnderProbability = modelProbabilityUnder,
+            modelPushProbability = modelProbabilityPush,
+            selectedSideProbability,
+            impliedProbability,
+            breakEvenProbability,
+            probabilityEdge,
+            estimatedEv,
+            modelProjection = (decimal?)null,
+            providerLine = row.Line,
+            recommendationScore = GetDecimal(details, "rankingScore"),
+            strategyClassification = row.StrategyClassification,
+            row.StrategyTier,
+            row.LifecycleStatus,
+            row.IsCandidate,
+            row.IsWatchlist,
+            row.IsAvoid,
+            row.IsResearchOnly,
+            reasonCodes,
+            diagnostics = new
+            {
+                row.BestSide,
+                row.BestProbability,
+                row.BestImpliedProbability,
+                row.BestProbabilityEdge,
+                row.BestEstimatedEv,
+                bestOverEstimatedEv = GetDecimal(details, "bestOverEstimatedEv"),
+                bestUnderEstimatedEv = GetDecimal(details, "bestUnderEstimatedEv"),
+                bestOverAmericanPrice = GetInt(details, "bestOverAmericanPrice"),
+                bestUnderAmericanPrice = GetInt(details, "bestUnderAmericanPrice"),
+                probabilitySource = modelProbabilityOver.HasValue && modelProbabilityUnder.HasValue
+                    ? "MarketLineShoppingSnapshot.DetailsJson"
+                    : "Unavailable"
+            }
+        };
+
+        return new SideSelectionAuditProjection(summary, detail);
+    }
+
+    private static IReadOnlyList<string> BuildSideSelectionReasonCodes(
+        MarketLineShoppingSnapshot row,
+        string selectedSide,
+        decimal? modelProbabilityOver,
+        decimal? modelProbabilityUnder,
+        decimal? modelProbabilityPush,
+        decimal? selectedSideProbability,
+        decimal? breakEvenProbability,
+        decimal? probabilityEdge,
+        decimal? estimatedEv)
+    {
+        var reasons = new List<string>();
+
+        if (string.IsNullOrWhiteSpace(row.BestSide) || selectedSide is "Missing" or "None")
+        {
+            reasons.Add("MissingSideSelection");
+        }
+
+        if (selectedSide.Equals("Under", StringComparison.OrdinalIgnoreCase))
+        {
+            if (modelProbabilityUnder.HasValue && modelProbabilityUnder.Value < 0.50m)
+            {
+                reasons.Add("UnderSelectedWithModelUnderBelowFifty");
+            }
+
+            if (modelProbabilityOver.HasValue && modelProbabilityOver.Value > 0.50m)
+            {
+                reasons.Add("UnderSelectedWithModelOverAboveFifty");
+            }
+
+            if (modelProbabilityOver.HasValue && modelProbabilityUnder.HasValue && modelProbabilityOver.Value > modelProbabilityUnder.Value)
+            {
+                reasons.Add("PossibleSideInversion");
+            }
+        }
+
+        if (selectedSide.Equals("Over", StringComparison.OrdinalIgnoreCase))
+        {
+            if (modelProbabilityOver.HasValue && modelProbabilityOver.Value < 0.50m)
+            {
+                reasons.Add("OverSelectedWithModelOverBelowFifty");
+            }
+
+            if (modelProbabilityOver.HasValue && modelProbabilityUnder.HasValue && modelProbabilityUnder.Value > modelProbabilityOver.Value)
+            {
+                reasons.Add("PossibleSideInversion");
+            }
+        }
+
+        if (estimatedEv.HasValue && estimatedEv.Value > 0m
+            && selectedSideProbability.HasValue
+            && breakEvenProbability.HasValue
+            && selectedSideProbability.Value <= breakEvenProbability.Value)
+        {
+            reasons.Add("PositiveEvButSelectedProbabilityBelowBreakEven");
+        }
+
+        if (selectedSideProbability.HasValue && breakEvenProbability.HasValue && probabilityEdge.HasValue)
+        {
+            var expectedEdge = Math.Round(selectedSideProbability.Value - breakEvenProbability.Value, 6);
+            if (Math.Abs(expectedEdge - probabilityEdge.Value) > 0.0005m)
+            {
+                reasons.Add(modelProbabilityPush.GetValueOrDefault() > 0m
+                    ? "ProbabilityEdgeUsesRawImpliedProbabilityWithPushProbability"
+                    : "ProbabilityEdgeDoesNotMatchSelectedProbability");
+            }
+        }
+
+        if (selectedSide.Equals("Under", StringComparison.OrdinalIgnoreCase)
+            && modelProbabilityUnder.HasValue
+            && modelProbabilityUnder.Value < 0.50m
+            && estimatedEv.HasValue
+            && estimatedEv.Value > 0m)
+        {
+            reasons.Add("UnderPositiveEvBelowMinProbability");
+        }
+
+        return reasons
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+    }
+
+    private static async Task<int> CountSideLabelChangesAsync(
+        ApplicationDbContext dbContext,
+        Guid? predictionRunId,
+        DateOnly? fromDate,
+        DateOnly? toDate,
+        string? provider,
+        string? propType,
+        CancellationToken cancellationToken)
+    {
+        var recommendations = await BuildRecommendationAuditQuery(dbContext, predictionRunId, fromDate, toDate, provider, propType)
+            .Select(row => new
+            {
+                row.PredictionRunId,
+                row.EventId,
+                row.PlayerName,
+                row.PropType,
+                row.Line,
+                row.Bookmaker,
+                row.Provider,
+                row.Side
+            })
+            .ToListAsync(cancellationToken);
+        var lineShoppingRows = await BuildLineShoppingAuditQuery(dbContext, predictionRunId, fromDate, toDate, provider, propType)
+            .Select(row => new
+            {
+                row.PredictionRunId,
+                row.EventId,
+                row.Player,
+                row.PropType,
+                row.Line,
+                row.Bookmaker,
+                row.Provider,
+                row.BestSide
+            })
+            .ToListAsync(cancellationToken);
+        var lineSideByKey = lineShoppingRows
+            .GroupBy(row => BuildSideContinuityKey(row.PredictionRunId, row.EventId, row.Player, row.PropType, row.Line, row.Bookmaker, row.Provider))
+            .ToDictionary(group => group.Key, group => NormalizeSide(group.First().BestSide), StringComparer.OrdinalIgnoreCase);
+
+        return recommendations.Count(row =>
+        {
+            var key = BuildSideContinuityKey(row.PredictionRunId, row.EventId, row.PlayerName, row.PropType, row.Line, row.Bookmaker, row.Provider);
+            return lineSideByKey.TryGetValue(key, out var lineSide)
+                && !NormalizeSide(row.Side).Equals(lineSide, StringComparison.OrdinalIgnoreCase);
+        });
+    }
+
+    private static string BuildSideContinuityKey(
+        Guid? predictionRunId,
+        string? eventId,
+        string? player,
+        string? propType,
+        decimal line,
+        string? bookmaker,
+        string? provider)
+    {
+        return string.Join("|", new[]
+        {
+            predictionRunId?.ToString("D") ?? string.Empty,
+            eventId ?? string.Empty,
+            NormalizePlayerName(player),
+            NormalizePlayerName(propType),
+            line.ToString("0.####"),
+            NormalizePlayerName(bookmaker),
+            NormalizePlayerName(provider)
+        });
+    }
+
+    private static string NormalizeSide(string? side)
+    {
+        if (string.IsNullOrWhiteSpace(side))
+        {
+            return "Missing";
+        }
+
+        if (side.Equals("OVER", StringComparison.OrdinalIgnoreCase))
+        {
+            return "Over";
+        }
+
+        if (side.Equals("UNDER", StringComparison.OrdinalIgnoreCase))
+        {
+            return "Under";
+        }
+
+        if (side.Equals("PASS", StringComparison.OrdinalIgnoreCase))
+        {
+            return "Pass";
+        }
+
+        if (side.Equals("NONE", StringComparison.OrdinalIgnoreCase))
+        {
+            return "None";
+        }
+
+        return side;
+    }
+
+    private static decimal? CalculateRate(int numerator, int denominator)
+    {
+        return denominator <= 0
+            ? null
+            : Math.Round((decimal)numerator / denominator, 4);
+    }
+
+    private static decimal? CalculateImpliedProbability(decimal? decimalPrice)
+    {
+        return decimalPrice.HasValue && decimalPrice.Value > 0m
+            ? Math.Round(1m / decimalPrice.Value, 6)
+            : null;
+    }
+
+    private static decimal? CalculateEstimatedEv(decimal? winProbability, decimal? loseProbability, decimal? decimalPrice)
+    {
+        return winProbability.HasValue && loseProbability.HasValue && decimalPrice.HasValue
+            ? Math.Round((winProbability.Value * (decimalPrice.Value - 1m)) - loseProbability.Value, 6)
+            : null;
+    }
+
+    private static decimal? CalculateBreakEvenProbability(decimal? impliedProbability, decimal? pushProbability)
+    {
+        if (!impliedProbability.HasValue)
+        {
+            return null;
+        }
+
+        if (!pushProbability.HasValue || pushProbability.Value <= 0m)
+        {
+            return impliedProbability;
+        }
+
+        return Math.Round(impliedProbability.Value * (1m - pushProbability.Value), 6);
+    }
+
+    private static decimal? GetDecimal(JsonElement element, string propertyName)
+    {
+        if (!TryGetPropertyIgnoreCase(element, propertyName, out var property))
+        {
+            return null;
+        }
+
+        return property.ValueKind switch
+        {
+            JsonValueKind.Number when property.TryGetDecimal(out var value) => value,
+            JsonValueKind.String when decimal.TryParse(property.GetString(), out var value) => value,
+            _ => null
+        };
+    }
+
+    private static int? GetInt(JsonElement element, string propertyName)
+    {
+        if (!TryGetPropertyIgnoreCase(element, propertyName, out var property))
+        {
+            return null;
+        }
+
+        return property.ValueKind switch
+        {
+            JsonValueKind.Number when property.TryGetInt32(out var value) => value,
+            JsonValueKind.String when int.TryParse(property.GetString(), out var value) => value,
+            _ => null
+        };
+    }
+
+    private static bool TryGetPropertyIgnoreCase(JsonElement element, string propertyName, out JsonElement property)
+    {
+        if (element.ValueKind == JsonValueKind.Object && element.TryGetProperty(propertyName, out property))
+        {
+            return true;
+        }
+
+        if (element.ValueKind == JsonValueKind.Object)
+        {
+            foreach (var candidate in element.EnumerateObject())
+            {
+                if (candidate.Name.Equals(propertyName, StringComparison.OrdinalIgnoreCase))
+                {
+                    property = candidate.Value;
+                    return true;
+                }
+            }
+        }
+
+        property = default;
+        return false;
+    }
+
+    private static string BuildSideSelectionAuditRecommendation(
+        int totalRows,
+        PredictionStageSummary predictionStageSummary,
+        int possibleSideInversionCount,
+        int possibleEvProbabilityMismatchCount,
+        int missingSideDefaultedCount,
+        int sideLabelChangedCount,
+        int underSelections,
+        int overSelections)
+    {
+        if (totalRows == 0)
+        {
+            if (predictionStageSummary.PredictionRowsEvaluated == 0)
+            {
+                return "No persisted line-shopping rows or prediction rows matched the requested filters. Run a prediction/market refresh first or widen the filters.";
+            }
+
+            if (predictionStageSummary.ProjectionAboveLineButSelectedUnderCount > 0
+                || predictionStageSummary.SelectedUnderWithProjectionAboveLineCount > 0)
+            {
+                return "Prediction-stage diagnostics found Under selections where the projected value is above the line. Investigate prediction recommendation orientation before changing downstream snapshots.";
+            }
+
+            if (predictionStageSummary.PredictionRowsWhereProjectionBelowLine > predictionStageSummary.PredictionRowsWhereProjectionAboveLine * 3
+                && predictionStageSummary.PredictionRowsWhereProjectionBelowLine >= 20)
+            {
+                return "No persisted line-shopping rows matched the requested filters. Prediction-stage diagnostics show projections are mostly below the line, which explains Under dominance before downstream selection.";
+            }
+
+            if (predictionStageSummary.OverEvPositiveCount > 0 && predictionStageSummary.PredictionOverSelections == 0)
+            {
+                return "No persisted line-shopping rows matched the requested filters. Prediction-stage diagnostics found positive diagnostic Over EV but no Over selections; review generation thresholds and projection-vs-line selection.";
+            }
+
+            if (predictionStageSummary.OverEvGreaterThanUnderEvCount == 0)
+            {
+                return "No persisted line-shopping rows matched the requested filters. Prediction-stage diagnostics show Under EV beats Over EV on every evaluated row.";
+            }
+
+            return "No persisted line-shopping rows matched the requested filters. Use predictionStageSummary and prediction sample groups to diagnose the upstream prediction-side imbalance.";
+        }
+
+        if (missingSideDefaultedCount > 0)
+        {
+            return "Investigate missing/None BestSide rows before changing side selection; missing side should not silently become Under.";
+        }
+
+        if (possibleEvProbabilityMismatchCount > 0)
+        {
+            return "Investigate EV/probability-edge consistency first; selected-side probability may not match break-even math on some rows.";
+        }
+
+        if (sideLabelChangedCount > 0)
+        {
+            return "Investigate side label continuity between line-shopping snapshots and recommendation ledger rows before changing model logic.";
+        }
+
+        if (possibleSideInversionCount > 0)
+        {
+            return "Review sampled rows with PossibleSideInversion; high Under share may be valid if Under EV beats Over EV, but these rows need manual inspection.";
+        }
+
+        if (underSelections > overSelections * 3 && underSelections >= 20)
+        {
+            return "Under selections are heavily concentrated, but no direct probability/EV mismatch was detected. Review model distribution, market pricing, and prop mix before changing selection code.";
+        }
+
+        return "No direct persisted evidence of side inversion was detected. Keep monitoring side distribution and inspect samples before changing recommendation behavior.";
     }
 
     private static PredictionRunResponse ToRunResponse(PredictionRun run)
@@ -3247,6 +4944,159 @@ public static class PredictionDebugEndpoints
         string Recommendation,
         decimal Confidence,
         DateTimeOffset CreatedAt);
+
+    private sealed record SideSelectionAuditProjection(
+        SideSelectionAuditSummary Summary,
+        object Detail);
+
+    private sealed record SideSelectionAuditSummary(
+        string SelectedSide,
+        decimal? ModelProbabilityOver,
+        decimal? ModelProbabilityUnder,
+        decimal? EstimatedEv,
+        IReadOnlyList<string> ReasonCodes);
+
+    private sealed record PredictionStageSummary(
+        Guid? LatestPredictionRunId,
+        DateTimeOffset? LatestPredictionRunCreatedAtUtc,
+        int PredictionRowsEvaluated,
+        int PredictionRowsWithLine,
+        int PredictionRowsMissingLine,
+        int PredictionOverSelections,
+        int PredictionUnderSelections,
+        int PredictionPassSelections,
+        decimal? PredictionOverSelectionRate,
+        decimal? PredictionUnderSelectionRate,
+        decimal? PredictionPassRate,
+        int PredictionRowsWhereProjectionAboveLine,
+        int PredictionRowsWhereProjectionBelowLine,
+        int PredictionRowsWhereProjectionEqualsLine,
+        int ProjectionAboveLineButSelectedUnderCount,
+        int ProjectionBelowLineButSelectedOverCount,
+        int OverProbabilityGreaterThanUnderCount,
+        int UnderProbabilityGreaterThanOverCount,
+        int OverEvGreaterThanUnderEvCount,
+        int UnderEvGreaterThanOverEvCount,
+        int OverEvPositiveCount,
+        int UnderEvPositiveCount,
+        int OverEvPositiveButPassedCount,
+        int UnderEvPositiveButPassedCount,
+        int OverEvPositiveButSelectedUnderCount,
+        int SelectedUnderWithModelUnderBelowBreakEvenCount,
+        int SelectedUnderWithModelOverAboveModelUnderCount,
+        int SelectedUnderWithProjectionAboveLineCount,
+        int PossibleProbabilityOrientationIssueCount,
+        int OverEligibleButPassedCount,
+        int PassReasonMissingCount);
+
+    private sealed record PredictionPassGateSummary(
+        int PassRows,
+        int PassRowsWithPositiveOverEv,
+        int PassRowsWhereOverEvBeatsUnderEv,
+        int PassRowsWhereProjectionAboveLine,
+        int PassRowsRejectedByGenerationProjectionEdgeThreshold,
+        int PassRowsRejectedByPropTypeAllowlist,
+        int PassRowsRejectedByUnknownGate,
+        int OverPositivePassRowsRejectedByGenerationProjectionEdgeThreshold,
+        int OverPositivePassRowsRejectedByPropTypeAllowlist,
+        int OverPositivePassRowsRejectedByUnknownGate,
+        int DiagnosticOverEvPositiveButProductionOverEdgeBelowThresholdCount,
+        int DiagnosticOverEvBeatsUnderButProductionOverEdgeBelowThresholdCount,
+        IReadOnlyDictionary<string, int> PassReasonsByCount,
+        IReadOnlyDictionary<string, int> FailedGatesByCount);
+
+    private sealed record PredictionHitProbabilityDiagnostics(
+        decimal MinimumPickHitProbability,
+        decimal StrongPickHitProbability,
+        decimal ResearchOnlyBelowHitProbability,
+        int SelectedRowsBelow50Count,
+        int SelectedRowsBelowMinimumHitProbabilityCount,
+        int OverRowsRejectedByHitProbability,
+        int UnderRowsRejectedByHitProbability,
+        int OverRowsRejectedByProjectionThreshold,
+        int UnderRowsRejectedByProjectionThreshold,
+        IReadOnlyDictionary<string, int> CandidateSideDistributionAfterFix);
+
+    private sealed record PredictionStageAuditRow(
+        Guid PredictionId,
+        string PlayerName,
+        string PropType,
+        string? Provider,
+        string? Bookmaker,
+        DateOnly EventDate,
+        decimal? Line,
+        decimal? Projection,
+        decimal? ModelOverProbability,
+        decimal? ModelUnderProbability,
+        decimal? ModelPushProbability,
+        decimal? OverBreakEvenProbability,
+        decimal? UnderBreakEvenProbability,
+        decimal? OverEstimatedEv,
+        decimal? UnderEstimatedEv,
+        decimal? DiagnosticOverEv,
+        decimal? ProductionOverEv,
+        decimal? DiagnosticProductionEvDeltaOver,
+        decimal? DiagnosticUnderEv,
+        decimal? ProductionUnderEv,
+        decimal? DiagnosticProductionEvDeltaUnder,
+        string SelectedSide,
+        decimal? SelectedSideProbability,
+        decimal? SelectedSideEv,
+        string SelectionReason,
+        IReadOnlyList<string> PassReasonCodes,
+        IReadOnlyList<string> FailedGates,
+        PredictionThresholdsApplied ThresholdsApplied,
+        PredictionSideCandidate OverCandidateBeforeGates,
+        PredictionSideCandidate UnderCandidateBeforeGates,
+        PredictionSideCandidate OverCandidateAfterGates,
+        PredictionSideCandidate UnderCandidateAfterGates,
+        IReadOnlyList<string> SuspiciousReasons,
+        decimal ConfidenceScore,
+        decimal RankingScore,
+        int SampleSize,
+        string ProbabilityMethod,
+        decimal? Edge);
+
+    private sealed record PredictionThresholdsApplied(
+        string GenerationSelectionSource,
+        string ProductionSelectionRule,
+        decimal OverProjectionEdgeThreshold,
+        decimal UnderProjectionEdgeThreshold,
+        IReadOnlyList<string> EnabledPropTypes,
+        decimal MinimumPickHitProbability,
+        decimal StrongPickHitProbability,
+        decimal ResearchOnlyBelowHitProbability,
+        decimal? MinExpectedValueThreshold,
+        string? MinTrustLevel,
+        int? MinSampleSize);
+
+    private sealed record PredictionSideCandidate(
+        string Side,
+        decimal? ModelProbability,
+        decimal? BreakEvenProbability,
+        decimal? ProbabilityEdge,
+        decimal? EstimatedEv,
+        decimal? DiagnosticEv,
+        decimal? ProductionEv,
+        decimal? DiagnosticProductionEvDelta,
+        decimal? ModelProjection,
+        decimal? Line,
+        decimal? ProjectionDelta,
+        int SampleSize,
+        string TrustLevel,
+        decimal ConfidenceScore,
+        bool IncludedBeforeProductionGates,
+        bool IncludedAfterProductionGates,
+        IReadOnlyList<PredictionCandidateGate> Gates,
+        IReadOnlyList<string> GateFailureReasons);
+
+    private sealed record PredictionCandidateGate(
+        string Name,
+        bool Passed,
+        object? Actual,
+        object? Threshold,
+        string Comparator,
+        string Notes);
 
     private sealed record BacktestPredictionInput(
         Guid PredictionId,

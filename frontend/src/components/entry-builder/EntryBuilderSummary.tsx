@@ -20,7 +20,7 @@ export function EntryBuilderSummary({
 }) {
   const review = buildEntryReview(legs, rules, amount, selectedEntryType);
   const rule = review.rule;
-  const averageEv = legs.length ? legs.reduce((sum, leg) => sum + leg.estimatedEv, 0) / legs.length : 0;
+  const averageEdge = legs.length ? legs.reduce((sum, leg) => sum + leg.probabilityEdge, 0) / legs.length : 0;
   const sports = Array.from(new Set(legs.map((leg) => leg.sport)));
   const possibleLegCounts = review.allowedFinalLegCounts.length ? review.allowedFinalLegCounts.join(', ') : rule?.allowedLegCounts.join(', ') || 'Unavailable';
 
@@ -42,7 +42,7 @@ export function EntryBuilderSummary({
           py: 1.35
         }}
       >
-        <Metric label="Avg EV" value={legs.length ? formatSignedPercent(averageEv) : '-'} tone={averageEv > 0 ? 'fresh' : 'default'} />
+        <Metric label="Avg Edge" value={legs.length ? formatSignedPercent(averageEdge) : '-'} tone={averageEdge > 0 ? 'fresh' : 'default'} />
         <Metric label="Est. multiplier" value={legs.length ? formatMultiplier(review.multiplier) : '-'} />
         <Metric label="Est. payout" value={legs.length ? formatPayout(review.estimatedPayout) : '-'} />
       </Box>

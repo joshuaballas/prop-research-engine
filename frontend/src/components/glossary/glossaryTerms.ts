@@ -8,7 +8,7 @@ export const glossaryTerms: GlossaryTerm[] = [
   {
     label: 'EV',
     definition:
-      "Estimated expected value for the selected side of the prop. It combines the model's hit chance with the provider's payout or price to estimate whether the line is favorable. Higher EV means the opportunity is more attractive, but it is still an estimate, not a guarantee."
+      'Estimated expected value for sportsbook-priced markets. DFS props hide EV until a verified DFS payout or break-even model is available.'
   },
   {
     label: 'Edge',
@@ -79,7 +79,7 @@ export const glossaryTerms: GlossaryTerm[] = [
   {
     label: 'Top pick',
     definition:
-      'A high-priority opportunity surfaced by the app based on EV, edge, trust, caution state, and current line context. Top pick does not mean guaranteed winner.'
+      'A high-priority opportunity surfaced by the app based on edge, hit chance, trust, caution state, and current line context. Top pick does not mean guaranteed winner.'
   },
   {
     label: 'Best DFS line',

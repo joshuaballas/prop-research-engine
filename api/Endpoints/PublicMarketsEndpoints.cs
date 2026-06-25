@@ -4,6 +4,7 @@ using SportsBetting.Api.Integrations.TheOddsApi;
 using SportsBetting.Api.Models;
 using SportsBetting.Api.Predictions;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
 using System.Globalization;
 using System.Text;
 using System.Text.Json;
@@ -16,6 +17,8 @@ public static class PublicMarketsEndpoints
     private static readonly string[] SupportedMarketSports = ["MLB", "SOCCER"];
     private static readonly string[] SupportedMarketCompetitions = ["MLB", "World Cup"];
     private const string SoccerCompetitionName = "World Cup";
+    private const string DfsExpectedValueUnavailableReason = "EV is hidden for DFS props because sportsbook odds/break-even pricing is not available.";
+    private const string SportsbookExpectedValueUnavailableReason = "Sportsbook EV requires odds/break-even pricing.";
     private static readonly string[] SupportedMlbPerformancePropTypeKeys =
     [
         "HITS",
@@ -207,6 +210,7 @@ public static class PublicMarketsEndpoints
             string? bookmakerPreset,
             ApplicationDbContext dbContext,
             IPredictionProbabilityService probabilityService,
+            IOptions<PredictionGenerationOptions> predictionGenerationOptions,
             CancellationToken cancellationToken) =>
         {
             var marketSport = ResolveMarketSport(sport);
@@ -225,6 +229,7 @@ public static class PublicMarketsEndpoints
                 bookmakerPreset,
                 dbContext,
                 probabilityService,
+                predictionGenerationOptions.Value,
                 cancellationToken));
         })
         .WithName("MarketsTopPicks")
@@ -238,6 +243,7 @@ public static class PublicMarketsEndpoints
             string? bookmakerPreset,
             ApplicationDbContext dbContext,
             IPredictionProbabilityService probabilityService,
+            IOptions<PredictionGenerationOptions> predictionGenerationOptions,
             CancellationToken cancellationToken) =>
         {
             return Results.Ok(await BuildMarketTopPicksResponseAsync(
@@ -250,6 +256,7 @@ public static class PublicMarketsEndpoints
                 bookmakerPreset,
                 dbContext,
                 probabilityService,
+                predictionGenerationOptions.Value,
                 cancellationToken));
         })
         .WithName("MlbTopPicks")
@@ -266,6 +273,7 @@ public static class PublicMarketsEndpoints
             string? bookmakerPreset,
             ApplicationDbContext dbContext,
             IPredictionProbabilityService probabilityService,
+            IOptions<PredictionGenerationOptions> predictionGenerationOptions,
             CancellationToken cancellationToken) =>
         {
             var marketSport = ResolveMarketSport(sport);
@@ -286,6 +294,7 @@ public static class PublicMarketsEndpoints
                 bookmakerPreset,
                 dbContext,
                 probabilityService,
+                predictionGenerationOptions.Value,
                 cancellationToken));
         })
         .WithName("MarketsLineShopping")
@@ -428,6 +437,7 @@ public static class PublicMarketsEndpoints
             string? bookmakerPreset,
             ApplicationDbContext dbContext,
             IPredictionProbabilityService probabilityService,
+            IOptions<PredictionGenerationOptions> predictionGenerationOptions,
             CancellationToken cancellationToken) =>
         {
             return Results.Ok(await BuildMarketLineShoppingResponseAsync(
@@ -442,6 +452,7 @@ public static class PublicMarketsEndpoints
                 bookmakerPreset,
                 dbContext,
                 probabilityService,
+                predictionGenerationOptions.Value,
                 cancellationToken));
         })
         .WithName("MlbLineShopping")
@@ -907,6 +918,7 @@ public static class PublicMarketsEndpoints
         string? bookmakerPreset,
         ApplicationDbContext dbContext,
         IPredictionProbabilityService probabilityService,
+        PredictionGenerationOptions predictionGenerationOptions,
         CancellationToken cancellationToken)
     {
         if (IsSoccerSport(effectiveSport))
@@ -934,6 +946,7 @@ public static class PublicMarketsEndpoints
             providerCategory,
             dbContext,
             probabilityService,
+            predictionGenerationOptions,
             cancellationToken);
 
         return new
@@ -1042,6 +1055,7 @@ public static class PublicMarketsEndpoints
         string? bookmakerPreset,
         ApplicationDbContext dbContext,
         IPredictionProbabilityService probabilityService,
+        PredictionGenerationOptions predictionGenerationOptions,
         CancellationToken cancellationToken)
     {
         if (IsSoccerSport(effectiveSport))
@@ -1073,6 +1087,7 @@ public static class PublicMarketsEndpoints
             providerCategory,
             dbContext,
             probabilityService,
+            predictionGenerationOptions,
             cancellationToken);
 
         return new
@@ -2037,23 +2052,39 @@ public static class PublicMarketsEndpoints
                 avgEvAtRecommendationTime = AverageNullable(determinedRows.Select(row => row.Snapshot.EstimatedEv))
             },
             rows = determinedRows
-                .Select(row => new
+                .Select(row =>
                 {
-                    recommendationSnapshotId = row.Snapshot.Id,
-                    result = ToSnapshotGradeStatus(row.Outcome),
-                    playerName = row.Snapshot.PlayerName,
-                    propType = row.Snapshot.PropType,
-                    side = row.Snapshot.Side,
-                    line = row.Snapshot.Line,
-                    actualValue = row.ActualResult,
-                    provider = row.Snapshot.EntryProvider,
-                    bookmaker = row.Snapshot.Bookmaker,
-                    eventStartTimeUtc = row.Snapshot.EventStartTimeUtc,
-                    estimatedEv = row.Snapshot.EstimatedEv,
-                    hitChance = row.Snapshot.HitChance,
-                    trust = row.Snapshot.TrustLevel,
-                    sampleSize = row.Snapshot.HistoricalSampleSize,
-                    matchMethod = row.MatchMethod
+                    var expectedValueDisplay = BuildPublicExpectedValueDisplayMetadata(
+                        row.Snapshot.ProviderCategory,
+                        row.Snapshot.EstimatedEv,
+                        row.Snapshot.ImpliedProbability,
+                        decimalPrice: null,
+                        americanPrice: null);
+
+                    return new
+                    {
+                        recommendationSnapshotId = row.Snapshot.Id,
+                        result = ToSnapshotGradeStatus(row.Outcome),
+                        playerName = row.Snapshot.PlayerName,
+                        propType = row.Snapshot.PropType,
+                        side = row.Snapshot.Side,
+                        line = row.Snapshot.Line,
+                        actualValue = row.ActualResult,
+                        provider = row.Snapshot.EntryProvider,
+                        bookmaker = row.Snapshot.Bookmaker,
+                        providerCategory = row.Snapshot.ProviderCategory,
+                        expectedValueDisplay.IsDfs,
+                        expectedValueDisplay.IsSportsbook,
+                        expectedValueDisplay.ShowExpectedValue,
+                        expectedValueDisplay.DisplayExpectedValue,
+                        expectedValueDisplay.ExpectedValueUnavailableReason,
+                        eventStartTimeUtc = row.Snapshot.EventStartTimeUtc,
+                        estimatedEv = row.Snapshot.EstimatedEv,
+                        hitChance = row.Snapshot.HitChance,
+                        trust = row.Snapshot.TrustLevel,
+                        sampleSize = row.Snapshot.HistoricalSampleSize,
+                        matchMethod = row.MatchMethod
+                    };
                 })
                 .ToArray(),
             diagnostics = includeDiagnostics
@@ -5220,6 +5251,62 @@ public static class PublicMarketsEndpoints
         DateOnly EventDate,
         Guid PlayerId,
         string PropType);
+
+    private static PublicExpectedValueDisplayMetadata BuildPublicExpectedValueDisplayMetadata(
+        string? providerCategory,
+        decimal? estimatedEv,
+        decimal? impliedProbability,
+        decimal? decimalPrice,
+        int? americanPrice)
+    {
+        var isDfs = string.Equals(providerCategory, "DFS", StringComparison.OrdinalIgnoreCase);
+        var isSportsbook = string.Equals(providerCategory, "Sportsbook", StringComparison.OrdinalIgnoreCase);
+
+        if (isDfs)
+        {
+            return new PublicExpectedValueDisplayMetadata(
+                IsDfs: true,
+                IsSportsbook: false,
+                ShowExpectedValue: false,
+                DisplayExpectedValue: null,
+                ExpectedValueUnavailableReason: DfsExpectedValueUnavailableReason);
+        }
+
+        if (isSportsbook)
+        {
+            var hasSportsbookPricing = impliedProbability.HasValue ||
+                decimalPrice.HasValue ||
+                americanPrice.HasValue;
+
+            return hasSportsbookPricing && estimatedEv.HasValue
+                ? new PublicExpectedValueDisplayMetadata(
+                    IsDfs: false,
+                    IsSportsbook: true,
+                    ShowExpectedValue: true,
+                    DisplayExpectedValue: estimatedEv,
+                    ExpectedValueUnavailableReason: null)
+                : new PublicExpectedValueDisplayMetadata(
+                    IsDfs: false,
+                    IsSportsbook: true,
+                    ShowExpectedValue: false,
+                    DisplayExpectedValue: null,
+                    ExpectedValueUnavailableReason: SportsbookExpectedValueUnavailableReason);
+        }
+
+        return new PublicExpectedValueDisplayMetadata(
+            IsDfs: false,
+            IsSportsbook: false,
+            ShowExpectedValue: false,
+            DisplayExpectedValue: null,
+            ExpectedValueUnavailableReason: SportsbookExpectedValueUnavailableReason);
+    }
+
+    private sealed record PublicExpectedValueDisplayMetadata(
+        bool IsDfs,
+        bool IsSportsbook,
+        bool ShowExpectedValue,
+        decimal? DisplayExpectedValue,
+        string? ExpectedValueUnavailableReason);
 
     private sealed record PropHistoryResponse(
         string Sport,

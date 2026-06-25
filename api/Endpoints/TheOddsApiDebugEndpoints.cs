@@ -34,6 +34,7 @@ public static partial class TheOddsApiDebugEndpoints
             bool? includeBookmakerPrices,
             ApplicationDbContext dbContext,
             IPredictionProbabilityService probabilityService,
+            IOptions<PredictionGenerationOptions> predictionGenerationOptions,
             CancellationToken cancellationToken) =>
         {
             var totalStopwatch = Stopwatch.StartNew();
@@ -78,7 +79,7 @@ public static partial class TheOddsApiDebugEndpoints
             evCalculationMs = stepStopwatch.ElapsedMilliseconds;
 
             stepStopwatch.Restart();
-            var groups = BuildTheOddsLineShoppingGroups(rows, generatedAtUtc, lifecycleFreshnessMinutes);
+            var groups = BuildTheOddsLineShoppingGroups(rows, generatedAtUtc, lifecycleFreshnessMinutes, predictionGenerationOptions.Value);
             var topByBestEv = shouldReturnSummaryOnly
                 ? []
                 : groups
@@ -116,7 +117,8 @@ public static partial class TheOddsApiDebugEndpoints
                             || string.Equals(row.Strategy.StrategyClassification, "Research", StringComparison.OrdinalIgnoreCase)))
                     .OrderBy(row => GetLineShoppingTopOnlyStrategyRank(row.Strategy))
                     .ThenBy(row => row.Group.IsActionableForUser ? 0 : 1)
-                    .ThenByDescending(row => row.Group.BestEstimatedEv ?? decimal.MinValue)
+                    .ThenByDescending(row => row.Group.BestProbability ?? decimal.MinValue)
+                    .ThenByDescending(row => row.Group.BestProjectionEdge ?? decimal.MinValue)
                     .ThenByDescending(row => row.Group.RankingScore)
                     .Take(requestedTake)
                     .Select(row => row.Group)
@@ -238,6 +240,7 @@ public static partial class TheOddsApiDebugEndpoints
             int? freshnessMinutes,
             ApplicationDbContext dbContext,
             IPredictionProbabilityService probabilityService,
+            IOptions<PredictionGenerationOptions> predictionGenerationOptions,
             CancellationToken cancellationToken) =>
         {
             var totalStopwatch = Stopwatch.StartNew();
@@ -289,7 +292,7 @@ public static partial class TheOddsApiDebugEndpoints
             var buildRowsMs = stepStopwatch.ElapsedMilliseconds;
 
             stepStopwatch.Restart();
-            var groups = BuildTheOddsLineShoppingGroups(rows, generatedAtUtc, lifecycleFreshnessMinutes);
+            var groups = BuildTheOddsLineShoppingGroups(rows, generatedAtUtc, lifecycleFreshnessMinutes, predictionGenerationOptions.Value);
             var groupingMs = stepStopwatch.ElapsedMilliseconds;
 
             stepStopwatch.Restart();
@@ -306,7 +309,8 @@ public static partial class TheOddsApiDebugEndpoints
                 ? candidateGroups.Where(row => row.Group.IsActionableForUser)
                 : candidateGroups;
             var topPicks = preferredCandidateGroups
-                .OrderByDescending(row => row.Group.BestEstimatedEv ?? decimal.MinValue)
+                .OrderByDescending(row => row.Group.BestProbability ?? decimal.MinValue)
+                .ThenByDescending(row => row.Group.BestProjectionEdge ?? decimal.MinValue)
                 .ThenByDescending(row => row.Group.RankingScore)
                 .Take(requestedTake)
                 .Select(row => ToLineShoppingResponseGroup(row.Group, includeBookmakerPrices: false))
@@ -3718,6 +3722,8 @@ public static partial class TheOddsApiDebugEndpoints
             prediction.ProbabilityOver,
             prediction.ProbabilityUnder,
             prediction.ProbabilityPush,
+            prediction.PredictedValue,
+            prediction.Edge,
             prediction.RankingScore,
             platformProp.PlatformName,
             NormalizeTheOddsBookmakerKey(platformProp.BookmakerKey, platformProp.PlatformName),
@@ -3798,9 +3804,11 @@ public static partial class TheOddsApiDebugEndpoints
     private static List<TheOddsLineShoppingGroup> BuildTheOddsLineShoppingGroups(
         IReadOnlyCollection<TheOddsLineShoppingSourceRow> rows,
         DateTimeOffset? generatedAtUtc = null,
-        int freshnessMinutes = DefaultTheOddsLineShoppingFreshnessMinutes)
+        int freshnessMinutes = DefaultTheOddsLineShoppingFreshnessMinutes,
+        PredictionGenerationOptions? selectionOptions = null)
     {
         var now = generatedAtUtc ?? DateTimeOffset.UtcNow;
+        var effectiveSelectionOptions = selectionOptions ?? new PredictionGenerationOptions();
 
         return rows
             .GroupBy(row => new TheOddsLineShoppingGroupKey(
@@ -3819,8 +3827,10 @@ public static partial class TheOddsApiDebugEndpoints
                 row.PayoutMultiplierMayDiffer,
                 row.SpecialProjectionWarning,
                 row.ProviderCategory))
-            .Select(group => BuildLineShoppingGroup(group.Key, group.ToList(), now, freshnessMinutes))
-            .OrderByDescending(group => group.BestEstimatedEv ?? decimal.MinValue)
+            .Select(group => BuildLineShoppingGroup(group.Key, group.ToList(), now, freshnessMinutes, effectiveSelectionOptions))
+            .OrderByDescending(group => group.BestProbability ?? decimal.MinValue)
+            .ThenByDescending(group => group.BestProjectionEdge ?? decimal.MinValue)
+            .ThenByDescending(group => group.RankingScore)
             .ToList();
     }
 
@@ -3828,7 +3838,8 @@ public static partial class TheOddsApiDebugEndpoints
         TheOddsLineShoppingGroupKey key,
         IReadOnlyList<TheOddsLineShoppingSourceRow> rows,
         DateTimeOffset generatedAtUtc,
-        int freshnessMinutes)
+        int freshnessMinutes,
+        PredictionGenerationOptions selectionOptions)
     {
         var bestOver = rows
             .Where(row => row.OverEstimatedEv.HasValue)
@@ -3850,11 +3861,14 @@ public static partial class TheOddsApiDebugEndpoints
             .DefaultIfEmpty()
             .Max();
         var first = rows.OrderByDescending(row => row.RankingScore).First();
-        var bestSide = SelectBestSide(bestOver, bestUnder);
+        var bestSide = SelectBestSide(bestOver, bestUnder, rows, key.ProviderCategory, selectionOptions);
         var sampleWarning = BuildSampleWarning(first.HistoricalSampleSize, first.ProbabilityMethod);
         var trustLevel = BuildTrustLevel(
             rows.Any(row => row.IsEligibleAsNormalRecommendation),
             bestSide.EstimatedEv,
+            bestSide.Probability,
+            key.ProviderCategory,
+            selectionOptions,
             first.HistoricalSampleSize,
             first.ConfidenceScore,
             sampleWarning);
@@ -3904,12 +3918,17 @@ public static partial class TheOddsApiDebugEndpoints
             first.ModelProbabilityOver,
             first.ModelProbabilityUnder,
             first.ModelProbabilityPush,
+            first.ModelProjection,
+            first.ProjectionEdge,
             first.RankingScore,
             first.HistoricalSampleSize,
             first.ProbabilityMethod,
             first.ConfidenceScore,
             sampleWarning,
             trustLevel,
+            selectionOptions.MinimumPickHitProbability,
+            selectionOptions.StrongPickHitProbability,
+            selectionOptions.ResearchOnlyBelowHitProbability,
             rows
                 .OrderBy(row => row.Bookmaker)
                 .Select(row => new TheOddsBookmakerPriceRow(
@@ -3951,7 +3970,8 @@ public static partial class TheOddsApiDebugEndpoints
             bestSide.DecimalPrice,
             bestSide.Probability,
             bestSide.ImpliedProbability,
-            bestSide.ProbabilityEdge);
+            bestSide.ProbabilityEdge,
+            bestSide.ProjectionEdge);
     }
 
     private static object ToLineShoppingResponseGroup(TheOddsLineShoppingGroup group)
@@ -3965,6 +3985,12 @@ public static partial class TheOddsApiDebugEndpoints
     {
         var strategy = ClassifyTheOddsLineShoppingStrategy(group);
         var entryCompatibility = BuildTheOddsEntryCompatibility(group);
+        var expectedValueDisplay = BuildExpectedValueDisplayMetadata(
+            group.ProviderCategory,
+            group.BestEstimatedEv,
+            group.BestImpliedProbability,
+            group.BestDecimalPrice,
+            group.BestAmericanPrice);
 
         return new
         {
@@ -3998,6 +4024,11 @@ public static partial class TheOddsApiDebugEndpoints
             group.PayoutMultiplierMayDiffer,
             group.SpecialProjectionWarning,
             group.ProviderCategory,
+            expectedValueDisplay.IsDfs,
+            expectedValueDisplay.IsSportsbook,
+            expectedValueDisplay.ShowExpectedValue,
+            expectedValueDisplay.DisplayExpectedValue,
+            expectedValueDisplay.ExpectedValueUnavailableReason,
             group.Region,
             group.IsActionableForUser,
             group.IsIndicativeOdds,
@@ -4005,12 +4036,17 @@ public static partial class TheOddsApiDebugEndpoints
             modelProbabilityOver = group.ModelProbabilityOver,
             modelProbabilityUnder = group.ModelProbabilityUnder,
             modelProbabilityPush = group.ModelProbabilityPush,
+            modelProjection = group.ModelProjection,
+            projectionEdge = group.ProjectionEdge,
             group.RankingScore,
             group.HistoricalSampleSize,
             group.ProbabilityMethod,
             group.ConfidenceScore,
             group.SampleWarning,
             group.TrustLevel,
+            group.MinimumPickHitProbability,
+            group.StrongPickHitProbability,
+            group.ResearchOnlyBelowHitProbability,
             bookmakerPrices = includeBookmakerPrices ? group.BookmakerPrices : Array.Empty<TheOddsBookmakerPriceRow>(),
             group.BestOverBookmaker,
             group.BestOverAmericanPrice,
@@ -4027,6 +4063,7 @@ public static partial class TheOddsApiDebugEndpoints
             group.BestProbability,
             group.BestImpliedProbability,
             group.BestProbabilityEdge,
+            group.BestProjectionEdge,
             strategy.StrategyClassification,
             strategy.StrategyTier,
             strategy.StrategyReasons,
@@ -4047,6 +4084,65 @@ public static partial class TheOddsApiDebugEndpoints
             entryCompatibility.EntryRuleWarning
         };
     }
+
+    private static ExpectedValueDisplayMetadata BuildExpectedValueDisplayMetadata(
+        string? providerCategory,
+        decimal? estimatedEv,
+        decimal? impliedProbability,
+        decimal? decimalPrice,
+        int? americanPrice)
+    {
+        var isDfs = string.Equals(providerCategory, "DFS", StringComparison.OrdinalIgnoreCase);
+        var isSportsbook = string.Equals(providerCategory, "Sportsbook", StringComparison.OrdinalIgnoreCase);
+
+        if (isDfs)
+        {
+            return new ExpectedValueDisplayMetadata(
+                IsDfs: true,
+                IsSportsbook: false,
+                ShowExpectedValue: false,
+                DisplayExpectedValue: null,
+                ExpectedValueUnavailableReason: DfsExpectedValueUnavailableReason);
+        }
+
+        if (isSportsbook)
+        {
+            var hasSportsbookPricing = impliedProbability.HasValue ||
+                decimalPrice.HasValue ||
+                americanPrice.HasValue;
+
+            return hasSportsbookPricing && estimatedEv.HasValue
+                ? new ExpectedValueDisplayMetadata(
+                    IsDfs: false,
+                    IsSportsbook: true,
+                    ShowExpectedValue: true,
+                    DisplayExpectedValue: estimatedEv,
+                    ExpectedValueUnavailableReason: null)
+                : new ExpectedValueDisplayMetadata(
+                    IsDfs: false,
+                    IsSportsbook: true,
+                    ShowExpectedValue: false,
+                    DisplayExpectedValue: null,
+                    ExpectedValueUnavailableReason: SportsbookExpectedValueUnavailableReason);
+        }
+
+        return new ExpectedValueDisplayMetadata(
+            IsDfs: false,
+            IsSportsbook: false,
+            ShowExpectedValue: false,
+            DisplayExpectedValue: null,
+            ExpectedValueUnavailableReason: SportsbookExpectedValueUnavailableReason);
+    }
+
+    private const string DfsExpectedValueUnavailableReason = "EV is hidden for DFS props because sportsbook odds/break-even pricing is not available.";
+    private const string SportsbookExpectedValueUnavailableReason = "Sportsbook EV requires odds/break-even pricing.";
+
+    private sealed record ExpectedValueDisplayMetadata(
+        bool IsDfs,
+        bool IsSportsbook,
+        bool ShowExpectedValue,
+        decimal? DisplayExpectedValue,
+        string? ExpectedValueUnavailableReason);
 
     private static TheOddsEntryCompatibilityMetadata BuildTheOddsEntryCompatibility(
         TheOddsLineShoppingGroup group)
@@ -4153,10 +4249,15 @@ public static partial class TheOddsApiDebugEndpoints
         var isPitcherStrikeouts = string.Equals(group.NormalizedPropType, "Pitcher Strikeouts", StringComparison.OrdinalIgnoreCase);
         var isTotalBases = string.Equals(group.NormalizedPropType, "Total Bases", StringComparison.OrdinalIgnoreCase);
         var isBatterProp = !isPitcherStrikeouts;
+        var isDfs = string.Equals(group.ProviderCategory, "DFS", StringComparison.OrdinalIgnoreCase);
         var isResearchOnly = string.Equals(group.TrustLevel, "ResearchOnly", StringComparison.OrdinalIgnoreCase)
             || group.SampleWarning is "InsufficientHistoricalSample" or "MissingHistoricalDistribution";
         var isActionableLifecycle = !group.IsStale && !group.IsExpired && string.Equals(group.LifecycleStatus, "Active", StringComparison.OrdinalIgnoreCase);
         var hasPositiveBestEv = group.BestEstimatedEv > 0m;
+        var hasUserFacingHitProbability = group.BestProbability >= group.MinimumPickHitProbability;
+        var hasResearchHitProbability = group.BestProbability >= group.ResearchOnlyBelowHitProbability;
+        var hasStrongHitProbability = group.BestProbability >= group.StrongPickHitProbability;
+        var hasSelectedProjectionEdge = group.BestProjectionEdge.HasValue && group.BestProjectionEdge.Value >= 0m;
         var marketShape = BuildTheOddsLineShoppingMarketShape(group, isBatterProp, isPitcherStrikeouts);
 
         if (!hasBestPrice)
@@ -4188,6 +4289,18 @@ public static partial class TheOddsApiDebugEndpoints
             riskTags.Add("ResearchOnlySample");
         }
 
+        if (isDfs && !hasResearchHitProbability)
+        {
+            warnings.Add("Selected side hit chance is below the research floor.");
+            riskTags.Add("BelowResearchOnlyHitProbability");
+        }
+
+        if (isDfs && hasResearchHitProbability && !hasUserFacingHitProbability)
+        {
+            warnings.Add("Selected side hit chance is below the user-facing pick minimum.");
+            riskTags.Add("BelowMinimumUserFacingHitProbability");
+        }
+
         if (group.PayoutMultiplierMayDiffer)
         {
             riskTags.Add(group.ProjectionType);
@@ -4200,7 +4313,8 @@ public static partial class TheOddsApiDebugEndpoints
         }
 
         var isPlusMoneyBatterLinePointFive = isBatterProp && group.Line == 0.5m && group.BestDecimalPrice >= 2.00m;
-        var isStrongHighEv = string.Equals(group.TrustLevel, "Strong", StringComparison.OrdinalIgnoreCase)
+        var isStrongHighEv = !isDfs
+            && string.Equals(group.TrustLevel, "Strong", StringComparison.OrdinalIgnoreCase)
             && group.BestEstimatedEv >= 0.20m;
         if (isPlusMoneyBatterLinePointFive || isStrongHighEv)
         {
@@ -4253,30 +4367,37 @@ public static partial class TheOddsApiDebugEndpoints
             && (isPitcherStrikeouts || isTotalBases)
             && !(isBatterProp && group.Line == 0.5m)
             && !(isBatterProp && group.BestDecimalPrice >= 2.00m)
-            && hasBestPrice
+            && (hasBestPrice || isDfs)
             && hasBestSide
             && isActionableLifecycle;
-        var qualifiesConservative = matchesConservativeShape && hasPositiveBestEv;
+        var qualifiesConservative = matchesConservativeShape
+            && (isDfs
+                ? hasUserFacingHitProbability && hasSelectedProjectionEdge
+                : hasPositiveBestEv);
         if (qualifiesConservative)
         {
-            reasons.Add("Matches Conservative Candidate Strategy.");
+            reasons.Add(isDfs
+                ? "Matches DFS Candidate Strategy: hit chance and projection cushion clear configured gates."
+                : "Matches Conservative Candidate Strategy.");
             return new TheOddsLineShoppingStrategyClassification(
                 "Candidate",
-                "ConservativeCandidate",
+                isDfs && hasStrongHitProbability ? "StrongCandidate" : "ConservativeCandidate",
                 reasons,
                 warnings,
                 true,
                 false,
                 false,
                 false,
-                "Conservative Candidate Strategy",
+                isDfs && hasStrongHitProbability ? "Strong DFS Candidate" : "Conservative Candidate Strategy",
                 marketShape,
                 riskTags);
         }
 
         var qualifiesPitcherStrikeout = isPitcherStrikeouts
-            && hasPositiveBestEv
-            && hasBestPrice
+            && (isDfs
+                ? hasUserFacingHitProbability && hasSelectedProjectionEdge
+                : hasPositiveBestEv)
+            && (hasBestPrice || isDfs)
             && hasBestSide
             && isActionableLifecycle;
         if (qualifiesPitcherStrikeout)
@@ -4284,26 +4405,31 @@ public static partial class TheOddsApiDebugEndpoints
             reasons.Add("Pitcher Strikeouts with positive estimated EV.");
             return new TheOddsLineShoppingStrategyClassification(
                 "Candidate",
-                "PitcherStrikeoutCandidate",
+                isDfs && hasStrongHitProbability ? "StrongCandidate" : "PitcherStrikeoutCandidate",
                 reasons,
                 warnings,
                 true,
                 false,
                 false,
                 false,
-                "Pitcher Strikeouts Only",
+                isDfs && hasStrongHitProbability ? "Strong DFS Candidate" : "Pitcher Strikeouts Only",
                 marketShape,
                 riskTags);
         }
 
-        if (matchesConservativeShape && !hasPositiveBestEv)
+        if (matchesConservativeShape && ((!isDfs && !hasPositiveBestEv) || (isDfs && !hasUserFacingHitProbability)))
         {
-            reasons.Add("Conservative shape matched, but EV is not positive.");
-            warnings.Add("Conservative shape matched, but EV is not positive.");
-            riskTags.Add("NonPositiveEv");
+            reasons.Add(isDfs
+                ? "Conservative shape matched, but hit chance is below the user-facing pick minimum."
+                : "Conservative shape matched, but EV is not positive.");
+            warnings.Add(isDfs
+                ? "Hit chance is below the user-facing pick minimum."
+                : "Conservative shape matched, but EV is not positive.");
+            riskTags.Add(isDfs ? "BelowMinimumUserFacingHitProbability" : "NonPositiveEv");
         }
 
-        var qualifiesWatchlist = (string.Equals(group.TrustLevel, "Medium", StringComparison.OrdinalIgnoreCase) && isTotalBases)
+        var qualifiesWatchlist = (isDfs && hasResearchHitProbability && !hasUserFacingHitProbability && hasBestSide && isActionableLifecycle)
+            || (string.Equals(group.TrustLevel, "Medium", StringComparison.OrdinalIgnoreCase) && isTotalBases)
             || group.Line == 1.5m
             || (group.BestDecimalPrice >= 1.75m && group.BestDecimalPrice < 2.00m);
         if (qualifiesWatchlist)
@@ -4556,11 +4682,19 @@ public static partial class TheOddsApiDebugEndpoints
 
     private static BestSideSelection SelectBestSide(
         TheOddsLineShoppingSourceRow? bestOver,
-        TheOddsLineShoppingSourceRow? bestUnder)
+        TheOddsLineShoppingSourceRow? bestUnder,
+        IReadOnlyCollection<TheOddsLineShoppingSourceRow> rows,
+        string providerCategory,
+        PredictionGenerationOptions selectionOptions)
     {
+        if (string.Equals(providerCategory, "DFS", StringComparison.OrdinalIgnoreCase))
+        {
+            return SelectBestDfsSide(rows, selectionOptions);
+        }
+
         if (bestOver?.OverEstimatedEv is null && bestUnder?.UnderEstimatedEv is null)
         {
-            return new BestSideSelection("None", null, null, null, null, null, null, null);
+            return new BestSideSelection("None", null, null, null, null, null, null, null, null);
         }
 
         if (bestOver?.OverEstimatedEv is not null
@@ -4574,7 +4708,8 @@ public static partial class TheOddsApiDebugEndpoints
                 bestOver.OverEstimatedEv,
                 bestOver.ModelProbabilityOver,
                 bestOver.OverImpliedProbability,
-                bestOver.OverProbabilityEdge);
+                bestOver.OverProbabilityEdge,
+                bestOver.ProjectionEdge);
         }
 
         return new BestSideSelection(
@@ -4585,7 +4720,88 @@ public static partial class TheOddsApiDebugEndpoints
             bestUnder.UnderEstimatedEv,
             bestUnder.ModelProbabilityUnder,
             bestUnder.UnderImpliedProbability,
-            bestUnder.UnderProbabilityEdge);
+            bestUnder.UnderProbabilityEdge,
+            bestUnder.ProjectionEdge.HasValue ? -bestUnder.ProjectionEdge.Value : null);
+    }
+
+    private static BestSideSelection SelectBestDfsSide(
+        IReadOnlyCollection<TheOddsLineShoppingSourceRow> rows,
+        PredictionGenerationOptions selectionOptions)
+    {
+        var candidates = rows
+            .SelectMany(row => new[]
+            {
+                BuildDfsSideSelectionCandidate("Over", row, selectionOptions),
+                BuildDfsSideSelectionCandidate("Under", row, selectionOptions)
+            })
+            .Where(candidate => candidate is not null)
+            .Select(candidate => candidate!)
+            .OrderByDescending(candidate => candidate.SelectedSideProbability)
+            .ThenByDescending(candidate => candidate.ProjectionEdge)
+            .ThenByDescending(candidate => candidate.Source.ConfidenceScore)
+            .ThenByDescending(candidate => candidate.Source.RankingScore)
+            .ThenByDescending(candidate => candidate.ProbabilityEdge ?? decimal.MinValue)
+            .ToArray();
+
+        if (candidates.Length == 0)
+        {
+            return new BestSideSelection("None", null, null, null, null, null, null, null, null);
+        }
+
+        var best = candidates[0];
+        return new BestSideSelection(
+            best.Side,
+            best.Source.Bookmaker,
+            best.AmericanPrice,
+            best.DecimalPrice,
+            best.EstimatedEv,
+            best.SelectedSideProbability,
+            best.ImpliedProbability,
+            best.ProbabilityEdge,
+            best.ProjectionEdge);
+    }
+
+    private static DfsSideSelectionCandidate? BuildDfsSideSelectionCandidate(
+        string side,
+        TheOddsLineShoppingSourceRow row,
+        PredictionGenerationOptions selectionOptions)
+    {
+        var isOver = side.Equals("Over", StringComparison.OrdinalIgnoreCase);
+        if (isOver && !row.OverAvailable)
+        {
+            return null;
+        }
+
+        if (!isOver && !row.UnderAvailable)
+        {
+            return null;
+        }
+
+        var projectionEdge = row.ProjectionEdge.HasValue
+            ? isOver ? row.ProjectionEdge.Value : -row.ProjectionEdge.Value
+            : (decimal?)null;
+        var projectionThreshold = isOver
+            ? selectionOptions.OverProjectionEdgeThreshold
+            : selectionOptions.UnderProjectionEdgeThreshold;
+        var selectedSideProbability = isOver ? row.ModelProbabilityOver : row.ModelProbabilityUnder;
+        if (!projectionEdge.HasValue
+            || projectionEdge.Value < projectionThreshold
+            || !selectedSideProbability.HasValue
+            || selectedSideProbability.Value < selectionOptions.ResearchOnlyBelowHitProbability)
+        {
+            return null;
+        }
+
+        return new DfsSideSelectionCandidate(
+            side,
+            row,
+            selectedSideProbability.Value,
+            projectionEdge.Value,
+            isOver ? row.OverAmericanPrice : row.UnderAmericanPrice,
+            isOver ? row.OverDecimalPrice : row.UnderDecimalPrice,
+            isOver ? row.OverEstimatedEv : row.UnderEstimatedEv,
+            isOver ? row.OverImpliedProbability : row.UnderImpliedProbability,
+            isOver ? row.OverProbabilityEdge : row.UnderProbabilityEdge);
     }
 
     private static string BuildSampleWarning(int sampleSize, string probabilityMethod)
@@ -4611,6 +4827,9 @@ public static partial class TheOddsApiDebugEndpoints
     private static string BuildTrustLevel(
         bool isEligible,
         decimal? bestEstimatedEv,
+        decimal? selectedSideProbability,
+        string providerCategory,
+        PredictionGenerationOptions selectionOptions,
         int historicalSampleSize,
         decimal confidenceScore,
         string sampleWarning)
@@ -4618,6 +4837,25 @@ public static partial class TheOddsApiDebugEndpoints
         if (!isEligible || historicalSampleSize < 25 || sampleWarning is "MissingHistoricalDistribution" or "InsufficientHistoricalSample")
         {
             return "ResearchOnly";
+        }
+
+        if (string.Equals(providerCategory, "DFS", StringComparison.OrdinalIgnoreCase))
+        {
+            if (!selectedSideProbability.HasValue || selectedSideProbability.Value < selectionOptions.ResearchOnlyBelowHitProbability)
+            {
+                return "Weak";
+            }
+
+            if (selectedSideProbability.Value >= selectionOptions.StrongPickHitProbability
+                && confidenceScore >= 0.75m
+                && historicalSampleSize >= 100)
+            {
+                return "Strong";
+            }
+
+            return selectedSideProbability.Value >= selectionOptions.MinimumPickHitProbability
+                ? "Medium"
+                : "ResearchOnly";
         }
 
         if (!bestEstimatedEv.HasValue || bestEstimatedEv.Value <= 0m || confidenceScore < 0.45m)
@@ -10338,6 +10576,8 @@ public static partial class TheOddsApiDebugEndpoints
         decimal? ModelProbabilityOver,
         decimal? ModelProbabilityUnder,
         decimal? ModelProbabilityPush,
+        decimal? ModelProjection,
+        decimal? ProjectionEdge,
         decimal RankingScore,
         string Bookmaker,
         string BookmakerKey,
@@ -10417,6 +10657,18 @@ public static partial class TheOddsApiDebugEndpoints
         decimal? EstimatedEv,
         decimal? Probability,
         decimal? ImpliedProbability,
+        decimal? ProbabilityEdge,
+        decimal? ProjectionEdge);
+
+    private sealed record DfsSideSelectionCandidate(
+        string Side,
+        TheOddsLineShoppingSourceRow Source,
+        decimal SelectedSideProbability,
+        decimal ProjectionEdge,
+        int? AmericanPrice,
+        decimal? DecimalPrice,
+        decimal? EstimatedEv,
+        decimal? ImpliedProbability,
         decimal? ProbabilityEdge);
 
     private sealed record TheOddsLineShoppingLifecycle(
@@ -10495,12 +10747,17 @@ public static partial class TheOddsApiDebugEndpoints
         decimal? ModelProbabilityOver,
         decimal? ModelProbabilityUnder,
         decimal? ModelProbabilityPush,
+        decimal? ModelProjection,
+        decimal? ProjectionEdge,
         decimal RankingScore,
         int HistoricalSampleSize,
         string ProbabilityMethod,
         decimal ConfidenceScore,
         string SampleWarning,
         string TrustLevel,
+        decimal MinimumPickHitProbability,
+        decimal StrongPickHitProbability,
+        decimal ResearchOnlyBelowHitProbability,
         IReadOnlyList<TheOddsBookmakerPriceRow> BookmakerPrices,
         string? BestOverBookmaker,
         int? BestOverAmericanPrice,
@@ -10516,7 +10773,8 @@ public static partial class TheOddsApiDebugEndpoints
         decimal? BestDecimalPrice,
         decimal? BestProbability,
         decimal? BestImpliedProbability,
-        decimal? BestProbabilityEdge);
+        decimal? BestProbabilityEdge,
+        decimal? BestProjectionEdge);
 
     private readonly record struct TheOddsActualResultKey(
         Guid PlayerId,

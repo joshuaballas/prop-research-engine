@@ -24,7 +24,7 @@ import {
   mobileCardActionButtonSx,
   mobileCardDetailsButtonSx
 } from '../ui/AppRowActions';
-import { AppTableEvValue, AppTableMetricValue, AppTablePrimaryText, AppTableSecondaryText } from '../ui/AppTableTypography';
+import { AppTableMetricValue, AppTablePrimaryText, AppTableSecondaryText } from '../ui/AppTableTypography';
 import { OpportunityMetricGrid, OpportunityMetricItem, OpportunityPickText } from '../ui/OpportunityCard';
 import { ProjectionModifierBadge } from './ProjectionModifierBadge';
 
@@ -63,7 +63,6 @@ export function LineShoppingTable({ markets, showActions = true }: { markets: Ma
             <TableCell>Provider</TableCell>
             {showReferenceLines ? <TableCell>Reference Lines</TableCell> : null}
             <TableCell align="right"><MetricLabelWithHelp metric="edge" align="right" variant="table" /></TableCell>
-            <TableCell align="right"><MetricLabelWithHelp metric="ev" align="right" variant="table" /></TableCell>
             <TableCell align="right"><MetricLabelWithHelp metric="hitChance" align="right" variant="table" /></TableCell>
             <TableCell><MetricLabelWithHelp metric="trust" variant="table" /></TableCell>
             {showActions ? <TableCell align="center" sx={stickyActionHeaderCellSx}>Action</TableCell> : null}
@@ -130,11 +129,6 @@ function LineShoppingRow({
               ) : null}
               <TableCell align="right">
                 <AppTableMetricValue>{formatPercent(market.probabilityEdge, { signed: true })}</AppTableMetricValue>
-              </TableCell>
-              <TableCell align="right">
-                <AppTableEvValue positive={market.estimatedEv > 0}>
-                  {formatPercent(market.estimatedEv, { signed: true })}
-                </AppTableEvValue>
               </TableCell>
               <TableCell align="right">
                 <AppTableMetricValue>{formatPercent(market.modelProbability)}</AppTableMetricValue>
@@ -220,10 +214,10 @@ export function LineShoppingCard({ market }: { market: MarketOpportunity }) {
         </Box>
         <Stack spacing={0.1} alignItems="flex-end" flexShrink={0}>
           <Typography variant="caption" color="text.secondary" fontWeight={850} lineHeight={1}>
-            EV
+            Edge
           </Typography>
-          <Typography color={market.estimatedEv > 0 ? 'success.main' : 'error.main'} fontWeight={950} lineHeight={1.1}>
-            {formatPercent(market.estimatedEv, { signed: true })}
+          <Typography color={market.probabilityEdge > 0 ? 'success.main' : 'error.main'} fontWeight={950} lineHeight={1.1}>
+            {formatPercent(market.probabilityEdge, { signed: true })}
           </Typography>
         </Stack>
       </Stack>
@@ -347,7 +341,6 @@ export function LineShoppingComparisonList({ groups }: { groups: LineShoppingGro
             <TableCell>Best Provider</TableCell>
             <TableCell>Best Pick</TableCell>
             <TableCell align="right"><MetricLabelWithHelp metric="edge" align="right" variant="table" /></TableCell>
-            <TableCell align="right"><MetricLabelWithHelp metric="ev" align="right" variant="table" /></TableCell>
             <TableCell align="right"><MetricLabelWithHelp metric="hitChance" align="right" variant="table" /></TableCell>
             <TableCell><MetricLabelWithHelp metric="trust" variant="table" /></TableCell>
             <TableCell align="center" aria-label="Expand details" />
@@ -420,11 +413,6 @@ function LineShoppingComparisonRow({
           <AppTableMetricValue>{formatPercent(market.probabilityEdge, { signed: true })}</AppTableMetricValue>
         </TableCell>
         <TableCell align="right">
-          <AppTableEvValue positive={market.estimatedEv > 0}>
-            {formatPercent(market.estimatedEv, { signed: true })}
-          </AppTableEvValue>
-        </TableCell>
-        <TableCell align="right">
           <AppTableMetricValue>{formatPercent(market.modelProbability)}</AppTableMetricValue>
         </TableCell>
         <TableCell sx={{ minWidth: 125 }}>
@@ -454,7 +442,7 @@ function LineShoppingComparisonRow({
       </TableRow>
       {canExpand ? (
         <TableRow>
-          <TableCell colSpan={9} sx={{ p: 0, borderBottom: '1px solid rgba(148,163,184,.14)' }}>
+          <TableCell colSpan={8} sx={{ p: 0, borderBottom: '1px solid rgba(148,163,184,.14)' }}>
             <Collapse in={expandedVisible} timeout="auto" unmountOnExit>
               <Box
                 sx={{
@@ -767,9 +755,9 @@ function resolveConfidence(market: MarketOpportunity): 'Strong' | 'Medium' | 'We
 
   const hasModerateCaution = hasRenderableWarning(market.warnings) || market.projectionModifier !== 'Normal' || market.historicalSampleSize < 90;
 
-  if (market.estimatedEv > 0.1 && market.historicalSampleSize >= 90 && !hasModerateCaution) {
+  if (market.probabilityEdge > 0.1 && market.historicalSampleSize >= 90 && !hasModerateCaution) {
     return 'Strong';
   }
 
-  return market.estimatedEv > 0 ? 'Medium' : 'Weak';
+  return market.probabilityEdge > 0 ? 'Medium' : 'Weak';
 }

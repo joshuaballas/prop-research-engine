@@ -372,7 +372,9 @@ The dashboard includes presets:
 - Research Only / Diagnostics
 - Reset
 
-The compact Top Picks panel uses the current line-shopping response and shows the top 10 active, non-stale, non-expired strategy candidates sorted by estimated EV.
+The compact Top Picks panel uses the current line-shopping response and shows the top 10 active, non-stale, non-expired strategy candidates sorted by customer-facing model edge.
+
+Public market display rows include `providerCategory`, `isDfs`, `isSportsbook`, `showExpectedValue`, `displayExpectedValue`, and `expectedValueUnavailableReason`. DFS provider rows keep raw estimated EV fields for compatibility and diagnostics, but public UI should hide EV for DFS props because sportsbook odds/break-even pricing is not available. Use hit chance, model edge, trust, caution state, and recent history for DFS presentation. Sportsbook rows may show EV only when `showExpectedValue=true`.
 Top Picks and line-shopping rows include `entryCompatibilityGroup` and related entry-rule metadata. Entry Builder validates only the locked DFS provider/compatibility group. PrizePicks legs cannot mix with Underdog, DraftKings Pick6, Betr Picks, or sportsbook-context rows. Sportsbook rows remain comparison context only and cannot be added to entries. The provider app is the final source of truth for available entry types, final terms, and payout; app-configured multipliers are estimates only and carry source confidence. PrizePicks multiplier rows represent standard all-correct Player Pick top payouts only. Entry Builder must not apply those standard rows when selected legs include Demon, Goblin, Taco, promo, discount, boost, alt-line, special, alternate, or unknown projection types unless verified modifier logic is added. Underdog, DraftKings Pick6, and Betr Picks payout estimates remain unavailable because exact official payout rows are not configured. The Odds `_alternate` market keys are enough to identify alternate payout context; PrizePicks even/+100 alternate rows are inferred as Demon, while Goblin remains Alternate unless explicit provider metadata is available.
 
 ### DFS Payout Rule Source Status
@@ -468,6 +470,16 @@ Prediction backtest:
 Invoke-RestMethod -Uri "http://localhost:5299/api/debug/predictions/backtest"
 ```
 
+Side-selection audit:
+
+```powershell
+$base = "http://localhost:5299"
+Invoke-RestMethod -Method Post "$base/api/debug/predictions/generate/mlb"
+Invoke-RestMethod -Uri "http://localhost:5299/api/debug/predictions/mlb/side-selection-audit?latestRunOnly=true&includeSamples=true&maxSamples=200"
+```
+
+Use the side-selection audit before changing MLB recommendation selection logic when picks look unusually concentrated on Over or Under. Validate against a real `BaselineAverageModel` run from `/api/debug/predictions/generate/mlb` or `/api/debug/predictions/generate/mlb/the-odds`; do not use `/api/debug/predictions/sample`, which creates a fake `SampleModel` demo run. The audit defaults `excludeSampleRuns=true`, reports `latestPredictionRunModelName`, and ignores fake sample runs for latest-run selection. It is read-only, uses persisted predictions/snapshots/ledger rows only, and reports prediction-stage projection/probability/EV diagnostics even when no market snapshots exist. Review `predictionStageSummary`, `hitProbabilityDiagnostics`, `passGateSummary`, `passReasonsByCount`, `failedGatesByCount`, `actualSelectedOverSamples`, `overEligibleButPassedSamples`, `passReasonMissingSamples`, `rejectedByHitProbabilitySamples`, `positiveEdgeRejectedByHitProbabilitySamples`, `passesProjectionEdgeButFailsHitProbabilitySamples`, `highestOverEvSamples`, `projectionAboveLineButSelectedUnderSamples`, and `rowsWhereOverProbabilityGreaterThanUnderSamples` to determine whether an imbalance starts in prediction generation, probability orientation, neutral-price EV, or downstream line-shopping/ledger projection. Production MLB DFS selection is controlled by `MlbPredictionGeneration`: Over and Under projection-edge thresholds default to `0.75`, user-facing DFS picks require `MinimumPickHitProbability=0.55`, strong candidates use `StrongPickHitProbability=0.60`, and rows below `ResearchOnlyBelowHitProbability=0.50` are not promoted. The audit's diagnostic EV is a comparison signal, not a DFS production selection gate.
+
 The Odds line-shopping backtest:
 
 ```powershell
@@ -481,7 +493,7 @@ Use the calibration fields such as `byModelProbabilityBucket`, `byProbabilityEdg
 Use `strategySimulations` to compare read-only candidate filters. Add `strategyOnly=true` for a smaller payload, or pass filters such as `bookmaker=DraftKings`, `propType=Total%20Bases`, `line=1.5`, and `minBestPrice=1.75` to produce the `queryFilteredStrategy` row.
 The `/research` MLB Line Shopping table shows strategy classification/tier badges. Use the `Conservative Candidates` preset for the current preferred research view and `Avoid / Diagnostics` to inspect structurally suspicious market shapes without changing model output.
 
-Candidate tiers require positive `bestEstimatedEv`. If a row matches the conservative market shape but the best EV is zero or negative, it remains research/watchlist only and is tagged `NonPositiveEv`.
+DFS candidate tiers prioritize selected-side hit chance, projection edge, sample/trust, and model edge. Rows from DFS providers between 0.50 and 0.55 selected-side hit probability can remain watchlist/research only, and rows below 0.50 should not become user-facing picks. Sportsbook-context candidate analysis can still use positive `bestEstimatedEv` when sportsbook odds or break-even pricing exists; DFS EV stays hidden from customer-facing display.
 
 Persist strategy simulation snapshots after a slate is graded:
 

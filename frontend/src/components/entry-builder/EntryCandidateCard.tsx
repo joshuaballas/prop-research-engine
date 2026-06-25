@@ -81,9 +81,9 @@ export function EntryCandidateCard({ market, lockedProvider, selected = false, o
         title={market.player}
         value={
           <Stack alignItems="flex-end" spacing={0.25} sx={{ flexShrink: 0 }}>
-            <MetricLabelWithHelp metric="ev" align="right" />
-            <Typography color={market.estimatedEv > 0 ? 'success.main' : 'error.main'} fontWeight={950}>
-              {formatSignedPercent(market.estimatedEv)}
+            <MetricLabelWithHelp metric="edge" align="right" />
+            <Typography color={market.probabilityEdge > 0 ? 'success.main' : 'error.main'} fontWeight={950}>
+              {formatSignedPercent(market.probabilityEdge)}
             </Typography>
           </Stack>
         }

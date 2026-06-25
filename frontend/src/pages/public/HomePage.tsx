@@ -428,9 +428,9 @@ function LineStripPreview() {
                 </Typography>
               </Grid>
               <Grid size={{ xs: 4 }}>
-                <Typography variant="body2" color={row.estimatedEv > 0 ? 'success.main' : 'text.secondary'} textAlign="right" fontWeight={950}>
-                  {row.estimatedEv > 0 ? '+' : ''}
-                  {(row.estimatedEv * 100).toFixed(1)}% EV
+                <Typography variant="body2" color={row.probabilityEdge > 0 ? 'success.main' : 'text.secondary'} textAlign="right" fontWeight={950}>
+                  {row.probabilityEdge > 0 ? '+' : ''}
+                  {(row.probabilityEdge * 100).toFixed(1)}% Edge
                 </Typography>
               </Grid>
             </Grid>
@@ -673,10 +673,10 @@ function ModifierIntelligence() {
             </Stack>
             <Grid container spacing={1.4}>
               {[
-                ['Standard line', 'Baseline projection row', '+8.9% EV'],
+                ['Standard line', 'Baseline projection row', '+8.9% Edge'],
                 ['Demon', 'Higher projection, adjusted payout', 'Variable payout'],
                 ['Goblin', 'Lower projection, adjusted payout', 'Variable payout'],
-                ['Discounted Line', 'Reduced projection context', '+12.6% EV']
+                ['Discounted Line', 'Reduced projection context', '+12.6% Edge']
               ].map(([label, detail, value]) => (
                 <Grid key={label} size={{ xs: 12, sm: 6 }}>
                   <Box sx={{ p: 1.4, borderRadius: 2, bgcolor: 'rgba(8,13,26,.55)', border: `1px solid ${palette.border}` }}>

@@ -20,6 +20,7 @@ import { AppTableEvValue, AppTableMetricValue, AppTablePrimaryText, AppTableSeco
 import { OpportunityPickText } from '../ui/OpportunityCard';
 import { TagsLabelWithHelp } from './TagsLabelWithHelp';
 import { marketTagLabel } from '../../utils/marketTags';
+import { getDisplayExpectedValue } from '../../utils/expectedValueDisplay';
 
 export function MarketTable({ markets }: { markets: MarketOpportunity[] }) {
   const builder = useEntryBuilder();
@@ -32,7 +33,8 @@ export function MarketTable({ markets }: { markets: MarketOpportunity[] }) {
     ].filter(Boolean))
   );
   const showTagsColumn = meaningfulTags.size > 1;
-  const minWidth = 1130 - (showSportColumn ? 0 : 64) - (showTagsColumn ? 0 : 200);
+  const showEvColumn = markets.some((market) => market.showExpectedValue);
+  const minWidth = 1130 - (showSportColumn ? 0 : 64) - (showTagsColumn ? 0 : 200) - (showEvColumn ? 0 : 95);
 
   return (
     <>
@@ -41,7 +43,7 @@ export function MarketTable({ markets }: { markets: MarketOpportunity[] }) {
           <col style={{ width: '28%' }} />
           {showSportColumn ? <col style={{ width: 64 }} /> : null}
           <col style={{ width: 150 }} />
-          <col style={{ width: 95 }} />
+          {showEvColumn ? <col style={{ width: 95 }} /> : null}
           <col style={{ width: 95 }} />
           <col style={{ width: 115 }} />
           <col style={{ width: 95 }} />
@@ -53,7 +55,7 @@ export function MarketTable({ markets }: { markets: MarketOpportunity[] }) {
             <TableCell>Opportunity</TableCell>
             {showSportColumn ? <TableCell>Sport</TableCell> : null}
             <TableCell>Provider</TableCell>
-            <TableCell align="right"><MetricLabelWithHelp metric="ev" align="right" variant="table" /></TableCell>
+            {showEvColumn ? <TableCell align="right"><MetricLabelWithHelp metric="ev" align="right" variant="table" /></TableCell> : null}
             <TableCell align="right"><MetricLabelWithHelp metric="edge" align="right" variant="table" /></TableCell>
             <TableCell align="right"><MetricLabelWithHelp metric="hitChance" align="right" variant="table" /></TableCell>
             <TableCell><MetricLabelWithHelp metric="trust" variant="table" /></TableCell>
@@ -107,11 +109,17 @@ export function MarketTable({ markets }: { markets: MarketOpportunity[] }) {
                     <ProviderLabel provider={market.provider} category={market.providerCategory} compact />
                   )}
                 </TableCell>
-                <TableCell align="right" sx={{ py: 1.05 }}>
-                  <AppTableEvValue positive={market.estimatedEv > 0}>
-                    {formatPercent(market.estimatedEv, { signed: true })}
-                  </AppTableEvValue>
-                </TableCell>
+                {showEvColumn ? (
+                  <TableCell align="right" sx={{ py: 1.05 }}>
+                    {getDisplayExpectedValue(market) === null ? (
+                      <AppTableSecondaryText>-</AppTableSecondaryText>
+                    ) : (
+                      <AppTableEvValue positive={(getDisplayExpectedValue(market) ?? 0) > 0}>
+                        {formatPercent(getDisplayExpectedValue(market) ?? 0, { signed: true })}
+                      </AppTableEvValue>
+                    )}
+                  </TableCell>
+                ) : null}
                 <TableCell align="right" sx={{ py: 1.05 }}>
                   <AppTableMetricValue>{formatPercent(market.probabilityEdge, { signed: true })}</AppTableMetricValue>
                 </TableCell>

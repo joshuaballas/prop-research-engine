@@ -19,8 +19,8 @@ export function EntryLegCard({ leg, onRemove }: { leg: EntryLeg; onRemove?: (id:
       contentSx={{ p: 1.35, '&:last-child': { pb: 1.35 } }}
       title={leg.player}
       value={
-        <Typography color={leg.estimatedEv > 0 ? 'success.main' : 'error.main'} fontWeight={950} sx={{ flexShrink: 0 }}>
-          {formatSignedPercent(leg.estimatedEv)}
+        <Typography color={leg.probabilityEdge > 0 ? 'success.main' : 'error.main'} fontWeight={950} sx={{ flexShrink: 0 }}>
+          {formatSignedPercent(leg.probabilityEdge)}
         </Typography>
       }
       event={leg.sport}

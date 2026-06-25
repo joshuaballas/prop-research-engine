@@ -29,6 +29,26 @@ function mapMarketGroupToOpportunity(group: MarketGroupDto, index: number, sourc
     readString(group, 'entryProviderCategory', 'EntryProviderCategory') ?? readString(group, 'providerCategory', 'ProviderCategory'),
     entryActionable
   );
+  const isDfs = readBoolean(group, 'isDfs', 'IsDfs') ?? providerCategory === 'DFS';
+  const isSportsbook = readBoolean(group, 'isSportsbook', 'IsSportsbook') ?? providerCategory === 'Sportsbook';
+  const rawEstimatedEv = readNumber(group, 'bestEstimatedEv', 'BestEstimatedEv') ?? 0;
+  const hasSportsbookPricing =
+    readNumber(group, 'bestImpliedProbability', 'BestImpliedProbability') !== undefined ||
+    readNumber(group, 'bestDecimalPrice', 'BestDecimalPrice') !== undefined ||
+    readNumber(group, 'bestAmericanPrice', 'BestAmericanPrice') !== undefined;
+  const showExpectedValue =
+    readBoolean(group, 'showExpectedValue', 'ShowExpectedValue') ??
+    (isSportsbook && hasSportsbookPricing && readNumber(group, 'bestEstimatedEv', 'BestEstimatedEv') !== undefined);
+  const displayExpectedValue = showExpectedValue
+    ? readNumber(group, 'displayExpectedValue', 'DisplayExpectedValue') ?? rawEstimatedEv
+    : null;
+  const expectedValueUnavailableReason =
+    readString(group, 'expectedValueUnavailableReason', 'ExpectedValueUnavailableReason') ??
+    (isDfs
+      ? 'EV is hidden for DFS props because sportsbook odds/break-even pricing is not available.'
+      : showExpectedValue
+        ? undefined
+        : 'Sportsbook EV requires odds/break-even pricing.');
   const provider = cleanProvider(
     readString(group, 'entryProvider', 'EntryProvider') ??
       readString(group, 'bestBookmaker', 'BestBookmaker') ??
@@ -84,6 +104,11 @@ function mapMarketGroupToOpportunity(group: MarketGroupDto, index: number, sourc
     line,
     provider,
     providerCategory,
+    isDfs,
+    isSportsbook,
+    showExpectedValue,
+    displayExpectedValue,
+    expectedValueUnavailableReason,
     entryCompatibilityGroup,
     entryProvider: provider,
     canAddToEntry: providerCategory === 'DFS' && entryActionable && !isExpired && (!lifecycleStatusNormalized || lifecycleStatusNormalized === 'active'),
@@ -92,7 +117,7 @@ function mapMarketGroupToOpportunity(group: MarketGroupDto, index: number, sourc
     modelProbability: readNumber(group, 'bestProbability', 'BestProbability') ?? 0,
     impliedProbability: readNumber(group, 'bestImpliedProbability', 'BestImpliedProbability') ?? 0,
     probabilityEdge: readNumber(group, 'bestProbabilityEdge', 'BestProbabilityEdge') ?? 0,
-    estimatedEv: readNumber(group, 'bestEstimatedEv', 'BestEstimatedEv') ?? 0,
+    estimatedEv: rawEstimatedEv,
     strategyClassification: normalizeStrategy(group.strategyClassification, group),
     strategyTier: readString(group, 'strategyTier', 'StrategyTier') ?? 'Research',
     trustLevel: normalizeTrust(readString(group, 'trustLevel', 'TrustLevel'), readNumber(group, 'confidenceScore', 'ConfidenceScore')),

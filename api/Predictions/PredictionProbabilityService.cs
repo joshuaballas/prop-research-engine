@@ -294,9 +294,7 @@ public sealed class PredictionProbabilityService(
             query = query.Where(prediction => propIdFilter.Contains(prediction.PropId));
         }
 
-        return await query
-            .OrderByDescending(prediction => prediction.Edge.HasValue ? Math.Abs(prediction.Edge.Value) : 0m)
-            .ThenBy(prediction => prediction.Prop!.Player!.DisplayName)
+        var predictions = await query
             .Select(prediction => new PredictionProbabilityInput(
                 prediction.Id,
                 prediction.PropId,
@@ -312,6 +310,11 @@ public sealed class PredictionProbabilityService(
                 prediction.Recommendation,
                 prediction.Confidence))
             .ToListAsync(cancellationToken);
+
+        return predictions
+            .OrderByDescending(prediction => prediction.Edge.HasValue ? Math.Abs(prediction.Edge.Value) : 0m)
+            .ThenBy(prediction => prediction.PlayerName)
+            .ToList();
     }
 
     private async Task<List<HistoricalResultRow>> LoadHistoricalResultsAsync(

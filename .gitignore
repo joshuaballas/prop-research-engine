@@ -31,6 +31,7 @@ secrets.json
 *.user
 *.userosscache
 *.sln.docstates
+start-dev.bat
 
 # .NET user secrets are machine-local and must not be committed.
 **/secrets.json

@@ -19,11 +19,238 @@ using SportsBetting.Api.Data;
 using SportsBetting.Api.Integrations.TheOddsApi;
 using SportsBetting.Api.Integrations.Underdog;
 using SportsBetting.Api.Models;
+using SportsBetting.Api.Predictions;
 
 namespace SportsBetting.Api.Tests;
 
 public sealed class RefreshSafetyTests
 {
+    [Fact]
+    public async Task MlbSideSelectionAudit_FlagsSuspiciousSideProbabilityRows_AndMissingSide()
+    {
+        await using var factory = new SafetyTestApplicationFactory();
+        using var client = factory.CreateClient();
+        var date = new DateOnly(2026, 6, 24);
+
+        await SeedSideSelectionAuditRowsAsync(factory, date, [
+            CreateLineShoppingSnapshot("Under", "Jordan Walker", "Total Bases", 1.5m, 0.70m, 0.30m, 0.30m, 0.55m, 0.10m),
+            CreateLineShoppingSnapshot("", "Paul Goldschmidt", "Hits", 0.5m, 0.62m, 0.38m, null, null, null)
+        ]);
+
+        var response = await client.GetAsync("/api/debug/predictions/mlb/side-selection-audit?latestRunOnly=false&includeSamples=true&maxSamples=10");
+
+        await EnsureSuccessWithBodyAsync(response);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal(2, json.GetProperty("totalRowsEvaluated").GetInt32());
+        Assert.Equal(1, json.GetProperty("underSelections").GetInt32());
+        Assert.Equal(1, json.GetProperty("missingSideSelections").GetInt32());
+        Assert.Equal(1, json.GetProperty("suspiciousUnderCount").GetInt32());
+        Assert.Equal(1, json.GetProperty("possibleSideInversionCount").GetInt32());
+        Assert.Equal(1, json.GetProperty("possibleEvProbabilityMismatchCount").GetInt32());
+        Assert.Equal(1, json.GetProperty("missingSideDefaultedCount").GetInt32());
+        Assert.Contains(
+            json.GetProperty("samples").EnumerateArray(),
+            sample => sample.GetProperty("reasonCodes").EnumerateArray().Any(reason => reason.GetString() == "PossibleSideInversion"));
+    }
+
+    [Fact]
+    public async Task MlbSideSelectionAudit_CountsLineShoppingToLedgerSideChanges()
+    {
+        await using var factory = new SafetyTestApplicationFactory();
+        using var client = factory.CreateClient();
+        var date = new DateOnly(2026, 6, 24);
+        var predictionRunId = Guid.NewGuid();
+
+        await SeedSideSelectionAuditRowsAsync(
+            factory,
+            date,
+            [CreateLineShoppingSnapshot("Over", "Jordan Walker", "Total Bases", 1.5m, 0.70m, 0.30m, 0.70m, 0.55m, 0.15m, predictionRunId)],
+            [CreateRecommendationSnapshot("Under", "Jordan Walker", "Total Bases", 1.5m, predictionRunId, date)]);
+
+        var response = await client.GetAsync("/api/debug/predictions/mlb/side-selection-audit?latestRunOnly=false&includeSamples=false");
+
+        await EnsureSuccessWithBodyAsync(response);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal(1, json.GetProperty("sideLabelChangedCount").GetInt32());
+        Assert.Contains("side label continuity", json.GetProperty("recommendedNextAction").GetString(), StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task MlbSideSelectionAudit_ReturnsPredictionStageSamples_WhenNoSnapshotsExist()
+    {
+        await using var factory = new SafetyTestApplicationFactory();
+        using var client = factory.CreateClient();
+        await SeedPredictionStageAuditScenarioAsync(factory);
+
+        var response = await client.GetAsync("/api/debug/predictions/mlb/side-selection-audit?latestRunOnly=true&includeSamples=true&maxSamples=10");
+
+        await EnsureSuccessWithBodyAsync(response);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal(0, json.GetProperty("totalRowsEvaluated").GetInt32());
+        Assert.Equal(3, json.GetProperty("predictionRowsEvaluated").GetInt32());
+        Assert.Equal(0, json.GetProperty("predictionOverSelections").GetInt32());
+        Assert.Equal(2, json.GetProperty("predictionUnderSelections").GetInt32());
+        Assert.Equal(1, json.GetProperty("predictionPassSelections").GetInt32());
+        Assert.NotEmpty(json.GetProperty("selectedUnderSamples").EnumerateArray());
+        Assert.NotEmpty(json.GetProperty("passSamples").EnumerateArray());
+        Assert.NotEmpty(json.GetProperty("highestOverEvSamples").EnumerateArray());
+        var passSample = json.GetProperty("passSamples").EnumerateArray().First();
+        Assert.Contains(
+            passSample.GetProperty("passReasonCodes").EnumerateArray(),
+            reason => reason.GetString() == "RecommendationSuppressedByThreshold");
+        Assert.Contains(
+            passSample.GetProperty("failedGates").EnumerateArray(),
+            gate => gate.GetString() == "GenerationProjectionEdgeThreshold");
+        Assert.Equal(0.75m, passSample.GetProperty("thresholdsApplied").GetProperty("overProjectionEdgeThreshold").GetDecimal());
+        Assert.True(passSample.GetProperty("overCandidateBeforeGates").GetProperty("includedBeforeProductionGates").GetBoolean());
+        Assert.False(passSample.GetProperty("overCandidateAfterGates").GetProperty("includedAfterProductionGates").GetBoolean());
+    }
+
+    [Fact]
+    public async Task MlbSideSelectionAudit_FlagsPredictionStageProjectionAndEvMismatches()
+    {
+        await using var factory = new SafetyTestApplicationFactory();
+        using var client = factory.CreateClient();
+        await SeedPredictionStageAuditScenarioAsync(factory);
+
+        var response = await client.GetAsync("/api/debug/predictions/mlb/side-selection-audit?latestRunOnly=true&includeSamples=true&maxSamples=10");
+
+        await EnsureSuccessWithBodyAsync(response);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal(1, json.GetProperty("projectionAboveLineButSelectedUnderCount").GetInt32());
+        Assert.Equal(1, json.GetProperty("overEvPositiveButPassedCount").GetInt32());
+        Assert.Equal(1, json.GetProperty("overEvPositiveButSelectedUnderCount").GetInt32());
+        Assert.Equal(1, json.GetProperty("selectedUnderWithModelUnderBelowBreakEvenCount").GetInt32());
+        Assert.True(json.GetProperty("overEvPositiveCount").GetInt32() >= 2);
+        Assert.True(json.GetProperty("overEvGreaterThanUnderEvCount").GetInt32() >= 2);
+        Assert.True(json.GetProperty("passGateSummary").GetProperty("passRowsWithPositiveOverEv").GetInt32() >= 1);
+        Assert.True(json.GetProperty("passGateSummary").GetProperty("overPositivePassRowsRejectedByGenerationProjectionEdgeThreshold").GetInt32() >= 1);
+        Assert.True(json.GetProperty("passReasonsByCount").TryGetProperty("RecommendationSuppressedByThreshold", out _));
+        Assert.True(json.GetProperty("failedGatesByCount").TryGetProperty("GenerationProjectionEdgeThreshold", out _));
+        Assert.Contains(
+            json.GetProperty("projectionAboveLineButSelectedUnderSamples").EnumerateArray(),
+            sample => sample.GetProperty("suspiciousReasons").EnumerateArray().Any(reason => reason.GetString() == "ProjectionAboveLineButSelectedUnder"));
+        Assert.Contains(
+            json.GetProperty("overEvPositiveButPassedSamples").EnumerateArray(),
+            sample => sample.GetProperty("suspiciousReasons").EnumerateArray().Any(reason => reason.GetString() == "OverEvPositiveButPassed"));
+        Assert.Contains(
+            json.GetProperty("overPositivePassSamples").EnumerateArray(),
+            sample => sample.GetProperty("passReasonCodes").EnumerateArray().Any(reason => reason.GetString() == "DiagnosticOverEvPositiveButProductionOverEdgeBelowThreshold"));
+        Assert.All(
+            json.GetProperty("overPositivePassSamples").EnumerateArray(),
+            sample => Assert.Equal(
+                sample.GetProperty("diagnosticOverEv").GetDecimal(),
+                sample.GetProperty("productionOverEv").GetDecimal()));
+    }
+
+    [Fact]
+    public async Task MlbSideSelectionAudit_ReportsHitProbabilityPolicy_AndSaneOverThreshold()
+    {
+        await using var factory = new SafetyTestApplicationFactory();
+        using var client = factory.CreateClient();
+        await SeedPredictionStageAuditScenarioAsync(factory);
+
+        var response = await client.GetAsync("/api/debug/predictions/mlb/side-selection-audit?latestRunOnly=true&includeSamples=true&maxSamples=10");
+
+        await EnsureSuccessWithBodyAsync(response);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal(0.55m, json.GetProperty("minimumPickHitProbability").GetDecimal());
+        Assert.Equal(0.60m, json.GetProperty("strongPickHitProbability").GetDecimal());
+        Assert.Equal(0.50m, json.GetProperty("researchOnlyBelowHitProbability").GetDecimal());
+
+        var passSample = json.GetProperty("passSamples").EnumerateArray().First();
+        var thresholds = passSample.GetProperty("thresholdsApplied");
+        Assert.Equal(0.75m, thresholds.GetProperty("overProjectionEdgeThreshold").GetDecimal());
+        Assert.Equal(0.75m, thresholds.GetProperty("underProjectionEdgeThreshold").GetDecimal());
+        Assert.Equal(0.55m, thresholds.GetProperty("minimumPickHitProbability").GetDecimal());
+        Assert.True(json.GetProperty("candidateSideDistributionAfterFix").TryGetProperty("Over", out _)
+            || json.GetProperty("candidateSideDistributionAfterFix").TryGetProperty("Under", out _)
+            || json.GetProperty("candidateSideDistributionAfterFix").TryGetProperty("Pass", out _));
+    }
+
+    [Fact]
+    public async Task MlbPredictionGeneration_SelectsOver_WhenProjectionAndHitProbabilityClearGates()
+    {
+        await using var factory = new SafetyTestApplicationFactory();
+        using var client = factory.CreateClient();
+        await factory.SeedMlbPredictionGenerationSideSelectionScenarioAsync();
+
+        using (var scope = factory.Services.CreateScope())
+        {
+            var generator = scope.ServiceProvider.GetRequiredService<IPredictionGenerationService>();
+            await generator.GenerateMlbBaselinePredictionsAsync(CancellationToken.None);
+        }
+
+        using (var scope = factory.Services.CreateScope())
+        {
+            var dbContext = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+            var predictions = await dbContext.Predictions
+                .AsNoTracking()
+                .Include(prediction => prediction.Prop)
+                .ThenInclude(prop => prop!.Player)
+                .Include(prediction => prediction.Prop)
+                .ThenInclude(prop => prop!.PropType)
+                .ToListAsync();
+
+            var aaron = predictions.Single(prediction => prediction.Prop!.Player!.DisplayName == "Aaron Nola Style");
+            Assert.Equal("OVER", aaron.Recommendation);
+            Assert.True(aaron.PredictedProbability >= 0.55m);
+
+            var pete = predictions.Single(prediction => prediction.Prop!.Player!.DisplayName == "Pete Crow-Armstrong Style");
+            Assert.Equal("OVER", pete.Recommendation);
+            Assert.True(pete.PredictedProbability >= 0.55m);
+
+            var under = predictions.Single(prediction => prediction.Prop!.Player!.DisplayName == "Clear Under Style");
+            Assert.Equal("UNDER", under.Recommendation);
+            Assert.True(under.PredictedProbability >= 0.55m);
+
+            var pass = predictions.Single(prediction => prediction.Prop!.Player!.DisplayName == "Clear Pass Style");
+            Assert.Equal("PASS", pass.Recommendation);
+            Assert.Null(pass.PredictedProbability);
+        }
+
+        var response = await client.GetAsync("/api/debug/predictions/mlb/side-selection-audit?latestRunOnly=true&includeSamples=true&maxSamples=20");
+
+        await EnsureSuccessWithBodyAsync(response);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.True(json.GetProperty("predictionOverSelections").GetInt32() >= 2);
+        Assert.Equal(0, json.GetProperty("overEligibleButPassedCount").GetInt32());
+        Assert.Equal(0, json.GetProperty("passReasonMissingCount").GetInt32());
+        Assert.NotEmpty(json.GetProperty("actualSelectedOverSamples").EnumerateArray());
+        Assert.All(
+            json.GetProperty("actualSelectedOverSamples").EnumerateArray(),
+            sample => Assert.Equal("Over", sample.GetProperty("selectedSide").GetString()));
+        Assert.Equal(0, factory.TheOddsAdapter.CallCount);
+    }
+
+    [Fact]
+    public async Task MlbSideSelectionAudit_ExcludesSamplePredictionRuns_ByDefault()
+    {
+        await using var factory = new SafetyTestApplicationFactory();
+        using var client = factory.CreateClient();
+        await factory.SeedMlbPredictionGenerationSideSelectionScenarioAsync();
+
+        using (var scope = factory.Services.CreateScope())
+        {
+            var generator = scope.ServiceProvider.GetRequiredService<IPredictionGenerationService>();
+            await generator.GenerateMlbBaselinePredictionsAsync(CancellationToken.None);
+        }
+
+        var sampleResponse = await client.PostAsync("/api/debug/predictions/sample", content: null);
+        await EnsureSuccessWithBodyAsync(sampleResponse);
+
+        var auditResponse = await client.GetAsync("/api/debug/predictions/mlb/side-selection-audit?latestRunOnly=true&includeSamples=false");
+
+        await EnsureSuccessWithBodyAsync(auditResponse);
+        var json = await auditResponse.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal("BaselineAverageModel", json.GetProperty("latestPredictionRunModelName").GetString());
+        Assert.NotEqual("SampleModel", json.GetProperty("latestPredictionRunModelName").GetString());
+        Assert.True(json.GetProperty("predictionRowsWithLine").GetInt32() > 0);
+        Assert.True(json.GetProperty("predictionOverSelections").GetInt32() > 0);
+        Assert.Equal(0, json.GetProperty("passReasonMissingCount").GetInt32());
+        Assert.True(json.GetProperty("filters").GetProperty("excludeSampleRuns").GetBoolean());
+    }
+
     [Fact]
     public async Task Planner_AllowsBudget_WhenLocalDailyAndMonthlyCapsAreConfiguredButEnforcementIsDisabled()
     {
@@ -934,6 +1161,78 @@ public sealed class RefreshSafetyTests
 
         Assert.False(topPicks.GetProperty("snapshotBacked").GetBoolean());
         Assert.False(lineShopping.GetProperty("snapshotBacked").GetBoolean());
+        Assert.Equal(0, factory.TheOddsAdapter.CallCount);
+    }
+
+    [Fact]
+    public async Task PublicMarketSnapshots_ExposeExpectedValueDisplaySemantics_ByProviderCategory()
+    {
+        await using var factory = new SafetyTestApplicationFactory();
+        using var client = factory.CreateClient();
+        await factory.SeedExpectedValueDisplaySnapshotsAsync();
+
+        var dfsResponse = await client.GetAsync("/api/markets/line-shopping?providerCategory=DFS&take=10&includeBookmakerPrices=false");
+        var sportsbookResponse = await client.GetAsync("/api/markets/line-shopping?providerCategory=Sportsbook&topOnly=false&take=10&includeBookmakerPrices=false");
+
+        await EnsureSuccessWithBodyAsync(dfsResponse);
+        await EnsureSuccessWithBodyAsync(sportsbookResponse);
+        var dfsJson = await dfsResponse.Content.ReadFromJsonAsync<JsonElement>();
+        var sportsbookJson = await sportsbookResponse.Content.ReadFromJsonAsync<JsonElement>();
+
+        var dfsRow = dfsJson.GetProperty("comparisonGroups")[0];
+        Assert.Equal("DFS", dfsRow.GetProperty("providerCategory").GetString());
+        Assert.True(dfsRow.GetProperty("isDfs").GetBoolean());
+        Assert.False(dfsRow.GetProperty("isSportsbook").GetBoolean());
+        Assert.False(dfsRow.GetProperty("showExpectedValue").GetBoolean());
+        Assert.Equal(JsonValueKind.Null, dfsRow.GetProperty("displayExpectedValue").ValueKind);
+        Assert.Equal(
+            "EV is hidden for DFS props because sportsbook odds/break-even pricing is not available.",
+            dfsRow.GetProperty("expectedValueUnavailableReason").GetString());
+
+        var sportsbookRows = sportsbookJson.GetProperty("comparisonGroups").EnumerateArray().ToArray();
+        var pricedSportsbookRow = sportsbookRows.Single(row => row.GetProperty("player").GetString() == "Priced Sportsbook Player");
+        Assert.Equal("Sportsbook", pricedSportsbookRow.GetProperty("providerCategory").GetString());
+        Assert.False(pricedSportsbookRow.GetProperty("isDfs").GetBoolean());
+        Assert.True(pricedSportsbookRow.GetProperty("isSportsbook").GetBoolean());
+        Assert.True(pricedSportsbookRow.GetProperty("showExpectedValue").GetBoolean());
+        Assert.Equal(0.09m, pricedSportsbookRow.GetProperty("displayExpectedValue").GetDecimal());
+        Assert.Equal(JsonValueKind.Null, pricedSportsbookRow.GetProperty("expectedValueUnavailableReason").ValueKind);
+
+        var missingPricingRow = sportsbookRows.Single(row => row.GetProperty("player").GetString() == "Unpriced Sportsbook Player");
+        Assert.False(missingPricingRow.GetProperty("showExpectedValue").GetBoolean());
+        Assert.Equal(JsonValueKind.Null, missingPricingRow.GetProperty("displayExpectedValue").ValueKind);
+        Assert.Equal("Sportsbook EV requires odds/break-even pricing.", missingPricingRow.GetProperty("expectedValueUnavailableReason").GetString());
+        Assert.Equal(0, factory.TheOddsAdapter.CallCount);
+    }
+
+    [Fact]
+    public async Task MlbDfsLineShopping_UsesHitProbabilityBeforePromotingCandidates()
+    {
+        await using var factory = new SafetyTestApplicationFactory();
+        using var client = factory.CreateClient();
+        await factory.SeedMlbDfsHitProbabilitySelectionScenarioAsync();
+
+        var response = await client.GetAsync("/api/markets/line-shopping?sport=MLB&providerCategory=DFS&topOnly=false&take=10&includeBookmakerPrices=false");
+
+        await EnsureSuccessWithBodyAsync(response);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        var groups = json.GetProperty("comparisonGroups").EnumerateArray().ToArray();
+
+        var overCandidate = groups.Single(row => row.GetProperty("player").GetString() == "High Probability Over");
+        Assert.Equal("Over", overCandidate.GetProperty("bestSide").GetString());
+        Assert.True(overCandidate.GetProperty("bestProbability").GetDecimal() >= 0.55m);
+        Assert.True(overCandidate.GetProperty("isCandidate").GetBoolean());
+        Assert.False(overCandidate.GetProperty("showExpectedValue").GetBoolean());
+
+        var lowProbability = groups.Single(row => row.GetProperty("player").GetString() == "Low Probability Longshot");
+        Assert.Equal("None", lowProbability.GetProperty("bestSide").GetString());
+        Assert.False(lowProbability.GetProperty("isCandidate").GetBoolean());
+
+        var lean = groups.Single(row => row.GetProperty("player").GetString() == "Research Lean Over");
+        Assert.Equal("Over", lean.GetProperty("bestSide").GetString());
+        Assert.InRange(lean.GetProperty("bestProbability").GetDecimal(), 0.50m, 0.55m);
+        Assert.False(lean.GetProperty("isCandidate").GetBoolean());
+        Assert.True(lean.GetProperty("isWatchlist").GetBoolean() || lean.GetProperty("isResearchOnly").GetBoolean());
         Assert.Equal(0, factory.TheOddsAdapter.CallCount);
     }
 
@@ -4527,6 +4826,308 @@ public sealed class RefreshSafetyTests
         return existing.Take(count).ToArray();
     }
 
+    private static async Task SeedSideSelectionAuditRowsAsync(
+        SafetyTestApplicationFactory factory,
+        DateOnly slateDate,
+        IReadOnlyCollection<MarketLineShoppingSnapshot> lineShoppingRows,
+        IReadOnlyCollection<RecommendationSnapshot>? recommendationRows = null)
+    {
+        using var scope = factory.Services.CreateScope();
+        var dbContext = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+        await dbContext.Database.EnsureCreatedAsync();
+        var refreshRun = new TheOddsRefreshRun
+        {
+            Id = Guid.NewGuid(),
+            Provider = "The Odds API",
+            Sport = "MLB",
+            SlateDate = slateDate,
+            StartedAtUtc = DateTimeOffset.UtcNow.AddMinutes(-2),
+            CompletedAtUtc = DateTimeOffset.UtcNow,
+            Succeeded = true,
+            ForceLive = false,
+            DryRun = false,
+            BookmakerPreset = "test",
+            ProviderCategoriesIncluded = "DFS",
+            MarketsRequested = "test"
+        };
+        dbContext.TheOddsRefreshRuns.Add(refreshRun);
+
+        foreach (var predictionRunId in lineShoppingRows.Select(row => row.PredictionRunId)
+            .Concat((recommendationRows ?? []).Select(row => row.PredictionRunId))
+            .Where(id => id.HasValue)
+            .Select(id => id!.Value)
+            .Distinct())
+        {
+            dbContext.PredictionRuns.Add(new PredictionRun
+            {
+                Id = predictionRunId,
+                ModelName = "TestModel",
+                ModelVersion = "test",
+                CreatedAt = DateTimeOffset.UtcNow.AddMinutes(-3),
+                CompletedAt = DateTimeOffset.UtcNow.AddMinutes(-2)
+            });
+        }
+
+        foreach (var row in lineShoppingRows)
+        {
+            row.TheOddsRefreshRunId = refreshRun.Id;
+            dbContext.MarketLineShoppingSnapshots.Add(row);
+        }
+
+        if (recommendationRows is not null)
+        {
+            foreach (var row in recommendationRows)
+            {
+                row.RefreshRunId = refreshRun.Id;
+                dbContext.RecommendationSnapshots.Add(row);
+            }
+        }
+
+        await dbContext.SaveChangesAsync();
+    }
+
+    private static async Task SeedPredictionStageAuditScenarioAsync(SafetyTestApplicationFactory factory)
+    {
+        using var scope = factory.Services.CreateScope();
+        var dbContext = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+        await dbContext.Database.EnsureCreatedAsync();
+
+        var (sport, league) = await GetOrCreateMlbSportLeagueAsync(dbContext);
+        var run = new PredictionRun
+        {
+            Id = Guid.NewGuid(),
+            ModelName = "BaselineAverageModel",
+            ModelVersion = "test",
+            CreatedAt = DateTimeOffset.UtcNow.AddMinutes(-5),
+            CompletedAt = DateTimeOffset.UtcNow.AddMinutes(-4)
+        };
+        dbContext.PredictionRuns.Add(run);
+
+        await AddPredictionStageAuditPredictionAsync(
+            dbContext,
+            run,
+            league,
+            sport.Id,
+            "Projection Above Under",
+            "Side Audit Total Bases",
+            new DateOnly(2026, 6, 24),
+            line: 1.5m,
+            predictedValue: 2.5m,
+            recommendation: "UNDER",
+            historicalValues: [2m, 2m, 3m, 4m]);
+        await AddPredictionStageAuditPredictionAsync(
+            dbContext,
+            run,
+            league,
+            sport.Id,
+            "Positive Over Pass",
+            "Side Audit Hits",
+            new DateOnly(2026, 6, 24),
+            line: 0.5m,
+            predictedValue: 0.6m,
+            recommendation: "PASS",
+            historicalValues: [1m, 1m, 2m, 1m]);
+        await AddPredictionStageAuditPredictionAsync(
+            dbContext,
+            run,
+            league,
+            sport.Id,
+            "Normal Under",
+            "Side Audit Strikeouts",
+            new DateOnly(2026, 6, 24),
+            line: 6.5m,
+            predictedValue: 4.5m,
+            recommendation: "UNDER",
+            historicalValues: [2m, 3m, 4m, 5m]);
+
+        await dbContext.SaveChangesAsync();
+    }
+
+    private static async Task AddPredictionStageAuditPredictionAsync(
+        ApplicationDbContext dbContext,
+        PredictionRun run,
+        League league,
+        Guid sportId,
+        string playerName,
+        string propTypeName,
+        DateOnly eventDate,
+        decimal line,
+        decimal predictedValue,
+        string recommendation,
+        decimal[] historicalValues)
+    {
+        var propType = await dbContext.PropTypes.SingleOrDefaultAsync(row => row.SportId == sportId && row.Name == propTypeName);
+        if (propType is null)
+        {
+            propType = new PropType
+            {
+                Id = Guid.NewGuid(),
+                SportId = sportId,
+                Name = propTypeName,
+                StatKey = propTypeName.Replace(" ", string.Empty).ToUpperInvariant(),
+                ValueType = "numeric"
+            };
+            dbContext.PropTypes.Add(propType);
+        }
+
+        var player = new Player
+        {
+            Id = Guid.NewGuid(),
+            DisplayName = playerName,
+            LeagueId = league.Id
+        };
+        var prop = new Prop
+        {
+            Id = Guid.NewGuid(),
+            PlayerId = player.Id,
+            PropTypeId = propType.Id,
+            LeagueId = league.Id,
+            NormalizedKey = $"side-audit-{Guid.NewGuid():N}",
+            StartsAt = new DateTimeOffset(eventDate.ToDateTime(new TimeOnly(19, 0)), TimeSpan.Zero),
+            Status = "active"
+        };
+        dbContext.Players.Add(player);
+        dbContext.Props.Add(prop);
+        dbContext.Predictions.Add(new Prediction
+        {
+            Id = Guid.NewGuid(),
+            PredictionRunId = run.Id,
+            PropId = prop.Id,
+            PredictedValue = predictedValue,
+            SportsbookLine = line,
+            Edge = Math.Round(predictedValue - line, 4),
+            Recommendation = recommendation,
+            Confidence = 0.75m,
+            CreatedAt = DateTimeOffset.UtcNow.AddMinutes(-4)
+        });
+
+        for (var index = 0; index < historicalValues.Length; index++)
+        {
+            dbContext.PropResults.Add(new PropResult
+            {
+                Id = Guid.NewGuid(),
+                PlayerId = player.Id,
+                LeagueId = league.Id,
+                PropTypeId = propType.Id,
+                EventDate = eventDate.AddDays(-(index + 1)),
+                ActualResultValue = historicalValues[index],
+                ExternalSource = "mlb",
+                ExternalSourceIdentifier = $"side-audit:{player.Id:N}:{index}",
+                CreatedAt = DateTimeOffset.UtcNow.AddDays(-(index + 1)),
+                UpdatedAt = DateTimeOffset.UtcNow.AddDays(-(index + 1))
+            });
+        }
+    }
+
+    private static MarketLineShoppingSnapshot CreateLineShoppingSnapshot(
+        string bestSide,
+        string player,
+        string propType,
+        decimal line,
+        decimal modelProbabilityOver,
+        decimal modelProbabilityUnder,
+        decimal? bestProbability,
+        decimal? bestImpliedProbability,
+        decimal? bestProbabilityEdge,
+        Guid? predictionRunId = null)
+    {
+        return new MarketLineShoppingSnapshot
+        {
+            Id = Guid.NewGuid(),
+            TheOddsRefreshRunId = Guid.Empty,
+            PredictionRunId = predictionRunId,
+            Sport = "MLB",
+            SlateDate = new DateOnly(2026, 6, 24),
+            GeneratedAtUtc = DateTimeOffset.UtcNow,
+            BookmakerPreset = "test",
+            ProviderCategory = "DFS",
+            Provider = "Underdog Fantasy",
+            Bookmaker = "Underdog Fantasy",
+            Player = player,
+            EventId = "event-1",
+            EventName = "Away @ Home",
+            EventStartTime = new DateTimeOffset(2026, 6, 24, 23, 0, 0, TimeSpan.Zero),
+            LifecycleStatus = "Active",
+            PropType = propType,
+            Line = line,
+            BestSide = bestSide,
+            BestBookmaker = "Underdog Fantasy",
+            BestAmericanPrice = -110,
+            BestDecimalPrice = 1.91m,
+            BestProbability = bestProbability,
+            BestImpliedProbability = bestImpliedProbability,
+            BestProbabilityEdge = bestProbabilityEdge,
+            BestEstimatedEv = 0.10m,
+            StrategyClassification = "Candidate",
+            StrategyTier = "Medium",
+            IsCandidate = true,
+            EntryProvider = "Underdog Fantasy",
+            EntryCompatibilityGroup = "Underdog Fantasy",
+            EntryProviderCategory = "DFS",
+            EntryActionableForUser = true,
+            DetailsJson = JsonDocument.Parse($$"""
+            {
+              "modelProbabilityOver": {{modelProbabilityOver}},
+              "modelProbabilityUnder": {{modelProbabilityUnder}},
+              "rankingScore": 0.75,
+              "bestOverEstimatedEv": 0.05,
+              "bestUnderEstimatedEv": 0.10,
+              "bestImpliedProbability": {{(bestImpliedProbability ?? 0m)}},
+              "bestProbabilityEdge": {{(bestProbabilityEdge ?? 0m)}},
+              "bestEstimatedEv": 0.10
+            }
+            """)
+        };
+    }
+
+    private static RecommendationSnapshot CreateRecommendationSnapshot(
+        string side,
+        string player,
+        string propType,
+        decimal line,
+        Guid predictionRunId,
+        DateOnly slateDate)
+    {
+        return new RecommendationSnapshot
+        {
+            Id = Guid.NewGuid(),
+            IdempotencyKey = Guid.NewGuid().ToString("N"),
+            FirstSeenAtUtc = DateTimeOffset.UtcNow,
+            LastSeenAtUtc = DateTimeOffset.UtcNow,
+            SeenCount = 1,
+            CapturedAtUtc = DateTimeOffset.UtcNow,
+            PredictionRunId = predictionRunId,
+            Sport = "MLB",
+            SlateDate = slateDate,
+            ExpectedResultDate = slateDate,
+            EventId = "event-1",
+            EventStartTimeUtc = new DateTimeOffset(2026, 6, 24, 23, 0, 0, TimeSpan.Zero),
+            PlayerName = player,
+            NormalizedPlayerName = player.Replace(" ", string.Empty).ToUpperInvariant(),
+            PropType = propType,
+            NormalizedPropType = propType.Replace(" ", string.Empty).ToUpperInvariant(),
+            Side = side,
+            Line = line,
+            Provider = "Underdog Fantasy",
+            Bookmaker = "Underdog Fantasy",
+            ProviderCategory = "DFS",
+            EntryProvider = "Underdog Fantasy",
+            EntryCompatibilityGroup = "Underdog Fantasy",
+            HitChance = 0.30m,
+            ImpliedProbability = 0.55m,
+            ProbabilityEdge = -0.25m,
+            EstimatedEv = -0.10m,
+            TrustLevel = "Medium",
+            StrategyClassification = "Candidate",
+            StrategyTier = "Medium",
+            RankingScore = 0.75m,
+            IsCandidate = true,
+            IsTopPick = true,
+            IsActionableForUser = true,
+            LifecycleStatus = "Active"
+        };
+    }
+
     private sealed record ApiSportsProviderLinkTestState(
         Guid Id,
         string LinkStatus,
@@ -4739,6 +5340,497 @@ public sealed class SafetyTestApplicationFactory : WebApplicationFactory<Program
         var dbContext = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
         await dbContext.Database.EnsureDeletedAsync();
         await dbContext.Database.EnsureCreatedAsync();
+    }
+
+    public async Task SeedExpectedValueDisplaySnapshotsAsync()
+    {
+        using var scope = Services.CreateScope();
+        var dbContext = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+        await dbContext.Database.EnsureDeletedAsync();
+        await dbContext.Database.EnsureCreatedAsync();
+
+        var refreshRun = new TheOddsRefreshRun
+        {
+            Id = Guid.NewGuid(),
+            Provider = "The Odds API",
+            Sport = "MLB",
+            SlateDate = DateOnly.FromDateTime(DateTime.UtcNow),
+            StartedAtUtc = DateTimeOffset.UtcNow.AddMinutes(-5),
+            CompletedAtUtc = DateTimeOffset.UtcNow.AddMinutes(-4),
+            Succeeded = true,
+            Failed = false,
+            Blocked = false,
+            DryRun = false,
+            ForceLive = true,
+            BookmakerPreset = "mixed",
+            ProviderCategoriesIncluded = "DFS,Sportsbook",
+            SportsbookBookmakersRequested = "draftkings",
+            DfsBookmakersRequested = "prizepicks",
+            MarketsRequested = "pitcher_strikeouts",
+            EstimatedApiCalls = 1,
+            ActualApiCalls = 1,
+            PredictionCount = 3,
+            LineShoppingGroupCount = 3,
+            DiagnosticsJson = JsonSerializer.SerializeToDocument(new { })
+        };
+
+        dbContext.TheOddsRefreshRuns.Add(refreshRun);
+        dbContext.MarketLineShoppingSnapshots.AddRange(
+            BuildExpectedValueDisplaySnapshot(
+                refreshRun,
+                "DFS Player",
+                "DFS",
+                "PrizePicks",
+                bestEstimatedEv: 0.14m,
+                bestImpliedProbability: 0.5m,
+                bestDecimalPrice: 2.0m,
+                bestAmericanPrice: 100,
+                entryActionable: true),
+            BuildExpectedValueDisplaySnapshot(
+                refreshRun,
+                "Priced Sportsbook Player",
+                "Sportsbook",
+                "DraftKings",
+                bestEstimatedEv: 0.09m,
+                bestImpliedProbability: 0.52381m,
+                bestDecimalPrice: 1.91m,
+                bestAmericanPrice: -110,
+                entryActionable: false),
+            BuildExpectedValueDisplaySnapshot(
+                refreshRun,
+                "Unpriced Sportsbook Player",
+                "Sportsbook",
+                "DraftKings",
+                bestEstimatedEv: 0.07m,
+                bestImpliedProbability: null,
+                bestDecimalPrice: null,
+                bestAmericanPrice: null,
+                entryActionable: false));
+
+        await dbContext.SaveChangesAsync();
+    }
+
+    public async Task SeedMlbDfsHitProbabilitySelectionScenarioAsync()
+    {
+        using var scope = Services.CreateScope();
+        var dbContext = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+        await dbContext.Database.EnsureDeletedAsync();
+        await dbContext.Database.EnsureCreatedAsync();
+
+        var sport = new Sport { Id = Guid.NewGuid(), Code = "MLB", Name = "Baseball" };
+        var league = new League { Id = Guid.NewGuid(), SportId = sport.Id, Code = "MLB", Name = "Major League Baseball" };
+        var propType = new PropType
+        {
+            Id = Guid.NewGuid(),
+            SportId = sport.Id,
+            Name = "Pitcher Strikeouts",
+            StatKey = "PITCHER_STRIKEOUTS",
+            ValueType = "numeric"
+        };
+        var platform = new Platform
+        {
+            Id = Guid.NewGuid(),
+            Name = "PrizePicks",
+            Slug = "prizepicks",
+            CreatedAt = DateTimeOffset.UtcNow,
+            UpdatedAt = DateTimeOffset.UtcNow
+        };
+        var run = new PredictionRun
+        {
+            Id = Guid.NewGuid(),
+            ModelName = "BaselineAverageModel",
+            ModelVersion = "test",
+            CreatedAt = DateTimeOffset.UtcNow.AddMinutes(-10),
+            CompletedAt = DateTimeOffset.UtcNow.AddMinutes(-9)
+        };
+
+        dbContext.Sports.Add(sport);
+        dbContext.Leagues.Add(league);
+        dbContext.PropTypes.Add(propType);
+        dbContext.Platforms.Add(platform);
+        dbContext.PredictionRuns.Add(run);
+
+        await AddMlbDfsSelectionScenarioPlayerAsync(
+            dbContext,
+            league,
+            propType,
+            platform,
+            run,
+            "High Probability Over",
+            line: 6.5m,
+            projection: 8.0m,
+            overResults: 48,
+            pushResults: 0,
+            underResults: 12);
+        await AddMlbDfsSelectionScenarioPlayerAsync(
+            dbContext,
+            league,
+            propType,
+            platform,
+            run,
+            "Low Probability Longshot",
+            line: 6.5m,
+            projection: 8.0m,
+            overResults: 16,
+            pushResults: 0,
+            underResults: 44);
+        await AddMlbDfsSelectionScenarioPlayerAsync(
+            dbContext,
+            league,
+            propType,
+            platform,
+            run,
+            "Research Lean Over",
+            line: 6.5m,
+            projection: 8.0m,
+            overResults: 32,
+            pushResults: 0,
+            underResults: 28);
+
+        await dbContext.SaveChangesAsync();
+    }
+
+    public async Task SeedMlbPredictionGenerationSideSelectionScenarioAsync()
+    {
+        using var scope = Services.CreateScope();
+        var dbContext = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+        await dbContext.Database.EnsureDeletedAsync();
+        await dbContext.Database.EnsureCreatedAsync();
+
+        var sport = new Sport { Id = Guid.NewGuid(), Code = "MLB", Name = "Baseball" };
+        var league = new League { Id = Guid.NewGuid(), SportId = sport.Id, Code = "MLB", Name = "Major League Baseball" };
+        var pitcherStrikeouts = new PropType
+        {
+            Id = Guid.NewGuid(),
+            SportId = sport.Id,
+            Name = "Pitcher Strikeouts",
+            StatKey = "PITCHER_STRIKEOUTS",
+            ValueType = "numeric"
+        };
+        var totalBases = new PropType
+        {
+            Id = Guid.NewGuid(),
+            SportId = sport.Id,
+            Name = "Total Bases",
+            StatKey = "TOTAL_BASES",
+            ValueType = "numeric"
+        };
+        var platform = new Platform
+        {
+            Id = Guid.NewGuid(),
+            Name = "PrizePicks",
+            Slug = "prizepicks",
+            CreatedAt = DateTimeOffset.UtcNow,
+            UpdatedAt = DateTimeOffset.UtcNow
+        };
+
+        dbContext.Sports.Add(sport);
+        dbContext.Leagues.Add(league);
+        dbContext.PropTypes.AddRange(pitcherStrikeouts, totalBases);
+        dbContext.Platforms.Add(platform);
+
+        await AddMlbPredictionGenerationScenarioPlayerAsync(
+            dbContext,
+            league,
+            pitcherStrikeouts,
+            platform,
+            "Aaron Nola Style",
+            line: 3.5m,
+            historicalValues: Enumerable.Repeat(5m, 60).ToArray());
+        await AddMlbPredictionGenerationScenarioPlayerAsync(
+            dbContext,
+            league,
+            totalBases,
+            platform,
+            "Pete Crow-Armstrong Style",
+            line: 0.5m,
+            historicalValues: Enumerable.Repeat(3m, 60).ToArray());
+        await AddMlbPredictionGenerationScenarioPlayerAsync(
+            dbContext,
+            league,
+            pitcherStrikeouts,
+            platform,
+            "Clear Under Style",
+            line: 6.5m,
+            historicalValues: Enumerable.Repeat(4m, 60).ToArray());
+        await AddMlbPredictionGenerationScenarioPlayerAsync(
+            dbContext,
+            league,
+            totalBases,
+            platform,
+            "Clear Pass Style",
+            line: 2.5m,
+            historicalValues: Enumerable.Repeat(3m, 60).ToArray());
+
+        await dbContext.SaveChangesAsync();
+    }
+
+    private static async Task AddMlbPredictionGenerationScenarioPlayerAsync(
+        ApplicationDbContext dbContext,
+        League league,
+        PropType propType,
+        Platform platform,
+        string playerName,
+        decimal line,
+        decimal[] historicalValues)
+    {
+        var player = new Player
+        {
+            Id = Guid.NewGuid(),
+            LeagueId = league.Id,
+            DisplayName = playerName,
+            Position = propType.Name == "Pitcher Strikeouts" ? "P" : "OF"
+        };
+        var prop = new Prop
+        {
+            Id = Guid.NewGuid(),
+            PlayerId = player.Id,
+            LeagueId = league.Id,
+            PropTypeId = propType.Id,
+            NormalizedKey = $"mlb-generation-side-selection-{Guid.NewGuid():N}",
+            StartsAt = DateTimeOffset.UtcNow.AddHours(6),
+            Status = "active"
+        };
+        dbContext.Players.Add(player);
+        dbContext.Props.Add(prop);
+        dbContext.PlatformProps.Add(new PlatformProp
+        {
+            Id = Guid.NewGuid(),
+            PropId = prop.Id,
+            PlatformId = platform.Id,
+            PlatformPropId = $"generation-side-selection:{Guid.NewGuid():N}",
+            ExternalStableKey = $"generation-side-selection:{playerName}",
+            Label = $"{playerName} {propType.Name}",
+            CurrentLine = line,
+            OverAvailable = true,
+            UnderAvailable = true,
+            PayoutType = "standard",
+            Status = "active",
+            ObservedAt = DateTimeOffset.UtcNow.AddMinutes(-1),
+            Metadata = JsonSerializer.SerializeToDocument(new
+            {
+                dataProvider = "The Odds API",
+                providerCategory = "DFS",
+                region = "us_dfs",
+                isActionableForUser = true,
+                bookmaker = new { key = "prizepicks", title = "PrizePicks" },
+                market = new { key = propType.Name == "Pitcher Strikeouts" ? "pitcher_strikeouts" : "batter_total_bases", name = propType.Name }
+            })
+        });
+
+        for (var index = 0; index < historicalValues.Length; index++)
+        {
+            dbContext.PropResults.Add(new PropResult
+            {
+                Id = Guid.NewGuid(),
+                PlayerId = player.Id,
+                LeagueId = league.Id,
+                PropTypeId = propType.Id,
+                EventDate = DateOnly.FromDateTime(DateTime.UtcNow.Date).AddDays(-(index + 1)),
+                ActualResultValue = historicalValues[index],
+                ExternalSource = "mlb",
+                ExternalSourceIdentifier = $"generation-side-selection:{player.Id:N}:{index}",
+                CreatedAt = DateTimeOffset.UtcNow.AddDays(-(index + 1)),
+                UpdatedAt = DateTimeOffset.UtcNow.AddDays(-(index + 1))
+            });
+        }
+
+        await Task.CompletedTask;
+    }
+
+    private static async Task AddMlbDfsSelectionScenarioPlayerAsync(
+        ApplicationDbContext dbContext,
+        League league,
+        PropType propType,
+        Platform platform,
+        PredictionRun run,
+        string playerName,
+        decimal line,
+        decimal projection,
+        int overResults,
+        int pushResults,
+        int underResults)
+    {
+        var player = new Player
+        {
+            Id = Guid.NewGuid(),
+            LeagueId = league.Id,
+            DisplayName = playerName,
+            Position = "P"
+        };
+        var prop = new Prop
+        {
+            Id = Guid.NewGuid(),
+            PlayerId = player.Id,
+            LeagueId = league.Id,
+            PropTypeId = propType.Id,
+            NormalizedKey = $"mlb-dfs-hit-probability-{Guid.NewGuid():N}",
+            StartsAt = DateTimeOffset.UtcNow.AddHours(6),
+            Status = "active"
+        };
+        dbContext.Players.Add(player);
+        dbContext.Props.Add(prop);
+        dbContext.Predictions.Add(new Prediction
+        {
+            Id = Guid.NewGuid(),
+            PredictionRunId = run.Id,
+            PropId = prop.Id,
+            PredictedValue = projection,
+            SportsbookLine = line,
+            Edge = Math.Round(projection - line, 4),
+            Recommendation = "PASS",
+            Confidence = 0.75m,
+            CreatedAt = DateTimeOffset.UtcNow.AddMinutes(-8)
+        });
+
+        var eventStart = DateTimeOffset.UtcNow.AddHours(6);
+        dbContext.PlatformProps.Add(new PlatformProp
+        {
+            Id = Guid.NewGuid(),
+            PropId = prop.Id,
+            PlatformId = platform.Id,
+            PlatformPropId = $"theodds:prizepicks:test:{Guid.NewGuid():N}",
+            ExternalStableKey = $"theodds:prizepicks:{playerName}",
+            Label = $"{playerName} Pitcher Strikeouts",
+            CurrentLine = line,
+            OverAvailable = true,
+            UnderAvailable = true,
+            PayoutType = "standard",
+            Status = "active",
+            ObservedAt = DateTimeOffset.UtcNow.AddMinutes(-2),
+            Metadata = JsonSerializer.SerializeToDocument(new
+            {
+                dataProvider = "The Odds API",
+                providerCategory = "DFS",
+                region = "us_dfs",
+                isActionableForUser = true,
+                isIndicativeOdds = false,
+                projectionType = "Standard",
+                projectionTypeConfidence = "Known",
+                isAlternateMarket = false,
+                payoutMultiplierMayDiffer = false,
+                bookmaker = new { key = "prizepicks", title = "PrizePicks" },
+                market = new { key = "pitcher_strikeouts", name = "Pitcher Strikeouts" },
+                eventInfo = new
+                {
+                    eventId = "mlb-dfs-hit-probability-event",
+                    eventStartTime = eventStart,
+                    homeTeam = "Home",
+                    awayTeam = "Away"
+                },
+                options = new
+                {
+                    higher = new { americanPrice = 100, decimalPrice = 2.0m },
+                    lower = new { americanPrice = 100, decimalPrice = 2.0m }
+                }
+            })
+        });
+
+        var values = Enumerable.Repeat(line + 1m, overResults)
+            .Concat(Enumerable.Repeat(line, pushResults))
+            .Concat(Enumerable.Repeat(line - 1m, underResults))
+            .ToArray();
+        for (var index = 0; index < values.Length; index++)
+        {
+            dbContext.PropResults.Add(new PropResult
+            {
+                Id = Guid.NewGuid(),
+                PlayerId = player.Id,
+                LeagueId = league.Id,
+                PropTypeId = propType.Id,
+                EventDate = DateOnly.FromDateTime(DateTime.UtcNow.Date).AddDays(-(index + 1)),
+                ActualResultValue = values[index],
+                ExternalSource = "mlb",
+                ExternalSourceIdentifier = $"mlb-dfs-hit-probability:{player.Id:N}:{index}",
+                CreatedAt = DateTimeOffset.UtcNow.AddDays(-(index + 1)),
+                UpdatedAt = DateTimeOffset.UtcNow.AddDays(-(index + 1))
+            });
+        }
+
+        await Task.CompletedTask;
+    }
+
+    private static MarketLineShoppingSnapshot BuildExpectedValueDisplaySnapshot(
+        TheOddsRefreshRun refreshRun,
+        string player,
+        string providerCategory,
+        string bookmaker,
+        decimal? bestEstimatedEv,
+        decimal? bestImpliedProbability,
+        decimal? bestDecimalPrice,
+        int? bestAmericanPrice,
+        bool entryActionable)
+    {
+        var details = JsonSerializer.SerializeToDocument(new
+        {
+            sport = "MLB",
+            eventId = $"event-{player.Replace(" ", "-", StringComparison.OrdinalIgnoreCase).ToLowerInvariant()}",
+            eventStartTime = DateTimeOffset.UtcNow.AddHours(3),
+            eventStartTimeUtc = DateTimeOffset.UtcNow.AddHours(3),
+            homeTeam = "Home",
+            awayTeam = "Away",
+            player,
+            normalizedPropType = "Pitcher Strikeouts",
+            line = 6.5m,
+            providerCategory,
+            entryProviderCategory = providerCategory,
+            bestBookmaker = bookmaker,
+            bestSide = "Under",
+            bestAmericanPrice,
+            bestDecimalPrice,
+            bestProbability = 0.58m,
+            bestImpliedProbability,
+            bestProbabilityEdge = 0.08m,
+            bestEstimatedEv,
+            entryProvider = bookmaker,
+            entryActionableForUser = entryActionable,
+            strategyClassification = "Candidate",
+            strategyTier = "ConservativeCandidate",
+            isCandidate = true,
+            lifecycleStatus = "Active"
+        });
+
+        return new MarketLineShoppingSnapshot
+        {
+            Id = Guid.NewGuid(),
+            TheOddsRefreshRunId = refreshRun.Id,
+            PredictionRunId = null,
+            Sport = "MLB",
+            SlateDate = refreshRun.SlateDate,
+            GeneratedAtUtc = DateTimeOffset.UtcNow,
+            BookmakerPreset = "mixed",
+            ProviderCategory = providerCategory,
+            Provider = "The Odds API",
+            Bookmaker = bookmaker,
+            Player = player,
+            EventId = $"event-{player.Replace(" ", "-", StringComparison.OrdinalIgnoreCase).ToLowerInvariant()}",
+            EventName = "Away @ Home",
+            EventStartTime = DateTimeOffset.UtcNow.AddHours(3),
+            LifecycleStatus = "Active",
+            IsStale = false,
+            IsExpired = false,
+            PropType = "Pitcher Strikeouts",
+            Line = 6.5m,
+            BestSide = "Under",
+            BestBookmaker = bookmaker,
+            BestAmericanPrice = bestAmericanPrice,
+            BestDecimalPrice = bestDecimalPrice,
+            BestProbability = 0.58m,
+            BestImpliedProbability = bestImpliedProbability,
+            BestProbabilityEdge = 0.08m,
+            BestEstimatedEv = bestEstimatedEv,
+            StrategyClassification = "Candidate",
+            StrategyTier = "ConservativeCandidate",
+            IsCandidate = true,
+            IsWatchlist = false,
+            IsAvoid = false,
+            IsResearchOnly = false,
+            EntryProvider = bookmaker,
+            EntryCompatibilityGroup = bookmaker,
+            EntryProviderCategory = providerCategory,
+            EntryActionableForUser = entryActionable,
+            DetailsJson = details
+        };
     }
 
     public async Task SeedApiSportsSoccerProviderStatMappingsAsync(string? excludeCanonicalStatKey = null)

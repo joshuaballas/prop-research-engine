@@ -15,7 +15,7 @@ import { lockedActionButtonSx, removeActionButtonSx } from '../../components/ui/
 import { AppDataTable } from '../../components/ui/AppDataTable';
 import { AppRowActions, desktopRowActionButtonSx, desktopRowDetailsButtonSx } from '../../components/ui/AppRowActions';
 import { AppTablePagination } from '../../components/ui/AppTablePagination';
-import { AppTableEvValue, AppTableMetricValue, AppTablePrimaryText, AppTableSecondaryText } from '../../components/ui/AppTableTypography';
+import { AppTableMetricValue, AppTablePrimaryText, AppTableSecondaryText } from '../../components/ui/AppTableTypography';
 import { OpportunityPickText } from '../../components/ui/OpportunityCard';
 import { useEntryBuilder } from '../../hooks/useEntryBuilder';
 import { useTopPicksData } from '../../hooks/useMarketData';
@@ -42,7 +42,7 @@ const defaultTopPickFilters: TopPickFilterValues = {
   provider: 'All',
   opportunity: 'All',
   trust: 'All',
-  sort: 'EV'
+  sort: 'Edge'
 };
 
 export function TopPicksPage() {
@@ -82,7 +82,7 @@ export function TopPicksPage() {
 
   return (
     <Stack spacing={{ xs: 2, md: 3 }}>
-      <PageHeader title="Top Picks" description="Curated candidates ranked by model edge, EV, provider compatibility, and freshness." />
+      <PageHeader title="Top Picks" description="Curated picks ranked by model edge, hit chance, trust, provider fit, and freshness." />
       <TopPickControls
         isMobile={isMobile}
         filters={filters}
@@ -193,14 +193,13 @@ function sortTopPicks(markets: MarketOpportunity[], sort: string) {
     case 'Hit chance':
       return rows.sort((a, b) => b.modelProbability - a.modelProbability);
     case 'Trust':
-      return rows.sort((a, b) => trustSortRank(b) - trustSortRank(a) || b.estimatedEv - a.estimatedEv);
+      return rows.sort((a, b) => trustSortRank(b) - trustSortRank(a) || b.probabilityEdge - a.probabilityEdge);
     case 'Rank':
       return rows.sort((a, b) => (a.rank ?? Number.MAX_SAFE_INTEGER) - (b.rank ?? Number.MAX_SAFE_INTEGER));
     case 'Sample':
       return rows.sort((a, b) => b.historicalSampleSize - a.historicalSampleSize);
-    case 'EV':
     default:
-      return rows.sort((a, b) => b.estimatedEv - a.estimatedEv);
+      return rows.sort((a, b) => b.probabilityEdge - a.probabilityEdge);
   }
 }
 
@@ -233,7 +232,7 @@ function TopPickControls({
     onFiltersChange({ ...filters, [key]: value });
   };
   const clearFilters = () => onFiltersChange(defaultTopPickFilters);
-  const sortOptions = ['EV', 'Edge', 'Hit chance', 'Trust', 'Rank', 'Sample'];
+  const sortOptions = ['Edge', 'Hit chance', 'Trust', 'Rank', 'Sample'];
 
   if (isMobile) {
     return (
@@ -397,7 +396,6 @@ function RankedPicksTable({ markets, rankOffset, builder }: { markets: MarketOpp
               <TableCell>Rank</TableCell>
               <TableCell>Opportunity</TableCell>
               <TableCell>Provider</TableCell>
-              <TableCell align="right"><MetricLabelWithHelp metric="ev" align="right" variant="table" /></TableCell>
               <TableCell align="right"><MetricLabelWithHelp metric="edge" align="right" variant="table" /></TableCell>
               <TableCell align="right"><MetricLabelWithHelp metric="hitChance" align="right" variant="table" /></TableCell>
               <TableCell><MetricLabelWithHelp metric="trust" variant="table" /></TableCell>
@@ -438,11 +436,6 @@ function RankedPicksTable({ markets, rankOffset, builder }: { markets: MarketOpp
                 </TableCell>
                 <TableCell sx={{ minWidth: 160 }}>
                   <ProviderLabel provider={market.provider} category={market.providerCategory} compact />
-                </TableCell>
-                <TableCell align="right">
-                  <AppTableEvValue positive={market.estimatedEv > 0}>
-                    {formatPercent(market.estimatedEv, { signed: true })}
-                  </AppTableEvValue>
                 </TableCell>
                 <TableCell align="right"><AppTableMetricValue>{formatPercent(market.probabilityEdge, { signed: true })}</AppTableMetricValue></TableCell>
                 <TableCell align="right"><AppTableMetricValue>{formatPercent(market.modelProbability)}</AppTableMetricValue></TableCell>

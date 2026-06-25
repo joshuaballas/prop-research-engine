@@ -45,6 +45,7 @@ builder.Services.Configure<TheOddsScheduledRefreshOptions>(builder.Configuration
 builder.Services.Configure<TheOddsRefreshPlannerOptions>(builder.Configuration.GetSection(TheOddsRefreshPlannerOptions.SectionName));
 builder.Services.Configure<ProviderLineLifecycleOptions>(builder.Configuration.GetSection(ProviderLineLifecycleOptions.SectionName));
 builder.Services.Configure<MlbResultImportWorkerOptions>(builder.Configuration.GetSection(MlbResultImportWorkerOptions.SectionName));
+builder.Services.Configure<PredictionGenerationOptions>(builder.Configuration.GetSection(PredictionGenerationOptions.LegacySectionName));
 builder.Services.Configure<PredictionGenerationOptions>(builder.Configuration.GetSection(PredictionGenerationOptions.SectionName));
 builder.Services.AddHttpClient<IUnderdogAdapter, UnderdogAdapter>(client =>
 {

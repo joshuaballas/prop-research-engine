@@ -11,12 +11,15 @@ public sealed class PredictionGenerationService(
     ApplicationDbContext dbContext,
     IPredictionRepository predictionRepository,
     IPredictionFeatureService featureService,
+    IPlayerIdentityAliasService playerIdentityAliasService,
     IOptions<PredictionGenerationOptions> options,
     ILogger<PredictionGenerationService> logger) : IPredictionGenerationService
 {
     private const string ModelName = "BaselineAverageModel";
     private const string ModelVersion = "1.0";
     private const int TheOddsFreshnessWindowHours = 24;
+    private const int PriorSampleWeight = 25;
+    private IReadOnlyDictionary<Guid, Guid[]>? equivalentPropTypeIdsById;
 
     public async Task<PredictionGenerationResult> GenerateMlbBaselinePredictionsAsync(CancellationToken cancellationToken)
     {
@@ -67,7 +70,9 @@ public sealed class PredictionGenerationService(
         var suppressionCounts = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase)
         {
             ["RecommendationSuppressedByThreshold"] = 0,
-            ["RecommendationSuppressedByPropTypeFilter"] = 0
+            ["RecommendationSuppressedByPropTypeFilter"] = 0,
+            ["RecommendationSuppressedByHitProbability"] = 0,
+            ["RecommendationSuppressedByMissingProbability"] = 0
         };
         var generationOptions = options.Value;
         var enabledPropTypes = generationOptions.EnabledPropTypes
@@ -126,11 +131,17 @@ public sealed class PredictionGenerationService(
             var recommendationStopwatch = Stopwatch.StartNew();
             var edge = Math.Round(predictedValue - prop.SportsbookLine.Value, 4);
             var confidence = CalculateConfidence(features);
-            var recommendation = GetRecommendation(
+            var sideProbability = await CalculateSideProbabilitiesAsync(
+                prop.PlayerId,
+                prop.PropTypeId,
+                prop.SportsbookLine.Value,
+                eventDate,
+                cancellationToken);
+            var recommendationDecision = GetRecommendation(
                 edge,
                 prop.PropTypeName,
-                generationOptions.OverEdgeThreshold,
-                generationOptions.UnderEdgeThreshold,
+                sideProbability,
+                generationOptions,
                 enabledPropTypes,
                 suppressionCounts);
             recommendationStopwatch.Stop();
@@ -141,11 +152,11 @@ public sealed class PredictionGenerationService(
                 Id = Guid.NewGuid(),
                 PredictionRunId = predictionRun.Id,
                 PropId = prop.Id,
-                PredictedProbability = null,
+                PredictedProbability = recommendationDecision.SelectedSideProbability,
                 PredictedValue = predictedValue,
                 SportsbookLine = prop.SportsbookLine,
                 Edge = edge,
-                Recommendation = recommendation,
+                Recommendation = recommendationDecision.Recommendation,
                 Confidence = confidence,
                 CreatedAt = observedAt
             });
@@ -363,36 +374,174 @@ public sealed class PredictionGenerationService(
         skipCounts[reason] = skipCounts.GetValueOrDefault(reason) + 1;
     }
 
-    private static string GetRecommendation(
+    private async Task<SideProbabilityEstimate> CalculateSideProbabilitiesAsync(
+        Guid playerId,
+        Guid propTypeId,
+        decimal line,
+        DateOnly eventDate,
+        CancellationToken cancellationToken)
+    {
+        var equivalentPropTypeIds = await GetEquivalentPropTypeIdsAsync(propTypeId, cancellationToken);
+        var equivalentPlayerIds = await playerIdentityAliasService.GetEquivalentPlayerIdsAsync(
+            playerId,
+            "MLB",
+            cancellationToken);
+        var equivalentPlayerIdArray = equivalentPlayerIds.Distinct().ToArray();
+
+        var playerResults = await dbContext.PropResults
+            .AsNoTracking()
+            .Where(result => equivalentPlayerIdArray.Contains(result.PlayerId)
+                && equivalentPropTypeIds.Contains(result.PropTypeId)
+                && result.EventDate < eventDate)
+            .Select(result => result.ActualResultValue)
+            .ToListAsync(cancellationToken);
+        var priorResults = await dbContext.PropResults
+            .AsNoTracking()
+            .Where(result => equivalentPropTypeIds.Contains(result.PropTypeId)
+                && result.EventDate < eventDate)
+            .Select(result => result.ActualResultValue)
+            .ToListAsync(cancellationToken);
+
+        if (playerResults.Count == 0 && priorResults.Count == 0)
+        {
+            return new SideProbabilityEstimate(null, null, null, 0, 0);
+        }
+
+        var playerProbability = CalculateEmpiricalProbability(playerResults, line);
+        var priorProbability = CalculateEmpiricalProbability(priorResults, line);
+        var sampleWeight = playerResults.Count / (decimal)(playerResults.Count + PriorSampleWeight);
+
+        return new SideProbabilityEstimate(
+            BlendProbability(playerProbability.Over, priorProbability.Over, sampleWeight),
+            BlendProbability(playerProbability.Under, priorProbability.Under, sampleWeight),
+            BlendProbability(playerProbability.Push, priorProbability.Push, sampleWeight),
+            playerResults.Count,
+            priorResults.Count);
+    }
+
+    private async Task<Guid[]> GetEquivalentPropTypeIdsAsync(Guid propTypeId, CancellationToken cancellationToken)
+    {
+        equivalentPropTypeIdsById ??= await LoadEquivalentPropTypeIdsAsync(cancellationToken);
+
+        return equivalentPropTypeIdsById.TryGetValue(propTypeId, out var equivalentPropTypeIds)
+            ? equivalentPropTypeIds
+            : [propTypeId];
+    }
+
+    private async Task<IReadOnlyDictionary<Guid, Guid[]>> LoadEquivalentPropTypeIdsAsync(CancellationToken cancellationToken)
+    {
+        var propTypes = await dbContext.PropTypes
+            .AsNoTracking()
+            .Select(propType => new
+            {
+                propType.Id,
+                propType.Name
+            })
+            .ToListAsync(cancellationToken);
+
+        return propTypes
+            .GroupBy(propType => CanonicalPropTypeName(propType.Name), StringComparer.OrdinalIgnoreCase)
+            .SelectMany(group =>
+            {
+                var equivalentIds = group.Select(propType => propType.Id).Distinct().ToArray();
+                return group.Select(propType => new
+                {
+                    propType.Id,
+                    EquivalentIds = equivalentIds
+                });
+            })
+            .ToDictionary(item => item.Id, item => item.EquivalentIds);
+    }
+
+    private static PredictionRecommendationDecision GetRecommendation(
         decimal edge,
         string propType,
-        decimal overEdgeThreshold,
-        decimal underEdgeThreshold,
+        SideProbabilityEstimate sideProbability,
+        PredictionGenerationOptions generationOptions,
         IReadOnlySet<string> enabledPropTypes,
         IDictionary<string, int> suppressionCounts)
     {
-        string recommendation;
-        if (edge >= overEdgeThreshold)
+        var propTypeEnabled = enabledPropTypes.Count == 0 || enabledPropTypes.Contains(NormalizePropTypeName(propType));
+        var candidates = new[]
         {
-            recommendation = "OVER";
+            BuildRecommendationCandidate(
+                "OVER",
+                edge,
+                edge,
+                sideProbability.ProbabilityOver,
+                edge >= generationOptions.OverProjectionEdgeThreshold,
+                generationOptions.MinimumPickHitProbability),
+            BuildRecommendationCandidate(
+                "UNDER",
+                edge,
+                -edge,
+                sideProbability.ProbabilityUnder,
+                edge <= -generationOptions.UnderProjectionEdgeThreshold,
+                generationOptions.MinimumPickHitProbability)
         }
-        else if (edge <= -underEdgeThreshold)
+            .Where(candidate => candidate is not null)
+            .Select(candidate => candidate!)
+            .ToArray();
+
+        var eligibleCandidates = candidates
+            .Where(candidate => propTypeEnabled && candidate.ProjectionGatePassed && candidate.HitProbabilityGatePassed)
+            .OrderByDescending(candidate => candidate.SelectedSideProbability)
+            .ThenByDescending(candidate => candidate.ProjectionEdge)
+            .ToArray();
+        if (eligibleCandidates.Length > 0)
         {
-            recommendation = "UNDER";
+            var selected = eligibleCandidates[0];
+            return new PredictionRecommendationDecision(
+                selected.Recommendation,
+                selected.SelectedSideProbability,
+                selected.ReasonCode);
         }
-        else
+
+        var projectionCandidates = candidates
+            .Where(candidate => candidate.ProjectionGatePassed)
+            .ToArray();
+        if (projectionCandidates.Length == 0)
         {
             IncrementSuppression(suppressionCounts, "RecommendationSuppressedByThreshold");
-            return "PASS";
+            return new PredictionRecommendationDecision("PASS", null, "RecommendationSuppressedByThreshold");
         }
 
-        if (enabledPropTypes.Count == 0 || enabledPropTypes.Contains(NormalizePropTypeName(propType)))
+        if (!propTypeEnabled)
         {
-            return recommendation;
+            IncrementSuppression(suppressionCounts, "RecommendationSuppressedByPropTypeFilter");
+            return new PredictionRecommendationDecision("PASS", null, "RecommendationSuppressedByPropTypeFilter");
         }
 
-        IncrementSuppression(suppressionCounts, "RecommendationSuppressedByPropTypeFilter");
-        return "PASS";
+        if (projectionCandidates.Any(candidate => !candidate.SelectedSideProbability.HasValue))
+        {
+            IncrementSuppression(suppressionCounts, "RecommendationSuppressedByMissingProbability");
+            return new PredictionRecommendationDecision("PASS", null, "RecommendationSuppressedByMissingProbability");
+        }
+
+        IncrementSuppression(suppressionCounts, "RecommendationSuppressedByHitProbability");
+        return new PredictionRecommendationDecision("PASS", null, "RecommendationSuppressedByHitProbability");
+    }
+
+    private static PredictionRecommendationCandidate? BuildRecommendationCandidate(
+        string recommendation,
+        decimal edge,
+        decimal projectionEdge,
+        decimal? selectedSideProbability,
+        bool projectionGatePassed,
+        decimal minimumPickHitProbability)
+    {
+        if ((recommendation == "OVER" && edge <= 0m) || (recommendation == "UNDER" && edge >= 0m))
+        {
+            return null;
+        }
+
+        return new PredictionRecommendationCandidate(
+            recommendation,
+            Math.Round(projectionEdge, 4),
+            selectedSideProbability,
+            projectionGatePassed,
+            selectedSideProbability.HasValue && selectedSideProbability.Value >= minimumPickHitProbability,
+            recommendation == "OVER" ? "OverProjectionAndHitProbability" : "UnderProjectionAndHitProbability");
     }
 
     private static void IncrementSuppression(IDictionary<string, int> suppressionCounts, string reason)
@@ -415,6 +564,38 @@ public sealed class PredictionGenerationService(
         }
 
         return builder.ToString();
+    }
+
+    private static string CanonicalPropTypeName(string propTypeName)
+    {
+        return NormalizePropTypeName(propTypeName) switch
+        {
+            "RBI" => "RBIS",
+            _ => NormalizePropTypeName(propTypeName)
+        };
+    }
+
+    private static EmpiricalProbability CalculateEmpiricalProbability(IReadOnlyCollection<decimal> values, decimal line)
+    {
+        if (values.Count == 0)
+        {
+            return new EmpiricalProbability(null, null, null);
+        }
+
+        return new EmpiricalProbability(
+            Math.Round(values.Count(value => value > line) / (decimal)values.Count, 4),
+            Math.Round(values.Count(value => value < line) / (decimal)values.Count, 4),
+            Math.Round(values.Count(value => value == line) / (decimal)values.Count, 4));
+    }
+
+    private static decimal? BlendProbability(decimal? playerProbability, decimal? priorProbability, decimal sampleWeight)
+    {
+        if (playerProbability.HasValue && priorProbability.HasValue)
+        {
+            return Math.Round((playerProbability.Value * sampleWeight) + (priorProbability.Value * (1m - sampleWeight)), 4);
+        }
+
+        return playerProbability ?? priorProbability;
     }
 
     private static decimal CalculateConfidence(PlayerPredictionFeatures features)
@@ -457,6 +638,31 @@ public sealed class PredictionGenerationService(
         string PropTypeName,
         DateTimeOffset StartsAt,
         decimal? SportsbookLine);
+
+    private sealed record SideProbabilityEstimate(
+        decimal? ProbabilityOver,
+        decimal? ProbabilityUnder,
+        decimal? ProbabilityPush,
+        int PlayerSampleSize,
+        int PriorSampleSize);
+
+    private sealed record EmpiricalProbability(
+        decimal? Over,
+        decimal? Under,
+        decimal? Push);
+
+    private sealed record PredictionRecommendationDecision(
+        string Recommendation,
+        decimal? SelectedSideProbability,
+        string ReasonCode);
+
+    private sealed record PredictionRecommendationCandidate(
+        string Recommendation,
+        decimal ProjectionEdge,
+        decimal? SelectedSideProbability,
+        bool ProjectionGatePassed,
+        bool HitProbabilityGatePassed,
+        string ReasonCode);
 
     private sealed record TheOddsCandidatePlatformProp(
         Guid PlatformPropId,

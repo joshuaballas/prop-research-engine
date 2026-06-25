@@ -181,6 +181,7 @@ public static partial class TheOddsApiDebugEndpoints
         string? providerCategory,
         ApplicationDbContext dbContext,
         IPredictionProbabilityService probabilityService,
+        PredictionGenerationOptions selectionOptions,
         CancellationToken cancellationToken)
     {
         if (!runId.HasValue)
@@ -229,7 +230,7 @@ public static partial class TheOddsApiDebugEndpoints
 
         var freshnessCutoff = generatedAtUtc.AddHours(-FreshnessWindowHours);
         var rows = BuildTheOddsLineShoppingRows(activePlatformProps, probabilityAnalysis, freshnessCutoff);
-        var groups = BuildTheOddsLineShoppingGroups(rows, generatedAtUtc, lifecycleFreshnessMinutes);
+        var groups = BuildTheOddsLineShoppingGroups(rows, generatedAtUtc, lifecycleFreshnessMinutes, selectionOptions);
         var strategyClassificationSummary = BuildTheOddsStrategyClassificationSummary(groups);
         var candidateGroups = groups
             .Select(group => new
@@ -243,7 +244,8 @@ public static partial class TheOddsApiDebugEndpoints
             ? candidateGroups.Where(row => row.Group.IsActionableForUser)
             : candidateGroups;
         var topPicks = preferredCandidateGroups
-            .OrderByDescending(row => row.Group.BestEstimatedEv ?? decimal.MinValue)
+            .OrderByDescending(row => row.Group.BestProbability ?? decimal.MinValue)
+            .ThenByDescending(row => row.Group.BestProjectionEdge ?? decimal.MinValue)
             .ThenByDescending(row => row.Group.RankingScore)
             .Take(requestedTake)
             .Select(row => ToLineShoppingResponseGroup(row.Group, includeBookmakerPrices: false))
@@ -291,6 +293,7 @@ public static partial class TheOddsApiDebugEndpoints
         string? providerCategory,
         ApplicationDbContext dbContext,
         IPredictionProbabilityService probabilityService,
+        PredictionGenerationOptions selectionOptions,
         CancellationToken cancellationToken)
     {
         if (!runId.HasValue && !summaryOnly)
@@ -325,7 +328,7 @@ public static partial class TheOddsApiDebugEndpoints
             cancellationToken);
         var freshnessCutoff = generatedAtUtc.AddHours(-FreshnessWindowHours);
         var rows = BuildTheOddsLineShoppingRows(platformProps, probabilityAnalysis, freshnessCutoff);
-        var groups = BuildTheOddsLineShoppingGroups(rows, generatedAtUtc, lifecycleFreshnessMinutes);
+        var groups = BuildTheOddsLineShoppingGroups(rows, generatedAtUtc, lifecycleFreshnessMinutes, selectionOptions);
         var selectedGroups = SelectLineShoppingResponseGroups(groups, summaryOnly, topOnly, requestedTake);
         var comparisonGroups = selectedGroups
             .Select(group => ToLineShoppingResponseGroup(group, includeBookmakerPrices))
@@ -999,6 +1002,8 @@ public static partial class TheOddsApiDebugEndpoints
             return detailsJson.Clone();
         }
 
+        AddExpectedValueDisplayMetadata(obj);
+
         if (playerId.HasValue && playerId.Value != Guid.Empty)
         {
             obj["playerId"] = playerId.Value;
@@ -1006,6 +1011,80 @@ public static partial class TheOddsApiDebugEndpoints
         }
 
         return obj;
+    }
+
+    private static void AddExpectedValueDisplayMetadata(JsonObject obj)
+    {
+        var providerCategory = GetString(obj, "providerCategory", "ProviderCategory");
+        var estimatedEv = GetDecimal(obj, "bestEstimatedEv", "BestEstimatedEv");
+        var impliedProbability = GetDecimal(obj, "bestImpliedProbability", "BestImpliedProbability");
+        var decimalPrice = GetDecimal(obj, "bestDecimalPrice", "BestDecimalPrice");
+        var americanPrice = GetInt32(obj, "bestAmericanPrice", "BestAmericanPrice");
+        var expectedValueDisplay = BuildExpectedValueDisplayMetadata(
+            providerCategory,
+            estimatedEv,
+            impliedProbability,
+            decimalPrice,
+            americanPrice);
+
+        obj["isDfs"] = expectedValueDisplay.IsDfs;
+        obj["isSportsbook"] = expectedValueDisplay.IsSportsbook;
+        obj["showExpectedValue"] = expectedValueDisplay.ShowExpectedValue;
+        obj["displayExpectedValue"] = expectedValueDisplay.DisplayExpectedValue;
+        obj["expectedValueUnavailableReason"] = expectedValueDisplay.ExpectedValueUnavailableReason;
+    }
+
+    private static string? GetString(JsonObject obj, params string[] keys)
+    {
+        foreach (var key in keys)
+        {
+            if (obj.TryGetPropertyValue(key, out var value) &&
+                value is not null &&
+                value.GetValueKind() == JsonValueKind.String)
+            {
+                return value.GetValue<string>();
+            }
+        }
+
+        return null;
+    }
+
+    private static decimal? GetDecimal(JsonObject obj, params string[] keys)
+    {
+        foreach (var key in keys)
+        {
+            if (!obj.TryGetPropertyValue(key, out var value) || value is null)
+            {
+                continue;
+            }
+
+            if (value.GetValueKind() == JsonValueKind.Number &&
+                value.AsValue().TryGetValue<decimal>(out var number))
+            {
+                return number;
+            }
+        }
+
+        return null;
+    }
+
+    private static int? GetInt32(JsonObject obj, params string[] keys)
+    {
+        foreach (var key in keys)
+        {
+            if (!obj.TryGetPropertyValue(key, out var value) || value is null)
+            {
+                continue;
+            }
+
+            if (value.GetValueKind() == JsonValueKind.Number &&
+                value.AsValue().TryGetValue<int>(out var number))
+            {
+                return number;
+            }
+        }
+
+        return null;
     }
 
     private static Task<IReadOnlyDictionary<Guid, Guid?>> ResolveTopPickSnapshotPlayerIdsAsync(
@@ -1261,7 +1340,8 @@ public static partial class TheOddsApiDebugEndpoints
         if (!topOnly)
         {
             return groups
-                .OrderByDescending(group => group.BestEstimatedEv ?? decimal.MinValue)
+                .OrderByDescending(group => group.BestProbability ?? decimal.MinValue)
+                .ThenByDescending(group => group.BestProjectionEdge ?? decimal.MinValue)
                 .ThenByDescending(group => group.RankingScore)
                 .Take(take)
                 .ToArray();
@@ -1281,7 +1361,8 @@ public static partial class TheOddsApiDebugEndpoints
                     || string.Equals(row.Strategy.StrategyClassification, "Research", StringComparison.OrdinalIgnoreCase)))
             .OrderBy(row => GetLineShoppingTopOnlyStrategyRank(row.Strategy))
             .ThenBy(row => row.Group.IsActionableForUser ? 0 : 1)
-            .ThenByDescending(row => row.Group.BestEstimatedEv ?? decimal.MinValue)
+            .ThenByDescending(row => row.Group.BestProbability ?? decimal.MinValue)
+            .ThenByDescending(row => row.Group.BestProjectionEdge ?? decimal.MinValue)
             .ThenByDescending(row => row.Group.RankingScore)
             .Take(take)
             .Select(row => row.Group)

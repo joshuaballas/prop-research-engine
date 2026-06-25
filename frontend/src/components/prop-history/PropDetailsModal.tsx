@@ -166,13 +166,14 @@ function usePropHistory(market: MarketOpportunity | null, enabled: boolean) {
 function MetricStrip({ market }: { market: MarketOpportunity }) {
   const cautions = getMarketCautions(market);
   const hasCautions = cautions.length > 0;
+  const showExpectedValue = market.showExpectedValue === true && typeof market.displayExpectedValue === 'number';
   return (
     <Box
       sx={{
         display: 'grid',
         gridTemplateColumns: {
           xs: 'repeat(2, minmax(0, 1fr))',
-          md: hasCautions ? 'repeat(5, minmax(0, 1fr))' : 'repeat(4, minmax(0, 1fr))'
+          md: `repeat(${(showExpectedValue ? 4 : 3) + (hasCautions ? 1 : 0)}, minmax(0, 1fr))`
         },
         gap: { xs: 1.05, md: 1.25 },
         px: { xs: 1.35, md: 1.6 },
@@ -184,7 +185,9 @@ function MetricStrip({ market }: { market: MarketOpportunity }) {
     >
       <DetailMetric metric="hitChance" value={formatPercent(market.modelProbability)} />
       <DetailMetric metric="edge" value={formatPercent(market.probabilityEdge, { signed: true })} />
-      <DetailMetric metric="ev" value={formatPercent(market.estimatedEv, { signed: true })} tone={market.estimatedEv >= 0 ? 'success.main' : 'error.main'} />
+      {showExpectedValue ? (
+        <DetailMetric metric="ev" value={formatPercent(market.displayExpectedValue ?? 0, { signed: true })} tone={(market.displayExpectedValue ?? 0) >= 0 ? 'success.main' : 'error.main'} />
+      ) : null}
       <DetailMetric metric="trust" value={market.trustLevel === 'Research' ? 'Weak' : market.trustLevel} />
       {hasCautions ? (
         <Stack spacing={0.45} minWidth={0} sx={{ gridColumn: { xs: '1 / -1', md: 'auto' } }}>

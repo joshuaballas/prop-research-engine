@@ -20,7 +20,7 @@ const defaultLineShoppingFilters: MarketFilterValues = {
   providerCategory: 'All',
   trust: 'All',
   opportunity: 'All',
-  sort: 'EV',
+  sort: 'Edge',
   canAddOnly: true
 };
 

@@ -120,7 +120,7 @@ export function EntryReceiptDialog({ open, onClose, legs, review, amount }: Entr
             <ReceiptMetric label="Entry amount" value={formatMoney(amount)} />
             <ReceiptMetric label="Est. multiplier" value={review.multiplier === null ? 'Unavailable' : `${review.multiplier.toFixed(2)}x`} />
             <ReceiptMetric label="Est. payout" value={review.estimatedPayout === null ? 'Unavailable' : formatMoney(review.estimatedPayout)} />
-            <ReceiptMetric label="Avg EV" value={receiptStats.averageEv === null ? 'Unavailable' : formatPercent(receiptStats.averageEv, { signed: true })} />
+            <ReceiptMetric label="Avg Edge" value={receiptStats.averageEdge === null ? 'Unavailable' : formatPercent(receiptStats.averageEdge, { signed: true })} />
             <ReceiptMetric label="Estimated all-hit chance" value={receiptStats.allHitChance === null ? 'Unavailable' : formatPercent(receiptStats.allHitChance)} />
             <ReceiptMetric
               label="Status"
@@ -146,7 +146,7 @@ export function EntryReceiptDialog({ open, onClose, legs, review, amount }: Entr
                       <TableCell>Pick</TableCell>
                       <TableCell>Prop</TableCell>
                       <TableCell>Game</TableCell>
-                      <TableCell align="right">EV</TableCell>
+                      <TableCell align="right">Edge</TableCell>
                       <TableCell align="right">Hit Chance</TableCell>
                       <TableCell>Trust</TableCell>
                       <TableCell align="right">Sample</TableCell>
@@ -170,7 +170,7 @@ export function EntryReceiptDialog({ open, onClose, legs, review, amount }: Entr
                             {leg.event} - {leg.startTime}
                           </Typography>
                         </TableCell>
-                        <TableCell align="right">{formatPercent(leg.estimatedEv, { signed: true })}</TableCell>
+                        <TableCell align="right">{formatPercent(leg.probabilityEdge, { signed: true })}</TableCell>
                         <TableCell align="right">{formatPercent(leg.modelProbability)}</TableCell>
                         <TableCell><TrustValue level={leg.trustLevel} /></TableCell>
                         <TableCell align="right">{leg.historicalSampleSize}</TableCell>
@@ -213,7 +213,7 @@ export function EntryReceiptDialog({ open, onClose, legs, review, amount }: Entr
                       {leg.event} - {leg.startTime}
                     </Typography>
                     <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 0.75 }}>
-                      <ReceiptMiniMetric label="EV" value={formatPercent(leg.estimatedEv, { signed: true })} />
+                      <ReceiptMiniMetric label="Edge" value={formatPercent(leg.probabilityEdge, { signed: true })} />
                       <ReceiptMiniMetric label="Hit Chance" value={formatPercent(leg.modelProbability)} />
                       <ReceiptMiniMetric label="Sample" value={String(leg.historicalSampleSize)} />
                     </Box>
@@ -321,14 +321,14 @@ function ReceiptList({ title, items, emptyText, tone }: { title: string; items: 
 
 function buildReceiptStats(legs: EntryLeg[]) {
   if (!legs.length) {
-    return { averageEv: null, allHitChance: null };
+    return { averageEdge: null, allHitChance: null };
   }
 
-  const evValues = legs.map((leg) => leg.estimatedEv).filter((value) => Number.isFinite(value));
+  const edgeValues = legs.map((leg) => leg.probabilityEdge).filter((value) => Number.isFinite(value));
   const probabilities = legs.map((leg) => leg.modelProbability).filter((value) => Number.isFinite(value) && value > 0);
 
   return {
-    averageEv: evValues.length === legs.length ? evValues.reduce((sum, value) => sum + value, 0) / legs.length : null,
+    averageEdge: edgeValues.length === legs.length ? edgeValues.reduce((sum, value) => sum + value, 0) / legs.length : null,
     allHitChance: probabilities.length === legs.length ? probabilities.reduce((product, value) => product * value, 1) : null
   };
 }

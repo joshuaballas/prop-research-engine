@@ -12,7 +12,7 @@ export function SharedEntryBuilderDrawer() {
   const theme = useTheme();
   const isMobile = useMediaQuery(theme.breakpoints.down('md'));
   const lockedProvider = builder.lockedProviderName;
-  const averageEv = builder.legs.length ? builder.legs.reduce((sum, leg) => sum + leg.estimatedEv, 0) / builder.legs.length : 0;
+  const averageEdge = builder.legs.length ? builder.legs.reduce((sum, leg) => sum + leg.probabilityEdge, 0) / builder.legs.length : 0;
   const [rules, setRules] = useState<EntryRule[]>(mockEntryRules);
 
   useEffect(() => {
@@ -81,7 +81,7 @@ export function SharedEntryBuilderDrawer() {
           }}
         >
           <Box component="span">
-            {isMobile ? `${lockedProvider} - ${builder.legs.length} legs - Avg EV ${formatSignedPercent(averageEv)}` : `Entry: ${lockedProvider} - ${builder.legs.length} legs`}
+            {isMobile ? `${lockedProvider} - ${builder.legs.length} legs - Avg Edge ${formatSignedPercent(averageEdge)}` : `Entry: ${lockedProvider} - ${builder.legs.length} legs`}
           </Box>
         </Button>
       ) : null}

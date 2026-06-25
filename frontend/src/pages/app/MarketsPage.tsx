@@ -22,12 +22,11 @@ const defaultFilters: MarketFilterValues = {
   providerCategory: 'All',
   trust: 'All',
   opportunity: 'All',
-  sort: 'EV',
+  sort: 'Edge',
   canAddOnly: true
 };
 
 const sortOptions: MarketFilterOption[] = [
-  { label: 'EV', value: 'EV' },
   { label: 'Edge', value: 'Edge' },
   { label: 'Hit chance', value: 'HitChance' },
   { label: 'Trust', value: 'Trust' },
@@ -203,14 +202,13 @@ function sortMarkets(markets: MarketOpportunity[], sort: string) {
     case 'HitChance':
       return rows.sort((a, b) => b.modelProbability - a.modelProbability);
     case 'Trust':
-      return rows.sort((a, b) => trustRank(b) - trustRank(a) || b.estimatedEv - a.estimatedEv);
+      return rows.sort((a, b) => trustRank(b) - trustRank(a) || b.probabilityEdge - a.probabilityEdge);
     case 'PlayerAz':
       return rows.sort((a, b) => a.player.localeCompare(b.player));
     case 'StartsSoon':
       return rows.sort((a, b) => Date.parse(a.startTime || '') - Date.parse(b.startTime || ''));
-    case 'EV':
     default:
-      return rows.sort((a, b) => b.estimatedEv - a.estimatedEv);
+      return rows.sort((a, b) => b.probabilityEdge - a.probabilityEdge);
   }
 }
 

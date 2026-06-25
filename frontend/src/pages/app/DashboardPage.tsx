@@ -62,8 +62,8 @@ export function DashboardPage() {
   const latestCompletedDateLabel = formatDateShort(performanceAvailability?.latestCompletedDate ?? performanceAvailability?.latestGradedDate);
   const latestImportedResultsDateLabel = formatDateShort(performanceAvailability?.latestResultsImportDate);
   const returnedTopPicks = topPicks.length;
-  const bestEvMarket = filtered.reduce<MarketOpportunity | undefined>(
-    (best, market) => (!best || market.estimatedEv > best.estimatedEv ? market : best),
+  const bestEdgeMarket = filtered.reduce<MarketOpportunity | undefined>(
+    (best, market) => (!best || market.probabilityEdge > best.probabilityEdge ? market : best),
     undefined
   );
   const freshness = freshnessQuery.data;
@@ -107,7 +107,7 @@ export function DashboardPage() {
           <MetricCard label="Top Picks" value={`${returnedTopPicks}`} helper="Current props" />
         </Grid>
         <Grid size={{ xs: 6, sm: 6, lg: 2.4 }}>
-          <MetricCard label="Best EV" value={formatPercent(bestEvMarket?.estimatedEv ?? 0, { signed: true })} helper={bestEvMarket?.player ?? 'No active prop'} />
+          <MetricCard label="Best Edge" value={formatPercent(bestEdgeMarket?.probabilityEdge ?? 0, { signed: true })} helper={bestEdgeMarket?.player ?? 'No active prop'} />
         </Grid>
         <Grid size={{ xs: 6, sm: 6, lg: 2.4 }}>
           <MetricCard label="Providers" value={`${new Set(activeDfs.map((market) => market.provider)).size}`} helper="Live providers" />
@@ -242,7 +242,7 @@ function DashboardOpportunityCard({ market, builder }: { market: MarketOpportuni
     <>
       <OpportunityCardLayout
         title={market.player}
-        value={<EvValue value={market.estimatedEv} />}
+        value={<EdgeValue value={market.probabilityEdge} />}
         market={<OpportunityPickText side={market.side} propType={market.propType} line={market.line} />}
         provider={
           <OpportunityProviderRow provider={market.provider} category={market.providerCategory}>
@@ -280,11 +280,11 @@ function ApiStateCard({ message, tone = 'default' }: { message: string; tone?: '
   );
 }
 
-function EvValue({ value }: { value: number }) {
+function EdgeValue({ value }: { value: number }) {
   return (
     <Stack direction="row" spacing={0.55} alignItems="baseline" flexShrink={0}>
       <Typography variant="caption" color="text.secondary" fontWeight={850}>
-        EV
+        Edge
       </Typography>
       <Typography color={value >= 0 ? 'success.main' : 'error.main'} fontWeight={950}>
         {formatPercent(value, { signed: true })}
@@ -313,7 +313,7 @@ function LineShoppingPreviewCard({ market, showReference }: { market: MarketOppo
       compact
       contentSx={{ p: 1.7, '&:last-child': { pb: 1.7 } }}
       title={market.player}
-      value={<EvValue value={market.estimatedEv} />}
+      value={<EdgeValue value={market.probabilityEdge} />}
       market={<OpportunityPickText side={market.side} propType={market.propType} line={market.line} />}
       provider={
         <OpportunityProviderRow provider={market.provider} category={market.providerCategory} sx={{ justifyContent: 'flex-start', columnGap: 1.4, rowGap: 0.8 }}>
@@ -339,7 +339,7 @@ function hasReferenceLine(market: MarketOpportunity) {
 
 function EntryBuilderPreview({ provider, legs, sports, onReview }: { provider: string; legs: MarketOpportunity[]; sports: string[]; onReview: () => void }) {
   const hasProvider = legs.length > 0;
-  const projectedEv = legs.length ? legs.reduce((sum, leg) => sum + leg.estimatedEv, 0) / legs.length : 0;
+  const projectedEdge = legs.length ? legs.reduce((sum, leg) => sum + leg.probabilityEdge, 0) / legs.length : 0;
   const payoutMayVary = legs.some((leg) => leg.projectionModifier !== 'Normal');
 
   if (!hasProvider) {
@@ -389,7 +389,7 @@ function EntryBuilderPreview({ provider, legs, sports, onReview }: { provider: s
             <MiniMetric label="Legs" value={`${legs.length}`} />
           </Grid>
           <Grid size={{ xs: 6 }}>
-            <MiniMetric label="Avg EV" value={formatPercent(projectedEv, { signed: true })} />
+            <MiniMetric label="Avg Edge" value={formatPercent(projectedEdge, { signed: true })} />
           </Grid>
           <Grid size={{ xs: 6 }}>
             <MiniMetric label="Sports" value={sports.length ? sports.join(', ') : '-'} />
@@ -417,8 +417,8 @@ function EntryBuilderPreview({ provider, legs, sports, onReview }: { provider: s
                     }}
                   />
                 </Box>
-                <Typography color={leg.estimatedEv > 0 ? 'success.main' : 'error.main'} fontWeight={950}>
-                  {formatPercent(leg.estimatedEv, { signed: true })}
+                <Typography color={leg.probabilityEdge > 0 ? 'success.main' : 'error.main'} fontWeight={950}>
+                  {formatPercent(leg.probabilityEdge, { signed: true })}
                 </Typography>
               </Stack>
             </Box>

@@ -3,7 +3,7 @@ export type MetricHelpKey = 'ev' | 'edge' | 'hitChance' | 'trust' | 'sample' | '
 export const metricHelp: Record<MetricHelpKey, { label: string; description: string }> = {
   ev: {
     label: 'EV',
-    description: 'Estimated expected value for the selected side. Higher is better.'
+    description: 'EV is only shown for sportsbook-priced markets. DFS props use hit chance, edge, and trust instead.'
   },
   edge: {
     label: 'Edge',
