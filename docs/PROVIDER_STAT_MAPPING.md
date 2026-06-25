@@ -67,6 +67,15 @@ Invoke-RestMethod "$base/api/debug/soccer/results/api-sports/world-cup/prop-mapp
 
 The gap diagnostic is for review only. It reports The Odds market keys missing canonical mappings, API-Sports result stat keys missing provider mappings, canonical key mismatches, mappings that exist but are not gradeable, imported stats that were not requested by The Odds, and player-matched/stat-missing rows. It never writes `provider_stat_mappings`, writes grades, imports results, refreshes odds, or enables public Soccer grading.
 
+Read-only mapping approval review:
+
+```powershell
+Invoke-RestMethod "$base/api/debug/soccer/results/api-sports/world-cup/stat-mapping-review?fromDate=2026-06-21&toDate=2026-06-24&includeSamples=true&maxSamples=100" |
+  ConvertTo-Json -Depth 80
+```
+
+The review endpoint lists each NeedsConfirmation, Unsupported, non-gradeable, or non-public-gradeable Soccer mapping with source fields, affected rows, imported-stat-noise rows, current notes, why it is non-gradeable today, risk, and recommendation. It is designed to support future explicit manual approval decisions, not to approve mappings automatically.
+
 Dry-run one fixture and verify DB mappings:
 
 ```powershell

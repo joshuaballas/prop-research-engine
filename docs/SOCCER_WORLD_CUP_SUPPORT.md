@@ -245,6 +245,8 @@ The Soccer market refresh also creates normalized `games` / `teams` from The Odd
 
 `/api/debug/soccer/results/api-sports/world-cup/prop-mapping-gap` explains remaining Soccer prop/stat mapping blockers after event and player alias joins are resolved. It compares ungraded The Odds sportsbook context rows against API-Sports fixture result stats, reports missing The Odds market canonical mappings, missing API-Sports stat mappings, mapping-exists-but-not-gradeable rows, canonical mismatches, and imported-stat noise. It is diagnostic only: it does not create provider stat mappings, write grades, import results, refresh odds, or enable public Soccer grading.
 
+`/api/debug/soccer/results/api-sports/world-cup/stat-mapping-review` reviews the exact API-Sports Soccer mappings that are NeedsConfirmation, Unsupported, non-gradeable, or not public-gradeable. It reports current source fields, affected rows, The Odds returned platform-row counts, imported-stat noise, why the mapping is non-gradeable today, and a recommendation such as `KeepNonGradeable`, `ManualApprovalCandidate`, `NeedsMoreProviderEvidence`, or `IgnoreAsImportedNoise`. It is explicitly read-only and always reports `publicGradingEligible=false`.
+
 `/api/debug/soccer/world-cup/spike-status` is the roll-up status endpoint for the Soccer World Cup spike. It is read-only, never calls providers, and reports `productionReadiness.status=ResearchOnly`. It aggregates persisted ingestion, fixture mapping, alias, grading coverage, and prop/stat mapping diagnostics, then restates the hard guardrails: public Soccer grading is disabled, Soccer rows are not Entry Builder playable, sportsbook context is research-only, and alias/stat mapping approval remains manual.
 
 The spike-status alias summary intentionally separates `aliasPlatformPlayerNamesEvaluated`, `aliasCandidateCount`, `aliasLinksApproved`, `aliasSafeCandidatesApproved`, `aliasManualApprovalsApproved`, and remaining buckets such as `aliasNeedsReviewRemaining`, `aliasNoCandidateRemaining`, `aliasAmbiguousRemaining`, and `aliasNewSafeCandidatesRemaining`. Do not treat evaluated player-name counts as unresolved alias work.
@@ -342,6 +344,9 @@ Invoke-RestMethod "$base/api/debug/soccer/results/api-sports/world-cup/grading-c
   ConvertTo-Json -Depth 80
 
 Invoke-RestMethod "$base/api/debug/soccer/results/api-sports/world-cup/prop-mapping-gap?fromDate=2026-06-21&toDate=2026-06-24&includeSamples=true&maxSamples=100" |
+  ConvertTo-Json -Depth 80
+
+Invoke-RestMethod "$base/api/debug/soccer/results/api-sports/world-cup/stat-mapping-review?fromDate=2026-06-21&toDate=2026-06-24&includeSamples=true&maxSamples=100" |
   ConvertTo-Json -Depth 80
 
 Invoke-RestMethod "$base/api/debug/soccer/world-cup/spike-status?fromDate=2026-06-21&toDate=2026-06-24&includeDetails=true" |

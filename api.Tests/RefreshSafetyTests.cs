@@ -1792,6 +1792,70 @@ public sealed class RefreshSafetyTests
     }
 
     [Fact]
+    public async Task ApiSportsWorldCupStatMappingReview_IdentifiesNonGradeableMappings_ReadOnly()
+    {
+        await using var factory = new SafetyTestApplicationFactory(ApiSportsLiveConfig());
+        using var client = factory.CreateClient();
+        await factory.SeedApiSportsSoccerMarketJoinRowsAsync(
+            platformMarketKey: "player_goals",
+            platformPropTypeName: "Goals",
+            platformStatKey: "GOALS",
+            apiSportsPropTypeName: "Goal + Assist",
+            apiSportsStatKey: "GOAL_ASSIST");
+        await factory.SeedApiSportsSoccerProviderStatMappingsAsync();
+        var before = await factory.CountArtifactsAsync();
+        var apiSportsCallsBefore = factory.ApiSportsFootballClient.FixturePlayerStatsCallCount;
+
+        var response = await client.GetAsync("/api/debug/soccer/results/api-sports/world-cup/stat-mapping-review?fromDate=2026-06-21&toDate=2026-06-21&includeSamples=true");
+
+        await EnsureSuccessWithBodyAsync(response);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.False(json.GetProperty("callsExternalApis").GetBoolean());
+        Assert.True(json.GetProperty("readOnly").GetBoolean());
+        Assert.False(json.GetProperty("writesRows").GetBoolean());
+        Assert.False(json.GetProperty("publicSoccerGradingEnabled").GetBoolean());
+        Assert.False(json.GetProperty("summary").GetProperty("publicGradingEligible").GetBoolean());
+        Assert.Contains(
+            json.GetProperty("mappings").EnumerateArray(),
+            row => row.GetProperty("canonicalStatKey").GetString() == "GOAL_ASSIST"
+                && row.GetProperty("ruleConfidence").GetString() == "NeedsConfirmation"
+                && row.GetProperty("isGradeable").GetBoolean() == false
+                && row.GetProperty("rowCountAffected").GetInt32() == 1
+                && row.GetProperty("recommendation").GetString() == "NeedsMoreProviderEvidence"
+                && row.GetProperty("publicGradingEligible").GetBoolean() == false);
+        Assert.Equal(before, await factory.CountArtifactsAsync());
+        Assert.Equal(apiSportsCallsBefore, factory.ApiSportsFootballClient.FixturePlayerStatsCallCount);
+    }
+
+    [Fact]
+    public async Task ApiSportsWorldCupStatMappingReview_SeparatesImportedStatNoise()
+    {
+        await using var factory = new SafetyTestApplicationFactory(ApiSportsLiveConfig());
+        using var client = factory.CreateClient();
+        await factory.SeedApiSportsSoccerMarketJoinRowsAsync(
+            platformMarketKey: "player_goals",
+            platformPropTypeName: "Goals",
+            platformStatKey: "GOALS",
+            apiSportsPropTypeName: "Passes Attempted",
+            apiSportsStatKey: "PASSES_ATTEMPTED");
+        await factory.SeedApiSportsSoccerProviderStatMappingsAsync();
+
+        var response = await client.GetAsync("/api/debug/soccer/results/api-sports/world-cup/stat-mapping-review?fromDate=2026-06-21&toDate=2026-06-21&includeSamples=true");
+
+        await EnsureSuccessWithBodyAsync(response);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.True(json.GetProperty("summary").GetProperty("importedStatNoiseRows").GetInt32() >= 1);
+        Assert.Contains(
+            json.GetProperty("importedStatNoise").EnumerateArray(),
+            row => row.GetProperty("apiSportsStatKey").GetString() == "PASSES_ATTEMPTED"
+                && row.GetProperty("recommendation").GetString() == "IgnoreAsImportedNoise");
+        Assert.DoesNotContain(
+            json.GetProperty("mappings").EnumerateArray(),
+            row => row.GetProperty("canonicalStatKey").GetString() == "PASSES_ATTEMPTED"
+                && row.GetProperty("recommendation").GetString() == "ManualApprovalCandidate");
+    }
+
+    [Fact]
     public async Task SoccerWorldCupSpikeStatus_IsResearchOnlyReadOnlyAndNoExternalApis()
     {
         await using var factory = new SafetyTestApplicationFactory(ApiSportsLiveConfig());

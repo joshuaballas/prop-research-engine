@@ -1644,6 +1644,55 @@ public static class ResultsDebugEndpoints
         .WithName("ApiSportsSoccerWorldCupPropMappingGapDebug")
         .WithSummary("Read-only Soccer World Cup prop/stat mapping gap diagnostic across resolved The Odds/API-Sports fixture pairs.");
 
+        endpoints.MapGet("/api/debug/soccer/results/api-sports/world-cup/stat-mapping-review", async (
+            DateOnly? fromDate,
+            DateOnly? toDate,
+            bool? includeSamples,
+            int? maxSamples,
+            ApplicationDbContext dbContext,
+            CancellationToken cancellationToken) =>
+        {
+            var range = NormalizeApiSportsWorldCupDateRange(fromDate, toDate);
+            var sampleLimit = Math.Clamp(maxSamples ?? 100, 1, 500);
+            var resultRows = await LoadApiSportsMarketJoinResultRowsAsync(dbContext, range, null, cancellationToken);
+            var platformRows = await LoadApiSportsMarketJoinPlatformRowsAsync(dbContext, range, null, cancellationToken);
+            var apiSportsMappings = await LoadApiSportsSoccerProviderStatMappingRowsAsync(dbContext, cancellationToken);
+            var propGap = BuildApiSportsSoccerPropMappingGapDiagnostic(
+                resultRows,
+                platformRows,
+                apiSportsMappings,
+                includeSamples != false,
+                sampleLimit);
+            var review = BuildApiSportsSoccerStatMappingReview(
+                resultRows,
+                platformRows,
+                apiSportsMappings,
+                propGap,
+                includeSamples != false,
+                sampleLimit);
+
+            return Results.Ok(new
+            {
+                generatedAtUtc = DateTimeOffset.UtcNow,
+                callsExternalApis = false,
+                readOnly = true,
+                writesRows = false,
+                publicSoccerGradingEnabled = false,
+                scope = new
+                {
+                    range.FromDate,
+                    range.ToDate,
+                    maxSamples = sampleLimit
+                },
+                summary = review.Summary,
+                mappings = review.Mappings,
+                importedStatNoise = review.ImportedStatNoise,
+                recommendedNextAction = review.RecommendedNextAction
+            });
+        })
+        .WithName("ApiSportsSoccerWorldCupStatMappingReviewDebug")
+        .WithSummary("Read-only Soccer World Cup needs-review/non-gradeable provider stat mapping review.");
+
         endpoints.MapGet("/api/debug/soccer/the-odds/api-sports/fixture-mapping-coverage", async (
             DateOnly? fromDate,
             DateOnly? toDate,
@@ -5463,11 +5512,13 @@ public static class ResultsDebugEndpoints
             .Select(mapping => new ApiSportsProviderStatMappingDiagnosticRow(
                 mapping.CanonicalStatKey,
                 mapping.DisplayName,
+                ExtractJsonStringArray(mapping.ProviderStatFieldsJson),
                 mapping.RuleConfidence,
                 mapping.IsGradeable,
                 mapping.PublicGradingEnabled,
                 mapping.ProviderStatKey,
-                mapping.ValueTransform))
+                mapping.ValueTransform,
+                mapping.Notes))
             .ToArrayAsync(cancellationToken);
     }
 
@@ -6284,6 +6335,188 @@ public static class ResultsDebugEndpoints
         return propTypeMappingMissingRows == 0
             ? "No prop/stat mapping gaps were detected for resolved Soccer fixture pairs."
             : "Mapping gaps remain but require manual review before any Soccer grading expansion.";
+    }
+
+    private static ApiSportsSoccerStatMappingReview BuildApiSportsSoccerStatMappingReview(
+        IReadOnlyList<ApiSportsMarketJoinResultRow> resultRows,
+        IReadOnlyList<ApiSportsMarketJoinPlatformRow> platformRows,
+        IReadOnlyList<ApiSportsProviderStatMappingDiagnosticRow> apiSportsMappings,
+        ApiSportsSoccerPropMappingGapDiagnostic propGap,
+        bool includeSamples,
+        int sampleLimit)
+    {
+        var resultRowsByStatKey = resultRows
+            .GroupBy(row => row.StatKey, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(group => group.Key, group => group.ToArray(), StringComparer.OrdinalIgnoreCase);
+        var platformRowsByCanonicalKey = platformRows
+            .Where(row => !string.IsNullOrWhiteSpace(row.CanonicalStatKey))
+            .GroupBy(row => row.CanonicalStatKey!, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(group => group.Key, group => group.ToArray(), StringComparer.OrdinalIgnoreCase);
+        var gapRowsByStatKey = propGap.ApiSportsStatGaps
+            .GroupBy(row => row.ApiSportsStatKey, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(group => group.Key, group => group.ToArray(), StringComparer.OrdinalIgnoreCase);
+        var importedNoiseByStatKey = propGap.IgnoredNoise
+            .GroupBy(row => row.ApiSportsStatKey, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(group => group.Key, group => group.ToArray(), StringComparer.OrdinalIgnoreCase);
+        var reviewMappings = apiSportsMappings
+            .Where(mapping => !mapping.IsGradeable
+                || !string.Equals(mapping.RuleConfidence, "Known", StringComparison.OrdinalIgnoreCase))
+            .Select(mapping =>
+            {
+                resultRowsByStatKey.TryGetValue(mapping.CanonicalStatKey, out var matchingResultRows);
+                platformRowsByCanonicalKey.TryGetValue(mapping.CanonicalStatKey, out var matchingPlatformRows);
+                gapRowsByStatKey.TryGetValue(mapping.CanonicalStatKey, out var statGaps);
+                importedNoiseByStatKey.TryGetValue(mapping.CanonicalStatKey, out var importedNoiseRows);
+                matchingResultRows ??= [];
+                matchingPlatformRows ??= [];
+                statGaps ??= [];
+                importedNoiseRows ??= [];
+                var nonGradeableGapRows = statGaps
+                    .Where(row => row.Category == "MappingExistsButNotGradeable")
+                    .ToArray();
+                var affectedRows = nonGradeableGapRows.Sum(row => row.RowCount);
+                var requestedByTheOddsRows = matchingPlatformRows.Length;
+                var importedNoiseRowsCount = importedNoiseRows.Sum(row => row.RowCount);
+                var recommendation = BuildApiSportsSoccerStatMappingReviewRecommendation(mapping, affectedRows, requestedByTheOddsRows, importedNoiseRowsCount);
+                var risk = BuildApiSportsSoccerStatMappingReviewRisk(mapping, affectedRows, requestedByTheOddsRows);
+                return new ApiSportsSoccerStatMappingReviewRow(
+                    mapping.DisplayName,
+                    mapping.CanonicalStatKey,
+                    mapping.ProviderStatFields,
+                    mapping.RuleConfidence,
+                    mapping.IsGradeable,
+                    mapping.PublicGradingEnabled,
+                    affectedRows,
+                    matchingResultRows.Select(row => row.PlayerName).Distinct(StringComparer.OrdinalIgnoreCase).Count(),
+                    matchingResultRows.Select(row => row.ApiSportsFixtureId).Where(value => !string.IsNullOrWhiteSpace(value)).Distinct(StringComparer.OrdinalIgnoreCase).Count(),
+                    requestedByTheOddsRows,
+                    importedNoiseRowsCount,
+                    includeSamples
+                        ? nonGradeableGapRows.SelectMany(row => row.SampleRows).Take(sampleLimit).ToArray()
+                        : [],
+                    mapping.Notes,
+                    BuildApiSportsSoccerStatMappingNonGradeableReason(mapping, affectedRows, requestedByTheOddsRows, importedNoiseRowsCount),
+                    risk,
+                    recommendation,
+                    PublicGradingEligible: false,
+                    DebugPreviewEligibleIfApproved: recommendation == "ManualApprovalCandidate");
+            })
+            .OrderByDescending(row => row.RowCountAffected)
+            .ThenBy(row => row.PropType)
+            .ToArray();
+        var importedNoise = propGap.IgnoredNoise
+            .Select(row => new ApiSportsSoccerImportedStatNoiseReviewRow(
+                row.ApiSportsPropType,
+                row.ApiSportsStatKey,
+                row.RowCount,
+                row.DistinctPlayers,
+                row.DistinctFixtures,
+                "Imported API-Sports stat exists for matched players, but The Odds did not request or return this market for the platform rows in scope.",
+                "IgnoreAsImportedNoise"))
+            .OrderByDescending(row => row.RowCount)
+            .ThenBy(row => row.ApiSportsStatKey)
+            .ToArray();
+        var summary = new ApiSportsSoccerStatMappingReviewSummary(
+            reviewMappings.Length,
+            reviewMappings.Count(row => row.RuleConfidence == "NeedsConfirmation"),
+            reviewMappings.Count(row => row.RuleConfidence == "Unsupported"),
+            reviewMappings.Count(row => !row.IsGradeable),
+            reviewMappings.Sum(row => row.RowCountAffected),
+            reviewMappings.Count(row => row.Recommendation == "ManualApprovalCandidate"),
+            reviewMappings.Count(row => row.Recommendation == "KeepNonGradeable"),
+            reviewMappings.Count(row => row.Recommendation == "NeedsMoreProviderEvidence"),
+            importedNoise.Sum(row => row.RowCount),
+            false);
+
+        return new ApiSportsSoccerStatMappingReview(
+            summary,
+            reviewMappings,
+            importedNoise,
+            BuildApiSportsSoccerStatMappingReviewNextAction(summary));
+    }
+
+    private static string BuildApiSportsSoccerStatMappingReviewRecommendation(
+        ApiSportsProviderStatMappingDiagnosticRow mapping,
+        int affectedRows,
+        int requestedByTheOddsRows,
+        int importedNoiseRows)
+    {
+        if (string.Equals(mapping.RuleConfidence, "Unsupported", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(mapping.ValueTransform, "Unsupported", StringComparison.OrdinalIgnoreCase))
+        {
+            return "KeepNonGradeable";
+        }
+
+        if (requestedByTheOddsRows == 0 && importedNoiseRows > 0)
+        {
+            return "IgnoreAsImportedNoise";
+        }
+
+        if (affectedRows > 0 && requestedByTheOddsRows > 0)
+        {
+            return "ManualApprovalCandidate";
+        }
+
+        return "NeedsMoreProviderEvidence";
+    }
+
+    private static string BuildApiSportsSoccerStatMappingReviewRisk(
+        ApiSportsProviderStatMappingDiagnosticRow mapping,
+        int affectedRows,
+        int requestedByTheOddsRows)
+    {
+        if (string.Equals(mapping.RuleConfidence, "Unsupported", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(mapping.ValueTransform, "Unsupported", StringComparison.OrdinalIgnoreCase))
+        {
+            return "High";
+        }
+
+        if (affectedRows > 0 && requestedByTheOddsRows > 0)
+        {
+            return "Medium";
+        }
+
+        return "Low";
+    }
+
+    private static string BuildApiSportsSoccerStatMappingNonGradeableReason(
+        ApiSportsProviderStatMappingDiagnosticRow mapping,
+        int affectedRows,
+        int requestedByTheOddsRows,
+        int importedNoiseRows)
+    {
+        if (string.Equals(mapping.RuleConfidence, "Unsupported", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(mapping.ValueTransform, "Unsupported", StringComparison.OrdinalIgnoreCase))
+        {
+            return "Mapping is marked unsupported and should remain non-gradeable without new provider evidence.";
+        }
+
+        if (affectedRows > 0 && requestedByTheOddsRows > 0)
+        {
+            return "Mapping exists but is marked NeedsConfirmation/non-gradeable while The Odds returned matching platform markets in scope.";
+        }
+
+        if (requestedByTheOddsRows == 0 && importedNoiseRows > 0)
+        {
+            return "API-Sports imported this stat for matched players, but The Odds did not return the corresponding market in scope.";
+        }
+
+        return "Mapping has not been proven against returned The Odds markets in the selected range.";
+    }
+
+    private static string BuildApiSportsSoccerStatMappingReviewNextAction(ApiSportsSoccerStatMappingReviewSummary summary)
+    {
+        if (summary.ManualApprovalCandidates > 0)
+        {
+            return "Review manual approval candidates one at a time; public Soccer grading remains disabled.";
+        }
+
+        if (summary.NeedsMoreProviderEvidence > 0)
+        {
+            return "Collect more provider evidence before approving any NeedsConfirmation Soccer stat mappings.";
+        }
+
+        return "Keep current non-gradeable Soccer mappings unchanged.";
     }
 
     private static IReadOnlyList<object> BuildSoccerWorldCupSpikeStatusBlockers(
@@ -9905,11 +10138,60 @@ public static class ResultsDebugEndpoints
     private sealed record ApiSportsProviderStatMappingDiagnosticRow(
         string CanonicalStatKey,
         string DisplayName,
+        IReadOnlyList<string> ProviderStatFields,
         string RuleConfidence,
         bool IsGradeable,
         bool PublicGradingEnabled,
         string? ProviderStatKey,
-        string ValueTransform);
+        string ValueTransform,
+        string? Notes);
+
+    private sealed record ApiSportsSoccerStatMappingReview(
+        ApiSportsSoccerStatMappingReviewSummary Summary,
+        IReadOnlyList<ApiSportsSoccerStatMappingReviewRow> Mappings,
+        IReadOnlyList<ApiSportsSoccerImportedStatNoiseReviewRow> ImportedStatNoise,
+        string RecommendedNextAction);
+
+    private sealed record ApiSportsSoccerStatMappingReviewSummary(
+        int MappingsReviewed,
+        int NeedsConfirmationMappings,
+        int UnsupportedMappings,
+        int NonGradeableMappings,
+        int RowCountAffected,
+        int ManualApprovalCandidates,
+        int KeepNonGradeableRecommendations,
+        int NeedsMoreProviderEvidence,
+        int ImportedStatNoiseRows,
+        bool PublicGradingEligible);
+
+    private sealed record ApiSportsSoccerStatMappingReviewRow(
+        string PropType,
+        string CanonicalStatKey,
+        IReadOnlyList<string> ApiSportsSourceFields,
+        string RuleConfidence,
+        bool IsGradeable,
+        bool PublicGradingEnabled,
+        int RowCountAffected,
+        int DistinctPlayers,
+        int DistinctFixtures,
+        int TheOddsReturnedPlatformRows,
+        int ImportedStatNoiseRows,
+        IReadOnlyList<ApiSportsSoccerResultMappingGapRow> SampleRows,
+        string? CurrentNotes,
+        string WhyNonGradeableToday,
+        string RiskAssessment,
+        string Recommendation,
+        bool PublicGradingEligible,
+        bool DebugPreviewEligibleIfApproved);
+
+    private sealed record ApiSportsSoccerImportedStatNoiseReviewRow(
+        string ApiSportsPropType,
+        string ApiSportsStatKey,
+        int RowCount,
+        int DistinctPlayers,
+        int DistinctFixtures,
+        string WhyIgnored,
+        string Recommendation);
 
     private sealed record ApiSportsSoccerFixtureMappingCoverage(
         ApiSportsSoccerFixtureMappingCoverageSummary Summary,

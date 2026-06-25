@@ -181,6 +181,8 @@ Approved provider links are used by `/api/debug/soccer/results/api-sports/world-
 
 `/api/debug/soccer/results/api-sports/world-cup/prop-mapping-gap` is the read-only follow-up when grading coverage is blocked by `propTypeMappingMissing`. It uses only persisted API-Sports `prop_results`, persisted The Odds Soccer sportsbook `platform_props`, resolved fixture/provider-event pairs, approved The Odds alias links, and DB-backed API-Sports stat mappings. It separates missing The Odds market canonical mappings, API-Sports stats without provider mappings, canonical key mismatches, non-gradeable mappings, imported stat noise, and player-matched/stat-missing rows. It recommends review or mapping work but does not write mappings, grades, aliases, imports, or provider refreshes.
 
+`/api/debug/soccer/results/api-sports/world-cup/stat-mapping-review` turns the prop/stat gap into explicit mapping review rows. It lists NeedsConfirmation, Unsupported, non-gradeable, and non-public-gradeable API-Sports mappings with source fields, affected row counts, imported-stat-noise counts, samples, risk assessment, and recommendation. It distinguishes stats API-Sports imported but The Odds did not return from mappings that may later need manual approval. It does not write provider stat mappings or enable public Soccer grading.
+
 `/api/debug/soccer/world-cup/spike-status` summarizes the spike without writing or calling providers. It combines The Odds ingestion coverage, fixture mapping, alias/link coverage, debug grading coverage, and prop/stat mapping gaps into a single `ResearchOnly` status. The response includes production guardrails showing public Soccer grading disabled, Soccer Entry Builder usage disabled, sportsbook context research-only, and automatic alias/stat-mapping approval disabled.
 
 The alias portion of spike status uses explicit fields instead of a generic unresolved count: evaluated platform player names, total alias candidates, approved links, safe-link approvals, manual approvals, remaining needs-review rows, remaining no-candidate rows, remaining ambiguous rows, and remaining new safe candidates.
@@ -431,6 +433,9 @@ Invoke-RestMethod "$base/api/debug/soccer/results/api-sports/world-cup/grading-c
   ConvertTo-Json -Depth 80
 
 Invoke-RestMethod "$base/api/debug/soccer/results/api-sports/world-cup/prop-mapping-gap?fromDate=2026-06-21&toDate=2026-06-24&includeSamples=true&maxSamples=100" |
+  ConvertTo-Json -Depth 80
+
+Invoke-RestMethod "$base/api/debug/soccer/results/api-sports/world-cup/stat-mapping-review?fromDate=2026-06-21&toDate=2026-06-24&includeSamples=true&maxSamples=100" |
   ConvertTo-Json -Depth 80
 
 Invoke-RestMethod "$base/api/debug/soccer/world-cup/spike-status?fromDate=2026-06-21&toDate=2026-06-24&includeDetails=true" |
