@@ -7,7 +7,7 @@ public sealed class PredictionProbabilityService(
     ApplicationDbContext dbContext,
     IPlayerIdentityAliasService playerIdentityAliasService) : IPredictionProbabilityService
 {
-    private const int PriorSampleWeight = 25;
+    private const int PriorSampleWeight = 5;
     private IReadOnlyDictionary<Guid, Guid[]>? equivalentPropTypeIdsById;
 
     public async Task<PredictionProbabilityRunAnalysis> AnalyzeLatestRunAsync(CancellationToken cancellationToken)
@@ -173,6 +173,7 @@ public sealed class PredictionProbabilityService(
         var line = prediction.SportsbookLine.Value;
         var playerProbability = CalculateEmpiricalProbability(playerResults, line);
         var priorProbability = CalculateEmpiricalProbability(priorResults, line);
+        var empiricalMeanProjection = Average(playerResults);
         var sampleWeight = playerResults.Length / (decimal)(playerResults.Length + PriorSampleWeight);
         var probabilityOver = BlendProbability(playerProbability.Over, priorProbability.Over, sampleWeight);
         var probabilityUnder = BlendProbability(playerProbability.Under, priorProbability.Under, sampleWeight);
@@ -202,7 +203,14 @@ public sealed class PredictionProbabilityService(
             confidenceScore,
             rankingScore,
             playerResults.Length,
-            methodUsed);
+            methodUsed,
+            empiricalMeanProjection,
+            playerProbability.Over,
+            playerProbability.Under,
+            priorProbability.Over,
+            priorProbability.Under,
+            PriorSampleWeight,
+            Math.Round(sampleWeight, 4));
     }
 
     private async Task<Guid[]> GetEquivalentPlayerIdsAsync(
@@ -355,6 +363,11 @@ public sealed class PredictionProbabilityService(
             Math.Round(values.Count(value => value == line) / (decimal)values.Count, 4));
     }
 
+    private static decimal? Average(IReadOnlyCollection<decimal> values)
+    {
+        return values.Count == 0 ? null : Math.Round(values.Average(), 4);
+    }
+
     private static decimal? BlendProbability(decimal? playerProbability, decimal? priorProbability, decimal sampleWeight)
     {
         if (playerProbability.HasValue && priorProbability.HasValue)
@@ -428,7 +441,14 @@ public sealed class PredictionProbabilityService(
             0m,
             0m,
             0,
-            methodUsed);
+            methodUsed,
+            null,
+            null,
+            null,
+            null,
+            null,
+            PriorSampleWeight,
+            0m);
     }
 
     private static string CanonicalPropTypeName(string propTypeName)

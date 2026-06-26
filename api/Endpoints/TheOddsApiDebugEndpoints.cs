@@ -19,6 +19,7 @@ public static partial class TheOddsApiDebugEndpoints
 {
     private const int FreshnessWindowHours = 24;
     private const int DefaultTheOddsLineShoppingFreshnessMinutes = 30;
+    private const decimal ProjectionProbabilityConflictThreshold = 0.5m;
     private const string MlbAliasProvider = "mlb-alias";
     private const string ExpandedTheOddsUsSportsbookBookmakers =
         "draftkings,fanduel,betmgm,espnbet,betrivers,fanatics,williamhill_us,betonlineag,bovada,lowvig,mybookieag";
@@ -365,6 +366,171 @@ public static partial class TheOddsApiDebugEndpoints
         })
         .WithName("TheOddsApiMlbTopPicksDebug")
         .WithSummary("Read-only lightweight top picks for active persisted The Odds API MLB line-shopping groups.");
+
+        endpoints.MapGet("/api/debug/the-odds/mlb/projection-probability-conflicts", async (
+            Guid? runId,
+            string? propType,
+            string? playerName,
+            bool? includeSamples,
+            int? sampleTake,
+            int? freshnessMinutes,
+            ApplicationDbContext dbContext,
+            IPredictionProbabilityService probabilityService,
+            IPlayerIdentityAliasService playerIdentityAliasService,
+            IOptions<PredictionGenerationOptions> predictionGenerationOptions,
+            CancellationToken cancellationToken) =>
+        {
+            var generatedAtUtc = DateTimeOffset.UtcNow;
+            var lifecycleFreshnessMinutes = Math.Clamp(freshnessMinutes ?? DefaultTheOddsLineShoppingFreshnessMinutes, 1, 1440);
+            var requestedSampleTake = Math.Clamp(sampleTake ?? 25, 1, 100);
+            var shouldIncludeSamples = includeSamples ?? true;
+            var normalizedPropTypeFilter = string.IsNullOrWhiteSpace(propType)
+                ? null
+                : NormalizeTheOddsPropTypeName(propType);
+
+            var platformPropDataRows = await LoadTheOddsPlatformPropDataRowsAsync(dbContext, cancellationToken);
+            var platformProps = ParseTheOddsPlatformProps(platformPropDataRows);
+            var propIds = platformProps.Select(row => row.PropId).Distinct().ToArray();
+            var probabilityAnalysis = runId.HasValue
+                ? await probabilityService.AnalyzeRunForPropsAsync(runId.Value, propIds, cancellationToken)
+                : await probabilityService.AnalyzeLatestRunForPropsAsync(propIds, cancellationToken);
+
+            if (probabilityAnalysis is null)
+            {
+                return Results.NotFound(new { error = $"Prediction run '{runId}' was not found." });
+            }
+
+            var rows = BuildTheOddsLineShoppingRows(
+                platformProps,
+                probabilityAnalysis,
+                generatedAtUtc.AddHours(-FreshnessWindowHours));
+            var groups = BuildTheOddsLineShoppingGroups(
+                rows,
+                generatedAtUtc,
+                lifecycleFreshnessMinutes,
+                predictionGenerationOptions.Value)
+                .Where(group => normalizedPropTypeFilter is null
+                    || string.Equals(NormalizeTheOddsPropTypeName(group.NormalizedPropType), normalizedPropTypeFilter, StringComparison.OrdinalIgnoreCase))
+                .Where(group => string.IsNullOrWhiteSpace(playerName)
+                    || group.Player.Contains(playerName, StringComparison.OrdinalIgnoreCase))
+                .ToArray();
+            var conflicts = groups
+                .Where(group => group.ProjectionProbabilityConflict)
+                .ToArray();
+            var conflictBucketsByKey = await BuildProjectionProbabilityConflictBucketsAsync(
+                dbContext,
+                playerIdentityAliasService,
+                conflicts,
+                cancellationToken);
+            var samples = shouldIncludeSamples
+                ? await BuildProjectionProbabilityConflictSamplesAsync(
+                    dbContext,
+                    playerIdentityAliasService,
+                    conflicts,
+                    requestedSampleTake,
+                    cancellationToken)
+                : [];
+            var totalGroupsEvaluated = groups.Length;
+            var conflictGroups = conflicts.Length;
+            var conflictRate = totalGroupsEvaluated == 0
+                ? 0m
+                : Math.Round(conflictGroups / (decimal)totalGroupsEvaluated, 4);
+            var recentWeightedProjectionProbabilityConflicts = groups.Count(HasRecentWeightedProjectionProbabilityConflict);
+            var conflictBuckets = conflicts
+                .GroupBy(group => conflictBucketsByKey.GetValueOrDefault(BuildProjectionProbabilityConflictKey(group), "UnknownNeedsReview"), StringComparer.OrdinalIgnoreCase)
+                .Select(group => new { bucket = group.Key, count = group.Count() })
+                .OrderByDescending(row => row.count)
+                .ThenBy(row => row.bucket)
+                .ToArray();
+            var recommendation = conflictGroups == 0
+                ? "No projection/probability conflicts were found for the selected scope."
+                : "Keep promotion suppression active for conflicts. Use samples to distinguish skewed distributions from mapping/history bugs before changing thresholds.";
+
+            return Results.Ok(new
+            {
+                generatedAtUtc,
+                callsExternalApis = false,
+                readOnly = true,
+                writesRows = false,
+                totalGroupsEvaluated,
+                conflictGroups,
+                conflictRate,
+                conflictBuckets,
+                recentWeightedProjectionProbabilityConflicts,
+                run = new
+                {
+                    runId = probabilityAnalysis.RunId,
+                    probabilityAnalysis.ModelName,
+                    probabilityAnalysis.ModelVersion,
+                    probabilityAnalysis.CreatedAt,
+                    probabilityAnalysis.PredictionCount
+                },
+                filters = new
+                {
+                    propType,
+                    playerName,
+                    includeSamples = shouldIncludeSamples,
+                    sampleTake = requestedSampleTake,
+                    freshnessMinutes = lifecycleFreshnessMinutes
+                },
+                summary = new
+                {
+                    totalGroupsEvaluated,
+                    conflictGroups,
+                    conflictRate,
+                    activeConflictGroups = conflicts.Count(IsActiveTheOddsLineShoppingGroup),
+                    totalBasesConflictGroups = conflicts.Count(group => string.Equals(group.NormalizedPropType, "Total Bases", StringComparison.OrdinalIgnoreCase)),
+                    recentWeightedProjectionProbabilityConflicts,
+                    averageProjectionEdge = AverageNullable(conflicts.Select(group => group.ProjectionEdge)),
+                    averageAbsoluteProjectionEdge = AverageNullable(conflicts.Select(group => group.ProjectionEdge.HasValue ? Math.Abs(group.ProjectionEdge.Value) : (decimal?)null)),
+                    averageProbabilityEdge = AverageNullable(conflicts.Select(CalculateProjectionProbabilityConflictEdge)),
+                    averagePlayerSampleSize = AverageInt(conflicts.Select(group => group.HistoricalSampleSize)),
+                    averageEffectiveShrinkageWeight = AverageNullable(conflicts.Select(group => (decimal?)group.EffectiveShrinkageWeight)),
+                    conflictBuckets,
+                    recommendation
+                },
+                conflictsByPropType = groups
+                    .GroupBy(group => group.NormalizedPropType, StringComparer.OrdinalIgnoreCase)
+                    .Select(group =>
+                    {
+                        var propConflicts = group.Where(row => row.ProjectionProbabilityConflict).ToArray();
+                        return new
+                        {
+                            normalizedPropType = group.Key,
+                            totalGroups = group.Count(),
+                            conflictGroups = propConflicts.Length,
+                            conflictRate = group.Count() == 0 ? 0m : Math.Round(propConflicts.Length / (decimal)group.Count(), 4),
+                            recentWeightedProjectionProbabilityConflicts = group.Count(HasRecentWeightedProjectionProbabilityConflict),
+                            averageProjectionEdge = AverageNullable(propConflicts.Select(row => row.ProjectionEdge)),
+                            averageAbsoluteProjectionEdge = AverageNullable(propConflicts.Select(row => row.ProjectionEdge.HasValue ? Math.Abs(row.ProjectionEdge.Value) : (decimal?)null)),
+                            averageProbabilityEdge = AverageNullable(propConflicts.Select(CalculateProjectionProbabilityConflictEdge)),
+                            averagePlayerSampleSize = AverageInt(propConflicts.Select(row => row.HistoricalSampleSize)),
+                            sampleSizeBuckets = propConflicts
+                                .GroupBy(row => HistoricalSampleSizeBucket(row.HistoricalSampleSize), StringComparer.OrdinalIgnoreCase)
+                                .Select(bucket => new { bucket = bucket.Key, count = bucket.Count() })
+                                .OrderBy(row => row.bucket)
+                                .ToArray(),
+                            averageRawPlayerEmpiricalOverRate = AverageNullable(propConflicts.Select(row => row.RawPlayerEmpiricalOverRate)),
+                            averageRawPlayerEmpiricalUnderRate = AverageNullable(propConflicts.Select(row => row.RawPlayerEmpiricalUnderRate)),
+                            averageRawPriorOverRate = AverageNullable(propConflicts.Select(row => row.RawPriorOverRate)),
+                            averageRawPriorUnderRate = AverageNullable(propConflicts.Select(row => row.RawPriorUnderRate)),
+                            averageEffectiveShrinkageWeight = AverageNullable(propConflicts.Select(row => (decimal?)row.EffectiveShrinkageWeight)),
+                            conflictBuckets = propConflicts
+                                .GroupBy(row => conflictBucketsByKey.GetValueOrDefault(BuildProjectionProbabilityConflictKey(row), "UnknownNeedsReview"), StringComparer.OrdinalIgnoreCase)
+                                .Select(bucket => new { bucket = bucket.Key, count = bucket.Count() })
+                                .OrderByDescending(row => row.count)
+                                .ThenBy(row => row.bucket)
+                                .ToArray()
+                        };
+                    })
+                    .OrderByDescending(row => row.conflictGroups)
+                    .ThenBy(row => row.normalizedPropType)
+                    .ToArray(),
+                samples
+            });
+        })
+        .WithName("TheOddsApiMlbProjectionProbabilityConflictAuditDebug")
+        .WithSummary("Read-only MLB audit for projection direction vs probability direction conflicts.");
 
         endpoints.MapGet("/api/debug/the-odds/mlb/line-shopping-backtest", async (
             Guid? runId,
@@ -3941,6 +4107,8 @@ public static partial class TheOddsApiDebugEndpoints
             prediction.ProbabilityOver,
             prediction.ProbabilityUnder,
             prediction.ProbabilityPush,
+            prediction.EmpiricalMeanProjection,
+            prediction.EmpiricalMeanProjection.HasValue ? Math.Round(prediction.EmpiricalMeanProjection.Value - platformProp.CurrentLine, 4) : null,
             prediction.PredictedValue,
             prediction.Edge,
             prediction.RankingScore,
@@ -3970,7 +4138,13 @@ public static partial class TheOddsApiDebugEndpoints
             platformProp.BacktestResultDate.ResolvedMlbDate,
             prediction.SampleSize,
             prediction.MethodUsed,
-            prediction.ConfidenceScore);
+            prediction.ConfidenceScore,
+            prediction.RawPlayerEmpiricalOverRate,
+            prediction.RawPlayerEmpiricalUnderRate,
+            prediction.RawPriorOverRate,
+            prediction.RawPriorUnderRate,
+            prediction.PriorSampleWeight,
+            prediction.EffectiveShrinkageWeight);
     }
 
     private static List<TheOddsPersistedPlatformPropRow> ApplyTheOddsLineShoppingScope(
@@ -4081,6 +4255,16 @@ public static partial class TheOddsApiDebugEndpoints
             .Max();
         var first = rows.OrderByDescending(row => row.RankingScore).First();
         var bestSide = SelectBestSide(bestOver, bestUnder, rows, key.ProviderCategory, selectionOptions);
+        var projectionDirection = ResolveProjectionDirection(first.ModelProjection, key.Line);
+        var probabilityDirection = ResolveProbabilityDirection(first.ModelProbabilityOver, first.ModelProbabilityUnder);
+        var projectionProbabilityConflict = HasProjectionProbabilityConflict(
+            first.ModelProjection,
+            key.Line,
+            first.ModelProbabilityOver,
+            first.ModelProbabilityUnder);
+        var conflictReason = projectionProbabilityConflict
+            ? $"Projection direction {projectionDirection} conflicts with probability direction {probabilityDirection} at the configured projection conflict threshold."
+            : null;
         var sampleWarning = BuildSampleWarning(first.HistoricalSampleSize, first.ProbabilityMethod);
         var trustLevel = BuildTrustLevel(
             rows.Any(row => row.IsEligibleAsNormalRecommendation),
@@ -4139,10 +4323,22 @@ public static partial class TheOddsApiDebugEndpoints
             first.ModelProbabilityPush,
             first.ModelProjection,
             first.ProjectionEdge,
+            first.RecentWeightedProjection,
+            first.RecentWeightedProjectionEdge,
             first.RankingScore,
             first.HistoricalSampleSize,
             first.ProbabilityMethod,
             first.ConfidenceScore,
+            projectionDirection,
+            probabilityDirection,
+            projectionProbabilityConflict,
+            conflictReason,
+            first.RawPlayerEmpiricalOverRate,
+            first.RawPlayerEmpiricalUnderRate,
+            first.RawPriorOverRate,
+            first.RawPriorUnderRate,
+            first.PriorSampleWeight,
+            first.EffectiveShrinkageWeight,
             sampleWarning,
             trustLevel,
             selectionOptions.MinimumPickHitProbability,
@@ -4181,7 +4377,7 @@ public static partial class TheOddsApiDebugEndpoints
             bestUnder?.Bookmaker,
             bestUnder?.UnderAmericanPrice,
             bestUnder?.UnderEstimatedEv,
-            bestEstimatedEv,
+            bestSide.EstimatedEv,
             spreads.Where(value => value.HasValue).DefaultIfEmpty().Max(),
             bestSide.Side,
             bestSide.Bookmaker,
@@ -4257,10 +4453,33 @@ public static partial class TheOddsApiDebugEndpoints
             modelProbabilityPush = group.ModelProbabilityPush,
             modelProjection = group.ModelProjection,
             projectionEdge = group.ProjectionEdge,
+            recommendationProjection = group.ModelProjection,
+            recommendationProjectionSource = "EmpiricalMeanFromProbabilityPlayerHistory",
+            displayProjection = group.ModelProjection,
+            displayProjectionSource = "Recommendation-aligned empirical mean from the same player-history window used for hit probability.",
+            recentWeightedProjection = group.RecentWeightedProjection,
+            recentWeightedProjectionEdge = group.RecentWeightedProjectionEdge,
+            recentWeightedProjectionSource = "Context only: seasonAverage*0.50 + last10Average*0.30 + last5Average*0.20.",
+            recentWeightedProjectionProbabilityConflict = HasRecentWeightedProjectionProbabilityConflict(group),
+            probabilityWindowDescription = "All pre-event player prop_results for equivalent MLB player and prop type, blended with prop-type prior for side probabilities.",
+            projectionWindowDescription = "Recommendation/display projection uses the empirical mean from the same player history as hit probability. recentWeightedProjection uses season/last10/last5 context only.",
+            isProjectionRecommendationAligned = true,
+            shouldProjectionEdgeBeDisplayed = !group.ProjectionProbabilityConflict && !HasRecentWeightedProjectionProbabilityConflict(group),
             rankingScore = group.RankingScore,
             historicalSampleSize = group.HistoricalSampleSize,
             probabilityMethod = group.ProbabilityMethod,
             confidenceScore = group.ConfidenceScore,
+            projectionDirection = group.ProjectionDirection,
+            probabilityDirection = group.ProbabilityDirection,
+            projectionProbabilityConflict = group.ProjectionProbabilityConflict,
+            conflictReason = group.ProjectionProbabilityConflictReason,
+            rawPlayerEmpiricalOverRate = group.RawPlayerEmpiricalOverRate,
+            rawPlayerEmpiricalUnderRate = group.RawPlayerEmpiricalUnderRate,
+            rawPriorOverRate = group.RawPriorOverRate,
+            rawPriorUnderRate = group.RawPriorUnderRate,
+            priorSampleWeight = group.PriorSampleWeight,
+            playerSampleSize = group.HistoricalSampleSize,
+            effectiveShrinkageWeight = group.EffectiveShrinkageWeight,
             sampleWarning = group.SampleWarning,
             trustLevel = group.TrustLevel,
             minimumPickHitProbability = group.MinimumPickHitProbability,
@@ -4518,6 +4737,12 @@ public static partial class TheOddsApiDebugEndpoints
         {
             warnings.Add("Best side is unavailable.");
             riskTags.Add("MissingBestSide");
+        }
+
+        if (group.ProjectionProbabilityConflict)
+        {
+            warnings.Add(group.ProjectionProbabilityConflictReason ?? "Projection direction conflicts with model probability direction.");
+            riskTags.Add("ProjectionProbabilityConflict");
         }
 
         if (group.IsStale)
@@ -4956,6 +5181,12 @@ public static partial class TheOddsApiDebugEndpoints
         if (bestOver?.OverEstimatedEv is not null
             && (bestUnder?.UnderEstimatedEv is null || bestOver.OverEstimatedEv >= bestUnder.UnderEstimatedEv))
         {
+            if (HasSelectedSideProjectionConflict("Over", bestOver.ModelProjection, bestOver.Line)
+                || HasSelectedSideProjectionConflict("Over", bestOver.RecentWeightedProjection, bestOver.Line))
+            {
+                return new BestSideSelection("None", null, null, null, null, null, null, null, null);
+            }
+
             return new BestSideSelection(
                 "Over",
                 bestOver.Bookmaker,
@@ -4968,9 +5199,15 @@ public static partial class TheOddsApiDebugEndpoints
                 bestOver.ProjectionEdge);
         }
 
+        if (HasSelectedSideProjectionConflict("Under", bestUnder!.ModelProjection, bestUnder.Line)
+            || HasSelectedSideProjectionConflict("Under", bestUnder.RecentWeightedProjection, bestUnder.Line))
+        {
+            return new BestSideSelection("None", null, null, null, null, null, null, null, null);
+        }
+
         return new BestSideSelection(
             "Under",
-            bestUnder!.Bookmaker,
+            bestUnder.Bookmaker,
             bestUnder.UnderAmericanPrice,
             bestUnder.UnderDecimalPrice,
             bestUnder.UnderEstimatedEv,
@@ -5036,12 +5273,9 @@ public static partial class TheOddsApiDebugEndpoints
         var projectionEdge = row.ProjectionEdge.HasValue
             ? isOver ? row.ProjectionEdge.Value : -row.ProjectionEdge.Value
             : (decimal?)null;
-        var projectionThreshold = isOver
-            ? selectionOptions.OverProjectionEdgeThreshold
-            : selectionOptions.UnderProjectionEdgeThreshold;
         var selectedSideProbability = isOver ? row.ModelProbabilityOver : row.ModelProbabilityUnder;
-        if (!projectionEdge.HasValue
-            || projectionEdge.Value < projectionThreshold
+        if (HasSelectedSideProjectionConflict(side, row.ModelProjection, row.Line)
+            || HasSelectedSideProjectionConflict(side, row.RecentWeightedProjection, row.Line)
             || !selectedSideProbability.HasValue
             || selectedSideProbability.Value < selectionOptions.ResearchOnlyBelowHitProbability)
         {
@@ -5052,12 +5286,506 @@ public static partial class TheOddsApiDebugEndpoints
             side,
             row,
             selectedSideProbability.Value,
-            projectionEdge.Value,
+            projectionEdge ?? 0m,
             isOver ? row.OverAmericanPrice : row.UnderAmericanPrice,
             isOver ? row.OverDecimalPrice : row.UnderDecimalPrice,
             isOver ? row.OverEstimatedEv : row.UnderEstimatedEv,
             isOver ? row.OverImpliedProbability : row.UnderImpliedProbability,
             isOver ? row.OverProbabilityEdge : row.UnderProbabilityEdge);
+    }
+
+    private static bool HasSelectedSideProjectionConflict(string side, decimal? modelProjection, decimal line)
+    {
+        if (!modelProjection.HasValue)
+        {
+            return false;
+        }
+
+        var projectionEdge = modelProjection.Value - line;
+        if (Math.Abs(projectionEdge) < ProjectionProbabilityConflictThreshold)
+        {
+            return false;
+        }
+
+        return (projectionEdge > 0m && side.Equals("Under", StringComparison.OrdinalIgnoreCase))
+            || (projectionEdge < 0m && side.Equals("Over", StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static bool HasProjectionProbabilityConflict(
+        decimal? modelProjection,
+        decimal line,
+        decimal? probabilityOver,
+        decimal? probabilityUnder)
+    {
+        var projectionDirection = ResolveProjectionDirection(modelProjection, line);
+        var probabilityDirection = ResolveProbabilityDirection(probabilityOver, probabilityUnder);
+
+        return (projectionDirection == "Over" && probabilityDirection == "Under")
+            || (projectionDirection == "Under" && probabilityDirection == "Over");
+    }
+
+    private static bool HasRecentWeightedProjectionProbabilityConflict(TheOddsLineShoppingGroup group)
+    {
+        var recentWeightedProjectionDirection = ResolveProjectionDirection(group.RecentWeightedProjection, group.Line);
+        return (recentWeightedProjectionDirection == "Over" && group.ProbabilityDirection == "Under")
+            || (recentWeightedProjectionDirection == "Under" && group.ProbabilityDirection == "Over");
+    }
+
+    private static string ResolveProjectionDirection(decimal? modelProjection, decimal line)
+    {
+        if (!modelProjection.HasValue)
+        {
+            return "Neutral";
+        }
+
+        var projectionEdge = modelProjection.Value - line;
+        if (Math.Abs(projectionEdge) < ProjectionProbabilityConflictThreshold)
+        {
+            return "Neutral";
+        }
+
+        return projectionEdge > 0m ? "Over" : "Under";
+    }
+
+    private static string ResolveProbabilityDirection(decimal? probabilityOver, decimal? probabilityUnder)
+    {
+        if (!probabilityOver.HasValue || !probabilityUnder.HasValue || probabilityOver.Value == probabilityUnder.Value)
+        {
+            return "Neutral";
+        }
+
+        return probabilityOver.Value > probabilityUnder.Value ? "Over" : "Under";
+    }
+
+    private static decimal? CalculateProjectionProbabilityConflictEdge(TheOddsLineShoppingGroup group)
+    {
+        if (!group.ModelProbabilityOver.HasValue || !group.ModelProbabilityUnder.HasValue)
+        {
+            return null;
+        }
+
+        return group.ProjectionDirection switch
+        {
+            "Over" => Math.Round(group.ModelProbabilityUnder.Value - group.ModelProbabilityOver.Value, 4),
+            "Under" => Math.Round(group.ModelProbabilityOver.Value - group.ModelProbabilityUnder.Value, 4),
+            _ => Math.Round(Math.Abs(group.ModelProbabilityOver.Value - group.ModelProbabilityUnder.Value), 4)
+        };
+    }
+
+    private static async Task<IReadOnlyDictionary<ProjectionProbabilityConflictKey, string>> BuildProjectionProbabilityConflictBucketsAsync(
+        ApplicationDbContext dbContext,
+        IPlayerIdentityAliasService playerIdentityAliasService,
+        IReadOnlyCollection<TheOddsLineShoppingGroup> conflicts,
+        CancellationToken cancellationToken)
+    {
+        if (conflicts.Count == 0)
+        {
+            return new Dictionary<ProjectionProbabilityConflictKey, string>();
+        }
+
+        var equivalentPropTypeIdsById = await LoadEquivalentMlbPropTypeIdsAsync(dbContext, cancellationToken);
+        var result = new Dictionary<ProjectionProbabilityConflictKey, string>();
+        foreach (var group in conflicts)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var equivalentPlayerIds = (await playerIdentityAliasService.GetEquivalentPlayerIdsAsync(
+                    group.PlayerId,
+                    "MLB",
+                    cancellationToken))
+                .Distinct()
+                .ToArray();
+            var equivalentPropTypeIds = equivalentPropTypeIdsById.TryGetValue(group.PropTypeId, out var propTypeIds)
+                ? propTypeIds
+                : [group.PropTypeId];
+            var values = await dbContext.PropResults
+                .AsNoTracking()
+                .Include(row => row.League)
+                .Where(row => row.League != null
+                    && row.League.Code == "MLB"
+                    && equivalentPlayerIds.Contains(row.PlayerId)
+                    && equivalentPropTypeIds.Contains(row.PropTypeId)
+                    && row.EventDate < group.EventDate)
+                .Select(row => row.ActualResultValue)
+                .ToArrayAsync(cancellationToken);
+
+            result[BuildProjectionProbabilityConflictKey(group)] = ClassifyProjectionProbabilityConflict(
+                group,
+                GetHistoryMean(values),
+                GetHistoryMedian(values),
+                GetHistoryRate(values, group.Line, isOver: true),
+                GetHistoryRate(values, group.Line, isOver: false));
+        }
+
+        return result;
+    }
+
+    private static ProjectionProbabilityConflictKey BuildProjectionProbabilityConflictKey(TheOddsLineShoppingGroup group)
+    {
+        return new ProjectionProbabilityConflictKey(
+            group.PlayerId,
+            group.PropTypeId,
+            group.Line,
+            group.ModelProjection,
+            group.EventDate,
+            group.EventId);
+    }
+
+    private static async Task<object[]> BuildProjectionProbabilityConflictSamplesAsync(
+        ApplicationDbContext dbContext,
+        IPlayerIdentityAliasService playerIdentityAliasService,
+        IReadOnlyCollection<TheOddsLineShoppingGroup> conflicts,
+        int sampleTake,
+        CancellationToken cancellationToken)
+    {
+        var selectedConflicts = conflicts
+            .OrderByDescending(group => string.Equals(group.NormalizedPropType, "Total Bases", StringComparison.OrdinalIgnoreCase))
+            .ThenByDescending(group => group.ProjectionEdge.HasValue ? Math.Abs(group.ProjectionEdge.Value) : 0m)
+            .ThenByDescending(CalculateProjectionProbabilityConflictEdge)
+            .ThenBy(group => group.Player)
+            .Take(sampleTake)
+            .ToArray();
+
+        if (selectedConflicts.Length == 0)
+        {
+            return [];
+        }
+
+        var equivalentPropTypeIdsById = await LoadEquivalentMlbPropTypeIdsAsync(dbContext, cancellationToken);
+        var samples = new List<object>(selectedConflicts.Length);
+        foreach (var group in selectedConflicts)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var equivalentPlayerIds = (await playerIdentityAliasService.GetEquivalentPlayerIdsAsync(
+                    group.PlayerId,
+                    "MLB",
+                    cancellationToken))
+                .Distinct()
+                .ToArray();
+            var equivalentPropTypeIds = equivalentPropTypeIdsById.TryGetValue(group.PropTypeId, out var propTypeIds)
+                ? propTypeIds
+                : [group.PropTypeId];
+
+            var playerHistory = await dbContext.PropResults
+                .AsNoTracking()
+                .Include(result => result.League)
+                .Where(result => result.League != null
+                    && result.League.Code == "MLB"
+                    && equivalentPlayerIds.Contains(result.PlayerId)
+                    && equivalentPropTypeIds.Contains(result.PropTypeId)
+                    && result.EventDate < group.EventDate)
+                .OrderByDescending(result => result.EventDate)
+                .Select(result => new ProjectionFeatureValue(result.EventDate, result.ActualResultValue))
+                .ToArrayAsync(cancellationToken);
+            var priorValues = await dbContext.PropResults
+                .AsNoTracking()
+                .Include(result => result.League)
+                .Where(result => result.League != null
+                    && result.League.Code == "MLB"
+                    && equivalentPropTypeIds.Contains(result.PropTypeId)
+                    && result.EventDate < group.EventDate)
+                .Select(result => result.ActualResultValue)
+                .ToArrayAsync(cancellationToken);
+            var playerValues = playerHistory.Select(row => row.Value).ToArray();
+            var probabilityHistorySummary = BuildLineHistorySummary(playerValues, group.Line);
+            var projectionFeatureSummary = BuildProjectionFeatureSummary(playerHistory, group.EventDate, group.RecentWeightedProjection);
+            var conflictBucket = ClassifyProjectionProbabilityConflict(
+                group,
+                GetHistoryMean(playerValues),
+                GetHistoryMedian(playerValues),
+                GetHistoryRate(playerValues, group.Line, isOver: true),
+                GetHistoryRate(playerValues, group.Line, isOver: false));
+
+            samples.Add(new
+            {
+                group.Player,
+                playerId = group.PlayerId,
+                canonicalPlayerId = (Guid?)null,
+                equivalentPlayerIds,
+                group.NormalizedPropType,
+                propTypeId = group.PropTypeId,
+                equivalentPropTypeIds,
+                group.Line,
+                group.ModelProjection,
+                group.ProjectionEdge,
+                recommendationProjection = group.ModelProjection,
+                recommendationProjectionSource = "EmpiricalMeanFromProbabilityPlayerHistory",
+                displayProjection = group.ModelProjection,
+                displayProjectionSource = "Recommendation-aligned empirical mean from the same player-history window used for hit probability.",
+                recentWeightedProjection = group.RecentWeightedProjection,
+                recentWeightedProjectionEdge = group.RecentWeightedProjectionEdge,
+                recentWeightedProjectionSource = "Context only: seasonAverage*0.50 + last10Average*0.30 + last5Average*0.20.",
+                recentWeightedProjectionProbabilityConflict = HasRecentWeightedProjectionProbabilityConflict(group),
+                probabilityWindowDescription = "All pre-event player prop_results for equivalent MLB player and prop type, blended with prop-type prior for side probabilities.",
+                projectionWindowDescription = "Recommendation/display projection uses the empirical mean from the same player history as hit probability. recentWeightedProjection uses season/last10/last5 context only.",
+                isProjectionRecommendationAligned = true,
+                shouldProjectionEdgeBeDisplayed = !group.ProjectionProbabilityConflict && !HasRecentWeightedProjectionProbabilityConflict(group),
+                projectionFeatureSampleSize = projectionFeatureSummary.SeasonSampleSize,
+                projectionFeatureSummary,
+                group.ModelProbabilityOver,
+                group.ModelProbabilityUnder,
+                group.ProjectionDirection,
+                group.ProbabilityDirection,
+                group.ProjectionProbabilityConflict,
+                group.ProjectionProbabilityConflictReason,
+                conflictBucket,
+                group.RawPlayerEmpiricalOverRate,
+                group.RawPlayerEmpiricalUnderRate,
+                group.RawPriorOverRate,
+                group.RawPriorUnderRate,
+                group.PriorSampleWeight,
+                group.EffectiveShrinkageWeight,
+                group.HistoricalSampleSize,
+                group.ProbabilityMethod,
+                probabilityHistory = probabilityHistorySummary,
+                projectionMeanFromProbabilityValues = probabilityHistorySummary.Mean,
+                modelProjectionMinusEmpiricalMean = group.ModelProjection.HasValue && probabilityHistorySummary.Mean.HasValue
+                    ? Math.Round(group.ModelProjection.Value - probabilityHistorySummary.Mean.Value, 4)
+                    : (decimal?)null,
+                recentWeightedProjectionMinusEmpiricalMean = group.RecentWeightedProjection.HasValue && probabilityHistorySummary.Mean.HasValue
+                    ? Math.Round(group.RecentWeightedProjection.Value - probabilityHistorySummary.Mean.Value, 4)
+                    : (decimal?)null,
+                priorHistory = BuildLineHistorySummary(priorValues, group.Line),
+                valuesUsed = playerHistory
+                    .Take(100)
+                    .Select(row => new { eventDate = row.EventDate, value = row.Value })
+                    .ToArray(),
+                resultSource = "prop_results.actual_result_value",
+                graphHistoryValues = "Same persisted prop_results source; UI may display a limited recent window.",
+                interpretation = BuildProjectionProbabilityConflictInterpretation(group, playerValues, conflictBucket)
+            });
+        }
+
+        return samples.ToArray();
+    }
+
+    private static async Task<IReadOnlyDictionary<Guid, Guid[]>> LoadEquivalentMlbPropTypeIdsAsync(
+        ApplicationDbContext dbContext,
+        CancellationToken cancellationToken)
+    {
+        var propTypes = await dbContext.PropTypes
+            .AsNoTracking()
+            .Select(propType => new
+            {
+                propType.Id,
+                propType.Name
+            })
+            .ToArrayAsync(cancellationToken);
+
+        return propTypes
+            .GroupBy(propType => CanonicalTheOddsPropTypeName(propType.Name), StringComparer.OrdinalIgnoreCase)
+            .SelectMany(group =>
+            {
+                var ids = group.Select(propType => propType.Id).Distinct().ToArray();
+                return group.Select(propType => new { propType.Id, EquivalentIds = ids });
+            })
+            .ToDictionary(row => row.Id, row => row.EquivalentIds);
+    }
+
+    private static LineHistorySummary BuildLineHistorySummary(IReadOnlyCollection<decimal> values, decimal line)
+    {
+        var orderedValues = values.OrderBy(value => value).ToArray();
+        var overCount = values.Count(value => value > line);
+        var underCount = values.Count(value => value < line);
+        var pushCount = values.Count(value => value == line);
+        return new LineHistorySummary(
+            values.Count,
+            overCount,
+            underCount,
+            pushCount,
+            values.Count == 0 ? null : Math.Round(overCount / (decimal)values.Count, 4),
+            values.Count == 0 ? null : Math.Round(underCount / (decimal)values.Count, 4),
+            values.Count == 0 ? null : Math.Round(pushCount / (decimal)values.Count, 4),
+            GetHistoryMean(values),
+            CalculateMedian(orderedValues),
+            values.Count == 0 ? null : values.Min(),
+            values.Count == 0 ? null : values.Max());
+    }
+
+    private static decimal? CalculateMedian(IReadOnlyList<decimal> sortedValues)
+    {
+        if (sortedValues.Count == 0)
+        {
+            return null;
+        }
+
+        var midpoint = sortedValues.Count / 2;
+        if (sortedValues.Count % 2 == 1)
+        {
+            return sortedValues[midpoint];
+        }
+
+        return Math.Round((sortedValues[midpoint - 1] + sortedValues[midpoint]) / 2m, 4);
+    }
+
+    private static ProjectionFeatureSummary BuildProjectionFeatureSummary(
+        IReadOnlyList<ProjectionFeatureValue> playerHistory,
+        DateOnly eventDate,
+        decimal? modelProjection)
+    {
+        var ordered = playerHistory.ToArray();
+        var last5 = ordered.Take(5).ToArray();
+        var last10 = ordered.Take(10).ToArray();
+        var season = ordered.Where(row => row.EventDate.Year == eventDate.Year).ToArray();
+        var seasonAverage = AverageProjectionFeatureValues(season);
+        var last10Average = AverageProjectionFeatureValues(last10);
+        var last5Average = AverageProjectionFeatureValues(last5);
+        var recomputedProjection = seasonAverage.HasValue && last10Average.HasValue && last5Average.HasValue
+            ? Math.Round((seasonAverage.Value * 0.50m) + (last10Average.Value * 0.30m) + (last5Average.Value * 0.20m), 4)
+            : (decimal?)null;
+
+        return new ProjectionFeatureSummary(
+            "WeightedSeasonLast10Last5",
+            season.Length,
+            last10.Length,
+            last5.Length,
+            seasonAverage,
+            last10Average,
+            last5Average,
+            recomputedProjection,
+            modelProjection.HasValue && recomputedProjection.HasValue
+                ? Math.Round(modelProjection.Value - recomputedProjection.Value, 4)
+                : null,
+            last5,
+            last10,
+            season.Take(100).ToArray());
+    }
+
+    private static decimal? AverageProjectionFeatureValues(IReadOnlyCollection<ProjectionFeatureValue> values)
+    {
+        return values.Count == 0 ? null : Math.Round(values.Average(row => row.Value), 4);
+    }
+
+    private static decimal? GetHistoryMean(IReadOnlyCollection<decimal> values)
+    {
+        return values.Count == 0 ? null : Math.Round(values.Average(), 4);
+    }
+
+    private static decimal? GetHistoryMedian(IReadOnlyCollection<decimal> values)
+    {
+        return CalculateMedian(values.OrderBy(value => value).ToArray());
+    }
+
+    private static decimal? GetHistoryRate(IReadOnlyCollection<decimal> values, decimal line, bool isOver)
+    {
+        if (values.Count == 0)
+        {
+            return null;
+        }
+
+        var count = isOver
+            ? values.Count(value => value > line)
+            : values.Count(value => value < line);
+        return Math.Round(count / (decimal)values.Count, 4);
+    }
+
+    private static string ClassifyProjectionProbabilityConflict(TheOddsLineShoppingGroup group)
+    {
+        return ClassifyProjectionProbabilityConflict(
+            group,
+            null,
+            null,
+            group.RawPlayerEmpiricalOverRate,
+            group.RawPlayerEmpiricalUnderRate);
+    }
+
+    private static string ClassifyProjectionProbabilityConflict(
+        TheOddsLineShoppingGroup group,
+        decimal? empiricalMean,
+        decimal? empiricalMedian,
+        decimal? empiricalOverRate,
+        decimal? empiricalUnderRate)
+    {
+        if (group.HistoricalSampleSize < 25)
+        {
+            return "LowSampleUnstable";
+        }
+
+        if (group.EffectiveShrinkageWeight < 0.80m)
+        {
+            return "PriorDrivenConflict";
+        }
+
+        var meanDirection = ResolveProjectionDirection(empiricalMean, group.Line);
+        var medianDirection = ResolveProjectionDirection(empiricalMedian, group.Line);
+        var empiricalProbabilityDirection = ResolveProbabilityDirection(empiricalOverRate, empiricalUnderRate);
+
+        if (group.ProjectionDirection != "Neutral"
+            && meanDirection != "Neutral"
+            && group.ProjectionDirection != meanDirection
+            && empiricalProbabilityDirection != "Neutral"
+            && group.ProjectionDirection != empiricalProbabilityDirection
+            && group.ModelProjection.HasValue
+            && empiricalMean.HasValue
+            && Math.Abs(group.ModelProjection.Value - empiricalMean.Value) >= ProjectionProbabilityConflictThreshold)
+        {
+            return "ProjectionInputMismatch";
+        }
+
+        if (group.ProjectionDirection != "Neutral"
+            && meanDirection == "Neutral"
+            && empiricalProbabilityDirection != "Neutral"
+            && group.ProjectionDirection != empiricalProbabilityDirection
+            && group.ModelProjection.HasValue
+            && empiricalMean.HasValue
+            && Math.Abs(group.ModelProjection.Value - empiricalMean.Value) >= ProjectionProbabilityConflictThreshold)
+        {
+            return "ProjectionInputMismatch";
+        }
+
+        if (group.ProjectionDirection != "Neutral"
+            && meanDirection == group.ProjectionDirection
+            && empiricalProbabilityDirection != "Neutral"
+            && empiricalProbabilityDirection != group.ProjectionDirection)
+        {
+            return "ValidSkew";
+        }
+
+        if (group.ProjectionDirection != "Neutral"
+            && medianDirection != "Neutral"
+            && medianDirection != group.ProjectionDirection
+            && empiricalProbabilityDirection != "Neutral"
+            && empiricalProbabilityDirection != group.ProjectionDirection)
+        {
+            return "ValidSkew";
+        }
+
+        return "UnknownNeedsReview";
+    }
+
+    private static string BuildProjectionProbabilityConflictInterpretation(
+        TheOddsLineShoppingGroup group,
+        IReadOnlyCollection<decimal> playerValues,
+        string conflictBucket)
+    {
+        if (playerValues.Count == 0)
+        {
+            return "No player-specific values were found for this local player/prop history lookup; inspect aliases and prop-type mapping.";
+        }
+
+        if (conflictBucket == "ProjectionInputMismatch")
+        {
+            return "Projection weighted features disagree with the all-history empirical mean and hit-rate direction; inspect projection window/features before trusting this row.";
+        }
+
+        var mean = playerValues.Average();
+        var underRate = playerValues.Count(value => value < group.Line) / (decimal)playerValues.Count;
+        if (group.ModelProjection > group.Line
+            && underRate > 0.5m
+            && mean > group.Line)
+        {
+            return "Player distribution is skewed: mean projection is above the line while most observed outcomes are under the line.";
+        }
+
+        if (group.ModelProjection > group.Line
+            && underRate > 0.5m
+            && mean <= group.Line)
+        {
+            return "Probability and empirical distribution favor under; model projection is above the line and may be influenced by projection features or stale/incorrect projection inputs.";
+        }
+
+        return "Inspect player/prior counts and values to determine whether this is skew behavior or a data/model issue.";
     }
 
     private static string BuildSampleWarning(int sampleSize, string probabilityMethod)
@@ -10849,6 +11577,8 @@ public static partial class TheOddsApiDebugEndpoints
         decimal? ModelProbabilityPush,
         decimal? ModelProjection,
         decimal? ProjectionEdge,
+        decimal? RecentWeightedProjection,
+        decimal? RecentWeightedProjectionEdge,
         decimal RankingScore,
         string Bookmaker,
         string BookmakerKey,
@@ -10876,7 +11606,13 @@ public static partial class TheOddsApiDebugEndpoints
         DateOnly? ResolvedMlbDate,
         int HistoricalSampleSize,
         string ProbabilityMethod,
-        decimal ConfidenceScore);
+        decimal ConfidenceScore,
+        decimal? RawPlayerEmpiricalOverRate,
+        decimal? RawPlayerEmpiricalUnderRate,
+        decimal? RawPriorOverRate,
+        decimal? RawPriorUnderRate,
+        int PriorSampleWeight,
+        decimal EffectiveShrinkageWeight);
 
     private sealed record TheOddsLineShoppingGroupKey(
         string? EventId,
@@ -11020,10 +11756,22 @@ public static partial class TheOddsApiDebugEndpoints
         decimal? ModelProbabilityPush,
         decimal? ModelProjection,
         decimal? ProjectionEdge,
+        decimal? RecentWeightedProjection,
+        decimal? RecentWeightedProjectionEdge,
         decimal RankingScore,
         int HistoricalSampleSize,
         string ProbabilityMethod,
         decimal ConfidenceScore,
+        string ProjectionDirection,
+        string ProbabilityDirection,
+        bool ProjectionProbabilityConflict,
+        string? ProjectionProbabilityConflictReason,
+        decimal? RawPlayerEmpiricalOverRate,
+        decimal? RawPlayerEmpiricalUnderRate,
+        decimal? RawPriorOverRate,
+        decimal? RawPriorUnderRate,
+        int PriorSampleWeight,
+        decimal EffectiveShrinkageWeight,
         string SampleWarning,
         string TrustLevel,
         decimal MinimumPickHitProbability,
@@ -11046,6 +11794,43 @@ public static partial class TheOddsApiDebugEndpoints
         decimal? BestImpliedProbability,
         decimal? BestProbabilityEdge,
         decimal? BestProjectionEdge);
+
+    private sealed record LineHistorySummary(
+        int SampleSize,
+        int OverCount,
+        int UnderCount,
+        int PushCount,
+        decimal? OverRate,
+        decimal? UnderRate,
+        decimal? PushRate,
+        decimal? Mean,
+        decimal? Median,
+        decimal? Min,
+        decimal? Max);
+
+    private sealed record ProjectionFeatureSummary(
+        string ProjectionSource,
+        int SeasonSampleSize,
+        int Last10SampleSize,
+        int Last5SampleSize,
+        decimal? SeasonAverage,
+        decimal? Last10Average,
+        decimal? Last5Average,
+        decimal? RecomputedProjection,
+        decimal? ModelProjectionMinusRecomputedProjection,
+        IReadOnlyCollection<ProjectionFeatureValue> Last5Values,
+        IReadOnlyCollection<ProjectionFeatureValue> Last10Values,
+        IReadOnlyCollection<ProjectionFeatureValue> SeasonValuesUsed);
+
+    private sealed record ProjectionFeatureValue(DateOnly EventDate, decimal Value);
+
+    private readonly record struct ProjectionProbabilityConflictKey(
+        Guid PlayerId,
+        Guid PropTypeId,
+        decimal Line,
+        decimal? ModelProjection,
+        DateOnly EventDate,
+        string? EventId);
 
     private readonly record struct TheOddsActualResultKey(
         Guid PlayerId,

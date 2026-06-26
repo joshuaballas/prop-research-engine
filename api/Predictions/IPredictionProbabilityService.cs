@@ -45,4 +45,11 @@ public sealed record PredictionProbabilityResult(
     decimal ConfidenceScore,
     decimal RankingScore,
     int SampleSize,
-    string MethodUsed);
+    string MethodUsed,
+    decimal? EmpiricalMeanProjection,
+    decimal? RawPlayerEmpiricalOverRate,
+    decimal? RawPlayerEmpiricalUnderRate,
+    decimal? RawPriorOverRate,
+    decimal? RawPriorUnderRate,
+    int PriorSampleWeight,
+    decimal EffectiveShrinkageWeight);

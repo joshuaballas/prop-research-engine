@@ -1855,6 +1855,8 @@ public static partial class TheOddsApiDebugEndpoints
                     ModelProbabilityPush: null,
                     ModelProjection: null,
                     ProjectionEdge: null,
+                    RecentWeightedProjection: null,
+                    RecentWeightedProjectionEdge: null,
                     RankingScore: 0m,
                     row.PlatformName,
                     NormalizeTheOddsBookmakerKey(row.BookmakerKey, row.PlatformName),
@@ -1882,7 +1884,13 @@ public static partial class TheOddsApiDebugEndpoints
                     ResolvedMlbDate: null,
                     HistoricalSampleSize: 0,
                     ProbabilityMethod: "Unavailable",
-                    ConfidenceScore: 0m);
+                    ConfidenceScore: 0m,
+                    RawPlayerEmpiricalOverRate: null,
+                    RawPlayerEmpiricalUnderRate: null,
+                    RawPriorOverRate: null,
+                    RawPriorUnderRate: null,
+                    PriorSampleWeight: 0,
+                    EffectiveShrinkageWeight: 0m);
             })
             .ToList();
     }

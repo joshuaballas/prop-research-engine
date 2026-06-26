@@ -224,6 +224,35 @@ public sealed class RefreshSafetyTests
     }
 
     [Fact]
+    public async Task MlbPredictionGeneration_DoesNotInvertOverProbability_WhenPlayerHistoryBeatsLineDespiteOppositePrior()
+    {
+        await using var factory = new SafetyTestApplicationFactory();
+        await factory.SeedMlbPredictionGenerationPriorShrinkageInversionScenarioAsync();
+
+        using (var scope = factory.Services.CreateScope())
+        {
+            var generator = scope.ServiceProvider.GetRequiredService<IPredictionGenerationService>();
+            await generator.GenerateMlbBaselinePredictionsAsync(CancellationToken.None);
+        }
+
+        using (var scope = factory.Services.CreateScope())
+        {
+            var dbContext = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+            var prediction = await dbContext.Predictions
+                .AsNoTracking()
+                .Include(row => row.Prop)
+                .ThenInclude(prop => prop!.Player)
+                .SingleAsync(row => row.Prop!.Player!.DisplayName == "Jacob Misiorowski Style");
+
+            Assert.Equal("OVER", prediction.Recommendation);
+            Assert.True(prediction.PredictedValue > prediction.SportsbookLine);
+            Assert.True(prediction.PredictedProbability > 0.55m);
+        }
+
+        Assert.Equal(0, factory.TheOddsAdapter.CallCount);
+    }
+
+    [Fact]
     public async Task MlbSideSelectionAudit_ExcludesSamplePredictionRuns_ByDefault()
     {
         await using var factory = new SafetyTestApplicationFactory();
@@ -1481,6 +1510,97 @@ public sealed class RefreshSafetyTests
         Assert.InRange(lean.GetProperty("bestProbability").GetDecimal(), 0.50m, 0.55m);
         Assert.False(lean.GetProperty("isCandidate").GetBoolean());
         Assert.True(lean.GetProperty("isWatchlist").GetBoolean() || lean.GetProperty("isResearchOnly").GetBoolean());
+        Assert.Equal(0, factory.TheOddsAdapter.CallCount);
+    }
+
+    [Fact]
+    public async Task MlbSportsbookLineShopping_SuppressesCandidate_WhenProjectionAndProbabilityConflict()
+    {
+        await using var factory = new SafetyTestApplicationFactory();
+        using var client = factory.CreateClient();
+        await factory.SeedMlbDfsHitProbabilitySelectionScenarioAsync();
+
+        var response = await client.GetAsync("/api/markets/line-shopping?sport=MLB&providerCategory=Sportsbook&topOnly=false&take=10&includeBookmakerPrices=false");
+
+        await EnsureSuccessWithBodyAsync(response);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        var groups = json.GetProperty("comparisonGroups").EnumerateArray().ToArray();
+        var conflicted = groups.Single(row => row.GetProperty("player").GetString() == "Valid Skew Conflict");
+
+        Assert.Equal("None", conflicted.GetProperty("bestSide").GetString());
+        Assert.False(conflicted.GetProperty("isCandidate").GetBoolean());
+        Assert.False(conflicted.GetProperty("isRecommendation").GetBoolean());
+        Assert.Equal(JsonValueKind.Null, conflicted.GetProperty("bestEstimatedEv").ValueKind);
+        Assert.Equal(JsonValueKind.Null, conflicted.GetProperty("displayExpectedValue").ValueKind);
+        Assert.False(conflicted.GetProperty("showExpectedValue").GetBoolean());
+        Assert.Equal("Over", conflicted.GetProperty("projectionDirection").GetString());
+        Assert.Equal("Under", conflicted.GetProperty("probabilityDirection").GetString());
+        Assert.True(conflicted.GetProperty("projectionProbabilityConflict").GetBoolean());
+        Assert.Equal(0.30m, conflicted.GetProperty("rawPlayerEmpiricalOverRate").GetDecimal());
+        Assert.Equal(0.70m, conflicted.GetProperty("rawPlayerEmpiricalUnderRate").GetDecimal());
+        Assert.Equal(30, conflicted.GetProperty("playerSampleSize").GetInt32());
+
+        var recentTrendMismatch = groups.Single(row => row.GetProperty("player").GetString() == "Projection Conflict Under");
+        Assert.False(recentTrendMismatch.GetProperty("projectionProbabilityConflict").GetBoolean());
+        Assert.True(recentTrendMismatch.GetProperty("isProjectionRecommendationAligned").GetBoolean());
+        Assert.Equal("Under", recentTrendMismatch.GetProperty("projectionDirection").GetString());
+        Assert.Equal("Under", recentTrendMismatch.GetProperty("probabilityDirection").GetString());
+        Assert.True(recentTrendMismatch.GetProperty("recentWeightedProjectionProbabilityConflict").GetBoolean());
+        Assert.Equal("None", recentTrendMismatch.GetProperty("bestSide").GetString());
+        Assert.False(recentTrendMismatch.GetProperty("isCandidate").GetBoolean());
+        Assert.False(recentTrendMismatch.GetProperty("isRecommendation").GetBoolean());
+        Assert.Equal(JsonValueKind.Null, recentTrendMismatch.GetProperty("displayExpectedValue").ValueKind);
+        Assert.Equal(0, factory.TheOddsAdapter.CallCount);
+    }
+
+    [Fact]
+    public async Task MlbProjectionProbabilityConflictAudit_ReturnsPropTypeBreakdownAndHistorySamples()
+    {
+        await using var factory = new SafetyTestApplicationFactory();
+        using var client = factory.CreateClient();
+        await factory.SeedMlbDfsHitProbabilitySelectionScenarioAsync();
+
+        var response = await client.GetAsync("/api/debug/the-odds/mlb/projection-probability-conflicts?propType=Pitcher%20Strikeouts&includeSamples=true&sampleTake=10");
+
+        await EnsureSuccessWithBodyAsync(response);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        var summary = json.GetProperty("summary");
+        Assert.False(json.GetProperty("callsExternalApis").GetBoolean());
+        Assert.True(json.GetProperty("readOnly").GetBoolean());
+        Assert.False(json.GetProperty("writesRows").GetBoolean());
+        Assert.True(json.GetProperty("totalGroupsEvaluated").GetInt32() >= 1);
+        Assert.True(json.GetProperty("conflictGroups").GetInt32() >= 1);
+        Assert.True(json.GetProperty("conflictRate").GetDecimal() > 0m);
+        Assert.NotEmpty(json.GetProperty("conflictBuckets").EnumerateArray());
+        Assert.True(json.GetProperty("recentWeightedProjectionProbabilityConflicts").GetInt32() >= 1);
+        Assert.True(summary.GetProperty("conflictGroups").GetInt32() >= 1);
+        Assert.Contains(
+            summary.GetProperty("conflictBuckets").EnumerateArray(),
+            row => row.GetProperty("bucket").GetString() == "ValidSkew");
+        Assert.True(summary.GetProperty("recentWeightedProjectionProbabilityConflicts").GetInt32() >= 1);
+
+        var propTypeBreakdown = json.GetProperty("conflictsByPropType").EnumerateArray().ToArray();
+        var pitcherStrikeouts = propTypeBreakdown.Single(row => row.GetProperty("normalizedPropType").GetString() == "Pitcher Strikeouts");
+        Assert.True(pitcherStrikeouts.GetProperty("conflictGroups").GetInt32() >= 1);
+        Assert.True(pitcherStrikeouts.GetProperty("averagePlayerSampleSize").GetDecimal() >= 10m);
+
+        var samples = json.GetProperty("samples").EnumerateArray().ToArray();
+        var conflicted = samples.Single(row => row.GetProperty("player").GetString() == "Valid Skew Conflict");
+        Assert.Equal("Over", conflicted.GetProperty("projectionDirection").GetString());
+        Assert.Equal("Under", conflicted.GetProperty("probabilityDirection").GetString());
+        Assert.True(conflicted.GetProperty("projectionProbabilityConflict").GetBoolean());
+        Assert.Equal("ValidSkew", conflicted.GetProperty("conflictBucket").GetString());
+        Assert.Equal(30, conflicted.GetProperty("probabilityHistory").GetProperty("sampleSize").GetInt32());
+        Assert.Equal(9, conflicted.GetProperty("probabilityHistory").GetProperty("overCount").GetInt32());
+        Assert.Equal(21, conflicted.GetProperty("probabilityHistory").GetProperty("underCount").GetInt32());
+        Assert.Equal("EmpiricalMeanFromProbabilityPlayerHistory", conflicted.GetProperty("recommendationProjectionSource").GetString());
+        Assert.True(conflicted.GetProperty("isProjectionRecommendationAligned").GetBoolean());
+        Assert.Equal("WeightedSeasonLast10Last5", conflicted.GetProperty("projectionFeatureSummary").GetProperty("projectionSource").GetString());
+
+        var skew = samples.Single(row => row.GetProperty("player").GetString() == "Valid Skew Conflict");
+        Assert.Equal("ValidSkew", skew.GetProperty("conflictBucket").GetString());
+        Assert.True(skew.GetProperty("probabilityHistory").GetProperty("mean").GetDecimal() > skew.GetProperty("line").GetDecimal());
+        Assert.True(skew.GetProperty("probabilityHistory").GetProperty("underRate").GetDecimal() > 0.5m);
         Assert.Equal(0, factory.TheOddsAdapter.CallCount);
     }
 
@@ -6951,6 +7071,49 @@ public sealed class SafetyTestApplicationFactory : WebApplicationFactory<Program
             underAmericanPrice: -110,
             overDecimalPrice: 1.91m,
             underDecimalPrice: 1.91m);
+        await AddMlbDfsSelectionScenarioPlayerAsync(
+            dbContext,
+            league,
+            propType,
+            platform,
+            run,
+            "Projection Conflict Under",
+            line: 7.5m,
+            projection: 9.0m,
+            overResults: 3,
+            pushResults: 0,
+            underResults: 27,
+            providerCategory: "Sportsbook",
+            bookmakerKey: "thescorebet",
+            bookmakerTitle: "theScore Bet",
+            region: "us",
+            entryActionable: false,
+            overAmericanPrice: -110,
+            underAmericanPrice: 150,
+            overDecimalPrice: 1.91m,
+            underDecimalPrice: 2.5m);
+        await AddMlbDfsSelectionScenarioPlayerAsync(
+            dbContext,
+            league,
+            propType,
+            platform,
+            run,
+            "Valid Skew Conflict",
+            line: 1.5m,
+            projection: 2.0m,
+            overResults: 0,
+            pushResults: 0,
+            underResults: 0,
+            providerCategory: "Sportsbook",
+            bookmakerKey: "fanduel",
+            bookmakerTitle: "FanDuel",
+            region: "us",
+            entryActionable: false,
+            overAmericanPrice: -110,
+            underAmericanPrice: -110,
+            overDecimalPrice: 1.91m,
+            underDecimalPrice: 1.91m,
+            historicalValues: Enumerable.Repeat(1m, 21).Concat(Enumerable.Repeat(5m, 9)).ToArray());
 
         await dbContext.SaveChangesAsync();
     }
@@ -7026,6 +7189,78 @@ public sealed class SafetyTestApplicationFactory : WebApplicationFactory<Program
             "Clear Pass Style",
             line: 2.5m,
             historicalValues: Enumerable.Repeat(3m, 60).ToArray());
+
+        await dbContext.SaveChangesAsync();
+    }
+
+    public async Task SeedMlbPredictionGenerationPriorShrinkageInversionScenarioAsync()
+    {
+        using var scope = Services.CreateScope();
+        var dbContext = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+        await dbContext.Database.EnsureDeletedAsync();
+        await dbContext.Database.EnsureCreatedAsync();
+
+        var sport = new Sport { Id = Guid.NewGuid(), Code = "MLB", Name = "Baseball" };
+        var league = new League { Id = Guid.NewGuid(), SportId = sport.Id, Code = "MLB", Name = "Major League Baseball" };
+        var pitcherStrikeouts = new PropType
+        {
+            Id = Guid.NewGuid(),
+            SportId = sport.Id,
+            Name = "Pitcher Strikeouts",
+            StatKey = "PITCHER_STRIKEOUTS",
+            ValueType = "numeric"
+        };
+        var platform = new Platform
+        {
+            Id = Guid.NewGuid(),
+            Name = "theScore Bet",
+            Slug = "thescorebet",
+            CreatedAt = DateTimeOffset.UtcNow,
+            UpdatedAt = DateTimeOffset.UtcNow
+        };
+
+        dbContext.Sports.Add(sport);
+        dbContext.Leagues.Add(league);
+        dbContext.PropTypes.Add(pitcherStrikeouts);
+        dbContext.Platforms.Add(platform);
+
+        await AddMlbPredictionGenerationScenarioPlayerAsync(
+            dbContext,
+            league,
+            pitcherStrikeouts,
+            platform,
+            "Jacob Misiorowski Style",
+            line: 7.5m,
+            historicalValues: [9m, 8m, 11m, 10m, 8m, 12m, 8m, 8m, 15m, 7m]);
+
+        for (var playerIndex = 0; playerIndex < 20; playerIndex++)
+        {
+            var player = new Player
+            {
+                Id = Guid.NewGuid(),
+                LeagueId = league.Id,
+                DisplayName = $"Prior Under Style {playerIndex}",
+                Position = "P"
+            };
+            dbContext.Players.Add(player);
+
+            for (var resultIndex = 0; resultIndex < 10; resultIndex++)
+            {
+                dbContext.PropResults.Add(new PropResult
+                {
+                    Id = Guid.NewGuid(),
+                    PlayerId = player.Id,
+                    LeagueId = league.Id,
+                    PropTypeId = pitcherStrikeouts.Id,
+                    EventDate = DateOnly.FromDateTime(DateTime.UtcNow.Date).AddDays(-(resultIndex + 1)),
+                    ActualResultValue = 4m,
+                    ExternalSource = "mlb",
+                    ExternalSourceIdentifier = $"prior-shrinkage-inversion:{player.Id:N}:{resultIndex}",
+                    CreatedAt = DateTimeOffset.UtcNow.AddDays(-(resultIndex + 1)),
+                    UpdatedAt = DateTimeOffset.UtcNow.AddDays(-(resultIndex + 1))
+                });
+            }
+        }
 
         await dbContext.SaveChangesAsync();
     }
@@ -7123,7 +7358,8 @@ public sealed class SafetyTestApplicationFactory : WebApplicationFactory<Program
         int overAmericanPrice = 100,
         int underAmericanPrice = 100,
         decimal overDecimalPrice = 2.0m,
-        decimal underDecimalPrice = 2.0m)
+        decimal underDecimalPrice = 2.0m,
+        decimal[]? historicalValues = null)
     {
         var player = new Player
         {
@@ -7200,7 +7436,7 @@ public sealed class SafetyTestApplicationFactory : WebApplicationFactory<Program
             })
         });
 
-        var values = Enumerable.Repeat(line + 1m, overResults)
+        var values = historicalValues ?? Enumerable.Repeat(line + 1m, overResults)
             .Concat(Enumerable.Repeat(line, pushResults))
             .Concat(Enumerable.Repeat(line - 1m, underResults))
             .ToArray();

@@ -17,7 +17,7 @@ public sealed class PredictionGenerationService(
     private const string ModelName = "BaselineAverageModel";
     private const string ModelVersion = "1.0";
     private const int TheOddsFreshnessWindowHours = 24;
-    private const int PriorSampleWeight = 25;
+    private const int PriorSampleWeight = 5;
     private IReadOnlyDictionary<Guid, Guid[]>? equivalentPropTypeIdsById;
 
     public async Task<PredictionGenerationResult> GenerateMlbBaselinePredictionsAsync(CancellationToken cancellationToken)
