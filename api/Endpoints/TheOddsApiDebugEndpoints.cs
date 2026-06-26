@@ -988,6 +988,9 @@ public static partial class TheOddsApiDebugEndpoints
                     target.MaxEvents,
                     target.Regions,
                     target.Bookmakers,
+                    target.EffectiveBookmakers,
+                    target.RequestedBookmakers,
+                    target.SkippedBookmakers,
                     target.Markets,
                     target.SupportsResults,
                     target.SupportsHistory,
@@ -9321,7 +9324,10 @@ public static partial class TheOddsApiDebugEndpoints
         {
             "expanded" => "expanded",
             "dfsonly" or "dfs-only" or "dfs_only" => "dfsOnly",
+            "dfsall" or "dfs-all" or "dfs_all" => "dfsAll",
             "sportsbookonly" or "sportsbook-only" or "sportsbook_only" => "sportsbookOnly",
+            "sportsbookexpanded" or "sportsbook-expanded" or "sportsbook_expanded" => "allSportsbooks",
+            "allsportsbooks" or "all-sportsbooks" or "all_sportsbooks" => "allSportsbooks",
             "all" => "all",
             _ => "default"
         };
@@ -9340,7 +9346,15 @@ public static partial class TheOddsApiDebugEndpoints
                 configuredExpandedSportsbookBookmakers,
                 configuredDfsBookmakers,
                 includeDfsFromConfigOrQuery),
+            "allSportsbooks" => new TheOddsRefreshBookmakerSelection(
+                configuredExpandedSportsbookBookmakers,
+                configuredDfsBookmakers,
+                IncludeDfs: false),
             "dfsOnly" => new TheOddsRefreshBookmakerSelection(
+                SportsbookBookmakers: null,
+                configuredDfsBookmakers,
+                IncludeDfs: true),
+            "dfsAll" => new TheOddsRefreshBookmakerSelection(
                 SportsbookBookmakers: null,
                 configuredDfsBookmakers,
                 IncludeDfs: true),

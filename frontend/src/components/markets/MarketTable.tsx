@@ -36,18 +36,18 @@ export function MarketTable({ markets }: { markets: MarketOpportunity[] }) {
   );
   const showTagsColumn = meaningfulTags.size > 1;
   const showEvColumn = markets.some((market) => market.showExpectedValue);
-  const minWidth = 1130 - (showSportColumn ? 0 : 64) - (showTagsColumn ? 0 : 200) - (showEvColumn ? 0 : 95);
+  const minWidth = 1130 - (showSportColumn ? 0 : 100) - (showTagsColumn ? 0 : 200) - (showEvColumn ? 0 : 90);
 
   return (
     <>
       <AppDataTable minWidth={minWidth} sx={{ borderRadius: 3 }} tableSx={{ tableLayout: 'fixed' }}>
         <colgroup>
           <col style={{ width: '28%' }} />
-          {showSportColumn ? <col style={{ width: 64 }} /> : null}
+          {showSportColumn ? <col style={{ width: 100 }} /> : null}
           <col style={{ width: 150 }} />
-          {showEvColumn ? <col style={{ width: 95 }} /> : null}
+          {showEvColumn ? <col style={{ width: 90 }} /> : null}
           <col style={{ width: 95 }} />
-          <col style={{ width: 115 }} />
+          <col style={{ width: 100 }} />
           <col style={{ width: 95 }} />
           {showTagsColumn ? <col style={{ width: 200 }} /> : null}
           <col style={{ width: 130 }} />

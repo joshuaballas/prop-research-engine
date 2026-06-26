@@ -283,6 +283,9 @@ public sealed class TheOddsMlbScheduledRefreshWorker(
         var soccerIdentityResolutionService = serviceProvider.GetRequiredService<ISoccerPlayerIdentityResolutionService>();
         var soccerIdentityResolutionOptions = serviceProvider.GetRequiredService<IOptions<SoccerIdentityResolutionOptions>>();
 
+        var effectiveBookmakers = string.IsNullOrWhiteSpace(target.Bookmakers)
+            ? JoinOrNull(target.EffectiveBookmakers)
+            : target.Bookmakers;
         var request = new TheOddsMarketRefreshRequest(
             Sport: target.Sport,
             Competition: target.Competition,
@@ -302,7 +305,7 @@ public sealed class TheOddsMlbScheduledRefreshWorker(
             ProviderCategory: target.ProviderCategory,
             Region: target.Regions,
             Regions: target.Regions,
-            Bookmakers: ToJsonStringElement(target.Bookmakers),
+            Bookmakers: ToJsonStringElement(effectiveBookmakers),
             MaxEvents: target.MaxEvents);
 
         await TheOddsApiDebugEndpoints.BuildSoccerWorldCupRefreshPlanningResponseAsync(
@@ -329,6 +332,13 @@ public sealed class TheOddsMlbScheduledRefreshWorker(
 
         using var document = JsonDocument.Parse(JsonSerializer.Serialize(value));
         return document.RootElement.Clone();
+    }
+
+    private static string? JoinOrNull(IReadOnlyList<string> values)
+    {
+        return values.Count == 0
+            ? null
+            : string.Join(",", values);
     }
 
     private void LogTargetCompleted(TheOddsRefreshTargetPlan target)

@@ -344,7 +344,7 @@ function formatLineLabel(line: MarketOpportunity) {
 }
 
 function formatOfferingLabel(line: MarketOpportunity) {
-  return `${line.provider} · ${line.propType} ${formatLineLabel(line)}`;
+  return `${line.provider} · ${line.propType} · ${formatLineLabel(line)}`;
 }
 
 function formatLineNumber(line: number) {

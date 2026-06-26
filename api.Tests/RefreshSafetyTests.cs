@@ -457,6 +457,7 @@ public sealed class RefreshSafetyTests
         Assert.True(worldCup.GetProperty("enabled").GetBoolean());
         Assert.True(worldCup.GetProperty("executionWired").GetBoolean());
         Assert.True(worldCup.GetProperty("providerSportKeyVerified").GetBoolean());
+        Assert.Contains(worldCup.GetProperty("effectiveBookmakers").EnumerateArray(), row => row.GetString() == "bovada");
         Assert.True(worldCup.GetProperty("shouldRefresh").GetBoolean());
         Assert.Equal(JsonValueKind.Null, worldCup.GetProperty("skipReason").ValueKind);
         Assert.False(epl.GetProperty("enabled").GetBoolean());
@@ -549,8 +550,12 @@ public sealed class RefreshSafetyTests
 
         Assert.Equal(mlbDfsRunId, mlbDfs.GetProperty("latestRefreshRunId").GetGuid());
         Assert.Equal(8, mlbDfs.GetProperty("actualApiCalls").GetInt32());
+        Assert.Contains(mlbDfs.GetProperty("effectiveBookmakers").EnumerateArray(), row => row.GetString() == "prizepicks");
+        Assert.Contains(mlbDfs.GetProperty("effectiveBookmakers").EnumerateArray(), row => row.GetString() == "betr_us_dfs");
         Assert.Equal(mlbSportsbookRunId, mlbSportsbook.GetProperty("latestRefreshRunId").GetGuid());
         Assert.Equal(9, mlbSportsbook.GetProperty("actualApiCalls").GetInt32());
+        Assert.Contains(mlbSportsbook.GetProperty("effectiveBookmakers").EnumerateArray(), row => row.GetString() == "bovada");
+        Assert.Contains(mlbSportsbook.GetProperty("effectiveBookmakers").EnumerateArray(), row => row.GetString() == "mybookieag");
         Assert.Equal(worldCupRunId, worldCup.GetProperty("latestRefreshRunId").GetGuid());
         Assert.Equal(10, worldCup.GetProperty("actualApiCalls").GetInt32());
         Assert.Equal(JsonValueKind.Null, epl.GetProperty("latestRefreshRunId").ValueKind);

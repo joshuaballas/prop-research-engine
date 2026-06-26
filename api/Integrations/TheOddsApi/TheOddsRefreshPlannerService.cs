@@ -18,8 +18,13 @@ public interface ITheOddsRefreshPlannerService
 public sealed class TheOddsRefreshPlannerService(
     ApplicationDbContext dbContext,
     IOptions<TheOddsRefreshPlannerOptions> options,
-    IOptions<TheOddsScheduledRefreshOptions> scheduledRefreshOptions) : ITheOddsRefreshPlannerService
+    IOptions<TheOddsScheduledRefreshOptions> scheduledRefreshOptions,
+    IOptions<TheOddsIngestionWorkerOptions> workerOptions) : ITheOddsRefreshPlannerService
 {
+    private const string DefaultExpandedSportsbookBookmakers =
+        "draftkings,fanduel,betmgm,espnbet,betrivers,fanatics,williamhill_us,betonlineag,bovada,lowvig,mybookieag";
+    private const string DefaultDfsBookmakers = "prizepicks,underdog,pick6,betr_us_dfs";
+
     public async Task<TheOddsRefreshPlanResult> BuildPlanAsync(CancellationToken cancellationToken)
     {
         var generatedAtUtc = DateTimeOffset.UtcNow;
@@ -190,6 +195,7 @@ public sealed class TheOddsRefreshPlannerService(
         foreach (var target in targets)
         {
             var targetKey = target.ResolveKey();
+            var targetBookmakers = ResolveTargetBookmakers(target, workerOptions.Value);
             var targetBookmakerPresets = ResolveTargetPersistedBookmakerPresets(target);
             var candidateRuns = await dbContext.TheOddsRefreshRuns
                 .AsNoTracking()
@@ -280,6 +286,9 @@ public sealed class TheOddsRefreshPlannerService(
                 MaxEvents: target.MaxEvents,
                 Regions: target.Regions,
                 Bookmakers: target.Bookmakers,
+                EffectiveBookmakers: targetBookmakers.EffectiveBookmakers,
+                RequestedBookmakers: targetBookmakers.RequestedBookmakers,
+                SkippedBookmakers: targetBookmakers.SkippedBookmakers,
                 Markets: target.Markets,
                 SupportsResults: target.SupportsResults,
                 SupportsHistory: target.SupportsHistory,
@@ -346,8 +355,26 @@ public sealed class TheOddsRefreshPlannerService(
         var persisted = string.Equals(target.Sport, "MLB", StringComparison.OrdinalIgnoreCase)
             ? ResolveMlbPersistedBookmakerPreset(configured)
             : configured;
+        var aliases = new List<string> { configured, persisted };
+        if (string.Equals(target.Sport, "MLB", StringComparison.OrdinalIgnoreCase))
+        {
+            if (string.Equals(persisted, "allSportsbooks", StringComparison.OrdinalIgnoreCase))
+            {
+                aliases.Add("default");
+            }
 
-        return new[] { configured, persisted }
+            if (string.Equals(persisted, "dfsAll", StringComparison.OrdinalIgnoreCase))
+            {
+                aliases.Add("dfsOnly");
+            }
+        }
+        else if (string.Equals(target.Sport, "SOCCER", StringComparison.OrdinalIgnoreCase)
+            && string.Equals(persisted, "allSportsbooks", StringComparison.OrdinalIgnoreCase))
+        {
+            aliases.Add("soccerSportsbookContext");
+        }
+
+        return aliases
             .Where(value => !string.IsNullOrWhiteSpace(value))
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToArray();
@@ -359,10 +386,71 @@ public sealed class TheOddsRefreshPlannerService(
         {
             "expanded" => "expanded",
             "dfsonly" or "dfs-only" or "dfs_only" => "dfsOnly",
+            "dfsall" or "dfs-all" or "dfs_all" => "dfsAll",
             "sportsbookonly" or "sportsbook-only" or "sportsbook_only" => "sportsbookOnly",
+            "sportsbookexpanded" or "sportsbook-expanded" or "sportsbook_expanded" => "allSportsbooks",
+            "allsportsbooks" or "all-sportsbooks" or "all_sportsbooks" => "allSportsbooks",
             "all" => "all",
             _ => "default"
         };
+    }
+
+    private static TargetBookmakerPlan ResolveTargetBookmakers(
+        TheOddsScheduledRefreshTargetOptions target,
+        TheOddsIngestionWorkerOptions workerOptions)
+    {
+        var explicitBookmakers = NullIfWhiteSpace(target.Bookmakers);
+        if (!string.IsNullOrWhiteSpace(explicitBookmakers))
+        {
+            return new TargetBookmakerPlan(
+                NormalizeCsv(explicitBookmakers),
+                NormalizeCsv(explicitBookmakers),
+                []);
+        }
+
+        var expandedSportsbooks = NormalizeCsv(
+            NullIfWhiteSpace(workerOptions.ExpandedBookmakers) ?? DefaultExpandedSportsbookBookmakers);
+        var conservativeSportsbooks = NormalizeCsv(NullIfWhiteSpace(workerOptions.Bookmakers) ?? string.Empty);
+        var dfsBookmakers = NormalizeCsv(NullIfWhiteSpace(workerOptions.DfsBookmakers) ?? DefaultDfsBookmakers);
+        var preset = ResolveMlbPersistedBookmakerPreset(target.BookmakerPreset);
+
+        if (string.Equals(target.ProviderCategory, "DFS", StringComparison.OrdinalIgnoreCase))
+        {
+            return new TargetBookmakerPlan(
+                dfsBookmakers,
+                dfsBookmakers,
+                []);
+        }
+
+        if (!string.Equals(target.ProviderCategory, "Sportsbook", StringComparison.OrdinalIgnoreCase))
+        {
+            return new TargetBookmakerPlan([], [], []);
+        }
+
+        var effectiveSportsbooks = preset switch
+        {
+            "expanded" or "allSportsbooks" or "all" => expandedSportsbooks,
+            _ => conservativeSportsbooks.Length > 0 ? conservativeSportsbooks : expandedSportsbooks
+        };
+
+        return new TargetBookmakerPlan(
+            effectiveSportsbooks,
+            effectiveSportsbooks,
+            []);
+    }
+
+    private static string[] NormalizeCsv(string? value)
+    {
+        return (value ?? string.Empty)
+            .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Where(row => !string.IsNullOrWhiteSpace(row))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+    }
+
+    private static string? NullIfWhiteSpace(string? value)
+    {
+        return string.IsNullOrWhiteSpace(value) ? null : value.Trim();
     }
 
     private static bool ContainsCsvValue(string? csv, string value)
@@ -1113,6 +1201,9 @@ public sealed record TheOddsRefreshTargetPlan(
     int? MaxEvents,
     string? Regions,
     string? Bookmakers,
+    IReadOnlyList<string> EffectiveBookmakers,
+    IReadOnlyList<string> RequestedBookmakers,
+    IReadOnlyList<string> SkippedBookmakers,
     string? Markets,
     bool SupportsResults,
     bool SupportsHistory,
@@ -1139,6 +1230,11 @@ public sealed record TheOddsRefreshTargetPlan(
     bool ShouldRefresh,
     string? SkipReason,
     string? Notes);
+
+public sealed record TargetBookmakerPlan(
+    IReadOnlyList<string> EffectiveBookmakers,
+    IReadOnlyList<string> RequestedBookmakers,
+    IReadOnlyList<string> SkippedBookmakers);
 
 public sealed record PlannerCadenceRule(
     string Name,

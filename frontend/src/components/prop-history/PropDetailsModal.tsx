@@ -59,7 +59,7 @@ export function PropDetailsModal({ market, open, onClose }: PropDetailsModalProp
             <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
               <ProviderLabel provider={market.provider} category={market.providerCategory} compact />
               <Typography color="text.secondary" variant="body2">
-                {market.side} {market.propType} {formatLineNumber(market.line)}
+                {market.propType} · {market.side} {formatLineNumber(market.line)}
               </Typography>
             </Stack>
           ) : null}
