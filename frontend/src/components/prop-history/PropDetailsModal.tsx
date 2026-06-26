@@ -7,15 +7,13 @@ import { isDemoDataMode } from '../../config/dataMode';
 import { mockPlayerResearchPlayers } from '../../data/mockPlayerResearch';
 import { palette } from '../../theme/palette';
 import { formatPercent } from '../../utils/formatters';
-import { getMarketCautions } from '../../utils/marketCautions';
 import { MetricLabelWithHelp } from '../metrics/MetricLabelWithHelp';
 import { TrustValue } from '../metrics/TrustValue';
 import { ProviderLabel } from '../providers/ProviderLabel';
 import { AppCard } from '../ui/AppCard';
 import { PropHistorySkeleton } from '../ui/LoadingSkeletons';
-import { CautionLabels } from '../markets/CautionLabels';
 import type { MarketOpportunity, PlayerHistoryStatKey } from '../../types/markets';
-import { PropHistoryCard } from './PropHistoryCard';
+import { getHistoryContentMaxWidth, PropHistoryCard } from './PropHistoryCard';
 
 interface PropDetailsModalProps {
   market: MarketOpportunity | null;
@@ -29,6 +27,9 @@ export function PropDetailsModal({ market, open, onClose }: PropDetailsModalProp
   const { data: apiHistory, loading, error } = usePropHistory(market, open && !isDemoDataMode && !soccerHistory);
   const hasApiHistory = Boolean(apiHistory?.games?.length);
   const detailsHistory = hasApiHistory ? apiHistory : soccerHistory;
+  const demoHistoryCardMaxWidth = market && demoHistory ? getDemoHistoryCardMaxWidth(demoHistory.stat.log, market) : undefined;
+  const detailsHistoryCardMaxWidth = market && detailsHistory ? getApiHistoryCardMaxWidth(detailsHistory, market) : undefined;
+  const activeHistoryCardMaxWidth = isDemoDataMode ? demoHistoryCardMaxWidth : detailsHistoryCardMaxWidth;
 
   return (
     <Dialog
@@ -82,9 +83,9 @@ export function PropDetailsModal({ market, open, onClose }: PropDetailsModalProp
       <DialogContent className="app-scrollbar" sx={{ pt: { xs: 0.75, sm: 1 }, pb: { xs: 2.25, sm: 3 }, px: { xs: 1.25, sm: 3 } }}>
         {market ? (
           <Stack spacing={1.5}>
-            <MetricStrip market={market} />
+            <MetricStrip market={market} maxWidth={activeHistoryCardMaxWidth} />
             {isDemoDataMode && demoHistory ? (
-              <AppCard contentSx={{ p: { xs: 1.25, md: 2 } }}>
+              <AppCard sx={historyCardSx(demoHistoryCardMaxWidth)} contentSx={{ p: { xs: 1.25, md: 2 } }}>
                 <PropHistoryCard stat={demoHistory.stat} selectedOffering={market} allLines={demoHistory.allLines} />
               </AppCard>
             ) : null}
@@ -92,7 +93,7 @@ export function PropDetailsModal({ market, open, onClose }: PropDetailsModalProp
               <PropHistorySkeleton />
             ) : null}
             {!isDemoDataMode && !loading && detailsHistory ? (
-              <AppCard contentSx={{ p: { xs: 1.25, md: 2 } }}>
+              <AppCard sx={historyCardSx(detailsHistoryCardMaxWidth)} contentSx={{ p: { xs: 1.25, md: 2 } }}>
                 <PropHistoryCard history={detailsHistory} selectedOffering={market} />
               </AppCard>
             ) : null}
@@ -171,9 +172,7 @@ function getPropHistoryUnavailableMessage(market: MarketOpportunity, apiHistory?
   return apiHistory?.emptyReason ?? 'Prop history is not available for this opportunity yet.';
 }
 
-function MetricStrip({ market }: { market: MarketOpportunity }) {
-  const cautions = getMarketCautions(market);
-  const hasCautions = cautions.length > 0;
+function MetricStrip({ market, maxWidth }: { market: MarketOpportunity; maxWidth?: number }) {
   const showExpectedValue = market.showExpectedValue === true && typeof market.displayExpectedValue === 'number';
   return (
     <Box
@@ -181,14 +180,15 @@ function MetricStrip({ market }: { market: MarketOpportunity }) {
         display: 'grid',
         gridTemplateColumns: {
           xs: 'repeat(2, minmax(0, 1fr))',
-          md: `repeat(${(showExpectedValue ? 4 : 3) + (hasCautions ? 1 : 0)}, minmax(0, 1fr))`
+          md: `repeat(${showExpectedValue ? 4 : 3}, minmax(0, 1fr))`
         },
         gap: { xs: 1.05, md: 1.25 },
         px: { xs: 1.35, md: 1.6 },
         py: { xs: 1.25, md: 1.45 },
         borderRadius: 2.5,
         border: '1px solid rgba(148,163,184,.14)',
-        bgcolor: palette.cardSurface
+        bgcolor: palette.cardSurface,
+        ...historyCardSx(maxWidth)
       }}
     >
       <DetailMetric metric="hitChance" value={formatPercent(market.modelProbability)} />
@@ -197,14 +197,6 @@ function MetricStrip({ market }: { market: MarketOpportunity }) {
         <DetailMetric metric="ev" value={formatPercent(market.displayExpectedValue ?? 0, { signed: true })} tone={(market.displayExpectedValue ?? 0) >= 0 ? 'success.main' : 'error.main'} />
       ) : null}
       <DetailMetric metric="trust" value={market.trustLevel === 'Research' ? 'Weak' : market.trustLevel} />
-      {hasCautions ? (
-        <Stack spacing={0.45} minWidth={0} sx={{ gridColumn: { xs: '1 / -1', md: 'auto' } }}>
-          <MetricLabelWithHelp metric="caution" />
-          <Box sx={{ display: 'flex', minHeight: 26, alignItems: 'center' }}>
-            <CautionLabels cautions={cautions} />
-          </Box>
-        </Stack>
-      ) : null}
     </Box>
   );
 }
@@ -242,6 +234,34 @@ function findHistoryForMarket(market: MarketOpportunity) {
   if (!stat) return null;
 
   return { stat, allLines: player.currentLines };
+}
+
+function historyCardSx(maxWidth?: number) {
+  if (!maxWidth) return undefined;
+
+  return {
+    width: '100%',
+    maxWidth: { xs: '100%', sm: maxWidth },
+    mx: 'auto'
+  };
+}
+
+function getDemoHistoryCardMaxWidth(log: Array<{ value?: string | number | null }>, market: MarketOpportunity) {
+  return getHistoryContentMaxWidth(countPlottedValues(log.map((row) => row.value)), 'card', formatOfferingLabel(market));
+}
+
+function getApiHistoryCardMaxWidth(history: PropHistoryResponseDto, market: MarketOpportunity) {
+  return getHistoryContentMaxWidth(countPlottedValues((history.games ?? []).map((game) => game.value)), 'card', formatOfferingLabel(market));
+}
+
+function countPlottedValues(values: Array<string | number | null | undefined>) {
+  return values
+    .slice(-10)
+    .filter((value) => {
+      if (typeof value === 'number') return Number.isFinite(value);
+      if (!value) return false;
+      return Number.isFinite(Number.parseFloat(value.replace(/[^\d.-]/g, '')));
+    }).length;
 }
 
 function buildSoccerPlayerHistory(market: MarketOpportunity): PropHistoryResponseDto | null {
@@ -312,6 +332,10 @@ function formatSoccerHistoryDate(value?: string | null) {
 
 function normalizeLabel(value: string) {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, '');
+}
+
+function formatOfferingLabel(line: MarketOpportunity) {
+  return `${line.provider} Â· ${line.propType} Â· ${line.side} ${formatLineNumber(line.line)}`;
 }
 
 function formatLineNumber(line: number) {

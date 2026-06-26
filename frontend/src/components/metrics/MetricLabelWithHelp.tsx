@@ -13,7 +13,7 @@ interface MetricLabelWithHelpProps {
 
 export function MetricLabelWithHelp({ metric, align = 'left', label: labelOverride, variant = 'caption', iconPosition = 'after', sx }: MetricLabelWithHelpProps) {
   const help = metricHelp[metric];
-  const displayLabel = labelOverride ?? (metric === 'hitChance' && variant === 'table' ? 'Hit chance' : help.label);
+  const displayLabel = labelOverride ?? (metric === 'hitChance' ? 'Hit chance' : help.label);
   const justifyContent = align === 'right' ? 'flex-end' : align === 'center' ? 'center' : 'flex-start';
   const icon = (
     <Tooltip title={help.description} arrow enterTouchDelay={0} leaveTouchDelay={5000}>
@@ -61,7 +61,18 @@ export function MetricLabelWithHelp({ metric, align = 'left', label: labelOverri
   );
 
   return (
-    <Stack direction="row" alignItems="center" spacing={0.45} justifyContent={justifyContent} sx={{ minWidth: 0, ...sx }}>
+    <Stack
+      direction="row"
+      alignItems="center"
+      justifyContent={justifyContent}
+      sx={{
+        display: 'inline-flex',
+        gap: 0.45,
+        minWidth: 0,
+        whiteSpace: 'nowrap',
+        ...sx
+      }}
+    >
       {iconPosition === 'before' ? icon : label}
       {iconPosition === 'before' ? label : icon}
     </Stack>

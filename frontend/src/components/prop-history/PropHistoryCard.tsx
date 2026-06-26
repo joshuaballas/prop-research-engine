@@ -16,6 +16,11 @@ import type { PropHistoryResponseDto } from '../../api/types';
 import type { MarketOpportunity } from '../../types/markets';
 import { renderWarningText } from '../../utils/warnings';
 
+const MIN_HISTORY_CONTENT_WIDTH = 600;
+const HISTORY_HEADER_LEFT_WIDTH = 300;
+const HISTORY_HEADER_GAP_WIDTH = 24;
+const HISTORY_HEADER_CHARACTER_WIDTH = 7.6;
+
 interface PropHistoryCardProps {
   stat?: PlayerResearchStat;
   history?: PropHistoryResponseDto;
@@ -40,7 +45,7 @@ interface PropHistoryView {
 interface PropHistoryLogRow {
   date: string;
   event: string;
-  value: string | number;
+  value?: string | number | null;
   result?: string;
   line?: number | null;
   side?: string | null;
@@ -58,18 +63,44 @@ export function PropHistoryCard({ stat, history, selectedOffering, allLines = []
 
   const chartGameLimit = isMobile ? 5 : 10;
   const chartHistoryView = { ...historyView, log: getDisplayLog(historyView.log, chartGameLimit) };
+  const chartPointCount = chartHistoryView.log.filter((row) => parseStatNumber(row.value) !== undefined).length;
+  const offeringLabel = formatOfferingLabel(selectedOffering);
+  const contentMaxWidth = getHistoryContentMaxWidth(chartPointCount, 'content', offeringLabel);
 
   return (
-    <Stack spacing={{ xs: 0.75, sm: 0.95 }} sx={{ height: '100%', minHeight: 0 }}>
-      <Stack direction={{ xs: 'column', sm: 'row' }} justifyContent="space-between" alignItems={{ xs: 'stretch', sm: 'flex-start' }} gap={{ xs: 0.55, sm: 1 }}>
-        <Stack spacing={0.25}>
+    <Stack
+      spacing={{ xs: 0.75, sm: 0.95 }}
+      sx={{
+        height: '100%',
+        minHeight: 0,
+        width: '100%',
+        maxWidth: { xs: 'none', sm: contentMaxWidth ?? 'none' },
+        mx: 'auto'
+      }}
+    >
+      <Stack direction={{ xs: 'column', sm: 'row' }} justifyContent="space-between" alignItems={{ xs: 'stretch', sm: 'flex-start' }} gap={{ xs: 0.55, sm: 1 }} minWidth={0}>
+        <Stack spacing={0.25} minWidth={0} sx={{ flex: { sm: '0 0 auto' } }}>
           <Typography variant="h5">Prop history</Typography>
-          <Typography color="text.secondary" variant="body2">
+          <Typography color="text.secondary" variant="body2" sx={{ whiteSpace: { xs: 'normal', sm: 'nowrap' } }}>
             Recent stat values against the selected line.
           </Typography>
         </Stack>
-        <Typography color="text.secondary" variant="body2" fontWeight={850} textAlign={{ xs: 'left', sm: 'right' }} sx={{ overflowWrap: 'anywhere' }}>
-          {formatOfferingLabel(selectedOffering)}
+        <Typography
+          color="text.secondary"
+          variant="body2"
+          fontWeight={850}
+          textAlign={{ xs: 'left', sm: 'right' }}
+          title={offeringLabel}
+          sx={{
+            minWidth: 0,
+            flex: { sm: '0 1 auto' },
+            maxWidth: '100%',
+            whiteSpace: { xs: 'normal', sm: 'nowrap' },
+            overflow: { sm: 'hidden' },
+            textOverflow: { sm: 'ellipsis' }
+          }}
+        >
+          {offeringLabel}
         </Typography>
       </Stack>
       <PropHistoryBarChart stat={chartHistoryView} selectedOffering={selectedOffering} />
@@ -84,12 +115,15 @@ function PropHistoryBarChart({ stat, selectedOffering }: { stat: PropHistoryView
   const lineValue = typeof stat.selectedLine === 'number' ? stat.selectedLine : selectedOffering.line;
   const selectedSide = normalizeSide(stat.selectedSide) ?? selectedOffering.side;
   const data: ChartDatum[] = stat.log
-    .map((row) => {
-      const value = parseStatNumber(row.value) ?? 0;
+    .flatMap((row): ChartDatum[] => {
+      const value = parseStatNumber(row.value);
+      if (value === undefined) {
+        return [];
+      }
       const rowLine = typeof row.line === 'number' ? row.line : lineValue;
       const rowSide = normalizeSide(row.side) ?? selectedSide;
       const result = normalizeResult(row.result) ?? deriveResult(value, rowLine, rowSide);
-      return {
+      return [{
         date: row.date,
         event: row.event,
         value,
@@ -97,9 +131,8 @@ function PropHistoryBarChart({ stat, selectedOffering }: { stat: PropHistoryView
         line: rowLine,
         lineLabel: `${rowSide} ${formatLineNumber(rowLine)}`,
         result
-      };
-    })
-    .filter((row) => Number.isFinite(row.value));
+      }];
+    });
 
   return (
     <Box
@@ -135,7 +168,7 @@ function PropHistoryBarChart({ stat, selectedOffering }: { stat: PropHistoryView
           {lineValue !== undefined ? (
             <ReferenceLine y={lineValue} stroke={palette.warning} strokeDasharray="5 5" strokeWidth={2.2} />
           ) : null}
-          <Bar dataKey="value" radius={[8, 8, 3, 3]} maxBarSize={42}>
+          <Bar dataKey="value" radius={[8, 8, 3, 3]} maxBarSize={42} minPointSize={(value: number) => (value === 0 ? 4 : 0)}>
             {data.map((row) => (
               <Cell
                 key={`${row.date}-${row.event}`}
@@ -302,7 +335,7 @@ interface ChartDatum {
   result: string;
 }
 
-function parseStatNumber(value?: string | number) {
+function parseStatNumber(value?: string | number | null) {
   if (typeof value === 'number') return Number.isFinite(value) ? value : undefined;
   if (!value) return undefined;
   const parsed = Number.parseFloat(value.replace(/[^\d.-]/g, ''));
@@ -399,13 +432,30 @@ function mapApiHistoryToView(history: PropHistoryResponseDto): PropHistoryView {
     log: (history.games ?? []).map((game) => ({
       date: game.dateLabel ?? formatDateLabel(game.date),
       event: game.gameLabel ?? game.event ?? 'MLB game',
-      value: game.value ?? 0,
+      value: game.value,
       result: game.result,
       line: game.selectedLine ?? game.line ?? history.line,
       side: game.side ?? history.side,
       sortKey: parseDateSortKey(game.date)
     }))
   };
+}
+
+export function getHistoryContentMaxWidth(pointCount: number, target: 'content' | 'card' = 'content', headerLabel?: string) {
+  if (pointCount >= 10) {
+    return undefined;
+  }
+
+  const displayPointCount = Math.min(10, Math.max(5, pointCount));
+  const chartDrivenWidth = displayPointCount * 82 + 112;
+  const headerDrivenWidth = getHeaderDrivenWidth(headerLabel);
+  const contentWidth = Math.max(chartDrivenWidth, MIN_HISTORY_CONTENT_WIDTH, headerDrivenWidth);
+  return target === 'card' ? contentWidth + 32 : contentWidth;
+}
+
+function getHeaderDrivenWidth(headerLabel?: string) {
+  if (!headerLabel) return 0;
+  return Math.ceil(HISTORY_HEADER_LEFT_WIDTH + HISTORY_HEADER_GAP_WIDTH + headerLabel.length * HISTORY_HEADER_CHARACTER_WIDTH);
 }
 
 function normalizeSide(value?: string | null): MarketOpportunity['side'] | undefined {
