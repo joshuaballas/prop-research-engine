@@ -98,7 +98,6 @@ export function EntryCandidateCard({ market, lockedProvider, selected = false, o
             <OpportunityMetricItem label="Edge" value={formatSignedPercent(market.probabilityEdge)} metric="edge" />
             <OpportunityMetricItem label="Hit chance" value={formatPercent(market.modelProbability)} metric="hitChance" />
             <OpportunityMetricItem label="Trust" value={<TrustValue level={market.trustLevel} sx={{ fontSize: 14, fontWeight: 950, lineHeight: 1.5 }} />} metric="trust" />
-            <OpportunityMetricItem label="Sample" value={String(market.historicalSampleSize)} />
           </OpportunityMetricGrid>
         }
         caution={warning || (incompatible ? `Locked to ${lockedProvider}` : undefined)}

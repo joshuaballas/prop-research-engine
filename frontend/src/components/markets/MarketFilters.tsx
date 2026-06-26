@@ -181,7 +181,7 @@ export function MarketFilters({
             {...fieldProps('sort', 'Edge')}
             sx={{ minWidth: { xs: '100%', md: 124 }, width: { md: 124 } }}
           >
-            {(sortOptions ?? ['Edge', 'Hit chance', 'Sample'].map((item) => ({ label: item, value: item }))).map((item) => (
+            {(sortOptions ?? ['Edge', 'Hit chance'].map((item) => ({ label: item, value: item }))).map((item) => (
               <MenuItem key={item.value} value={item.value}>
                 {item.label}
               </MenuItem>

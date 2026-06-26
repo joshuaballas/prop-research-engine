@@ -270,7 +270,6 @@ function DashboardOpportunityCard({ market, builder }: { market: MarketOpportuni
               value={<TrustValue level={market.trustLevel} sx={{ fontSize: '0.875rem', fontWeight: 900, lineHeight: 1.43 }} />}
               metric="trust"
             />
-            <OpportunityMetricItem label="Sample" value={String(market.historicalSampleSize)} />
           </OpportunityMetricGrid>
         }
         caution={warning}

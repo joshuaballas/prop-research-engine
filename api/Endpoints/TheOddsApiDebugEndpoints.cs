@@ -20,6 +20,9 @@ public static partial class TheOddsApiDebugEndpoints
     private const int FreshnessWindowHours = 24;
     private const int DefaultTheOddsLineShoppingFreshnessMinutes = 30;
     private const decimal ProjectionProbabilityConflictThreshold = 0.5m;
+    private const decimal SportsbookRecommendationEvWatchlistThreshold = 0.20m;
+    private const decimal SportsbookRecommendationEvHardSuppressThreshold = 0.30m;
+    private const decimal SportsbookLargeProbabilityEdgeThreshold = 0.20m;
     private const string MlbAliasProvider = "mlb-alias";
     private const string ExpandedTheOddsUsSportsbookBookmakers =
         "draftkings,fanduel,betmgm,espnbet,betrivers,fanatics,williamhill_us,betonlineag,bovada,lowvig,mybookieag";
@@ -531,6 +534,128 @@ public static partial class TheOddsApiDebugEndpoints
         })
         .WithName("TheOddsApiMlbProjectionProbabilityConflictAuditDebug")
         .WithSummary("Read-only MLB audit for projection direction vs probability direction conflicts.");
+
+        endpoints.MapGet("/api/debug/the-odds/mlb/sportsbook-ev-audit", async (
+            Guid? runId,
+            string? propType,
+            string? bookmaker,
+            int? takeSamples,
+            int? freshnessMinutes,
+            ApplicationDbContext dbContext,
+            IPredictionProbabilityService probabilityService,
+            IOptions<PredictionGenerationOptions> predictionGenerationOptions,
+            CancellationToken cancellationToken) =>
+        {
+            var generatedAtUtc = DateTimeOffset.UtcNow;
+            var lifecycleFreshnessMinutes = Math.Clamp(freshnessMinutes ?? DefaultTheOddsLineShoppingFreshnessMinutes, 1, 1440);
+            var sampleTake = Math.Clamp(takeSamples ?? 25, 1, 100);
+            var normalizedPropTypeFilter = string.IsNullOrWhiteSpace(propType)
+                ? null
+                : NormalizeTheOddsPropTypeName(propType);
+            var normalizedBookmakerFilter = string.IsNullOrWhiteSpace(bookmaker)
+                ? null
+                : NormalizeTheOddsBookmakerKey(bookmaker, bookmaker);
+
+            var platformProps = await LoadScopedTheOddsPlatformPropsAsync(
+                dbContext,
+                providerCategory: "Sportsbook",
+                cancellationToken);
+            var probabilityAnalysis = await LoadProbabilityAnalysisAsync(
+                runId,
+                platformProps.Select(row => row.PropId).Distinct().ToArray(),
+                probabilityService,
+                cancellationToken);
+            if (probabilityAnalysis is null)
+            {
+                return Results.NotFound(new { error = $"Prediction run '{runId}' was not found." });
+            }
+
+            var rows = BuildTheOddsLineShoppingRows(
+                platformProps,
+                probabilityAnalysis,
+                generatedAtUtc.AddHours(-FreshnessWindowHours));
+            var groups = BuildTheOddsLineShoppingGroups(
+                rows,
+                generatedAtUtc,
+                lifecycleFreshnessMinutes,
+                predictionGenerationOptions.Value)
+                .Where(group => string.Equals(group.ProviderCategory, "Sportsbook", StringComparison.OrdinalIgnoreCase))
+                .Where(group => normalizedPropTypeFilter is null
+                    || string.Equals(NormalizeTheOddsPropTypeName(group.NormalizedPropType), normalizedPropTypeFilter, StringComparison.OrdinalIgnoreCase))
+                .Where(group => normalizedBookmakerFilter is null
+                    || string.Equals(NormalizeTheOddsBookmakerKey(group.BestBookmaker, group.BestBookmaker), normalizedBookmakerFilter, StringComparison.OrdinalIgnoreCase))
+                .ToArray();
+            var classified = groups
+                .Select(group => new SportsbookEvAuditClassifiedRow(
+                    group,
+                    ClassifyTheOddsLineShoppingStrategy(group)))
+                .ToArray();
+
+            var suppressedRows = classified
+                .Where(row => !string.IsNullOrWhiteSpace(row.Group.EvSuppressedReason))
+                .ToArray();
+
+            return Results.Ok(new
+            {
+                generatedAtUtc,
+                callsExternalApis = false,
+                readOnly = true,
+                writesRows = false,
+                run = new
+                {
+                    runId = probabilityAnalysis.RunId,
+                    probabilityAnalysis.ModelName,
+                    probabilityAnalysis.ModelVersion,
+                    probabilityAnalysis.CreatedAt,
+                    probabilityAnalysis.PredictionCount
+                },
+                filters = new
+                {
+                    propType,
+                    bookmaker,
+                    takeSamples = sampleTake,
+                    freshnessMinutes = lifecycleFreshnessMinutes
+                },
+                summary = new
+                {
+                    sportsbookGroupsEvaluated = groups.Length,
+                    recommendationCount = classified.Count(row => row.Strategy.IsCandidate),
+                    rowsWithRawEv = groups.Count(group => group.RawExpectedValue.HasValue),
+                    rowsWithCalibratedEv = groups.Count(group => group.CalibratedExpectedValue.HasValue),
+                    rowsWithDisplayEv = groups.Count(group => group.DisplayExpectedValue.HasValue),
+                    suppressedForUnrealisticEv = suppressedRows.Length,
+                    negativeOrZeroDisplayEvRecommendations = classified.Count(row =>
+                        row.Strategy.IsCandidate && (!row.Group.DisplayExpectedValue.HasValue || row.Group.DisplayExpectedValue.Value <= 0m)),
+                    overTwentyPercentDisplayEvRecommendations = classified.Count(row =>
+                        row.Strategy.IsCandidate && row.Group.DisplayExpectedValue > SportsbookRecommendationEvWatchlistThreshold),
+                    overThirtyPercentDisplayEvRecommendations = classified.Count(row =>
+                        row.Strategy.IsCandidate && row.Group.DisplayExpectedValue > SportsbookRecommendationEvHardSuppressThreshold)
+                },
+                evBuckets = new
+                {
+                    rawExpectedValue = BuildSportsbookEvBucketCounts(groups, group => group.RawExpectedValue),
+                    calibratedExpectedValue = BuildSportsbookEvBucketCounts(groups, group => group.CalibratedExpectedValue),
+                    displayExpectedValue = BuildSportsbookEvBucketCounts(groups, group => group.DisplayExpectedValue)
+                },
+                bySport = BuildSportsbookEvBreakdown(classified, _ => "MLB", "sport"),
+                byPropType = BuildSportsbookEvBreakdown(classified, row => row.Group.NormalizedPropType, "propType"),
+                byBookmaker = BuildSportsbookEvBreakdown(classified, row => row.Group.BestBookmaker ?? "Unknown", "bookmaker"),
+                bySampleWarning = BuildSportsbookEvBreakdown(classified, row => row.Group.SampleWarning, "sampleWarning"),
+                suppressedSamples = suppressedRows
+                    .OrderByDescending(row => row.Group.RawExpectedValue ?? decimal.MinValue)
+                    .Take(sampleTake)
+                    .Select(row => ToSportsbookEvAuditSample(row.Group, row.Strategy))
+                    .ToArray(),
+                recommendationSamples = classified
+                    .Where(row => row.Strategy.IsCandidate)
+                    .OrderByDescending(row => row.Group.DisplayExpectedValue ?? decimal.MinValue)
+                    .Take(sampleTake)
+                    .Select(row => ToSportsbookEvAuditSample(row.Group, row.Strategy))
+                    .ToArray()
+            });
+        })
+        .WithName("TheOddsApiMlbSportsbookEvAuditDebug")
+        .WithSummary("Read-only MLB sportsbook EV calibration and suppression audit.");
 
         endpoints.MapGet("/api/debug/the-odds/mlb/line-shopping-backtest", async (
             Guid? runId,
@@ -4266,6 +4391,22 @@ public static partial class TheOddsApiDebugEndpoints
             ? $"Projection direction {projectionDirection} conflicts with probability direction {probabilityDirection} at the configured projection conflict threshold."
             : null;
         var sampleWarning = BuildSampleWarning(first.HistoricalSampleSize, first.ProbabilityMethod);
+        var evCalibration = BuildSportsbookExpectedValueCalibration(
+            key.ProviderCategory,
+            bestSide.Probability,
+            bestSide.ImpliedProbability,
+            bestSide.DecimalPrice,
+            first.HistoricalSampleSize,
+            sampleWarning,
+            first.ConfidenceScore);
+        bestSide = bestSide with
+        {
+            EstimatedEv = evCalibration.DisplayExpectedValue,
+            Probability = evCalibration.SelectedSideProbability,
+            ProbabilityEdge = evCalibration.SelectedSideProbability.HasValue && bestSide.ImpliedProbability.HasValue
+                ? Math.Round(evCalibration.SelectedSideProbability.Value - bestSide.ImpliedProbability.Value, 6)
+                : bestSide.ProbabilityEdge
+        };
         var trustLevel = BuildTrustLevel(
             rows.Any(row => row.IsEligibleAsNormalRecommendation),
             bestSide.EstimatedEv,
@@ -4377,12 +4518,22 @@ public static partial class TheOddsApiDebugEndpoints
             bestUnder?.Bookmaker,
             bestUnder?.UnderAmericanPrice,
             bestUnder?.UnderEstimatedEv,
+            evCalibration.RawExpectedValue,
+            evCalibration.CalibratedExpectedValue,
+            evCalibration.DisplayExpectedValue,
+            evCalibration.EvCalibrationMethod,
+            evCalibration.EvSuppressedReason,
             bestSide.EstimatedEv,
             spreads.Where(value => value.HasValue).DefaultIfEmpty().Max(),
             bestSide.Side,
             bestSide.Bookmaker,
             bestSide.AmericanPrice,
             bestSide.DecimalPrice,
+            evCalibration.RawSelectedSideProbability,
+            evCalibration.CalibratedSelectedSideProbability,
+            evCalibration.SelectedSideProbability,
+            evCalibration.ProbabilityCalibrationMethod,
+            evCalibration.ProbabilityCalibrationReason,
             bestSide.Probability,
             bestSide.ImpliedProbability,
             bestSide.ProbabilityEdge,
@@ -4406,6 +4557,15 @@ public static partial class TheOddsApiDebugEndpoints
             group.BestImpliedProbability,
             group.BestDecimalPrice,
             group.BestAmericanPrice);
+        if (!string.IsNullOrWhiteSpace(group.EvSuppressedReason))
+        {
+            expectedValueDisplay = expectedValueDisplay with
+            {
+                ShowExpectedValue = false,
+                DisplayExpectedValue = null,
+                ExpectedValueUnavailableReason = group.EvSuppressedReason
+            };
+        }
 
         return new
         {
@@ -4451,6 +4611,10 @@ public static partial class TheOddsApiDebugEndpoints
             modelProbabilityOver = group.ModelProbabilityOver,
             modelProbabilityUnder = group.ModelProbabilityUnder,
             modelProbabilityPush = group.ModelProbabilityPush,
+            rawSelectedSideProbability = group.RawSelectedSideProbability,
+            calibratedSelectedSideProbability = group.CalibratedSelectedSideProbability,
+            probabilityCalibrationMethod = group.ProbabilityCalibrationMethod,
+            probabilityCalibrationReason = group.ProbabilityCalibrationReason,
             modelProjection = group.ModelProjection,
             projectionEdge = group.ProjectionEdge,
             recommendationProjection = group.ModelProjection,
@@ -4493,6 +4657,10 @@ public static partial class TheOddsApiDebugEndpoints
             bestUnderAmericanPrice = group.BestUnderAmericanPrice,
             bestUnderEstimatedEv = group.BestUnderEstimatedEv,
             bestEstimatedEv = group.BestEstimatedEv,
+            rawExpectedValue = group.RawExpectedValue,
+            calibratedExpectedValue = group.CalibratedExpectedValue,
+            evCalibrationMethod = group.EvCalibrationMethod,
+            evSuppressedReason = group.EvSuppressedReason,
             largestPriceSpread = group.LargestPriceSpread,
             bestSide = group.BestSide,
             bestBookmaker = group.BestBookmaker,
@@ -4610,6 +4778,18 @@ public static partial class TheOddsApiDebugEndpoints
         bool ShowExpectedValue,
         decimal? DisplayExpectedValue,
         string? ExpectedValueUnavailableReason);
+
+    private sealed record SportsbookExpectedValueCalibration(
+        decimal? RawSelectedSideProbability,
+        decimal? CalibratedSelectedSideProbability,
+        decimal? SelectedSideProbability,
+        string ProbabilityCalibrationMethod,
+        string ProbabilityCalibrationReason,
+        decimal? RawExpectedValue,
+        decimal? CalibratedExpectedValue,
+        decimal? DisplayExpectedValue,
+        string EvCalibrationMethod,
+        string? EvSuppressedReason);
 
     private static TheOddsEntryCompatibilityMetadata BuildTheOddsEntryCompatibility(
         TheOddsLineShoppingGroup group)
@@ -6275,6 +6455,163 @@ public static partial class TheOddsApiDebugEndpoints
         return winProbability.HasValue && loseProbability.HasValue && decimalPrice.HasValue
             ? Math.Round((winProbability.Value * (decimalPrice.Value - 1m)) - loseProbability.Value, 6)
             : null;
+    }
+
+    internal static decimal? ConvertAmericanToDecimalForTesting(int? americanPrice)
+    {
+        return ConvertAmericanToDecimal(americanPrice);
+    }
+
+    internal static decimal? CalculateExpectedValueForTesting(decimal? winProbability, decimal? decimalPrice)
+    {
+        return winProbability.HasValue && decimalPrice.HasValue
+            ? Math.Round((winProbability.Value * decimalPrice.Value) - 1m, 6)
+            : null;
+    }
+
+    private static decimal? ConvertAmericanToDecimal(int? americanPrice)
+    {
+        if (!americanPrice.HasValue || americanPrice.Value == 0)
+        {
+            return null;
+        }
+
+        return americanPrice.Value > 0
+            ? Math.Round(1m + americanPrice.Value / 100m, 6)
+            : Math.Round(1m + 100m / Math.Abs(americanPrice.Value), 6);
+    }
+
+    private static SportsbookExpectedValueCalibration BuildSportsbookExpectedValueCalibration(
+        string providerCategory,
+        decimal? rawSelectedSideProbability,
+        decimal? impliedProbability,
+        decimal? decimalPrice,
+        int historicalSampleSize,
+        string sampleWarning,
+        decimal confidenceScore)
+    {
+        if (!string.Equals(providerCategory, "Sportsbook", StringComparison.OrdinalIgnoreCase))
+        {
+            return new SportsbookExpectedValueCalibration(
+                rawSelectedSideProbability,
+                rawSelectedSideProbability,
+                rawSelectedSideProbability,
+                "None",
+                "DFS rows do not use sportsbook EV calibration.",
+                null,
+                null,
+                null,
+                "None",
+                null);
+        }
+
+        var rawExpectedValue = CalculateExpectedValueForTesting(rawSelectedSideProbability, decimalPrice);
+        if (!rawSelectedSideProbability.HasValue || !impliedProbability.HasValue || !decimalPrice.HasValue)
+        {
+            return new SportsbookExpectedValueCalibration(
+                rawSelectedSideProbability,
+                null,
+                null,
+                "Unavailable",
+                "Sportsbook calibration requires selected-side probability and selected-book implied probability.",
+                rawExpectedValue,
+                null,
+                null,
+                "Unavailable",
+                "Sportsbook EV requires model probability and real odds.");
+        }
+
+        var probabilityEdge = rawSelectedSideProbability.Value - impliedProbability.Value;
+        var sampleWeight = historicalSampleSize switch
+        {
+            >= 150 => 0.70m,
+            >= 100 => 0.60m,
+            >= 50 => 0.45m,
+            >= 25 => 0.30m,
+            _ => 0.20m
+        };
+
+        if (!string.Equals(sampleWarning, "None", StringComparison.OrdinalIgnoreCase))
+        {
+            sampleWeight = Math.Min(sampleWeight, 0.30m);
+        }
+
+        if (Math.Abs(probabilityEdge) > SportsbookLargeProbabilityEdgeThreshold)
+        {
+            sampleWeight = Math.Min(sampleWeight, confidenceScore >= 0.75m && historicalSampleSize >= 100 ? 0.45m : 0.30m);
+        }
+
+        if (confidenceScore < 0.60m)
+        {
+            sampleWeight = Math.Min(sampleWeight, 0.25m);
+        }
+
+        var calibratedProbability = Math.Round(
+            impliedProbability.Value + ((rawSelectedSideProbability.Value - impliedProbability.Value) * sampleWeight),
+            4);
+        var calibratedExpectedValue = CalculateExpectedValueForTesting(calibratedProbability, decimalPrice);
+        var suppressedReason = BuildSportsbookExpectedValueSuppressedReason(
+            rawSelectedSideProbability.Value,
+            impliedProbability.Value,
+            calibratedExpectedValue,
+            historicalSampleSize,
+            sampleWarning,
+            confidenceScore);
+
+        return new SportsbookExpectedValueCalibration(
+            rawSelectedSideProbability,
+            calibratedProbability,
+            calibratedProbability,
+            "MarketImpliedShrinkage",
+            $"Shrank raw model probability toward selected-book implied probability with weight {sampleWeight:0.##}.",
+            rawExpectedValue,
+            calibratedExpectedValue,
+            suppressedReason is null ? calibratedExpectedValue : null,
+            "SelectedBookImpliedProbabilityShrinkage",
+            suppressedReason);
+    }
+
+    private static string? BuildSportsbookExpectedValueSuppressedReason(
+        decimal rawSelectedSideProbability,
+        decimal impliedProbability,
+        decimal? calibratedExpectedValue,
+        int historicalSampleSize,
+        string sampleWarning,
+        decimal confidenceScore)
+    {
+        if (!calibratedExpectedValue.HasValue)
+        {
+            return "Sportsbook EV requires model probability and real odds.";
+        }
+
+        if (calibratedExpectedValue.Value <= 0m)
+        {
+            return "Calibrated EV is not positive.";
+        }
+
+        if (calibratedExpectedValue.Value > SportsbookRecommendationEvHardSuppressThreshold)
+        {
+            return "Calibrated EV exceeds the sportsbook recommendation hard-suppression threshold.";
+        }
+
+        if (calibratedExpectedValue.Value > SportsbookRecommendationEvWatchlistThreshold)
+        {
+            return "Calibrated EV exceeds the sportsbook recommendation review threshold.";
+        }
+
+        if (rawSelectedSideProbability - impliedProbability > SportsbookLargeProbabilityEdgeThreshold
+            && (confidenceScore < 0.75m || historicalSampleSize < 100 || !string.Equals(sampleWarning, "None", StringComparison.OrdinalIgnoreCase)))
+        {
+            return "Large model-vs-market probability edge requires high confidence, sufficient sample, and no sample warning.";
+        }
+
+        if (!string.Equals(sampleWarning, "None", StringComparison.OrdinalIgnoreCase)
+            && calibratedExpectedValue.Value > 0.10m)
+        {
+            return "Sample warning with elevated sportsbook EV requires review.";
+        }
+
+        return null;
     }
 
     private static decimal? CalculatePriceSpread(IEnumerable<decimal?> prices)
@@ -11086,6 +11423,123 @@ public static partial class TheOddsApiDebugEndpoints
         };
     }
 
+    private static object[] BuildSportsbookEvBucketCounts(
+        IEnumerable<TheOddsLineShoppingGroup> groups,
+        Func<TheOddsLineShoppingGroup, decimal?> selector)
+    {
+        return groups
+            .GroupBy(group => SportsbookEvBucket(selector(group)), StringComparer.OrdinalIgnoreCase)
+            .Select(group => new
+            {
+                bucket = group.Key,
+                count = group.Count()
+            })
+            .OrderBy(row => SportsbookEvBucketSortKey(row.bucket))
+            .ThenBy(row => row.bucket)
+            .Cast<object>()
+            .ToArray();
+    }
+
+    private static object[] BuildSportsbookEvBreakdown(
+        IEnumerable<SportsbookEvAuditClassifiedRow> rows,
+        Func<SportsbookEvAuditClassifiedRow, string> keySelector,
+        string dimension)
+    {
+        return rows
+            .GroupBy(keySelector, StringComparer.OrdinalIgnoreCase)
+            .Select(group => new
+            {
+                dimension,
+                group = group.Key,
+                rowCount = group.Count(),
+                recommendationCount = group.Count(row => row.Strategy.IsCandidate),
+                suppressedCount = group.Count(row => !string.IsNullOrWhiteSpace(row.Group.EvSuppressedReason)),
+                averageRawExpectedValue = AverageNullable(group.Select(row => row.Group.RawExpectedValue)),
+                averageCalibratedExpectedValue = AverageNullable(group.Select(row => row.Group.CalibratedExpectedValue)),
+                averageDisplayExpectedValue = AverageNullable(group.Select(row => row.Group.DisplayExpectedValue)),
+                evBuckets = BuildSportsbookEvBucketCounts(group.Select(row => row.Group), row => row.DisplayExpectedValue)
+            })
+            .OrderByDescending(row => row.rowCount)
+            .ThenBy(row => row.group)
+            .Cast<object>()
+            .ToArray();
+    }
+
+    private static object ToSportsbookEvAuditSample(
+        TheOddsLineShoppingGroup group,
+        TheOddsLineShoppingStrategyClassification strategy)
+    {
+        return new
+        {
+            player = group.Player,
+            normalizedPropType = group.NormalizedPropType,
+            line = group.Line,
+            group.BestSide,
+            group.BestBookmaker,
+            group.BestAmericanPrice,
+            group.BestDecimalPrice,
+            rawSelectedSideProbability = group.RawSelectedSideProbability,
+            calibratedSelectedSideProbability = group.CalibratedSelectedSideProbability,
+            selectedSideProbability = group.RecommendationSelectedSideProbability,
+            group.BestImpliedProbability,
+            group.BestProbabilityEdge,
+            group.RawExpectedValue,
+            group.CalibratedExpectedValue,
+            group.DisplayExpectedValue,
+            group.EvCalibrationMethod,
+            group.EvSuppressedReason,
+            group.ProbabilityCalibrationMethod,
+            group.ProbabilityCalibrationReason,
+            group.SampleWarning,
+            group.HistoricalSampleSize,
+            group.ConfidenceScore,
+            group.ProjectionProbabilityConflict,
+            recentWeightedProjectionProbabilityConflict = HasRecentWeightedProjectionProbabilityConflict(group),
+            strategy.StrategyClassification,
+            strategy.StrategyTier,
+            strategy.IsCandidate,
+            strategy.IsWatchlist,
+            strategy.IsResearchOnly,
+            strategy.StrategyWarnings,
+            strategy.RiskTags
+        };
+    }
+
+    private static string SportsbookEvBucket(decimal? expectedValue)
+    {
+        if (!expectedValue.HasValue)
+        {
+            return "Unavailable";
+        }
+
+        return expectedValue.Value switch
+        {
+            <= 0m => "<=0",
+            <= 0.05m => "0-5%",
+            <= 0.10m => "5-10%",
+            <= 0.15m => "10-15%",
+            <= 0.20m => "15-20%",
+            <= 0.30m => "20-30%",
+            _ => "30%+"
+        };
+    }
+
+    private static int SportsbookEvBucketSortKey(string bucket)
+    {
+        return bucket switch
+        {
+            "<=0" => 0,
+            "0-5%" => 1,
+            "5-10%" => 2,
+            "10-15%" => 3,
+            "15-20%" => 4,
+            "20-30%" => 5,
+            "30%+" => 6,
+            "Unavailable" => 7,
+            _ => 99
+        };
+    }
+
     private static string RecommendationStrengthBucket(TheOddsLineShoppingBacktestRow row)
     {
         if (!row.BestEstimatedEv.HasValue || !row.BestProbabilityEdge.HasValue)
@@ -11715,6 +12169,10 @@ public static partial class TheOddsApiDebugEndpoints
         IReadOnlyList<object> ResponseGroups,
         object[] StrategyClassificationSummary);
 
+    private sealed record SportsbookEvAuditClassifiedRow(
+        TheOddsLineShoppingGroup Group,
+        TheOddsLineShoppingStrategyClassification Strategy);
+
     private sealed record TheOddsLineShoppingGroup(
         string? EventId,
         DateTimeOffset? EventStartTime,
@@ -11784,12 +12242,22 @@ public static partial class TheOddsApiDebugEndpoints
         string? BestUnderBookmaker,
         int? BestUnderAmericanPrice,
         decimal? BestUnderEstimatedEv,
+        decimal? RawExpectedValue,
+        decimal? CalibratedExpectedValue,
+        decimal? DisplayExpectedValue,
+        string EvCalibrationMethod,
+        string? EvSuppressedReason,
         decimal? BestEstimatedEv,
         decimal? LargestPriceSpread,
         string BestSide,
         string? BestBookmaker,
         int? BestAmericanPrice,
         decimal? BestDecimalPrice,
+        decimal? RawSelectedSideProbability,
+        decimal? CalibratedSelectedSideProbability,
+        decimal? RecommendationSelectedSideProbability,
+        string ProbabilityCalibrationMethod,
+        string ProbabilityCalibrationReason,
         decimal? BestProbability,
         decimal? BestImpliedProbability,
         decimal? BestProbabilityEdge,

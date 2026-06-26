@@ -36,7 +36,6 @@ export function EntryLegCard({ leg, onRemove }: { leg: EntryLeg; onRemove?: (id:
           <OpportunityMetricItem label="Edge" value={formatSignedPercent(leg.probabilityEdge)} metric="edge" />
           <OpportunityMetricItem label="Hit chance" value={formatPercent(leg.modelProbability)} metric="hitChance" />
           <OpportunityMetricItem label="Trust" value={<TrustValue level={leg.trustLevel} sx={{ fontSize: 14, fontWeight: 950, lineHeight: 1.5 }} />} metric="trust" />
-          <OpportunityMetricItem label="Sample" value={String(leg.historicalSampleSize)} />
         </OpportunityMetricGrid>
       }
       caution={warning}

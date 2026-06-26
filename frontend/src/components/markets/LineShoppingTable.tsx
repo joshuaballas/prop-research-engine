@@ -296,7 +296,6 @@ export function LineShoppingCard({ market }: { market: MarketOpportunity }) {
               <OpportunityMetricItem label="Edge" value={formatPercent(market.probabilityEdge, { signed: true })} metric="edge" />
               <OpportunityMetricItem label="Hit chance" value={formatPercent(market.modelProbability)} metric="hitChance" />
               <OpportunityMetricItem label="Trust" value={<TrustValue level={confidence} sx={{ fontSize: 14, fontWeight: 950, lineHeight: 1.5 }} />} metric="trust" />
-              <OpportunityMetricItem label="Sample" value={String(market.historicalSampleSize)} />
             </OpportunityMetricGrid>
             <ProviderLineGroup title="Provider lines" lines={providerLines} marketId={market.id} bestProvider={market.provider} />
             {referenceLines.length ? <ProviderLineGroup title="Reference lines" lines={referenceLines} marketId={market.id} /> : null}
@@ -659,17 +658,21 @@ function LineShoppingPlayerHistoryContext({ market, compact = false }: { market:
         <Box
           sx={{
             display: 'grid',
-            gridTemplateColumns: compact ? 'repeat(2, minmax(0, 1fr))' : { xs: 'repeat(2, minmax(0, 1fr))', sm: 'repeat(5, minmax(0, auto))' },
+            gridTemplateColumns: compact ? 'repeat(2, minmax(0, 1fr))' : { xs: 'repeat(2, minmax(0, 1fr))', sm: 'repeat(4, minmax(0, auto))' },
             gap: compact ? 0.8 : 1.1,
             alignItems: 'start'
           }}
         >
-          <HistoryStatValue label="Sample" value={sampleSize === undefined ? '-' : String(sampleSize)} />
           <HistoryStatValue label="Avg" value={formatHistoryAverage(stat.average)} />
           <HistoryStatValue label="Last 5" value={formatHistoryAverage(stat.last5Average)} />
           <HistoryStatValue label="Last 10" value={formatHistoryAverage(stat.last10Average)} />
           {!compact && latestDate ? <HistoryStatValue label="Latest" value={latestDate} /> : null}
         </Box>
+        {sampleSize !== undefined ? (
+          <Typography variant="caption" color="text.secondary" fontWeight={650}>
+            Based on {sampleSize} historical games.
+          </Typography>
+        ) : null}
       </Stack>
     </Box>
   );

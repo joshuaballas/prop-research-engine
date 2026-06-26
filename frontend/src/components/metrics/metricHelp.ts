@@ -7,10 +7,10 @@ export const metricHelp: Record<MetricHelpKey, { label: string; description: str
   },
   edge: {
     label: 'Edge',
-    description: 'Difference between our hit chance and the break-even chance implied by the provider line.'
+    description: 'Probability edge: model hit chance minus implied probability from the selected book.'
   },
   hitChance: {
-    label: 'Model hit chance',
+    label: 'Hit chance',
     description: 'Model-estimated chance that the selected side hits. If unavailable, historical hit rate is still shown in the chart.'
   },
   trust: {

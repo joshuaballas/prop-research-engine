@@ -250,7 +250,6 @@ function StatSummary({
   const alternativeProviders = Array.from(new Set(alternatives.map((line) => line.provider))).slice(0, 3);
   const metrics = stat.summaryMode === 'soccerPlayerHistory'
     ? [
-        ['Sample', stat.sampleSize ?? hitRate],
         ['Latest', stat.bestRecentResult],
         ['Average', stat.seasonAverage],
         ['Last 5', stat.last5Average],
@@ -271,13 +270,14 @@ function StatSummary({
     selectedOffering.line
   )}. Cleared ${displayedClears} of ${displayedGameCount} ${shownGameLabel}.`;
   const alternativeContext = alternativeProviders.length ? ` Alternatives listed from ${alternativeProviders.join(', ')}.` : '';
+  const sampleContext = stat.sampleSize ? ` Based on ${stat.sampleSize} historical games.` : '';
 
   return (
     <Stack spacing={{ xs: 0.6, sm: 0.75 }}>
       <Box
         sx={{
           display: 'grid',
-          gridTemplateColumns: { xs: 'repeat(2, minmax(0, 1fr))', sm: 'repeat(5, max-content)' },
+          gridTemplateColumns: { xs: 'repeat(2, minmax(0, 1fr))', sm: `repeat(${metrics.length}, max-content)` },
           justifyContent: { xs: 'stretch', sm: 'start' },
           alignItems: 'center',
           px: { xs: 0.95, sm: 1.3 },
@@ -318,7 +318,7 @@ function StatSummary({
         }}
       >
         <Typography variant="body2" color={hasWarning ? 'warning.main' : 'text.secondary'} fontWeight={hasWarning ? 820 : 650}>
-          {hasWarning ? `Limited history: ${warning}. ${baseContext}` : `${baseContext}${alternativeContext}`}
+          {hasWarning ? `Limited history: ${warning}. ${baseContext}${sampleContext}` : `${baseContext}${sampleContext}${alternativeContext}`}
         </Typography>
       </Box>
     </Stack>

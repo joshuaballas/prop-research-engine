@@ -156,7 +156,6 @@ function TopPickMetrics({ market, detailed, confidence }: { market: MarketOpport
           <OpportunityMetricItem label="Trust" value={<TrustValue level={confidence} sx={{ fontSize: 14, fontWeight: 950, lineHeight: 1.5 }} />} metric="trust" />
         </>
       ) : null}
-      <OpportunityMetricItem label="Sample" value={String(market.historicalSampleSize)} />
     </OpportunityMetricGrid>
   );
 }

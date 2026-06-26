@@ -39,6 +39,10 @@ export interface MarketOpportunity {
   showExpectedValue?: boolean;
   displayExpectedValue?: number | null;
   expectedValueUnavailableReason?: string | null;
+  rawExpectedValue?: number | null;
+  calibratedExpectedValue?: number | null;
+  evCalibrationMethod?: string | null;
+  evSuppressedReason?: string | null;
   sportsbookContextResearchOnly?: boolean;
   isResearchOnly?: boolean;
   isRecommendation?: boolean;
@@ -55,6 +59,10 @@ export interface MarketOpportunity {
   bestDecimalPrice: number;
   modelProbability: number | null;
   selectedSideProbability?: number | null;
+  rawSelectedSideProbability?: number | null;
+  calibratedSelectedSideProbability?: number | null;
+  probabilityCalibrationMethod?: string | null;
+  probabilityCalibrationReason?: string | null;
   modelProbabilityAvailable?: boolean;
   hitChanceUnavailableReason?: string | null;
   modelOverProbability?: number | null;

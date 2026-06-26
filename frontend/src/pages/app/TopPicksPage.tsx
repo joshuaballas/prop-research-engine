@@ -224,8 +224,6 @@ function sortTopPicks(markets: MarketOpportunity[], sort: string) {
       return rows.sort((a, b) => trustSortRank(b) - trustSortRank(a) || (b.probabilityEdge ?? Number.NEGATIVE_INFINITY) - (a.probabilityEdge ?? Number.NEGATIVE_INFINITY));
     case 'Rank':
       return rows.sort((a, b) => (a.rank ?? Number.MAX_SAFE_INTEGER) - (b.rank ?? Number.MAX_SAFE_INTEGER));
-    case 'Sample':
-      return rows.sort((a, b) => b.historicalSampleSize - a.historicalSampleSize);
     default:
       return rows.sort((a, b) => (b.probabilityEdge ?? Number.NEGATIVE_INFINITY) - (a.probabilityEdge ?? Number.NEGATIVE_INFINITY));
   }
@@ -262,7 +260,7 @@ function TopPickControls({
     onFiltersChange({ ...filters, [key]: value });
   };
   const clearFilters = () => onFiltersChange(defaultTopPickFilters);
-  const sortOptions = ['Edge', 'Hit chance', 'Trust', 'Rank', 'Sample'];
+  const sortOptions = ['Edge', 'Hit chance', 'Trust', 'Rank'];
 
   if (isMobile) {
     return (

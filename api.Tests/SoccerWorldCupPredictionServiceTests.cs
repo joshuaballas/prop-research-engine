@@ -123,7 +123,9 @@ public sealed class SoccerWorldCupPredictionServiceTests
         var group = Assert.Single(lineShopping.GetProperty("comparisonGroups").EnumerateArray());
 
         Assert.True(group.GetProperty("modelProbabilityAvailable").GetBoolean());
-        Assert.Equal(0.8m, group.GetProperty("selectedSideProbability").GetDecimal());
+        Assert.Equal(0.8m, group.GetProperty("rawSelectedSideProbability").GetDecimal());
+        Assert.Equal(0.5788m, group.GetProperty("selectedSideProbability").GetDecimal());
+        Assert.Equal("MarketImpliedShrinkage", group.GetProperty("probabilityCalibrationMethod").GetString());
         Assert.False(group.GetProperty("entryActionableForUser").GetBoolean());
         Assert.False(group.GetProperty("resultGradingSupported").GetBoolean());
         Assert.Empty(topPicks.GetProperty("topPicks").EnumerateArray());
@@ -134,7 +136,12 @@ public sealed class SoccerWorldCupPredictionServiceTests
     public async Task PublicSoccerTopPicks_ReturnsEligibleRows_WhenExplicitlyEnabled()
     {
         await using var factory = CreateFactory(predictionsEnabled: true, gradingEnabled: true, topPicksEnabled: true);
-        await SeedSoccerScenarioAsync(factory, historicalValues: BuildSoccerHistory(overWins: 18, underWins: 5), line: 0.5m);
+        await SeedSoccerScenarioAsync(
+            factory,
+            historicalValues: BuildSoccerHistory(overWins: 60, underWins: 15),
+            line: 0.5m,
+            priceOver: -220,
+            priceOverDecimal: 1.454545m);
         using var client = factory.CreateClient();
 
         var response = await client.GetAsync("/api/markets/top-picks?sport=SOCCER&competition=World%20Cup&take=10");
@@ -148,6 +155,8 @@ public sealed class SoccerWorldCupPredictionServiceTests
         Assert.Contains("Soccer predictions and grading are enabled", json.GetProperty("limitation").GetString());
         Assert.Equal(1, json.GetProperty("summary").GetProperty("activeCandidateCount").GetInt32());
         Assert.True(pick.GetProperty("modelProbabilityAvailable").GetBoolean());
+        Assert.True(pick.GetProperty("displayExpectedValue").GetDecimal() > 0m);
+        Assert.Equal(JsonValueKind.Null, pick.GetProperty("evSuppressedReason").ValueKind);
         Assert.True(pick.GetProperty("isRecommendation").GetBoolean());
         Assert.True(pick.GetProperty("recommendationActionableForUser").GetBoolean());
         Assert.Equal("Sportsbook", pick.GetProperty("recommendationType").GetString());
@@ -340,7 +349,11 @@ public sealed class SoccerWorldCupPredictionServiceTests
         string historicalStatKey = "SHOTS",
         string historicalPropTypeName = "Shots",
         DateTimeOffset? eventStart = null,
-        DateTimeOffset? observedAt = null)
+        DateTimeOffset? observedAt = null,
+        int priceOver = -110,
+        decimal priceOverDecimal = 1.91m,
+        int priceUnder = -110,
+        decimal priceUnderDecimal = 1.91m)
     {
         using var scope = factory.Services.CreateScope();
         var dbContext = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
@@ -398,7 +411,7 @@ public sealed class SoccerWorldCupPredictionServiceTests
             UnderAvailable = true,
             Status = "active",
             ObservedAt = observedAtUtc,
-            Metadata = BuildWorldCupMetadata("real-event-1", marketKey, eventStartUtc)
+            Metadata = BuildWorldCupMetadata("real-event-1", marketKey, eventStartUtc, priceOver, priceOverDecimal, priceUnder, priceUnderDecimal)
         });
         dbContext.ProviderEntityLinks.Add(new ProviderEntityLink
         {
@@ -476,13 +489,20 @@ public sealed class SoccerWorldCupPredictionServiceTests
             OverAvailable: true,
             UnderAvailable: true,
             DateOnly.FromDateTime(eventStartUtc.UtcDateTime.Date),
-            PriceOver: -110,
-            PriceOverDecimal: 1.91m,
-            PriceUnder: -110,
-            PriceUnderDecimal: 1.91m));
+            PriceOver: priceOver,
+            PriceOverDecimal: priceOverDecimal,
+            PriceUnder: priceUnder,
+            PriceUnderDecimal: priceUnderDecimal));
     }
 
-    private static JsonDocument BuildWorldCupMetadata(string eventId, string marketKey, DateTimeOffset eventStart)
+    private static JsonDocument BuildWorldCupMetadata(
+        string eventId,
+        string marketKey,
+        DateTimeOffset eventStart,
+        int priceOver = -110,
+        decimal priceOverDecimal = 1.91m,
+        int priceUnder = -110,
+        decimal priceUnderDecimal = 1.91m)
     {
         return JsonSerializer.SerializeToDocument(new
         {
@@ -521,8 +541,8 @@ public sealed class SoccerWorldCupPredictionServiceTests
             },
             options = new
             {
-                higher = new { americanPrice = -110, decimalPrice = 1.91m },
-                lower = new { americanPrice = -110, decimalPrice = 1.91m }
+                higher = new { americanPrice = priceOver, decimalPrice = priceOverDecimal },
+                lower = new { americanPrice = priceUnder, decimalPrice = priceUnderDecimal }
             }
         });
     }

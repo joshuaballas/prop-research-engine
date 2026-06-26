@@ -147,9 +147,8 @@ export function EntryReceiptDialog({ open, onClose, legs, review, amount }: Entr
                       <TableCell>Prop</TableCell>
                       <TableCell>Game</TableCell>
                       <TableCell align="right">Edge</TableCell>
-                      <TableCell align="right">Model Hit Chance</TableCell>
+                      <TableCell align="right">Hit chance</TableCell>
                       <TableCell>Trust</TableCell>
-                      <TableCell align="right">Sample</TableCell>
                       {showNotesColumn ? <TableCell>Notes</TableCell> : null}
                     </TableRow>
                   </TableHead>
@@ -173,7 +172,6 @@ export function EntryReceiptDialog({ open, onClose, legs, review, amount }: Entr
                         <TableCell align="right">{formatPercent(leg.probabilityEdge, { signed: true })}</TableCell>
                         <TableCell align="right">{formatPercent(leg.modelProbability)}</TableCell>
                         <TableCell><TrustValue level={leg.trustLevel} /></TableCell>
-                        <TableCell align="right">{leg.historicalSampleSize}</TableCell>
                         {showNotesColumn ? (
                           <TableCell>
                             <Typography variant="body2" color="text.secondary">
@@ -212,10 +210,9 @@ export function EntryReceiptDialog({ open, onClose, legs, review, amount }: Entr
                     <Typography variant="body2" color="text.secondary">
                       {leg.event} - {leg.startTime}
                     </Typography>
-                    <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 0.75 }}>
+                    <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 0.75 }}>
                       <ReceiptMiniMetric label="Edge" value={formatPercent(leg.probabilityEdge, { signed: true })} />
-                      <ReceiptMiniMetric label="Model Hit Chance" value={formatPercent(leg.modelProbability)} />
-                      <ReceiptMiniMetric label="Sample" value={String(leg.historicalSampleSize)} />
+                      <ReceiptMiniMetric label="Hit chance" value={formatPercent(leg.modelProbability)} />
                     </Box>
                     {legNotes[index] ? (
                       <Typography variant="body2" color="text.secondary">

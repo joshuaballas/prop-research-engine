@@ -32,7 +32,15 @@ function mapMarketGroupToOpportunity(group: MarketGroupDto, index: number, sourc
   const isDfs = readBoolean(group, 'isDfs', 'IsDfs') ?? providerCategory === 'DFS';
   const isSportsbook = readBoolean(group, 'isSportsbook', 'IsSportsbook') ?? providerCategory === 'Sportsbook';
   const rawEstimatedEv = readNumber(group, 'bestEstimatedEv', 'BestEstimatedEv') ?? 0;
+  const rawExpectedValue = readNumber(group, 'rawExpectedValue', 'RawExpectedValue') ?? null;
+  const calibratedExpectedValue = readNumber(group, 'calibratedExpectedValue', 'CalibratedExpectedValue') ?? null;
+  const evCalibrationMethod = readString(group, 'evCalibrationMethod', 'EvCalibrationMethod') ?? null;
+  const evSuppressedReason = readString(group, 'evSuppressedReason', 'EvSuppressedReason') ?? null;
   const selectedSideProbability = readNumber(group, 'selectedSideProbability', 'SelectedSideProbability', 'bestProbability', 'BestProbability') ?? null;
+  const rawSelectedSideProbability = readNumber(group, 'rawSelectedSideProbability', 'RawSelectedSideProbability') ?? null;
+  const calibratedSelectedSideProbability = readNumber(group, 'calibratedSelectedSideProbability', 'CalibratedSelectedSideProbability') ?? null;
+  const probabilityCalibrationMethod = readString(group, 'probabilityCalibrationMethod', 'ProbabilityCalibrationMethod') ?? null;
+  const probabilityCalibrationReason = readString(group, 'probabilityCalibrationReason', 'ProbabilityCalibrationReason') ?? null;
   const modelProbabilityAvailable =
     readBoolean(group, 'modelProbabilityAvailable', 'ModelProbabilityAvailable') ??
     selectedSideProbability !== null;
@@ -45,7 +53,7 @@ function mapMarketGroupToOpportunity(group: MarketGroupDto, index: number, sourc
     readBoolean(group, 'showExpectedValue', 'ShowExpectedValue') ??
     (isSportsbook && hasSportsbookPricing && readNumber(group, 'bestEstimatedEv', 'BestEstimatedEv') !== undefined);
   const displayExpectedValue = showExpectedValue
-    ? readNumber(group, 'displayExpectedValue', 'DisplayExpectedValue') ?? rawEstimatedEv
+    ? readNumber(group, 'displayExpectedValue', 'DisplayExpectedValue') ?? null
     : null;
   const expectedValueUnavailableReason =
     readString(group, 'expectedValueUnavailableReason', 'ExpectedValueUnavailableReason') ??
@@ -121,6 +129,10 @@ function mapMarketGroupToOpportunity(group: MarketGroupDto, index: number, sourc
     showExpectedValue,
     displayExpectedValue,
     expectedValueUnavailableReason,
+    rawExpectedValue,
+    calibratedExpectedValue,
+    evCalibrationMethod,
+    evSuppressedReason,
     sportsbookContextResearchOnly,
     isResearchOnly,
     isRecommendation,
@@ -137,6 +149,10 @@ function mapMarketGroupToOpportunity(group: MarketGroupDto, index: number, sourc
     bestDecimalPrice: readNumber(group, 'bestDecimalPrice', 'BestDecimalPrice') ?? 0,
     modelProbability: selectedSideProbability,
     selectedSideProbability,
+    rawSelectedSideProbability,
+    calibratedSelectedSideProbability,
+    probabilityCalibrationMethod,
+    probabilityCalibrationReason,
     modelProbabilityAvailable,
     hitChanceUnavailableReason:
       readString(group, 'hitChanceUnavailableReason', 'HitChanceUnavailableReason') ??

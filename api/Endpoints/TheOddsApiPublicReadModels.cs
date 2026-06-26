@@ -867,7 +867,6 @@ public static partial class TheOddsApiDebugEndpoints
         var rows = await query
             .OrderByDescending(row => row.BestEstimatedEv)
             .ThenBy(row => row.EntryActionableForUser ? 0 : 1)
-            .Take(requestedTake)
             .ToListAsync(cancellationToken);
         if (rows.Count == 0)
         {
@@ -883,19 +882,25 @@ public static partial class TheOddsApiDebugEndpoints
             .ThenByDescending(row => row.StartedAtUtc)
             .First();
         var playerIdsBySnapshotId = await ResolveTopPickSnapshotPlayerIdsAsync(dbContext, rows, cancellationToken);
+        var normalizedRows = rows
+            .Select(row => BuildSnapshotDetailsJsonObject(row.DetailsJson.RootElement, playerIdsBySnapshotId.GetValueOrDefault(row.Id)))
+            .Where(IsSafePublicTopPickSnapshotRow)
+            .OrderByDescending(row => GetDecimal(row, "displayExpectedValue") ?? decimal.MinValue)
+            .ThenByDescending(row => GetDecimal(row, "selectedSideProbability") ?? decimal.MinValue)
+            .ThenByDescending(row => GetDecimal(row, "rankingScore") ?? decimal.MinValue)
+            .Take(requestedTake)
+            .ToArray();
 
         return new MlbTopPicksReadResponse(
             rows.FirstOrDefault()?.GeneratedAtUtc ?? latestRefreshRun.CompletedAtUtc ?? latestRefreshRun.StartedAtUtc,
             SnapshotBacked: true,
             RefreshRunId: refreshRunIds.Length == 1 ? refreshRunIds[0] : null,
             FallbackReason: null,
-            Diagnostics: BuildSnapshotDiagnostics(rows.Count, providerCategory),
+            Diagnostics: BuildSnapshotDiagnostics(normalizedRows.Length, providerCategory),
             Run: new { runId = rows.FirstOrDefault()?.PredictionRunId, refreshRunIds, predictionCount = refreshRuns.Sum(row => row.PredictionCount) },
-            Summary: BuildSnapshotSummary(rows),
-            StrategyClassificationSummary: BuildSnapshotStrategySummary(rows),
-            TopPicks: rows
-                .Select(row => BuildSnapshotDetailsWithPlayerId(row.DetailsJson.RootElement, playerIdsBySnapshotId.GetValueOrDefault(row.Id)))
-                .ToArray());
+            Summary: BuildTopPickSnapshotSummary(normalizedRows),
+            StrategyClassificationSummary: BuildTopPickSnapshotStrategySummary(normalizedRows),
+            TopPicks: normalizedRows);
     }
 
     private static string? NormalizePublicProviderCategoryFilter(string? providerCategory)
@@ -1207,6 +1212,19 @@ public static partial class TheOddsApiDebugEndpoints
         };
     }
 
+    private static object BuildTopPickSnapshotSummary(IReadOnlyCollection<JsonObject> rows)
+    {
+        return new
+        {
+            totalSnapshotRowsReturned = rows.Count,
+            returnedTopPicks = rows.Count,
+            activeCandidateCount = rows.Count(row => GetBool(row, "isCandidate") == true),
+            actionableCandidateCount = rows.Count(row => GetBool(row, "isCandidate") == true && GetBool(row, "entryActionableForUser") == true),
+            sportsbookContextCandidateCount = rows.Count(row => GetBool(row, "isCandidate") == true && GetBool(row, "entryActionableForUser") != true),
+            dfsCandidateCount = rows.Count(row => GetBool(row, "isCandidate") == true && string.Equals(GetString(row, "providerCategory"), "DFS", StringComparison.OrdinalIgnoreCase))
+        };
+    }
+
     private static object BuildSnapshotSummary(IReadOnlyCollection<MarketLineShoppingSnapshot> rows)
     {
         return new
@@ -1250,6 +1268,28 @@ public static partial class TheOddsApiDebugEndpoints
             .ToArray();
     }
 
+    private static object[] BuildTopPickSnapshotStrategySummary(IReadOnlyCollection<JsonObject> rows)
+    {
+        return rows
+            .GroupBy(row => new
+            {
+                StrategyClassification = GetString(row, "strategyClassification") ?? string.Empty,
+                StrategyTier = GetString(row, "strategyTier") ?? string.Empty
+            })
+            .Select(group => new
+            {
+                classification = group.Key.StrategyClassification,
+                tier = group.Key.StrategyTier,
+                count = group.Count(),
+                averageBestEstimatedEv = group.Select(row => GetDecimal(row, "displayExpectedValue", "bestEstimatedEv")).Where(value => value.HasValue).Select(value => value!.Value).DefaultIfEmpty().Average(),
+                averageBestProbability = group.Select(row => GetDecimal(row, "selectedSideProbability", "bestProbability")).Where(value => value.HasValue).Select(value => value!.Value).DefaultIfEmpty().Average(),
+                averageBestPrice = group.Select(row => GetDecimal(row, "bestDecimalPrice")).Where(value => value.HasValue).Select(value => value!.Value).DefaultIfEmpty().Average()
+            })
+            .OrderByDescending(row => row.count)
+            .Cast<object>()
+            .ToArray();
+    }
+
     private static object[] BuildSnapshotStrategySummary(IReadOnlyCollection<MarketLineShoppingSnapshot> rows)
     {
         return rows
@@ -1282,12 +1322,18 @@ public static partial class TheOddsApiDebugEndpoints
 
     private static object BuildSnapshotDetailsWithPlayerId(JsonElement detailsJson, Guid? playerId)
     {
+        return BuildSnapshotDetailsJsonObject(detailsJson, playerId);
+    }
+
+    private static JsonObject BuildSnapshotDetailsJsonObject(JsonElement detailsJson, Guid? playerId)
+    {
         var node = JsonSerializer.SerializeToNode(detailsJson);
         if (node is not JsonObject obj)
         {
-            return detailsJson.Clone();
+            return new JsonObject();
         }
 
+        ApplySportsbookSnapshotEvSafety(obj);
         AddExpectedValueDisplayMetadata(obj);
         AddModelProbabilityDisplayMetadata(obj);
         AddRecommendationDisplayMetadata(obj);
@@ -1300,6 +1346,93 @@ public static partial class TheOddsApiDebugEndpoints
         }
 
         return obj;
+    }
+
+    private static bool IsSafePublicTopPickSnapshotRow(JsonObject obj)
+    {
+        if (GetBool(obj, "isCandidate") != true || GetBool(obj, "isRecommendation") != true)
+        {
+            return false;
+        }
+
+        if (string.Equals(GetString(obj, "providerCategory"), "Sportsbook", StringComparison.OrdinalIgnoreCase))
+        {
+            var displayExpectedValue = GetDecimal(obj, "displayExpectedValue");
+            return displayExpectedValue is > 0m and <= SportsbookRecommendationEvHardSuppressThreshold
+                && string.IsNullOrWhiteSpace(GetString(obj, "evSuppressedReason"));
+        }
+
+        return true;
+    }
+
+    private static void ApplySportsbookSnapshotEvSafety(JsonObject obj)
+    {
+        var providerCategory = GetString(obj, "providerCategory", "ProviderCategory");
+        if (!string.Equals(providerCategory, "Sportsbook", StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        var rawSelectedSideProbability = GetDecimal(
+            obj,
+            "rawSelectedSideProbability",
+            "RawSelectedSideProbability",
+            "selectedSideProbability",
+            "SelectedSideProbability",
+            "bestProbability",
+            "BestProbability");
+        var impliedProbability = GetDecimal(obj, "bestImpliedProbability", "BestImpliedProbability");
+        var decimalPrice = GetDecimal(obj, "bestDecimalPrice", "BestDecimalPrice")
+            ?? ConvertAmericanToDecimal(GetInt32(obj, "bestAmericanPrice", "BestAmericanPrice"));
+        if (!impliedProbability.HasValue && decimalPrice is > 0m)
+        {
+            impliedProbability = Math.Round(1m / decimalPrice.Value, 6);
+        }
+
+        var historicalSampleSize = GetInt32(obj, "historicalSampleSize", "HistoricalSampleSize", "playerSampleSize", "PlayerSampleSize") ?? 0;
+        var sampleWarning = GetString(obj, "sampleWarning", "SampleWarning") ?? "None";
+        var confidenceScore = GetDecimal(obj, "confidenceScore", "ConfidenceScore") ?? 0m;
+        var calibration = BuildSportsbookExpectedValueCalibration(
+            providerCategory!,
+            rawSelectedSideProbability,
+            impliedProbability,
+            decimalPrice,
+            historicalSampleSize,
+            sampleWarning,
+            confidenceScore);
+
+        obj["rawSelectedSideProbability"] = calibration.RawSelectedSideProbability;
+        obj["calibratedSelectedSideProbability"] = calibration.CalibratedSelectedSideProbability;
+        obj["selectedSideProbability"] = calibration.SelectedSideProbability;
+        obj["bestProbability"] = calibration.SelectedSideProbability;
+        obj["probabilityCalibrationMethod"] = calibration.ProbabilityCalibrationMethod;
+        obj["probabilityCalibrationReason"] = calibration.ProbabilityCalibrationReason;
+        obj["rawExpectedValue"] = calibration.RawExpectedValue;
+        obj["calibratedExpectedValue"] = calibration.CalibratedExpectedValue;
+        obj["bestEstimatedEv"] = calibration.DisplayExpectedValue;
+        obj["evCalibrationMethod"] = calibration.EvCalibrationMethod;
+        obj["evSuppressedReason"] = calibration.EvSuppressedReason;
+
+        if (calibration.SelectedSideProbability.HasValue && impliedProbability.HasValue)
+        {
+            obj["bestProbabilityEdge"] = Math.Round(calibration.SelectedSideProbability.Value - impliedProbability.Value, 6);
+        }
+
+        var shouldSuppressRecommendation = calibration.DisplayExpectedValue is not > 0m
+            || calibration.DisplayExpectedValue > SportsbookRecommendationEvHardSuppressThreshold
+            || !string.IsNullOrWhiteSpace(calibration.EvSuppressedReason);
+        if (!shouldSuppressRecommendation)
+        {
+            return;
+        }
+
+        obj["isCandidate"] = false;
+        obj["isRecommendation"] = false;
+        obj["recommendationActionableForUser"] = false;
+        obj["recommendationType"] = null;
+        obj["strategyClassification"] = "Research";
+        obj["strategyTier"] = "SportsbookEvSuppressed";
+        obj["isResearchOnly"] = true;
     }
 
     private static void NormalizePublicDetailsJsonCasing(JsonObject obj)
@@ -1369,7 +1502,8 @@ public static partial class TheOddsApiDebugEndpoints
         obj["isSportsbook"] = expectedValueDisplay.IsSportsbook;
         obj["showExpectedValue"] = expectedValueDisplay.ShowExpectedValue;
         obj["displayExpectedValue"] = expectedValueDisplay.DisplayExpectedValue;
-        obj["expectedValueUnavailableReason"] = expectedValueDisplay.ExpectedValueUnavailableReason;
+        obj["expectedValueUnavailableReason"] = GetString(obj, "evSuppressedReason", "EvSuppressedReason")
+            ?? expectedValueDisplay.ExpectedValueUnavailableReason;
     }
 
     private static void AddModelProbabilityDisplayMetadata(JsonObject obj)
@@ -2338,12 +2472,12 @@ public static partial class TheOddsApiDebugEndpoints
             !group.BestProbability.HasValue ||
             group.BestProbability.Value < options.MinimumHitProbability ||
             group.HistoricalSampleSize < Math.Max(1, options.MinimumTopPickSampleSize) ||
+            group.ProjectionProbabilityConflict ||
+            HasRecentWeightedProjectionProbabilityConflict(group) ||
+            !group.BestEstimatedEv.HasValue ||
+            group.BestEstimatedEv.Value <= 0m ||
+            !string.IsNullOrWhiteSpace(group.EvSuppressedReason) ||
             SoccerWorldCupPredictionService.ResolveSupportedStatKey(group.NormalizedPropType, group.MarketKey) is null)
-        {
-            return false;
-        }
-
-        if (!options.AllowNegativeEv && group.BestEstimatedEv < 0m)
         {
             return false;
         }

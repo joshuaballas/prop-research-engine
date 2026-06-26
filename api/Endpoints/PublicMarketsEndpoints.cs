@@ -1718,6 +1718,9 @@ public static class PublicMarketsEndpoints
             details["resultGradingSupported"] = false;
             details["resultGradingUnavailableReason"] = SoccerUnavailableMessage;
             details["publicSoccerGradingEnabled"] = false;
+            details["isRecommendation"] = false;
+            details["recommendationActionableForUser"] = false;
+            details["recommendationType"] = null;
             details["showExpectedValue"] = false;
             details["displayExpectedValue"] = null;
             details["expectedValueUnavailableReason"] = "World Cup sportsbook context is research-only until Soccer predictions and grading are enabled.";

@@ -100,7 +100,6 @@ export function MarketCard({ market }: { market: MarketOpportunity }) {
               <OpportunityMetricItem label="Edge" value={formatPercent(market.probabilityEdge, { signed: true })} metric="edge" />
               <OpportunityMetricItem label="Hit chance" value={formatPercent(market.modelProbability)} metric="hitChance" />
               <OpportunityMetricItem label="Trust" value={<TrustValue level={market.trustLevel} sx={{ fontSize: 14, fontWeight: 950, lineHeight: 1.5 }} />} metric="trust" />
-              <OpportunityMetricItem label="Sample" value={String(market.historicalSampleSize)} />
             </OpportunityMetricGrid>
           </Box>
         }
