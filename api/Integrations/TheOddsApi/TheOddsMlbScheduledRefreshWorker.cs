@@ -155,33 +155,67 @@ public sealed class TheOddsMlbScheduledRefreshWorker(
             return plan;
         }
 
-        await RunRefreshCycleAsync(cancellationToken);
+        await RunRefreshCycleAsync(plan, cancellationToken);
         return plan;
     }
 
-    private async Task RunRefreshCycleAsync(CancellationToken cancellationToken)
+    private async Task RunRefreshCycleAsync(TheOddsRefreshPlanResult plan, CancellationToken cancellationToken)
     {
         try
         {
             await using var scope = scopeFactory.CreateAsyncScope();
             var refreshService = scope.ServiceProvider.GetRequiredService<ITheOddsMlbRefreshService>();
             var refreshOptions = options.Value;
-            var request = new TheOddsMlbRefreshRequest(
-                Date: null,
-                DryRun: false,
-                ForceLive: true,
-                BookmakerPreset: refreshOptions.BookmakerPreset,
-                IncludeDfs: null,
-                IncludeCandidates: refreshOptions.IncludeCandidates,
-                IncludeLineShopping: refreshOptions.IncludeLineShopping,
-                IncludeFullDiagnostics: refreshOptions.IncludeFullDiagnostics,
-                FreshnessMinutes: refreshOptions.FreshnessMinutes);
+            var eligibleTargets = plan.Targets
+                .Where(target => target.ShouldRefresh)
+                .DistinctBy(target => target.Key, StringComparer.OrdinalIgnoreCase)
+                .ToArray();
 
-            await refreshService.RefreshCurrentAsync(request, httpContext: null, cancellationToken);
+            if (eligibleTargets.Length == 0)
+            {
+                state.MarkSkipped(DateTimeOffset.UtcNow, "No eligible refresh targets in this scheduled cycle.");
+                logger.LogInformation("The Odds API scheduled refresh cycle had no eligible refresh targets.");
+                return;
+            }
+
+            foreach (var target in eligibleTargets)
+            {
+                if (!string.Equals(target.Sport, "MLB", StringComparison.OrdinalIgnoreCase))
+                {
+                    logger.LogWarning(
+                        "The Odds API scheduled target {TargetKey} ({Sport}/{Competition}/{ProviderCategory}) is configured but scheduled execution is not wired for this target yet.",
+                        target.Key,
+                        target.Sport,
+                        target.Competition,
+                        target.ProviderCategory);
+                    continue;
+                }
+
+                var request = new TheOddsMlbRefreshRequest(
+                    Date: null,
+                    DryRun: false,
+                    ForceLive: true,
+                    BookmakerPreset: target.BookmakerPreset,
+                    IncludeDfs: string.Equals(target.ProviderCategory, "DFS", StringComparison.OrdinalIgnoreCase),
+                    IncludeCandidates: refreshOptions.IncludeCandidates,
+                    IncludeLineShopping: refreshOptions.IncludeLineShopping,
+                    IncludeFullDiagnostics: refreshOptions.IncludeFullDiagnostics,
+                    FreshnessMinutes: refreshOptions.FreshnessMinutes);
+
+                await refreshService.RefreshCurrentAsync(request, httpContext: null, cancellationToken);
+                logger.LogInformation(
+                    "The Odds API scheduled refresh target completed. TargetKey: {TargetKey}. Sport: {Sport}. Competition: {Competition}. ProviderCategory: {ProviderCategory}. BookmakerPreset: {BookmakerPreset}.",
+                    target.Key,
+                    target.Sport,
+                    target.Competition,
+                    target.ProviderCategory,
+                    target.BookmakerPreset);
+            }
+
             state.MarkCompleted(DateTimeOffset.UtcNow);
             logger.LogInformation(
-                "The Odds API MLB scheduled refresh completed. BookmakerPreset: {BookmakerPreset}. IncludeCandidates: {IncludeCandidates}. IncludeLineShopping: {IncludeLineShopping}.",
-                refreshOptions.BookmakerPreset,
+                "The Odds API scheduled refresh cycle completed. EligibleTargets: {EligibleTargets}. IncludeCandidates: {IncludeCandidates}. IncludeLineShopping: {IncludeLineShopping}.",
+                eligibleTargets.Length,
                 refreshOptions.IncludeCandidates,
                 refreshOptions.IncludeLineShopping);
         }

@@ -130,6 +130,16 @@ public sealed class TheOddsRefreshPlannerService(
             estimatedSlateEvents,
             allowEventDiscoveryFallback);
 
+        var targetPlans = await BuildTargetPlansAsync(
+            scheduledOptions,
+            plannerOptions,
+            generatedAtUtc,
+            currentPlanBudget: budget,
+            providerAvailable,
+            providerStatus,
+            providerDiagnostics.ProviderRejectedKeyDetected,
+            cancellationToken);
+
         return new TheOddsRefreshPlanResult(
             generatedAtUtc,
             ProviderStatus: providerStatus,
@@ -158,7 +168,129 @@ public sealed class TheOddsRefreshPlannerService(
             HasUsableMarketData: latestHadUsableMarketData,
             ShouldRefresh: skipReason is null,
             SkipReason: skipReason,
-            RecommendedAction: BuildRecommendedAction(skipReason, estimateSource, providerDiagnostics, budget));
+            RecommendedAction: BuildRecommendedAction(skipReason, estimateSource, providerDiagnostics, budget))
+        {
+            Targets = targetPlans
+        };
+    }
+
+    private async Task<IReadOnlyList<TheOddsRefreshTargetPlan>> BuildTargetPlansAsync(
+        TheOddsScheduledRefreshOptions scheduledOptions,
+        TheOddsRefreshPlannerOptions plannerOptions,
+        DateTimeOffset generatedAtUtc,
+        TheOddsRefreshBudgetSummary currentPlanBudget,
+        bool providerAvailable,
+        string providerStatus,
+        bool providerRejectedKeyDetected,
+        CancellationToken cancellationToken)
+    {
+        var targets = scheduledOptions.GetConfiguredTargets();
+        var plans = new List<TheOddsRefreshTargetPlan>(targets.Count);
+
+        foreach (var target in targets)
+        {
+            var targetKey = target.ResolveKey();
+            var latestRun = await dbContext.TheOddsRefreshRuns
+                .AsNoTracking()
+                .Where(row => row.Provider == "The Odds API"
+                    && row.Sport == target.Sport
+                    && row.BookmakerPreset == target.BookmakerPreset)
+                .OrderByDescending(row => row.StartedAtUtc)
+                .FirstOrDefaultAsync(cancellationToken);
+            var latestSuccessfulRun = await dbContext.TheOddsRefreshRuns
+                .AsNoTracking()
+                .Where(row => row.Provider == "The Odds API"
+                    && row.Sport == target.Sport
+                    && row.BookmakerPreset == target.BookmakerPreset
+                    && row.Succeeded
+                    && !row.DryRun
+                    && !row.Blocked)
+                .OrderByDescending(row => row.CompletedAtUtc ?? row.StartedAtUtc)
+                .FirstOrDefaultAsync(cancellationToken);
+
+            var latestSuccessAt = latestSuccessfulRun?.CompletedAtUtc ?? latestSuccessfulRun?.StartedAtUtc;
+            var latestAttemptAt = latestRun?.CompletedAtUtc ?? latestRun?.StartedAtUtc;
+            var estimatedApiCalls = Math.Max(1, target.EstimatedApiCalls ?? target.MaxEvents ?? scheduledOptions.GetFallbackEstimatedApiCalls());
+            var nextEligibleRefreshUtc = latestSuccessAt?.Add(scheduledOptions.GetInterval()) ?? generatedAtUtc;
+            var disabledReason = string.IsNullOrWhiteSpace(target.DisabledReason) ? null : target.DisabledReason;
+            var missingProviderKey = string.IsNullOrWhiteSpace(target.ProviderSportKey);
+            var unsupportedScheduledExecution = !string.Equals(target.Sport, "MLB", StringComparison.OrdinalIgnoreCase);
+            var blockers = new List<string>();
+
+            if (!target.Enabled)
+            {
+                blockers.Add(disabledReason ?? "TargetDisabled");
+            }
+
+            if (!scheduledOptions.Enabled)
+            {
+                blockers.Add("SchedulerDisabled");
+            }
+
+            if (missingProviderKey)
+            {
+                blockers.Add("MissingProviderSportKey");
+            }
+
+            if (providerRejectedKeyDetected)
+            {
+                blockers.Add("ProviderRejectedKey");
+            }
+
+            if (!providerAvailable)
+            {
+                blockers.Add("ProviderUnavailable");
+            }
+
+            if (!scheduledOptions.AllowScheduledLiveRefresh)
+            {
+                blockers.Add("ScheduledLiveRefreshDisabled");
+            }
+
+            if (unsupportedScheduledExecution)
+            {
+                blockers.Add("ScheduledExecutionNotYetWiredForTarget");
+            }
+
+            var shouldRefresh = scheduledOptions.Enabled
+                && target.Enabled
+                && !missingProviderKey
+                && providerAvailable
+                && !providerRejectedKeyDetected
+                && scheduledOptions.AllowScheduledLiveRefresh
+                && !unsupportedScheduledExecution
+                && generatedAtUtc >= nextEligibleRefreshUtc;
+
+            plans.Add(new TheOddsRefreshTargetPlan(
+                Key: targetKey,
+                Enabled: target.Enabled,
+                Sport: target.Sport,
+                Competition: target.Competition,
+                ProviderCategory: target.ProviderCategory,
+                BookmakerPreset: target.BookmakerPreset,
+                ProviderSportKey: target.ProviderSportKey,
+                MaxEvents: target.MaxEvents,
+                Regions: target.Regions,
+                Bookmakers: target.Bookmakers,
+                Markets: target.Markets,
+                SupportsResults: target.SupportsResults,
+                SupportsHistory: target.SupportsHistory,
+                EstimatedApiCalls: estimatedApiCalls,
+                LatestRefreshRunId: latestRun?.Id,
+                LatestSuccessfulRefreshRunId: latestSuccessfulRun?.Id,
+                LatestSuccessfulRefreshCompletedAtUtc: latestSuccessAt,
+                LatestAttemptAtUtc: latestAttemptAt,
+                ActualApiCallsFromLatestRun: latestRun?.ActualApiCalls ?? 0,
+                NextEligibleRefreshUtc: nextEligibleRefreshUtc,
+                ProviderStatus: providerStatus,
+                ProviderAvailable: providerAvailable,
+                BudgetAllowed: currentPlanBudget.BudgetAllowed,
+                ShouldRefresh: shouldRefresh,
+                SkipReason: shouldRefresh ? null : string.Join(",", blockers.Distinct(StringComparer.OrdinalIgnoreCase)),
+                Notes: target.Notes));
+        }
+
+        return plans;
     }
 
     private async Task<TheOddsRefreshBudgetSummary> BuildBudgetAsync(
@@ -849,7 +981,38 @@ public sealed record TheOddsRefreshPlanResult(
     bool HasUsableMarketData,
     bool ShouldRefresh,
     string? SkipReason,
-    string RecommendedAction);
+    string RecommendedAction)
+{
+    public IReadOnlyList<TheOddsRefreshTargetPlan> Targets { get; init; } = [];
+}
+
+public sealed record TheOddsRefreshTargetPlan(
+    string Key,
+    bool Enabled,
+    string Sport,
+    string Competition,
+    string ProviderCategory,
+    string BookmakerPreset,
+    string? ProviderSportKey,
+    int? MaxEvents,
+    string? Regions,
+    string? Bookmakers,
+    string? Markets,
+    bool SupportsResults,
+    bool SupportsHistory,
+    int EstimatedApiCalls,
+    Guid? LatestRefreshRunId,
+    Guid? LatestSuccessfulRefreshRunId,
+    DateTimeOffset? LatestSuccessfulRefreshCompletedAtUtc,
+    DateTimeOffset? LatestAttemptAtUtc,
+    int ActualApiCallsFromLatestRun,
+    DateTimeOffset NextEligibleRefreshUtc,
+    string ProviderStatus,
+    bool ProviderAvailable,
+    bool BudgetAllowed,
+    bool ShouldRefresh,
+    string? SkipReason,
+    string? Notes);
 
 public sealed record PlannerCadenceRule(
     string Name,

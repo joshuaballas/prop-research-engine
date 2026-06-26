@@ -953,6 +953,142 @@ public static partial class TheOddsApiDebugEndpoints
         .WithName("TheOddsApiMlbIngestionWorkerStatusDebug")
         .WithSummary("Read-only The Odds API MLB ingestion worker status and safety configuration.");
 
+        endpoints.MapGet("/api/debug/the-odds/scheduled-refresh/status", async (
+            IOptions<TheOddsScheduledRefreshOptions> options,
+            IOptions<TheOddsRefreshPlannerOptions> plannerOptions,
+            ITheOddsRefreshPlannerService planner,
+            ITheOddsScheduledRefreshState state,
+            ApplicationDbContext dbContext,
+            CancellationToken cancellationToken) =>
+        {
+            var scheduledOptions = options.Value;
+            var plannerConfig = plannerOptions.Value;
+            var snapshot = state.GetSnapshot();
+            var currentPlan = await planner.BuildPlanAsync(cancellationToken);
+            var scheduledInterval = scheduledOptions.GetInterval();
+            var plannerInterval = plannerConfig.GetPlannerInterval();
+            var executionBlockedReason = ResolveScheduledRefreshExecutionBlockedReason(scheduledOptions, plannerConfig);
+            var willCallExternalApis = executionBlockedReason is null && currentPlan.Targets.Any(target => target.ShouldRefresh);
+            var postRefreshReadBuffer = scheduledOptions.GetPostRefreshReadBuffer();
+            var nextRefreshDueUtc = scheduledOptions.Enabled
+                ? currentPlan.Targets.Where(target => target.Enabled).Select(target => (DateTimeOffset?)target.NextEligibleRefreshUtc).Min()
+                    ?? currentPlan.NextEligibleRefreshUtc
+                : (DateTimeOffset?)null;
+            var nextDataAvailableEstimateUtc = nextRefreshDueUtc?.Add(postRefreshReadBuffer);
+            var targets = currentPlan.Targets
+                .Select(target => new
+                {
+                    target.Key,
+                    target.Enabled,
+                    target.Sport,
+                    target.Competition,
+                    target.ProviderCategory,
+                    target.ProviderSportKey,
+                    target.BookmakerPreset,
+                    target.MaxEvents,
+                    target.Regions,
+                    target.Bookmakers,
+                    target.Markets,
+                    target.SupportsResults,
+                    target.SupportsHistory,
+                    target.EstimatedApiCalls,
+                    target.ActualApiCallsFromLatestRun,
+                    target.LatestRefreshRunId,
+                    target.LatestSuccessfulRefreshRunId,
+                    target.LatestSuccessfulRefreshCompletedAtUtc,
+                    target.LatestAttemptAtUtc,
+                    target.NextEligibleRefreshUtc,
+                    target.ProviderStatus,
+                    target.ProviderAvailable,
+                    target.BudgetAllowed,
+                    target.ShouldRefresh,
+                    target.SkipReason,
+                    target.Notes
+                })
+                .ToArray();
+
+            return Results.Ok(new
+            {
+                enabled = scheduledOptions.Enabled,
+                intervalMinutes = scheduledOptions.IntervalMinutes,
+                effectiveIntervalMinutes = (int)scheduledInterval.TotalMinutes,
+                plannerIntervalSeconds = plannerConfig.PlannerIntervalSeconds,
+                effectivePlannerIntervalSeconds = (int)plannerInterval.TotalSeconds,
+                workerRegistered = true,
+                workerRunning = snapshot.WorkerRunning,
+                status = scheduledOptions.Enabled && snapshot.Status == "disabled" ? "waiting" : snapshot.Status,
+                snapshot.LastWakeAtUtc,
+                snapshot.NextWakeEstimateUtc,
+                snapshot.LastRunStartedAtUtc,
+                snapshot.LastRunCompletedAtUtc,
+                snapshot.LastRunSucceeded,
+                snapshot.LastRunSkipped,
+                snapshot.LastRunBlocked,
+                snapshot.LastRunError,
+                snapshot.LastPlanGeneratedAtUtc,
+                snapshot.LastPlanShouldRefresh,
+                snapshot.LastPlanSkipReason,
+                snapshot.LastPlanEstimatedApiCalls,
+                snapshot.LastPlanBudgetAllowed,
+                snapshot.LastPlanProviderAvailable,
+                nextRefreshDueUtc,
+                nextDataAvailableEstimateUtc,
+                requireForceLive = scheduledOptions.RequireForceLive,
+                allowScheduledLiveRefresh = scheduledOptions.AllowScheduledLiveRefresh,
+                postRefreshReadBufferSeconds = (int)postRefreshReadBuffer.TotalSeconds,
+                currentPlan = new
+                {
+                    currentPlan.GeneratedAtUtc,
+                    currentPlan.ShouldRefresh,
+                    currentPlan.SkipReason,
+                    currentPlan.EstimatedApiCalls,
+                    aggregateTargetEstimatedApiCalls = currentPlan.Targets.Where(target => target.Enabled).Sum(target => target.EstimatedApiCalls),
+                    targetCount = currentPlan.Targets.Count,
+                    enabledTargetCount = currentPlan.Targets.Count(target => target.Enabled),
+                    runnableTargetCount = currentPlan.Targets.Count(target => target.ShouldRefresh),
+                    currentPlan.ProviderAvailable,
+                    currentPlan.ProviderStatus,
+                    currentPlan.ProviderRejectedKeyDetected,
+                    currentPlan.Budget,
+                    recommendedAction = currentPlan.RecommendedAction
+                },
+                targets,
+                refreshedTargets = targets
+                    .Where(target => target.LatestSuccessfulRefreshRunId is not null)
+                    .ToArray(),
+                skippedTargets = targets
+                    .Where(target => !target.ShouldRefresh)
+                    .Select(target => new
+                    {
+                        target.Key,
+                        target.Sport,
+                        target.Competition,
+                        target.ProviderCategory,
+                        target.BookmakerPreset,
+                        target.SkipReason,
+                        target.Notes
+                    })
+                    .ToArray(),
+                callsExternalApis = false,
+                willCallExternalApis,
+                executionBlockedReason,
+                readOnly = true,
+                safety = new
+                {
+                    oneSchedulerClock = true,
+                    statusEndpointCallsExternalApis = false,
+                    publicEndpointsCallExternalApis = false,
+                    publicEndpointsWriteData = false,
+                    liveExecutionRequiresAllowScheduledLiveRefresh = true,
+                    plannerGatedExecution = true,
+                    soccerEntryBuilderEnabled = false,
+                    worldCupDfsEnabled = false
+                }
+            });
+        })
+        .WithName("TheOddsApiScheduledRefreshStatusDebug")
+        .WithSummary("Read-only scheduled The Odds multi-target refresh worker status. Does not call external APIs.");
+
         endpoints.MapGet("/api/debug/the-odds/mlb/scheduled-refresh/status", async (
             IOptions<TheOddsScheduledRefreshOptions> options,
             IOptions<TheOddsRefreshPlannerOptions> plannerOptions,

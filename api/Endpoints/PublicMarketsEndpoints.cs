@@ -808,6 +808,13 @@ public static class PublicMarketsEndpoints
                 isProviderTelemetryStale = plan.Budget.IsProviderTelemetryStale
             },
             budgetSummary = plan.Budget,
+            targetSummary = new
+            {
+                targetCount = plan.Targets.Count,
+                enabledTargetCount = plan.Targets.Count(target => target.Enabled),
+                runnableTargetCount = plan.Targets.Count(target => target.ShouldRefresh),
+                aggregateEnabledEstimatedApiCalls = plan.Targets.Where(target => target.Enabled).Sum(target => target.EstimatedApiCalls)
+            },
             plans = new[]
             {
                 new
@@ -866,7 +873,54 @@ public static class PublicMarketsEndpoints
                     hasUsableMarketData = plan.HasUsableMarketData,
                     plan.RecommendedAction
                 }
-            }
+            },
+            targets = plan.Targets.Select(target => new
+            {
+                target.Key,
+                target.Enabled,
+                target.Sport,
+                target.Competition,
+                target.ProviderCategory,
+                provider = "The Odds API",
+                target.ProviderSportKey,
+                target.BookmakerPreset,
+                target.MaxEvents,
+                target.Regions,
+                target.Bookmakers,
+                target.Markets,
+                target.SupportsResults,
+                target.SupportsHistory,
+                target.EstimatedApiCalls,
+                target.ActualApiCallsFromLatestRun,
+                target.LatestRefreshRunId,
+                target.LatestSuccessfulRefreshRunId,
+                target.LatestSuccessfulRefreshCompletedAtUtc,
+                target.LatestAttemptAtUtc,
+                target.NextEligibleRefreshUtc,
+                target.ShouldRefresh,
+                target.SkipReason,
+                target.ProviderAvailable,
+                target.ProviderStatus,
+                target.Notes,
+                budgetAllowed = plan.Budget.BudgetAllowed,
+                budgetBlockReason = plan.Budget.BudgetBlockReason,
+                budgetExplanation = plan.Budget.BudgetExplanation,
+                plannerEnforcementEnabled = plan.Budget.PlannerEnforcementEnabled,
+                maxEstimatedCallsPerRun = plan.Budget.ConfiguredMaxEstimatedCallsPerRun,
+                localBudgetEnforcementEnabled = plan.Budget.LocalBudgetEnforcementEnabled,
+                dailyBudgetEnforcementEnabled = plan.Budget.LocalDailyBudgetEnforcementEnabled,
+                monthlyBudgetEnforcementEnabled = plan.Budget.LocalMonthlyBudgetEnforcementEnabled,
+                perRunEstimateBlockingEnabled = plan.Budget.PerRunEstimateBlockingEnabled,
+                providerCreditBlockingEnabled = plan.Budget.ProviderCreditBlockingEnabled,
+                isBlockedByProviderCredits = plan.Budget.IsBlockedByProviderCredits,
+                isBlockedByLocalBudget = plan.Budget.IsBlockedByLocalBudget,
+                isBlockedByPerRunEstimate = plan.Budget.IsBlockedByPerRunEstimate,
+                plannerWouldBlockIfEnforced = plan.Budget.PlannerWouldBlockIfEnforced,
+                plannerWarnings = plan.Budget.PlannerWarnings,
+                recommendedAction = target.ShouldRefresh
+                    ? "Target is eligible for the next scheduled cycle."
+                    : target.SkipReason
+            }).ToArray()
         };
     }
 
