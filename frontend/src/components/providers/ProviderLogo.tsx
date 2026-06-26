@@ -42,7 +42,12 @@ const aliases: Record<string, string> = {
   getfliff: 'getfliff',
   hardrock: 'hardrock',
   hardrockbet: 'hardrock',
-  rebet: 'rebet'
+  rebet: 'rebet',
+  thescore: 'thescore',
+  thescorebet: 'thescore',
+  the_score: 'thescore',
+  the_score_bet: 'thescore',
+  scorebet: 'thescore'
 };
 
 const monograms: Record<string, string> = {
@@ -61,6 +66,7 @@ const monograms: Record<string, string> = {
   bovada: 'BOV',
   lowvig: 'LV',
   mybookie: 'MYB',
+  thescore: 'TS',
   'sportsbook-context': 'SB'
 };
 

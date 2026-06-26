@@ -1,6 +1,6 @@
 import { Stack, Typography, type SxProps, type Theme } from '@mui/material';
 import type { ProviderCategory } from '../../types/markets';
-import { ProviderLogo } from './ProviderLogo';
+import { ProviderLogo, providerLogoKey } from './ProviderLogo';
 
 interface ProviderLabelProps {
   provider: string;
@@ -24,8 +24,9 @@ function formatProviderName(provider: string) {
   const replacements: Record<string, string> = {
     BetrPicks: 'Betr Picks',
     DraftKingsPick6: 'DraftKings Pick6',
-    SportsbookContext: 'Sportsbook Context'
+    SportsbookContext: 'Sportsbook Context',
+    thescore: 'theScore Bet'
   };
 
-  return replacements[provider] ?? provider;
+  return replacements[provider] ?? replacements[providerLogoKey(provider)] ?? provider;
 }
