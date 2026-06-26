@@ -463,6 +463,8 @@ export interface MarketPerformanceSummaryDto {
     hasGradeableSample?: boolean;
     gradeableGroupCount?: number;
     noResultOnlyGroupCount?: number;
+    selectedGradedDate?: string | null;
+    selectedGradedDateCoverageStatus?: string | null;
     unmatchedPicks?: number;
     hasLedgerRowsForCompletedDate?: boolean;
     hasFilteredRowsForCompletedDate?: boolean;

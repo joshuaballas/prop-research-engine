@@ -142,17 +142,17 @@ export function usePerformanceData(gradingMode: PerformanceGradingMode = 'latest
   return { ...query, rows, summary: query.data?.summary };
 }
 
-export function usePerformanceResults(date?: string) {
+export function usePerformanceResults(date?: string, enabled = true) {
   const refreshVersion = useMarketDataRefreshVersion();
   return useApiQuery(
     async (signal) => {
-      if (isDemoDataMode) {
+      if (isDemoDataMode || !enabled) {
         return undefined;
       }
 
       return getPerformanceResults(signal, date);
     },
-    [date, refreshVersion]
+    [date, enabled, refreshVersion]
   );
 }
 

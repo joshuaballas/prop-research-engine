@@ -218,6 +218,44 @@ public sealed class PerformanceGradingTests
     }
 
     [Fact]
+    public async Task PerformanceResults_DefaultDateSkipsPartialLatestCoverage()
+    {
+        await using var factory = new SafetyTestApplicationFactory();
+        using var client = factory.CreateClient();
+        var completeDate = new DateOnly(2026, 6, 22);
+        var partialDate = new DateOnly(2026, 6, 23);
+        await SeedPerformanceScenarioAsync(
+            factory,
+            completeDate,
+            "Pitcher Strikeouts",
+            "Over",
+            6.5m,
+            7m,
+            provider: "PrizePicks");
+        await SeedPerformanceScenarioAsync(
+            factory,
+            partialDate,
+            "Pitcher Strikeouts",
+            "Over",
+            6.5m,
+            7m,
+            provider: "Underdog",
+            resetDatabase: false);
+        await SeedMlbCoverageStateAsync(factory, completeDate, "Complete", importedResults: 2930, distinctPlayers: 274, distinctPropTypes: 16);
+        await SeedMlbCoverageStateAsync(factory, partialDate, "Partial", importedResults: 220, distinctPlayers: 20, distinctPropTypes: 11);
+
+        var response = await client.GetAsync("/api/markets/performance-results?sport=MLB&includeDiagnostics=true");
+
+        await EnsureSuccessWithBodyAsync(response);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal(completeDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture), json.GetProperty("date").GetString());
+        Assert.Equal("LatestCompleteMlbCoverageDate", json.GetProperty("dateSelection").GetProperty("source").GetString());
+        Assert.Contains(json.GetProperty("dateSelection").GetProperty("skippedIncompleteResultDates").EnumerateArray(), row => row.GetString() == partialDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture));
+        Assert.Equal(1, json.GetProperty("summary").GetProperty("gradedPicks").GetInt32());
+        Assert.Equal(1, json.GetProperty("summary").GetProperty("won").GetInt32());
+    }
+
+    [Fact]
     public async Task PerformanceSummary_MultipleMatchingResultRows_IsUnmatched_NotLoss()
     {
         await using var factory = new SafetyTestApplicationFactory();

@@ -43,7 +43,12 @@ export function PerformancePage() {
   const [selectedTab, setSelectedTab] = useState(breakdownTabs[0].label);
   const [historyPage, setHistoryPage] = useState(1);
   const performanceQuery = usePerformanceData('allHistory');
-  const resultsQuery = usePerformanceResults();
+  const latestGradedQuery = usePerformanceData('latestGraded');
+  const selectedResultsDate = latestGradedQuery.summary?.dataAvailability?.selectedGradedDate
+    ?? latestGradedQuery.summary?.dataAvailability?.latestGradedDate
+    ?? latestGradedQuery.summary?.dataAvailability?.usedDateRange?.fromDate
+    ?? undefined;
+  const resultsQuery = usePerformanceResults(selectedResultsDate, Boolean(selectedResultsDate));
   const performanceRows = performanceQuery.rows;
   const hasGradedSample = (performanceQuery.summary?.dataAvailability?.gradedPicks ?? performanceRows.find((row) => row.groupType === 'Overall')?.gradedPicks ?? 0) > 0;
   const activeTab = breakdownTabs.find((tab) => tab.label === selectedTab) ?? breakdownTabs[0];
@@ -69,10 +74,10 @@ export function PerformancePage() {
             Yesterday's Results
           </Typography>
           <Typography color="text.secondary">
-            Picks from the latest graded slate.
+            Picks from the latest graded slate{selectedResultsDate ? ` (${formatDisplayDate(selectedResultsDate)})` : ''}.
           </Typography>
         </Stack>
-        <YesterdayResultsSection isMobile={isMobile} loading={resultsQuery.loading} error={Boolean(resultsQuery.error)} data={resultsQuery.data} />
+        <YesterdayResultsSection isMobile={isMobile} loading={latestGradedQuery.loading || resultsQuery.loading} error={Boolean(latestGradedQuery.error || resultsQuery.error)} data={resultsQuery.data} />
       </Stack>
 
       <Stack spacing={1.5}>
@@ -693,6 +698,16 @@ function formatTargetLineCount(count: number) {
 function formatNumber(value?: number | null) {
   if (value === null || value === undefined) return '-';
   return Number(value).toFixed(2).replace(/0+$/, '').replace(/\.$/, '');
+}
+
+function formatDisplayDate(value: string) {
+  const [year, month, day] = value.split('-').map(Number);
+  if (!year || !month || !day) return value;
+
+  return new Date(year, month - 1, day).toLocaleDateString(undefined, {
+    month: 'short',
+    day: 'numeric'
+  });
 }
 
 function CleanBaselineCard() {

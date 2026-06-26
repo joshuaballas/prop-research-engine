@@ -1918,6 +1918,67 @@ public static class PublicMarketsEndpoints
         return skipped is null ? null : "Skipped";
     }
 
+    private static async Task<PerformanceResultsDateSelection> ResolvePerformanceResultsDateSelectionAsync(
+        DateOnly? requestedDate,
+        ApplicationDbContext dbContext,
+        CancellationToken cancellationToken)
+    {
+        if (requestedDate.HasValue)
+        {
+            return new PerformanceResultsDateSelection(
+                requestedDate.Value,
+                "ExplicitRequestDate",
+                LatestResultsImportDate: null,
+                LatestCompleteCoverageDate: null,
+                SkippedIncompleteResultDates: []);
+        }
+
+        var latestResultsImportDate = await dbContext.PropResults
+            .AsNoTracking()
+            .Select(row => (DateOnly?)row.EventDate)
+            .MaxAsync(cancellationToken);
+        var recentCoverageStates = await dbContext.MlbResultImportDateStates
+            .AsNoTracking()
+            .Where(row => row.ImportedResults > 0 || row.RecordsMapped > 0 || row.Status != "pending")
+            .OrderByDescending(row => row.EventDate)
+            .Select(row => new
+            {
+                row.EventDate,
+                row.CoverageStatus
+            })
+            .Take(90)
+            .ToArrayAsync(cancellationToken);
+
+        var latestCompleteCoverageDate = recentCoverageStates
+            .Where(row => string.Equals(row.CoverageStatus, "Complete", StringComparison.OrdinalIgnoreCase))
+            .Select(row => (DateOnly?)row.EventDate)
+            .FirstOrDefault();
+        if (latestCompleteCoverageDate.HasValue)
+        {
+            var skippedIncompleteResultDates = recentCoverageStates
+                .Where(row => latestResultsImportDate.HasValue
+                    && row.EventDate <= latestResultsImportDate.Value
+                    && row.EventDate > latestCompleteCoverageDate.Value
+                    && !string.Equals(row.CoverageStatus, "Complete", StringComparison.OrdinalIgnoreCase))
+                .Select(row => row.EventDate)
+                .ToArray();
+
+            return new PerformanceResultsDateSelection(
+                latestCompleteCoverageDate.Value,
+                "LatestCompleteMlbCoverageDate",
+                latestResultsImportDate,
+                latestCompleteCoverageDate,
+                skippedIncompleteResultDates);
+        }
+
+        return new PerformanceResultsDateSelection(
+            latestResultsImportDate,
+            latestResultsImportDate.HasValue ? "LegacyLatestPropResultDate" : "NoResultDatesAvailable",
+            latestResultsImportDate,
+            LatestCompleteCoverageDate: null,
+            SkippedIncompleteResultDates: []);
+    }
+
     private static async Task<object> BuildMarketPerformanceSummaryResponseAsync(
         string? requestedSport,
         string effectiveSport,
@@ -2451,11 +2512,11 @@ public static class PublicMarketsEndpoints
             };
         }
 
-        var selectedDate = requestedDate ??
-            await dbContext.PropResults
-                .AsNoTracking()
-                .Select(row => (DateOnly?)row.EventDate)
-                .MaxAsync(cancellationToken);
+        var dateSelection = await ResolvePerformanceResultsDateSelectionAsync(
+            requestedDate,
+            dbContext,
+            cancellationToken);
+        var selectedDate = dateSelection.SelectedDate;
 
         if (!selectedDate.HasValue)
         {
@@ -2467,6 +2528,15 @@ public static class PublicMarketsEndpoints
                 requestedSport,
                 sport = effectiveSport,
                 date = requestedDate,
+                dateSelection = new
+                {
+                    requestedDate,
+                    selectedDate,
+                    dateSelection.Source,
+                    dateSelection.LatestResultsImportDate,
+                    dateSelection.LatestCompleteCoverageDate,
+                    dateSelection.SkippedIncompleteResultDates
+                },
                 summary = new
                 {
                     gradedPicks = 0,
@@ -2529,6 +2599,15 @@ public static class PublicMarketsEndpoints
             requestedSport,
             sport = effectiveSport,
             date = selectedDate.Value,
+            dateSelection = new
+            {
+                requestedDate,
+                selectedDate = selectedDate.Value,
+                dateSelection.Source,
+                dateSelection.LatestResultsImportDate,
+                dateSelection.LatestCompleteCoverageDate,
+                dateSelection.SkippedIncompleteResultDates
+            },
             summary = new
             {
                 gradedPicks = determinedRows.Length,
@@ -5584,6 +5663,13 @@ public static class PublicMarketsEndpoints
         bool HasCoverageStates);
 
     private sealed record MlbSkippedCoverageDate(DateOnly Date, string Reason);
+
+    private sealed record PerformanceResultsDateSelection(
+        DateOnly? SelectedDate,
+        string Source,
+        DateOnly? LatestResultsImportDate,
+        DateOnly? LatestCompleteCoverageDate,
+        IReadOnlyCollection<DateOnly> SkippedIncompleteResultDates);
 
     private sealed record TheOddsProviderStatusReadModel(
         string provider,
