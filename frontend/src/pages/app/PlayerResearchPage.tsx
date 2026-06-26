@@ -17,6 +17,7 @@ import { ProjectionModifierBadge } from '../../components/markets/ProjectionModi
 import { PropHistoryCard } from '../../components/prop-history/PropHistoryCard';
 import { ProviderLabel } from '../../components/providers/ProviderLabel';
 import { AppCard } from '../../components/ui/AppCard';
+import { MarketCardSkeletonGrid, PropHistorySkeleton } from '../../components/ui/LoadingSkeletons';
 import { PageHeader } from '../../components/ui/PageHeader';
 import { StatusPill } from '../../components/ui/StatusPill';
 import { palette } from '../../theme/palette';
@@ -56,7 +57,7 @@ export function PlayerResearchPage() {
         <Stack spacing={2.5}>
           <PlayerProfile player={selectedPlayer} lines={playerLines} />
           {currentLinesQuery.loading ? (
-            <ApiStateCard message="Loading current provider lines for this player." />
+            <MarketCardSkeletonGrid count={4} />
           ) : currentLinesQuery.error ? (
             <ApiStateCard tone="error" message="Current provider lines could not be loaded right now." />
           ) : selectedOffering ? (
@@ -650,7 +651,7 @@ function PropHistoryTile({
   return (
     <DashboardTile>
       {historyQuery.loading ? (
-        <InlineState message="Loading persisted prop history." />
+        <PropHistorySkeleton />
       ) : historyQuery.error ? (
         <InlineState tone="error" message="Prop history could not be loaded for this line." />
       ) : historyQuery.history ? (

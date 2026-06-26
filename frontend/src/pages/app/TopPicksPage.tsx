@@ -16,6 +16,7 @@ import { AppDataTable } from '../../components/ui/AppDataTable';
 import { AppRowActions, desktopRowActionButtonSx, desktopRowDetailsButtonSx } from '../../components/ui/AppRowActions';
 import { AppTablePagination } from '../../components/ui/AppTablePagination';
 import { AppTableMetricValue, AppTablePrimaryText, AppTableSecondaryText } from '../../components/ui/AppTableTypography';
+import { MarketTableSkeleton, TopPickCardSkeleton, TopPickSkeletonGrid } from '../../components/ui/LoadingSkeletons';
 import { OpportunityPickText } from '../../components/ui/OpportunityCard';
 import { useEntryBuilder } from '../../hooks/useEntryBuilder';
 import { useTopPicksData } from '../../hooks/useMarketData';
@@ -99,7 +100,28 @@ export function TopPicksPage() {
       />
 
       {topPicksQuery.loading ? (
-        <ApiStateCard message="Loading latest top picks..." />
+        isMobile ? (
+          <Stack spacing={1.35} aria-busy="true">
+            {Array.from({ length: 6 }).map((_, index) => (
+              <TopPickCardSkeleton key={index} />
+            ))}
+          </Stack>
+        ) : (
+          <>
+            <Stack spacing={1.4}>
+              <Typography variant="h5" fontWeight={950}>
+                Featured Top Picks
+              </Typography>
+              <TopPickSkeletonGrid count={3} />
+            </Stack>
+            <Stack spacing={1.4}>
+              <Typography variant="h5" fontWeight={950}>
+                All Ranked Picks
+              </Typography>
+              <MarketTableSkeleton rows={8} columns={7} minWidth={1040} />
+            </Stack>
+          </>
+        )
       ) : topPicksQuery.error ? (
         <ApiStateCard tone="error" message="Top picks could not be loaded from the market API." />
       ) : topPicks.length === 0 ? (

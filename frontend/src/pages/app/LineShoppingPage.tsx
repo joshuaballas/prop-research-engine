@@ -4,6 +4,7 @@ import { groupLineShoppingMarkets, LineShoppingCard, LineShoppingComparisonList,
 import { MarketFilters, type MarketFilterOption, type MarketFilterValues } from '../../components/markets/MarketFilters';
 import { PageHeader } from '../../components/ui/PageHeader';
 import { AppTablePagination } from '../../components/ui/AppTablePagination';
+import { MarketCardSkeletonGrid, MarketTableSkeleton, MetricCardSkeleton } from '../../components/ui/LoadingSkeletons';
 import { MetricCard } from '../../components/ui/MetricCard';
 import { useEntryBuilder } from '../../hooks/useEntryBuilder';
 import { useLineShoppingData } from '../../hooks/useMarketData';
@@ -89,17 +90,21 @@ export function LineShoppingPage() {
         description="Compare provider projections against reference lines without mixing incompatible entry types."
       />
 
-      <Grid container spacing={2}>
-        <Grid size={{ xs: 6, sm: 6, lg: 4 }}>
-          <MetricCard label="Best Edge" value={formatPercent(bestEdge, { signed: true })} helper="Top available line" valueColor="success.main" />
+      {lineShoppingQuery.loading ? (
+        <MetricCardSkeleton count={3} />
+      ) : (
+        <Grid container spacing={2}>
+          <Grid size={{ xs: 6, sm: 6, lg: 4 }}>
+            <MetricCard label="Best Edge" value={formatPercent(bestEdge, { signed: true })} helper="Top available line" valueColor="success.main" />
+          </Grid>
+          <Grid size={{ xs: 6, sm: 6, lg: 4 }}>
+            <MetricCard label="Providers" value={String(dfsProviderCount)} helper="Live providers" />
+          </Grid>
+          <Grid size={{ xs: 6, sm: 6, lg: 4 }}>
+            <MetricCard label="Lines" value={String(visibleMarkets.length)} helper="Available now" />
+          </Grid>
         </Grid>
-        <Grid size={{ xs: 6, sm: 6, lg: 4 }}>
-          <MetricCard label="Providers" value={String(dfsProviderCount)} helper="Live providers" />
-        </Grid>
-        <Grid size={{ xs: 6, sm: 6, lg: 4 }}>
-          <MetricCard label="Lines" value={String(visibleMarkets.length)} helper="Available now" />
-        </Grid>
-      </Grid>
+      )}
 
       <MarketFilters
         idPrefix="line-shopping-filters"
@@ -124,7 +129,7 @@ export function LineShoppingPage() {
           : 'Showing all current rows. Use Entry-compatible to show only DFS rows that can be added to an entry.'}
       </Typography>
       {lineShoppingQuery.loading ? (
-        <ApiStateCard message="Loading latest line-shopping rows..." />
+        isMobile ? <MarketCardSkeletonGrid count={6} /> : <MarketTableSkeleton rows={8} columns={7} minWidth={980} />
       ) : lineShoppingQuery.error ? (
         <ApiStateCard tone="error" message="Line-shopping rows could not be loaded from the market API." />
       ) : isMobile ? (

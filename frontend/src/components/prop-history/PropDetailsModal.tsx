@@ -1,5 +1,5 @@
 import CloseRoundedIcon from '@mui/icons-material/CloseRounded';
-import { Box, CircularProgress, Dialog, DialogContent, DialogTitle, IconButton, Stack, Typography } from '@mui/material';
+import { Box, Dialog, DialogContent, DialogTitle, IconButton, Stack, Typography } from '@mui/material';
 import { useEffect, useState } from 'react';
 import { getPropHistory } from '../../api/markets';
 import type { PropHistoryResponseDto } from '../../api/types';
@@ -12,6 +12,7 @@ import { MetricLabelWithHelp } from '../metrics/MetricLabelWithHelp';
 import { TrustValue } from '../metrics/TrustValue';
 import { ProviderLabel } from '../providers/ProviderLabel';
 import { AppCard } from '../ui/AppCard';
+import { PropHistorySkeleton } from '../ui/LoadingSkeletons';
 import { CautionLabels } from '../markets/CautionLabels';
 import type { MarketOpportunity, PlayerHistoryStatKey } from '../../types/markets';
 import { PropHistoryCard } from './PropHistoryCard';
@@ -88,12 +89,7 @@ export function PropDetailsModal({ market, open, onClose }: PropDetailsModalProp
               </AppCard>
             ) : null}
             {!isDemoDataMode && loading ? (
-              <AppCard>
-                <Stack direction="row" spacing={1.25} alignItems="center">
-                  <CircularProgress size={18} />
-                  <Typography color="text.secondary">Loading persisted prop history...</Typography>
-                </Stack>
-              </AppCard>
+              <PropHistorySkeleton />
             ) : null}
             {!isDemoDataMode && !loading && detailsHistory ? (
               <AppCard contentSx={{ p: { xs: 1.25, md: 2 } }}>

@@ -15,6 +15,7 @@ import { PropDetailsModal } from '../../components/prop-history/PropDetailsModal
 import { ProviderLabel } from '../../components/providers/ProviderLabel';
 import { AppCard } from '../../components/ui/AppCard';
 import { DataStateBanner } from '../../components/ui/DataStateBanner';
+import { MarketCardSkeleton, MetricCardSkeleton, TopPickSkeletonGrid } from '../../components/ui/LoadingSkeletons';
 import { MetadataText } from '../../components/ui/MetadataText';
 import { MetricCard } from '../../components/ui/MetricCard';
 import {
@@ -102,27 +103,31 @@ export function DashboardPage() {
         />
       ) : null}
 
-      <Grid container spacing={2}>
-        <Grid size={{ xs: 6, sm: 6, lg: 2.4 }}>
-          <MetricCard label="Top Picks" value={`${returnedTopPicks}`} helper="Current props" />
+      {topPicksQuery.loading || lineShoppingQuery.loading || performanceQuery.loading ? (
+        <MetricCardSkeleton count={5} />
+      ) : (
+        <Grid container spacing={2}>
+          <Grid size={{ xs: 6, sm: 6, lg: 2.4 }}>
+            <MetricCard label="Top Picks" value={`${returnedTopPicks}`} helper="Current props" />
+          </Grid>
+          <Grid size={{ xs: 6, sm: 6, lg: 2.4 }}>
+            <MetricCard label="Best Edge" value={formatPercent(bestEdgeMarket?.probabilityEdge, { signed: true })} helper={bestEdgeMarket?.player ?? 'No active prop'} />
+          </Grid>
+          <Grid size={{ xs: 6, sm: 6, lg: 2.4 }}>
+            <MetricCard label="Providers" value={`${new Set(activeDfs.map((market) => market.provider)).size}`} helper="Live providers" />
+          </Grid>
+          <Grid size={{ xs: 6, sm: 6, lg: 2.4 }}>
+            <MetricCard label="Entry Builder" value={`${entryLegs.length} legs`} helper={entryProvider} />
+          </Grid>
+          <Grid size={{ xs: 12, sm: 6, lg: 2.4 }}>
+            <MetricCard
+              label="Graded picks"
+              value={hasGradedPerformance && overall ? `${overall.gradedPicks}` : '-'}
+              helper={latestCompletedDateLabel ? `Last graded date: ${latestCompletedDateLabel}` : latestImportedResultsDateLabel ? `Latest imported results: ${latestImportedResultsDateLabel}` : 'Awaiting imported results'}
+            />
+          </Grid>
         </Grid>
-        <Grid size={{ xs: 6, sm: 6, lg: 2.4 }}>
-          <MetricCard label="Best Edge" value={formatPercent(bestEdgeMarket?.probabilityEdge, { signed: true })} helper={bestEdgeMarket?.player ?? 'No active prop'} />
-        </Grid>
-        <Grid size={{ xs: 6, sm: 6, lg: 2.4 }}>
-          <MetricCard label="Providers" value={`${new Set(activeDfs.map((market) => market.provider)).size}`} helper="Live providers" />
-        </Grid>
-        <Grid size={{ xs: 6, sm: 6, lg: 2.4 }}>
-          <MetricCard label="Entry Builder" value={`${entryLegs.length} legs`} helper={entryProvider} />
-        </Grid>
-        <Grid size={{ xs: 12, sm: 6, lg: 2.4 }}>
-          <MetricCard
-            label="Graded picks"
-            value={hasGradedPerformance && overall ? `${overall.gradedPicks}` : '-'}
-            helper={latestCompletedDateLabel ? `Last graded date: ${latestCompletedDateLabel}` : latestImportedResultsDateLabel ? `Latest imported results: ${latestImportedResultsDateLabel}` : 'Awaiting imported results'}
-          />
-        </Grid>
-      </Grid>
+      )}
 
       <Box>
         <SectionHeader
@@ -137,9 +142,7 @@ export function DashboardPage() {
         <Box mt={2}>
           <Grid container spacing={2}>
             {topPicksQuery.loading ? (
-              <Grid size={12}>
-                <ApiStateCard message="Loading top props..." />
-              </Grid>
+              <TopPickSkeletonGrid count={3} />
             ) : topPicksQuery.error ? (
               <Grid size={12}>
                 <ApiStateCard tone="error" message="Top props could not be loaded." />
@@ -163,7 +166,11 @@ export function DashboardPage() {
           <Box mt={2}>
             <Stack spacing={1.2}>
               {lineShoppingQuery.loading ? (
-                <ApiStateCard message="Loading line-shopping preview..." />
+                <>
+                  {Array.from({ length: 3 }).map((_, index) => (
+                    <MarketCardSkeleton key={index} />
+                  ))}
+                </>
               ) : lineShoppingQuery.error ? (
                 <ApiStateCard tone="error" message="Line-shopping preview could not be loaded." />
               ) : filteredMarkets.length ? (
@@ -194,7 +201,9 @@ export function DashboardPage() {
           ) : undefined}
         />
         <Box mt={2}>
-          {performanceIsSparse ? (
+          {performanceQuery.loading ? (
+            <MetricCardSkeleton count={2} />
+          ) : performanceIsSparse ? (
             <SparsePerformancePanel availability={performanceAvailability} />
           ) : (
             <Grid container spacing={2}>

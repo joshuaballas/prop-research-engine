@@ -4,6 +4,7 @@ import { MarketCard } from '../../components/markets/MarketCard';
 import { MarketFilters, type MarketFilterOption, type MarketFilterValues } from '../../components/markets/MarketFilters';
 import { MarketTable } from '../../components/markets/MarketTable';
 import { AppTablePagination } from '../../components/ui/AppTablePagination';
+import { MarketCardSkeletonGrid, MarketTableSkeleton, MetricCardSkeleton } from '../../components/ui/LoadingSkeletons';
 import { MetricCard } from '../../components/ui/MetricCard';
 import { PageHeader } from '../../components/ui/PageHeader';
 import { SectionHeader } from '../../components/ui/SectionHeader';
@@ -91,17 +92,21 @@ export function MarketsPage() {
     <Stack spacing={3} sx={{ px: { xs: 0.75, sm: 0 } }}>
       <PageHeader title="Prop Scanner" description="Browse current provider props with hit chance, edge, trust, and entry status." />
 
-      <Grid container spacing={2}>
-        <Grid size={{ xs: 6, sm: 6, lg: 4 }}>
-          <MetricCard label="Props" value={String(filteredMarkets.length)} helper="Available now" />
+      {marketsQuery.loading ? (
+        <MetricCardSkeleton count={3} />
+      ) : (
+        <Grid container spacing={2}>
+          <Grid size={{ xs: 6, sm: 6, lg: 4 }}>
+            <MetricCard label="Props" value={String(filteredMarkets.length)} helper="Available now" />
+          </Grid>
+          <Grid size={{ xs: 6, sm: 6, lg: 4 }}>
+            <MetricCard label="Providers" value={String(providerCount)} helper="Live providers" />
+          </Grid>
+          <Grid size={{ xs: 6, sm: 6, lg: 4 }}>
+            <MetricCard label="Best Edge" value={formatPercent(bestEdge, { signed: true })} helper="Top current prop" valueColor="success.main" />
+          </Grid>
         </Grid>
-        <Grid size={{ xs: 6, sm: 6, lg: 4 }}>
-          <MetricCard label="Providers" value={String(providerCount)} helper="Live providers" />
-        </Grid>
-        <Grid size={{ xs: 6, sm: 6, lg: 4 }}>
-          <MetricCard label="Best Edge" value={formatPercent(bestEdge, { signed: true })} helper="Top current prop" valueColor="success.main" />
-        </Grid>
-      </Grid>
+      )}
 
       <MarketFilters
         idPrefix="prop-scanner-filters"
@@ -127,7 +132,7 @@ export function MarketsPage() {
 
       <SectionHeader title="Available props" description="Review available props, open Details for player history, and add eligible picks to an entry." />
       {marketsQuery.loading ? (
-        <ApiStateCard message="Loading prop scanner rows..." />
+        isMobile ? <MarketCardSkeletonGrid count={6} /> : <MarketTableSkeleton rows={8} columns={8} minWidth={980} />
       ) : marketsQuery.error ? (
         <ApiStateCard tone="error" message="Prop scanner rows could not be loaded from the market API." />
       ) : isMobile ? (

@@ -8,6 +8,7 @@ import { AppDataTable } from '../../components/ui/AppDataTable';
 import { AppTablePagination } from '../../components/ui/AppTablePagination';
 import { appTableRowSx } from '../../components/ui/appTableStyles';
 import { AppTableEvValue, AppTableMetricValue, AppTablePrimaryText, AppTableSecondaryText } from '../../components/ui/AppTableTypography';
+import { PerformanceBreakdownSkeleton, PerformanceSummarySkeleton } from '../../components/ui/LoadingSkeletons';
 import { PageHeader } from '../../components/ui/PageHeader';
 import { usePerformanceData, usePerformanceResults } from '../../hooks/useMarketData';
 import { useResponsiveView } from '../../hooks/useResponsiveView';
@@ -91,7 +92,7 @@ export function PerformancePage() {
         </Stack>
 
       {performanceQuery.loading ? (
-        <ApiStateCard message="Loading performance summary..." />
+        <PerformanceSummarySkeleton count={5} />
       ) : performanceQuery.error ? (
         <ApiStateCard tone="error" message="Performance summary could not be loaded from the market API." />
       ) : performanceRows.length && hasGradedSample ? (
@@ -156,8 +157,10 @@ export function PerformancePage() {
           })}
         </Box>
 
-        {performanceQuery.loading || performanceQuery.error || !performanceRows.length || !hasGradedSample ? (
-          <ApiStateCard message={performanceQuery.loading ? 'Loading breakdowns...' : 'No graded history yet.'} />
+        {performanceQuery.loading ? (
+          <PerformanceBreakdownSkeleton mobile={isMobile} />
+        ) : performanceQuery.error || !performanceRows.length || !hasGradedSample ? (
+          <ApiStateCard message="No graded history yet." />
         ) : !visibleRows.length ? (
           <ApiStateCard message="No graded results are available for this view yet." />
         ) : isMobile ? (
@@ -200,7 +203,7 @@ function YesterdayResultsSection({
   }, [data?.date, rows.length, isMobile]);
 
   if (loading) {
-    return <ApiStateCard message="Loading yesterday's results..." />;
+    return <PerformanceBreakdownSkeleton mobile={isMobile} />;
   }
 
   if (error) {
