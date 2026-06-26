@@ -991,9 +991,24 @@ public static partial class TheOddsApiDebugEndpoints
                     target.Markets,
                     target.SupportsResults,
                     target.SupportsHistory,
+                    target.ExecutionWired,
+                    target.ProviderSportKeyVerified,
                     target.EstimatedApiCalls,
-                    target.ActualApiCallsFromLatestRun,
+                    actualApiCalls = target.ActualApiCallsFromLatestRun,
+                    rowsCreated = target.PlatformPropsCreatedFromLatestRun,
+                    rowsUpdated = target.PlatformPropsUpdatedFromLatestRun,
+                    rowsUpserted = target.PlatformPropsUpsertedFromLatestRun,
                     target.LatestRefreshRunId,
+                    target.LatestRunStartedAtUtc,
+                    lastRunStartedAtUtc = target.LatestRunStartedAtUtc,
+                    target.LatestRunCompletedAtUtc,
+                    lastRunCompletedAtUtc = target.LatestRunCompletedAtUtc,
+                    target.LatestRunSucceeded,
+                    lastRunSucceeded = target.LatestRunSucceeded,
+                    target.LatestRunFailed,
+                    lastRunFailed = target.LatestRunFailed,
+                    target.LatestRunBlocked,
+                    lastRunBlocked = target.LatestRunBlocked,
                     target.LatestSuccessfulRefreshRunId,
                     target.LatestSuccessfulRefreshCompletedAtUtc,
                     target.LatestAttemptAtUtc,
@@ -1051,6 +1066,15 @@ public static partial class TheOddsApiDebugEndpoints
                     currentPlan.ProviderRejectedKeyDetected,
                     currentPlan.Budget,
                     recommendedAction = currentPlan.RecommendedAction
+                },
+                targetSummary = new
+                {
+                    targetCount = currentPlan.Targets.Count,
+                    enabledTargetCount = currentPlan.Targets.Count(target => target.Enabled),
+                    runnableTargetCount = currentPlan.Targets.Count(target => target.ShouldRefresh),
+                    executionWiredTargetCount = currentPlan.Targets.Count(target => target.ExecutionWired),
+                    providerSportKeyVerifiedTargetCount = currentPlan.Targets.Count(target => target.ProviderSportKeyVerified),
+                    aggregateEnabledEstimatedApiCalls = currentPlan.Targets.Where(target => target.Enabled).Sum(target => target.EstimatedApiCalls)
                 },
                 targets,
                 refreshedTargets = targets
@@ -11207,7 +11231,7 @@ public static partial class TheOddsApiDebugEndpoints
             : "MLB";
     }
 
-    private static async Task<IResult> BuildSoccerWorldCupRefreshPlanningResponseAsync(
+    internal static async Task<IResult> BuildSoccerWorldCupRefreshPlanningResponseAsync(
         TheOddsMarketRefreshRequest request,
         TheOddsApiOptions options,
         ITheOddsApiMlbPlayerPropsAdapter adapter,
@@ -11216,7 +11240,7 @@ public static partial class TheOddsApiDebugEndpoints
         IApplicationErrorLogger errorLogger,
         ISoccerPlayerIdentityResolutionService soccerIdentityResolutionService,
         SoccerIdentityResolutionOptions soccerIdentityResolutionOptions,
-        HttpContext httpContext,
+        HttpContext? httpContext,
         CancellationToken cancellationToken)
     {
         var dryRun = request.DryRun ?? true;

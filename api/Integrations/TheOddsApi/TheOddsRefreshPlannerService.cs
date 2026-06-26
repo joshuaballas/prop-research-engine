@@ -190,31 +190,34 @@ public sealed class TheOddsRefreshPlannerService(
         foreach (var target in targets)
         {
             var targetKey = target.ResolveKey();
-            var latestRun = await dbContext.TheOddsRefreshRuns
+            var targetBookmakerPresets = ResolveTargetPersistedBookmakerPresets(target);
+            var candidateRuns = await dbContext.TheOddsRefreshRuns
                 .AsNoTracking()
                 .Where(row => row.Provider == "The Odds API"
                     && row.Sport == target.Sport
-                    && row.BookmakerPreset == target.BookmakerPreset)
+                    && targetBookmakerPresets.Contains(row.BookmakerPreset))
                 .OrderByDescending(row => row.StartedAtUtc)
-                .FirstOrDefaultAsync(cancellationToken);
-            var latestSuccessfulRun = await dbContext.TheOddsRefreshRuns
-                .AsNoTracking()
-                .Where(row => row.Provider == "The Odds API"
-                    && row.Sport == target.Sport
-                    && row.BookmakerPreset == target.BookmakerPreset
-                    && row.Succeeded
-                    && !row.DryRun
-                    && !row.Blocked)
+                .Take(50)
+                .ToListAsync(cancellationToken);
+            var matchingRuns = candidateRuns
+                .Where(row => RefreshRunMatchesTarget(row, target))
+                .ToArray();
+            var latestRun = matchingRuns
+                .OrderByDescending(row => row.StartedAtUtc)
+                .FirstOrDefault();
+            var latestSuccessfulRun = matchingRuns
+                .Where(row => row.Succeeded && !row.DryRun && !row.Blocked)
                 .OrderByDescending(row => row.CompletedAtUtc ?? row.StartedAtUtc)
-                .FirstOrDefaultAsync(cancellationToken);
+                .FirstOrDefault();
 
             var latestSuccessAt = latestSuccessfulRun?.CompletedAtUtc ?? latestSuccessfulRun?.StartedAtUtc;
             var latestAttemptAt = latestRun?.CompletedAtUtc ?? latestRun?.StartedAtUtc;
             var estimatedApiCalls = Math.Max(1, target.EstimatedApiCalls ?? target.MaxEvents ?? scheduledOptions.GetFallbackEstimatedApiCalls());
             var nextEligibleRefreshUtc = latestSuccessAt?.Add(scheduledOptions.GetInterval()) ?? generatedAtUtc;
             var disabledReason = string.IsNullOrWhiteSpace(target.DisabledReason) ? null : target.DisabledReason;
+            var providerSportKeyVerified = IsProviderSportKeyVerified(target);
+            var executionWired = IsScheduledExecutionWired(target);
             var missingProviderKey = string.IsNullOrWhiteSpace(target.ProviderSportKey);
-            var unsupportedScheduledExecution = !string.Equals(target.Sport, "MLB", StringComparison.OrdinalIgnoreCase);
             var blockers = new List<string>();
 
             if (!target.Enabled)
@@ -230,6 +233,10 @@ public sealed class TheOddsRefreshPlannerService(
             if (missingProviderKey)
             {
                 blockers.Add("MissingProviderSportKey");
+            }
+            else if (!providerSportKeyVerified)
+            {
+                blockers.Add("ProviderSportKeyNotVerified");
             }
 
             if (providerRejectedKeyDetected)
@@ -247,7 +254,7 @@ public sealed class TheOddsRefreshPlannerService(
                 blockers.Add("ScheduledLiveRefreshDisabled");
             }
 
-            if (unsupportedScheduledExecution)
+            if (!executionWired)
             {
                 blockers.Add("ScheduledExecutionNotYetWiredForTarget");
             }
@@ -255,10 +262,11 @@ public sealed class TheOddsRefreshPlannerService(
             var shouldRefresh = scheduledOptions.Enabled
                 && target.Enabled
                 && !missingProviderKey
+                && providerSportKeyVerified
                 && providerAvailable
                 && !providerRejectedKeyDetected
                 && scheduledOptions.AllowScheduledLiveRefresh
-                && !unsupportedScheduledExecution
+                && executionWired
                 && generatedAtUtc >= nextEligibleRefreshUtc;
 
             plans.Add(new TheOddsRefreshTargetPlan(
@@ -275,12 +283,22 @@ public sealed class TheOddsRefreshPlannerService(
                 Markets: target.Markets,
                 SupportsResults: target.SupportsResults,
                 SupportsHistory: target.SupportsHistory,
+                ExecutionWired: executionWired,
+                ProviderSportKeyVerified: providerSportKeyVerified,
                 EstimatedApiCalls: estimatedApiCalls,
                 LatestRefreshRunId: latestRun?.Id,
+                LatestRunStartedAtUtc: latestRun?.StartedAtUtc,
+                LatestRunCompletedAtUtc: latestRun?.CompletedAtUtc,
+                LatestRunSucceeded: latestRun?.Succeeded,
+                LatestRunFailed: latestRun?.Failed,
+                LatestRunBlocked: latestRun?.Blocked,
                 LatestSuccessfulRefreshRunId: latestSuccessfulRun?.Id,
                 LatestSuccessfulRefreshCompletedAtUtc: latestSuccessAt,
                 LatestAttemptAtUtc: latestAttemptAt,
-                ActualApiCallsFromLatestRun: latestRun?.ActualApiCalls ?? 0,
+                ActualApiCallsFromLatestRun: latestRun?.ActualApiCalls,
+                PlatformPropsCreatedFromLatestRun: latestRun?.PlatformPropsCreated,
+                PlatformPropsUpdatedFromLatestRun: latestRun?.PlatformPropsUpdated,
+                PlatformPropsUpsertedFromLatestRun: latestRun?.PlatformPropsUpserted,
                 NextEligibleRefreshUtc: nextEligibleRefreshUtc,
                 ProviderStatus: providerStatus,
                 ProviderAvailable: providerAvailable,
@@ -291,6 +309,104 @@ public sealed class TheOddsRefreshPlannerService(
         }
 
         return plans;
+    }
+
+    private static bool RefreshRunMatchesTarget(
+        TheOddsRefreshRun run,
+        TheOddsScheduledRefreshTargetOptions target)
+    {
+        if (!string.Equals(run.Sport, target.Sport, StringComparison.OrdinalIgnoreCase)
+            || !ResolveTargetPersistedBookmakerPresets(target)
+                .Contains(run.BookmakerPreset, StringComparer.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        if (!ContainsCsvValue(run.ProviderCategoriesIncluded, target.ProviderCategory))
+        {
+            return false;
+        }
+
+        if (string.Equals(target.Sport, "MLB", StringComparison.OrdinalIgnoreCase))
+        {
+            return string.Equals(target.Competition, "MLB", StringComparison.OrdinalIgnoreCase);
+        }
+
+        var runCompetition = ExtractRefreshRunCompetition(run.DiagnosticsJson);
+        return !string.IsNullOrWhiteSpace(runCompetition)
+            && string.Equals(runCompetition, target.Competition, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string[] ResolveTargetPersistedBookmakerPresets(TheOddsScheduledRefreshTargetOptions target)
+    {
+        var configured = string.IsNullOrWhiteSpace(target.BookmakerPreset)
+            ? "default"
+            : target.BookmakerPreset.Trim();
+
+        var persisted = string.Equals(target.Sport, "MLB", StringComparison.OrdinalIgnoreCase)
+            ? ResolveMlbPersistedBookmakerPreset(configured)
+            : configured;
+
+        return new[] { configured, persisted }
+            .Where(value => !string.IsNullOrWhiteSpace(value))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+    }
+
+    private static string ResolveMlbPersistedBookmakerPreset(string bookmakerPreset)
+    {
+        return bookmakerPreset.ToLowerInvariant() switch
+        {
+            "expanded" => "expanded",
+            "dfsonly" or "dfs-only" or "dfs_only" => "dfsOnly",
+            "sportsbookonly" or "sportsbook-only" or "sportsbook_only" => "sportsbookOnly",
+            "all" => "all",
+            _ => "default"
+        };
+    }
+
+    private static bool ContainsCsvValue(string? csv, string value)
+    {
+        return (csv ?? string.Empty)
+            .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Any(row => string.Equals(row, value, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static string? ExtractRefreshRunCompetition(JsonDocument? diagnosticsJson)
+    {
+        if (diagnosticsJson is null)
+        {
+            return null;
+        }
+
+        return diagnosticsJson.RootElement.TryGetProperty("competition", out var competition)
+            && competition.ValueKind == JsonValueKind.String
+                ? competition.GetString()
+                : null;
+    }
+
+    private static bool IsScheduledExecutionWired(TheOddsScheduledRefreshTargetOptions target)
+    {
+        if (string.Equals(target.Sport, "MLB", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        return string.Equals(target.Sport, "SOCCER", StringComparison.OrdinalIgnoreCase)
+            && string.Equals(target.Competition, "World Cup", StringComparison.OrdinalIgnoreCase)
+            && string.Equals(target.ProviderCategory, "Sportsbook", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsProviderSportKeyVerified(TheOddsScheduledRefreshTargetOptions target)
+    {
+        if (string.Equals(target.Sport, "MLB", StringComparison.OrdinalIgnoreCase))
+        {
+            return string.Equals(target.ProviderSportKey, "baseball_mlb", StringComparison.OrdinalIgnoreCase);
+        }
+
+        return string.Equals(target.Sport, "SOCCER", StringComparison.OrdinalIgnoreCase)
+            && string.Equals(target.Competition, "World Cup", StringComparison.OrdinalIgnoreCase)
+            && string.Equals(target.ProviderSportKey, "soccer_fifa_world_cup", StringComparison.OrdinalIgnoreCase);
     }
 
     private async Task<TheOddsRefreshBudgetSummary> BuildBudgetAsync(
@@ -1000,12 +1116,22 @@ public sealed record TheOddsRefreshTargetPlan(
     string? Markets,
     bool SupportsResults,
     bool SupportsHistory,
+    bool ExecutionWired,
+    bool ProviderSportKeyVerified,
     int EstimatedApiCalls,
     Guid? LatestRefreshRunId,
+    DateTimeOffset? LatestRunStartedAtUtc,
+    DateTimeOffset? LatestRunCompletedAtUtc,
+    bool? LatestRunSucceeded,
+    bool? LatestRunFailed,
+    bool? LatestRunBlocked,
     Guid? LatestSuccessfulRefreshRunId,
     DateTimeOffset? LatestSuccessfulRefreshCompletedAtUtc,
     DateTimeOffset? LatestAttemptAtUtc,
-    int ActualApiCallsFromLatestRun,
+    int? ActualApiCallsFromLatestRun,
+    int? PlatformPropsCreatedFromLatestRun,
+    int? PlatformPropsUpdatedFromLatestRun,
+    int? PlatformPropsUpsertedFromLatestRun,
     DateTimeOffset NextEligibleRefreshUtc,
     string ProviderStatus,
     bool ProviderAvailable,
