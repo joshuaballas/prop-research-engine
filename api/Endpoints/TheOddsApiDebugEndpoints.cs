@@ -1247,6 +1247,8 @@ public static partial class TheOddsApiDebugEndpoints
         endpoints.MapGet("/api/debug/the-odds/scheduled-refresh/status", async (
             IOptions<TheOddsScheduledRefreshOptions> options,
             IOptions<TheOddsRefreshPlannerOptions> plannerOptions,
+            IOptions<ApiSportsOptions> apiSportsOptions,
+            IOptions<SoccerResultImportWorkerOptions> soccerResultWorkerOptions,
             ITheOddsRefreshPlannerService planner,
             ITheOddsScheduledRefreshState state,
             ApplicationDbContext dbContext,
@@ -1266,6 +1268,18 @@ public static partial class TheOddsApiDebugEndpoints
                     ?? currentPlan.NextEligibleRefreshUtc
                 : (DateTimeOffset?)null;
             var nextDataAvailableEstimateUtc = nextRefreshDueUtc?.Add(postRefreshReadBuffer);
+            var soccerResultImportState = await dbContext.SoccerResultImportStates
+                .AsNoTracking()
+                .SingleOrDefaultAsync(row => row.Source == SoccerResultImportWorker.Source
+                    && row.Competition == SoccerResultImportWorker.Competition, cancellationToken);
+            var soccerResultConfigError = SoccerResultImportWorker.ValidateApiSportsConfig(apiSportsOptions.Value);
+            var soccerResultImportStatus = ResolveScheduledSoccerResultImportStatus(
+                soccerResultWorkerOptions.Value,
+                soccerResultConfigError,
+                soccerResultImportState);
+            var soccerResultNextRunEstimateUtc = soccerResultWorkerOptions.Value.Enabled && soccerResultConfigError is null
+                ? soccerResultImportState?.LastStartedAt?.AddMinutes(Math.Max(1, soccerResultWorkerOptions.Value.IntervalMinutes)) ?? DateTimeOffset.UtcNow
+                : (DateTimeOffset?)null;
             var targets = currentPlan.Targets
                 .Select(target => new
                 {
@@ -1391,6 +1405,74 @@ public static partial class TheOddsApiDebugEndpoints
                 willCallExternalApis,
                 executionBlockedReason,
                 readOnly = true,
+                resultImportWorkflows = new
+                {
+                    soccerWorldCup = new
+                    {
+                        provider = "API-Sports Football",
+                        status = soccerResultImportStatus,
+                        implemented = true,
+                        workerExists = true,
+                        workerEnabled = soccerResultWorkerOptions.Value.Enabled,
+                        scheduledImportEnabled = soccerResultWorkerOptions.Value.Enabled && soccerResultConfigError is null,
+                        hourlyWorkerPullsSoccerOutcomes = soccerResultWorkerOptions.Value.Enabled && soccerResultConfigError is null,
+                        intervalMinutes = Math.Max(1, soccerResultWorkerOptions.Value.IntervalMinutes),
+                        soccerResultWorkerOptions.Value.MaxFixturesPerRun,
+                        soccerResultWorkerOptions.Value.RecentWindowDays,
+                        soccerResultWorkerOptions.Value.ImportCompletedFixturesOnly,
+                        lastImportAttemptAtUtc = soccerResultImportState?.LastStartedAt,
+                        lastImportAttemptSucceeded = soccerResultImportState is not null && IsSuccessfulSoccerResultImportStatus(soccerResultImportState.LastStatus),
+                        lastRunStartedAtUtc = soccerResultImportState?.LastStartedAt,
+                        lastRunCompletedAtUtc = soccerResultImportState?.LastCompletedAt,
+                        lastRunSucceeded = soccerResultImportState is not null && IsSuccessfulSoccerResultImportStatus(soccerResultImportState.LastStatus),
+                        lastSuccessfulRunAtUtc = soccerResultImportState?.LastSuccessfulRunAt,
+                        nextRunEstimateUtc = soccerResultNextRunEstimateUtc,
+                        latestCompletedFixtureDetected = soccerResultImportState is null || soccerResultImportState.LatestCompletedFixtureDetectedId is null
+                            ? null
+                            : new
+                            {
+                                fixtureId = soccerResultImportState.LatestCompletedFixtureDetectedId,
+                                eventDate = soccerResultImportState.LatestCompletedFixtureDetectedDate
+                            },
+                        latestCompletedFixtureImported = soccerResultImportState is null || soccerResultImportState.LatestCompletedFixtureImportedId is null
+                            ? null
+                            : new
+                            {
+                                fixtureId = soccerResultImportState.LatestCompletedFixtureImportedId,
+                                eventDate = soccerResultImportState.LatestCompletedFixtureImportedDate
+                            },
+                        latestRunSummary = soccerResultImportState is null
+                            ? null
+                            : new
+                            {
+                                soccerResultImportState.LastDiscoveredFixtureCount,
+                                soccerResultImportState.LastCompletedFixtureCount,
+                                soccerResultImportState.LastImportedFixtureCount,
+                                soccerResultImportState.LastFailedFixtureCount,
+                                soccerResultImportState.LastSkippedPendingFixtureCount,
+                                soccerResultImportState.LastResultRowsWritten,
+                                soccerResultImportState.LastResultRowsInserted,
+                                soccerResultImportState.LastResultRowsUpdated,
+                                soccerResultImportState.LastApiCallsUsed
+                            },
+                        latestErrorSummary = FirstNonBlank(soccerResultImportState?.LastErrorMessage, soccerResultConfigError),
+                        statusEndpoint = "GET /api/debug/soccer/results/api-sports/world-cup/scheduled-import-status",
+                        manualDebugEndpoints = new[]
+                        {
+                            "GET /api/debug/soccer/results/api-sports/world-cup/import-status",
+                            "POST /api/debug/soccer/results/api-sports/world-cup/backfill-completed"
+                        },
+                        reason = BuildSoccerResultImportStatusReason(soccerResultImportStatus, soccerResultConfigError)
+                    },
+                    mlb = new
+                    {
+                        provider = "MLB Stats API",
+                        status = "ImplementedSeparately",
+                        workerExists = true,
+                        scheduledImportEnabled = true,
+                        workflow = "MlbResultImportWorker"
+                    }
+                },
                 safety = new
                 {
                     oneSchedulerClock = true,
@@ -3870,6 +3952,54 @@ public static partial class TheOddsApiDebugEndpoints
         }
 
         return null;
+    }
+
+    private static string? FirstNonBlank(params string?[] values)
+    {
+        return values.FirstOrDefault(value => !string.IsNullOrWhiteSpace(value));
+    }
+
+    private static string ResolveScheduledSoccerResultImportStatus(
+        SoccerResultImportWorkerOptions options,
+        string? apiSportsConfigError,
+        SoccerResultImportState? state)
+    {
+        if (!options.Enabled)
+        {
+            return "Disabled";
+        }
+
+        if (!string.IsNullOrWhiteSpace(apiSportsConfigError))
+        {
+            return "NotConfigured";
+        }
+
+        return state?.LastStatus?.ToLowerInvariant() switch
+        {
+            "running" => "Running",
+            "failed" or "partial_failure" => "Failed",
+            "not_configured" => "NotConfigured",
+            "succeeded" or "completed_with_pending_fixtures" => "Idle",
+            _ => "Idle"
+        };
+    }
+
+    private static bool IsSuccessfulSoccerResultImportStatus(string? status)
+    {
+        return string.Equals(status, "succeeded", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(status, "completed_with_pending_fixtures", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string BuildSoccerResultImportStatusReason(string status, string? apiSportsConfigError)
+    {
+        return status switch
+        {
+            "Disabled" => "Soccer World Cup API-Sports result/stat import worker is registered but disabled by configuration.",
+            "NotConfigured" => $"Soccer World Cup API-Sports result/stat import worker is registered but cannot run because {apiSportsConfigError}",
+            "Running" => "Soccer World Cup API-Sports result/stat import worker is currently running.",
+            "Failed" => "Soccer World Cup API-Sports result/stat import worker recorded a failed or partially failed run. Inspect the Soccer scheduled import status endpoint for fixture-level details.",
+            _ => "Soccer World Cup API-Sports result/stat import worker is registered and waiting for the next scheduled cycle."
+        };
     }
 
     private static object BuildTheOddsProviderFailureResponse(TheOddsApiProviderException exception)

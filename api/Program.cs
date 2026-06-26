@@ -45,6 +45,7 @@ builder.Services.Configure<TheOddsScheduledRefreshOptions>(builder.Configuration
 builder.Services.Configure<TheOddsRefreshPlannerOptions>(builder.Configuration.GetSection(TheOddsRefreshPlannerOptions.SectionName));
 builder.Services.Configure<ProviderLineLifecycleOptions>(builder.Configuration.GetSection(ProviderLineLifecycleOptions.SectionName));
 builder.Services.Configure<MlbResultImportWorkerOptions>(builder.Configuration.GetSection(MlbResultImportWorkerOptions.SectionName));
+builder.Services.Configure<SoccerResultImportWorkerOptions>(builder.Configuration.GetSection(SoccerResultImportWorkerOptions.SectionName));
 builder.Services.Configure<SoccerIdentityResolutionOptions>(builder.Configuration.GetSection(SoccerIdentityResolutionOptions.SectionName));
 builder.Services.Configure<SoccerPredictionsOptions>(builder.Configuration.GetSection(SoccerPredictionsOptions.SectionName));
 builder.Services.Configure<SoccerGradingOptions>(builder.Configuration.GetSection(SoccerGradingOptions.SectionName));
@@ -103,6 +104,7 @@ builder.Services.AddSingleton<ITheOddsMlbIngestionWorkerState, TheOddsMlbIngesti
 builder.Services.AddSingleton<ITheOddsScheduledRefreshState, TheOddsScheduledRefreshState>();
 builder.Services.AddHostedService<UnderdogIngestionWorker>();
 builder.Services.AddHostedService<MlbResultImportWorker>();
+builder.Services.AddHostedService<SoccerResultImportWorker>();
 builder.Services.AddHostedService<TheOddsMlbIngestionWorker>();
 builder.Services.AddHostedService<TheOddsMlbScheduledRefreshWorker>();
 

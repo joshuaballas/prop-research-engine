@@ -352,6 +352,60 @@ public sealed class MlbResultImportDateState
     public DateTimeOffset UpdatedAt { get; set; } = DateTimeOffset.UtcNow;
 }
 
+public sealed class SoccerResultImportState
+{
+    public Guid Id { get; set; }
+    public string Source { get; set; } = "api-sports-football";
+    public string Competition { get; set; } = "World Cup";
+    public DateOnly? LastSuccessfulImportDate { get; set; }
+    public DateTimeOffset? LastSuccessfulRunAt { get; set; }
+    public DateTimeOffset? LastStartedAt { get; set; }
+    public DateTimeOffset? LastCompletedAt { get; set; }
+    public string LastStatus { get; set; } = "never_run";
+    public string? LastErrorMessage { get; set; }
+    public string? LatestCompletedFixtureDetectedId { get; set; }
+    public DateOnly? LatestCompletedFixtureDetectedDate { get; set; }
+    public string? LatestCompletedFixtureImportedId { get; set; }
+    public DateOnly? LatestCompletedFixtureImportedDate { get; set; }
+    public int LastApiCallsUsed { get; set; }
+    public int LastDiscoveredFixtureCount { get; set; }
+    public int LastCompletedFixtureCount { get; set; }
+    public int LastImportedFixtureCount { get; set; }
+    public int LastFailedFixtureCount { get; set; }
+    public int LastSkippedPendingFixtureCount { get; set; }
+    public int LastResultRowsWritten { get; set; }
+    public int LastResultRowsInserted { get; set; }
+    public int LastResultRowsUpdated { get; set; }
+    public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
+    public DateTimeOffset UpdatedAt { get; set; } = DateTimeOffset.UtcNow;
+}
+
+public sealed class SoccerResultImportFixtureState
+{
+    public Guid Id { get; set; }
+    public string Source { get; set; } = "api-sports-football";
+    public string Competition { get; set; } = "World Cup";
+    public string FixtureId { get; set; } = string.Empty;
+    public DateOnly? EventDate { get; set; }
+    public DateTimeOffset? KickoffUtc { get; set; }
+    public string? HomeTeamName { get; set; }
+    public string? AwayTeamName { get; set; }
+    public string? StatusShort { get; set; }
+    public string? StatusLong { get; set; }
+    public string ImportStatus { get; set; } = "NotStarted";
+    public string? SkipReason { get; set; }
+    public int ResultRowsPreviewed { get; set; }
+    public int ResultRowsWritten { get; set; }
+    public int ResultRowsInserted { get; set; }
+    public int ResultRowsUpdated { get; set; }
+    public int Attempts { get; set; }
+    public DateTimeOffset? LastAttemptedAt { get; set; }
+    public DateTimeOffset? LastSuccessfulAt { get; set; }
+    public string? LastErrorMessage { get; set; }
+    public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
+    public DateTimeOffset UpdatedAt { get; set; } = DateTimeOffset.UtcNow;
+}
+
 public sealed class PredictionRun
 {
     public Guid Id { get; set; }

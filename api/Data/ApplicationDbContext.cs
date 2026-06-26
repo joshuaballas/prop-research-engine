@@ -28,6 +28,8 @@ public sealed class ApplicationDbContext(DbContextOptions<ApplicationDbContext> 
     public DbSet<PropResult> PropResults => Set<PropResult>();
     public DbSet<MlbResultImportState> MlbResultImportStates => Set<MlbResultImportState>();
     public DbSet<MlbResultImportDateState> MlbResultImportDateStates => Set<MlbResultImportDateState>();
+    public DbSet<SoccerResultImportState> SoccerResultImportStates => Set<SoccerResultImportState>();
+    public DbSet<SoccerResultImportFixtureState> SoccerResultImportFixtureStates => Set<SoccerResultImportFixtureState>();
     public DbSet<PredictionRun> PredictionRuns => Set<PredictionRun>();
     public DbSet<Prediction> Predictions => Set<Prediction>();
     public DbSet<PredictionRunSkipCount> PredictionRunSkipCounts => Set<PredictionRunSkipCount>();
@@ -485,6 +487,39 @@ public sealed class ApplicationDbContext(DbContextOptions<ApplicationDbContext> 
             entity.HasIndex(x => x.EventDate).IsUnique();
             entity.HasIndex(x => new { x.Status, x.EventDate });
             entity.HasIndex(x => new { x.CoverageStatus, x.EventDate });
+        });
+
+        modelBuilder.Entity<SoccerResultImportState>(entity =>
+        {
+            entity.ToTable("soccer_result_import_states");
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.Source).HasMaxLength(100).IsRequired();
+            entity.Property(x => x.Competition).HasMaxLength(100).IsRequired();
+            entity.Property(x => x.LastStatus).HasMaxLength(50).IsRequired();
+            entity.Property(x => x.LastErrorMessage);
+            entity.Property(x => x.LatestCompletedFixtureDetectedId).HasMaxLength(100);
+            entity.Property(x => x.LatestCompletedFixtureImportedId).HasMaxLength(100);
+            entity.HasIndex(x => new { x.Source, x.Competition }).IsUnique();
+            entity.HasIndex(x => x.LastSuccessfulImportDate);
+        });
+
+        modelBuilder.Entity<SoccerResultImportFixtureState>(entity =>
+        {
+            entity.ToTable("soccer_result_import_fixture_states");
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.Source).HasMaxLength(100).IsRequired();
+            entity.Property(x => x.Competition).HasMaxLength(100).IsRequired();
+            entity.Property(x => x.FixtureId).HasMaxLength(100).IsRequired();
+            entity.Property(x => x.HomeTeamName).HasMaxLength(200);
+            entity.Property(x => x.AwayTeamName).HasMaxLength(200);
+            entity.Property(x => x.StatusShort).HasMaxLength(50);
+            entity.Property(x => x.StatusLong).HasMaxLength(200);
+            entity.Property(x => x.ImportStatus).HasMaxLength(50).IsRequired();
+            entity.Property(x => x.SkipReason).HasMaxLength(200);
+            entity.Property(x => x.LastErrorMessage);
+            entity.HasIndex(x => new { x.Source, x.Competition, x.FixtureId }).IsUnique();
+            entity.HasIndex(x => new { x.Competition, x.EventDate });
+            entity.HasIndex(x => new { x.ImportStatus, x.EventDate });
         });
     }
 

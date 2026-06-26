@@ -1249,11 +1249,11 @@ namespace SportsBetting.Api.Migrations
                         .IsUnique()
                         .HasDatabaseName("ix_mlb_result_import_date_states_event_date");
 
-                    b.HasIndex("Status", "EventDate")
-                        .HasDatabaseName("ix_mlb_result_import_date_states_status_event_date");
-
                     b.HasIndex("CoverageStatus", "EventDate")
                         .HasDatabaseName("ix_mlb_result_import_date_states_coverage_status_event_date");
+
+                    b.HasIndex("Status", "EventDate")
+                        .HasDatabaseName("ix_mlb_result_import_date_states_status_event_date");
 
                     b.ToTable("mlb_result_import_date_states", (string)null);
                 });
@@ -3065,6 +3065,246 @@ namespace SportsBetting.Api.Migrations
                         .HasDatabaseName("ix_recommendation_snapshots_grade_lookup");
 
                     b.ToTable("recommendation_snapshots", (string)null);
+                });
+
+            modelBuilder.Entity("SportsBetting.Api.Models.SoccerResultImportFixtureState", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<int>("Attempts")
+                        .HasColumnType("integer")
+                        .HasColumnName("attempts");
+
+                    b.Property<string>("AwayTeamName")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("away_team_name");
+
+                    b.Property<string>("Competition")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)")
+                        .HasColumnName("competition");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<DateOnly?>("EventDate")
+                        .HasColumnType("date")
+                        .HasColumnName("event_date");
+
+                    b.Property<string>("FixtureId")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)")
+                        .HasColumnName("fixture_id");
+
+                    b.Property<string>("HomeTeamName")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("home_team_name");
+
+                    b.Property<string>("ImportStatus")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("character varying(50)")
+                        .HasColumnName("import_status");
+
+                    b.Property<DateTimeOffset?>("KickoffUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("kickoff_utc");
+
+                    b.Property<DateTimeOffset?>("LastAttemptedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("last_attempted_at");
+
+                    b.Property<string>("LastErrorMessage")
+                        .HasColumnType("text")
+                        .HasColumnName("last_error_message");
+
+                    b.Property<DateTimeOffset?>("LastSuccessfulAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("last_successful_at");
+
+                    b.Property<int>("ResultRowsInserted")
+                        .HasColumnType("integer")
+                        .HasColumnName("result_rows_inserted");
+
+                    b.Property<int>("ResultRowsPreviewed")
+                        .HasColumnType("integer")
+                        .HasColumnName("result_rows_previewed");
+
+                    b.Property<int>("ResultRowsUpdated")
+                        .HasColumnType("integer")
+                        .HasColumnName("result_rows_updated");
+
+                    b.Property<int>("ResultRowsWritten")
+                        .HasColumnType("integer")
+                        .HasColumnName("result_rows_written");
+
+                    b.Property<string>("SkipReason")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("skip_reason");
+
+                    b.Property<string>("Source")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)")
+                        .HasColumnName("source");
+
+                    b.Property<string>("StatusLong")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("status_long");
+
+                    b.Property<string>("StatusShort")
+                        .HasMaxLength(50)
+                        .HasColumnType("character varying(50)")
+                        .HasColumnName("status_short");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at");
+
+                    b.HasKey("Id")
+                        .HasName("pk_soccer_result_import_fixture_states");
+
+                    b.HasIndex("Competition", "EventDate")
+                        .HasDatabaseName("ix_soccer_result_import_fixture_states_competition_event_date");
+
+                    b.HasIndex("ImportStatus", "EventDate")
+                        .HasDatabaseName("ix_soccer_result_import_fixture_states_import_status_event_date");
+
+                    b.HasIndex("Source", "Competition", "FixtureId")
+                        .IsUnique()
+                        .HasDatabaseName("ix_soccer_result_import_fixture_states_source_competition_fixt");
+
+                    b.ToTable("soccer_result_import_fixture_states", (string)null);
+                });
+
+            modelBuilder.Entity("SportsBetting.Api.Models.SoccerResultImportState", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<string>("Competition")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)")
+                        .HasColumnName("competition");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<int>("LastApiCallsUsed")
+                        .HasColumnType("integer")
+                        .HasColumnName("last_api_calls_used");
+
+                    b.Property<DateTimeOffset?>("LastCompletedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("last_completed_at");
+
+                    b.Property<int>("LastCompletedFixtureCount")
+                        .HasColumnType("integer")
+                        .HasColumnName("last_completed_fixture_count");
+
+                    b.Property<int>("LastDiscoveredFixtureCount")
+                        .HasColumnType("integer")
+                        .HasColumnName("last_discovered_fixture_count");
+
+                    b.Property<string>("LastErrorMessage")
+                        .HasColumnType("text")
+                        .HasColumnName("last_error_message");
+
+                    b.Property<int>("LastFailedFixtureCount")
+                        .HasColumnType("integer")
+                        .HasColumnName("last_failed_fixture_count");
+
+                    b.Property<int>("LastImportedFixtureCount")
+                        .HasColumnType("integer")
+                        .HasColumnName("last_imported_fixture_count");
+
+                    b.Property<int>("LastResultRowsInserted")
+                        .HasColumnType("integer")
+                        .HasColumnName("last_result_rows_inserted");
+
+                    b.Property<int>("LastResultRowsUpdated")
+                        .HasColumnType("integer")
+                        .HasColumnName("last_result_rows_updated");
+
+                    b.Property<int>("LastResultRowsWritten")
+                        .HasColumnType("integer")
+                        .HasColumnName("last_result_rows_written");
+
+                    b.Property<int>("LastSkippedPendingFixtureCount")
+                        .HasColumnType("integer")
+                        .HasColumnName("last_skipped_pending_fixture_count");
+
+                    b.Property<DateTimeOffset?>("LastStartedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("last_started_at");
+
+                    b.Property<string>("LastStatus")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("character varying(50)")
+                        .HasColumnName("last_status");
+
+                    b.Property<DateOnly?>("LastSuccessfulImportDate")
+                        .HasColumnType("date")
+                        .HasColumnName("last_successful_import_date");
+
+                    b.Property<DateTimeOffset?>("LastSuccessfulRunAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("last_successful_run_at");
+
+                    b.Property<DateOnly?>("LatestCompletedFixtureDetectedDate")
+                        .HasColumnType("date")
+                        .HasColumnName("latest_completed_fixture_detected_date");
+
+                    b.Property<string>("LatestCompletedFixtureDetectedId")
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)")
+                        .HasColumnName("latest_completed_fixture_detected_id");
+
+                    b.Property<DateOnly?>("LatestCompletedFixtureImportedDate")
+                        .HasColumnType("date")
+                        .HasColumnName("latest_completed_fixture_imported_date");
+
+                    b.Property<string>("LatestCompletedFixtureImportedId")
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)")
+                        .HasColumnName("latest_completed_fixture_imported_id");
+
+                    b.Property<string>("Source")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)")
+                        .HasColumnName("source");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at");
+
+                    b.HasKey("Id")
+                        .HasName("pk_soccer_result_import_states");
+
+                    b.HasIndex("LastSuccessfulImportDate")
+                        .HasDatabaseName("ix_soccer_result_import_states_last_successful_import_date");
+
+                    b.HasIndex("Source", "Competition")
+                        .IsUnique()
+                        .HasDatabaseName("ix_soccer_result_import_states_source_competition");
+
+                    b.ToTable("soccer_result_import_states", (string)null);
                 });
 
             modelBuilder.Entity("SportsBetting.Api.Models.Sport", b =>

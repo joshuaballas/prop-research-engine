@@ -729,15 +729,24 @@ public static class PublicMarketsEndpoints
             cancellationToken);
         var plan = await planner.BuildPlanAsync(cancellationToken);
 
-        return new
-        {
-            generatedAtUtc = DateTimeOffset.UtcNow,
-            callsExternalApis = false,
-            readOnly = true,
-            providers = new object[]
+            return new
             {
-                providerStatus with
+                generatedAtUtc = DateTimeOffset.UtcNow,
+                callsExternalApis = false,
+                readOnly = true,
+                requestTelemetryScope = "TheOddsApiMarketRefreshOnly",
+                providerRequestTelemetry = new
                 {
+                    dashboardRequestCardsMeasure = "The Odds API market refresh credit telemetry only.",
+                    includesApiSportsFootballResultCalls = false,
+                    includesMlbStatsApiResultCalls = false,
+                    apiSportsFootballRequestTelemetryPersisted = false,
+                    clarification = "Soccer/API-Sports result imports are separate from The Odds market refreshes and are not included in requestsUsed/requestsRemaining."
+                },
+                providers = new object[]
+                {
+                    providerStatus with
+                    {
                     budgetAllowed = plan.Budget.BudgetAllowed,
                     budgetBlockReason = plan.Budget.BudgetBlockReason,
                     budgetExplanation = plan.Budget.BudgetExplanation,

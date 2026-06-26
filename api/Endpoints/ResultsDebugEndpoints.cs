@@ -3639,6 +3639,216 @@ public static class ResultsDebugEndpoints
         .WithName("ApiSportsSoccerWorldCupImportStatusDebug")
         .WithSummary("Read-only World Cup 2026 API-Sports Soccer import coverage diagnostics.");
 
+        endpoints.MapGet("/api/debug/soccer/results/api-sports/world-cup/scheduled-import-status", async (
+            DateOnly? fromDate,
+            DateOnly? toDate,
+            IOptions<ApiSportsOptions> options,
+            IOptions<SoccerResultImportWorkerOptions> workerOptionsAccessor,
+            ApplicationDbContext dbContext,
+            CancellationToken cancellationToken) =>
+        {
+            var generatedAtUtc = DateTimeOffset.UtcNow;
+            var workerOptions = workerOptionsAccessor.Value;
+            var range = NormalizeApiSportsWorldCupDateRange(fromDate, toDate);
+            var persisted = await LoadApiSportsWorldCupPersistedImportStatusAsync(dbContext, range.FromDate, range.ToDate, cancellationToken);
+            var latestMarketRefresh = await LoadLatestTheOddsSoccerWorldCupRefreshRunAsync(dbContext, range, cancellationToken);
+            var importState = await dbContext.SoccerResultImportStates
+                .AsNoTracking()
+                .SingleOrDefaultAsync(row => row.Source == SoccerResultImportWorker.Source
+                    && row.Competition == SoccerResultImportWorker.Competition, cancellationToken);
+            var fixtureStates = await dbContext.SoccerResultImportFixtureStates
+                .AsNoTracking()
+                .Where(row => row.Source == SoccerResultImportWorker.Source
+                    && row.Competition == SoccerResultImportWorker.Competition
+                    && (!row.EventDate.HasValue || (row.EventDate >= range.FromDate && row.EventDate <= range.ToDate)))
+                .OrderByDescending(row => row.EventDate)
+                .ThenByDescending(row => row.KickoffUtc)
+                .Take(100)
+                .ToArrayAsync(cancellationToken);
+            var apiSportsConfigError = SoccerResultImportWorker.ValidateApiSportsConfig(options.Value);
+            var scheduledStatus = ResolveSoccerResultWorkerStatus(workerOptions, apiSportsConfigError, importState);
+            var nextRunEstimateUtc = workerOptions.Enabled && apiSportsConfigError is null
+                ? importState?.LastStartedAt?.AddMinutes(Math.Max(1, workerOptions.IntervalMinutes)) ?? generatedAtUtc
+                : (DateTimeOffset?)null;
+            var pendingCompletedFixtures = fixtureStates
+                .Where(row => IsApiSportsFixtureCompleted(row.StatusShort, row.StatusLong)
+                    && !string.Equals(row.ImportStatus, "Imported", StringComparison.OrdinalIgnoreCase))
+                .Take(25)
+                .ToArray();
+            var visibleRows = await LoadVisibleSoccerWorldCupPlatformRowsAsync(
+                dbContext,
+                "World Cup",
+                normalizedPlayerNameFilter: null,
+                take: 10_000,
+                cancellationToken);
+
+            var visibleRowsInRange = visibleRows
+                .Where(row =>
+                {
+                    var eventDate = DateOnly.FromDateTime(row.EventStartTimeUtc.UtcDateTime);
+                    return eventDate >= range.FromDate && eventDate <= range.ToDate;
+                })
+                .ToArray();
+            var importedDates = persisted.RowCountsByFixture
+                .Select(row => row.EventDate)
+                .ToHashSet();
+            var providerEventGroups = visibleRowsInRange
+                .Where(row => !string.IsNullOrWhiteSpace(row.EventId))
+                .GroupBy(row => row.EventId!, StringComparer.OrdinalIgnoreCase)
+                .Select(group =>
+                {
+                    var first = group.OrderBy(row => row.EventStartTimeUtc).First();
+                    var eventDate = DateOnly.FromDateTime(first.EventStartTimeUtc.UtcDateTime);
+                    return new
+                    {
+                        providerEventId = group.Key,
+                        eventName = BuildEventName(first.AwayTeam, first.HomeTeam),
+                        eventStartTimeUtc = first.EventStartTimeUtc,
+                        eventDate,
+                        first.HomeTeam,
+                        first.AwayTeam,
+                        platformRowCount = group.Count(),
+                        uniquePlayerCount = group.Select(row => row.LocalPlayerId).Distinct().Count(),
+                        hasSameDateApiSportsResults = importedDates.Contains(eventDate)
+                    };
+                })
+                .OrderByDescending(row => row.eventStartTimeUtc)
+                .ToArray();
+            var pastProviderEvents = providerEventGroups
+                .Where(row => row.eventStartTimeUtc <= generatedAtUtc)
+                .ToArray();
+            var pendingCompletedEvents = pastProviderEvents
+                .Where(row => !row.hasSameDateApiSportsResults)
+                .ToArray();
+            var pendingCompletedApproximation = pendingCompletedEvents
+                .Take(25)
+                .ToArray();
+
+            return Results.Ok(new
+            {
+                generatedAtUtc,
+                callsExternalApis = false,
+                readOnly = true,
+                writesRows = false,
+                scope = new
+                {
+                    sport = "SOCCER",
+                    competition = "World Cup",
+                    resultProvider = "api-sports-football",
+                    marketProvider = "The Odds API",
+                    range.FromDate,
+                    range.ToDate
+                },
+                soccerMarketRefresh = new
+                {
+                    enabledInOneClockScheduler = true,
+                    scheduledTargetKey = "soccer-world-cup-sportsbook",
+                    workflow = "The Odds market/provider-context refresh",
+                    latestAttempt = latestMarketRefresh,
+                    latestAttemptAtUtc = latestMarketRefresh?.CompletedAtUtc ?? latestMarketRefresh?.StartedAtUtc,
+                    latestAttemptSucceeded = latestMarketRefresh?.Succeeded,
+                    latestActualApiCalls = latestMarketRefresh?.ActualApiCalls,
+                    latestPlatformPropsCreated = latestMarketRefresh?.PlatformPropsCreated,
+                    latestPlatformPropsUpdated = latestMarketRefresh?.PlatformPropsUpdated,
+                    latestPlatformPropsUpserted = latestMarketRefresh?.PlatformPropsUpserted
+                },
+                soccerResultImport = new
+                {
+                    status = scheduledStatus,
+                    implemented = true,
+                    workerExists = true,
+                    workerEnabled = workerOptions.Enabled,
+                    scheduledImportEnabled = workerOptions.Enabled && apiSportsConfigError is null,
+                    hourlyWorkerPullsSoccerOutcomes = workerOptions.Enabled && apiSportsConfigError is null,
+                    intervalMinutes = Math.Max(1, workerOptions.IntervalMinutes),
+                    workerOptions.MaxFixturesPerRun,
+                    workerOptions.RecentWindowDays,
+                    workerOptions.ImportCompletedFixturesOnly,
+                    workerOptions.Competition,
+                    workerOptions.Provider,
+                    lastRunStartedAtUtc = importState?.LastStartedAt,
+                    lastRunCompletedAtUtc = importState?.LastCompletedAt,
+                    lastRunSucceeded = importState is not null && IsSuccessfulSoccerResultWorkerStatus(importState.LastStatus),
+                    nextRunEstimateUtc,
+                    lastImportAttemptAtUtc = importState?.LastStartedAt,
+                    lastImportAttemptSucceeded = importState is not null && IsSuccessfulSoccerResultWorkerStatus(importState.LastStatus),
+                    lastSuccessfulImportAtUtc = persisted.LatestImportedAtUtc,
+                    lastSuccessfulRunAtUtc = importState?.LastSuccessfulRunAt,
+                    latestCompletedFixtureDetected = importState is null || importState.LatestCompletedFixtureDetectedId is null
+                        ? null
+                        : new
+                        {
+                            fixtureId = importState.LatestCompletedFixtureDetectedId,
+                            eventDate = importState.LatestCompletedFixtureDetectedDate
+                        },
+                    latestCompletedFixtureImported = importState is null || importState.LatestCompletedFixtureImportedId is null
+                        ? null
+                        : new
+                        {
+                            fixtureId = importState.LatestCompletedFixtureImportedId,
+                            eventDate = importState.LatestCompletedFixtureImportedDate
+                        },
+                    lastImportedFixtureId = importState?.LatestCompletedFixtureImportedId ?? persisted.LatestImportedFixtureId,
+                    lastImportedEventDate = importState?.LatestCompletedFixtureImportedDate ?? persisted.LatestImportedDate,
+                    importedFixtureCount = persisted.RowCountsByFixture.Count,
+                    importedPlayerStatRowCount = persisted.TotalRows,
+                    failedFixtureCount = importState?.LastFailedFixtureCount ?? fixtureStates.Count(row => string.Equals(row.ImportStatus, "Failed", StringComparison.OrdinalIgnoreCase)),
+                    skippedPendingFixtureCount = importState?.LastSkippedPendingFixtureCount ?? fixtureStates.Count(row => string.Equals(row.ImportStatus, "Pending", StringComparison.OrdinalIgnoreCase)),
+                    pendingCompletedFixtures,
+                    providerApiCallsUsed = importState?.LastApiCallsUsed ?? 0,
+                    latestErrorSummary = FirstNonBlank(importState?.LastErrorMessage, apiSportsConfigError),
+                    reason = BuildSoccerResultWorkerStatusReason(scheduledStatus, apiSportsConfigError),
+                    manualDebugEndpoints = new[]
+                    {
+                        "GET /api/debug/soccer/results/api-sports/world-cup/import-status",
+                        "POST /api/debug/soccer/results/api-sports/world-cup/backfill-completed"
+                    }
+                },
+                persistedResultCoverage = new
+                {
+                    importedFixtureCount = persisted.RowCountsByFixture.Count,
+                    importedResultRows = persisted.TotalRows,
+                    persisted.LatestImportedFixtureId,
+                    latestImportedEventDate = persisted.LatestImportedDate,
+                    persisted.LatestImportedAtUtc,
+                    rowsByFixture = persisted.RowCountsByFixture.Take(50).ToArray()
+                },
+                providerContextCoverage = new
+                {
+                    visibleProviderEventCount = providerEventGroups.Length,
+                    visibleProviderRowCount = visibleRowsInRange.Length,
+                    pastProviderEventCount = pastProviderEvents.Length,
+                    lastPastStartProviderEvent = pastProviderEvents.OrderByDescending(row => row.eventStartTimeUtc).FirstOrDefault(),
+                    pendingCompletedMatchDetection = "ApproximateFromPersistedProviderEventsOnly",
+                    pendingCompletedProviderEventsWithoutSameDateResults = pendingCompletedEvents.Length,
+                    pendingCompletedProviderEventSamples = pendingCompletedApproximation,
+                    pendingCompletedMatchDetectionLimit = "No live API-Sports discovery was performed; exact missing completed fixtures require forceLive on the import-status/backfill debug endpoints."
+                },
+                providerRequestTelemetry = new
+                {
+                    theOddsApi = new
+                    {
+                        scope = "Market odds/provider-context refresh only",
+                        latestActualApiCalls = latestMarketRefresh?.ActualApiCalls,
+                        latestRunId = latestMarketRefresh?.Id
+                    },
+                    apiSportsFootball = new
+                    {
+                        scope = "Soccer result/stat provider",
+                        scheduledTelemetryPersisted = true,
+                        requestsUsed = (int?)null,
+                        requestsRemaining = (int?)null,
+                        latestScheduledApiCallsUsed = importState?.LastApiCallsUsed ?? 0,
+                        reason = "API-Sports Football request quota headers are not persisted; scheduled worker diagnostics track calls used per run separately from The Odds credit cards."
+                    }
+                },
+                workflowSeparation = "The Odds scheduled refresh updates market/provider-context rows only. API-Sports result/stat import is a separate SoccerResultImportWorker workflow.",
+                recommendedAction = BuildSoccerResultWorkerRecommendedAction(scheduledStatus)
+            });
+        })
+        .WithName("ApiSportsSoccerWorldCupScheduledImportStatusDebug")
+        .WithSummary("Read-only Soccer World Cup API-Sports scheduled result import worker status.");
+
         endpoints.MapGet("/api/debug/soccer/results/api-sports/world-cup/coverage", async (
             DateOnly? fromDate,
             DateOnly? toDate,
@@ -5429,72 +5639,18 @@ public static class ResultsDebugEndpoints
                 return block;
             }
 
-            var discovered = await DiscoverApiSportsWorldCupFixturesAsync(client, range.FromDate, range.ToDate, cancellationToken);
-            var completed = discovered.Where(row => IsApiSportsFixtureCompleted(row.StatusShort, row.StatusLong)).ToArray();
-            var skipped = discovered
-                .Where(row => !IsApiSportsFixtureCompleted(row.StatusShort, row.StatusLong))
-                .Select(row => new ApiSportsWorldCupSkippedFixture(row.FixtureId, row.EventDate, row.StatusShort, row.StatusLong, GetApiSportsFixtureSkipReason(row)))
-                .ToList();
-            var results = new List<ApiSportsWorldCupFixtureImportOutcome>();
-            var failures = new List<ApiSportsWorldCupFixtureImportFailure>();
-            var totalPreviewed = 0;
-            var totalWritten = 0;
-            var totalInserted = 0;
-            var totalUpdated = 0;
-
-            foreach (var fixture in completed)
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-                try
-                {
-                    var import = await ImportApiSportsSoccerFixtureAsync(
-                        client,
-                        dbContext,
-                        fixture.FixtureId,
-                        dryRun,
-                        cancellationToken);
-                    totalPreviewed += import.ResultRowsPreviewed;
-                    totalWritten += import.ResultRowsWritten;
-                    totalInserted += import.ResultRowsInserted;
-                    totalUpdated += import.ResultRowsUpdated;
-                    results.Add(new ApiSportsWorldCupFixtureImportOutcome(
-                        fixture.FixtureId,
-                        fixture.EventDate,
-                        fixture.KickoffUtc,
-                        fixture.HomeTeamName,
-                        fixture.AwayTeamName,
-                        fixture.StatusShort,
-                        fixture.StatusLong,
-                        import.ResultRowsPreviewed,
-                        import.ResultRowsWritten,
-                        import.ResultRowsInserted,
-                        import.ResultRowsUpdated,
-                        import.Preview.UnsupportedSkipped,
-                        import.MappingDiagnostics,
-                        import.RuleConfidenceCounts));
-                }
-                catch (Exception exception) when (exception is not OperationCanceledException)
-                {
-                    failures.Add(new ApiSportsWorldCupFixtureImportFailure(
-                        fixture.FixtureId,
-                        fixture.EventDate,
-                        fixture.StatusShort,
-                        fixture.StatusLong,
-                        exception.GetType().Name,
-                        exception.Message));
-                }
-            }
-            var coverageByDate = BuildApiSportsWorldCupBackfillCoverageByDate(
+            var importResult = await RunApiSportsWorldCupBackfillCompletedAsync(
+                client,
+                dbContext,
                 range.FromDate,
                 range.ToDate,
-                discovered,
-                skipped,
-                results,
-                failures);
+                dryRun,
+                maxCompletedFixtures: null,
+                cancellationToken);
 
             return Results.Ok(new
             {
-                generatedAtUtc = DateTimeOffset.UtcNow,
+                generatedAtUtc = importResult.GeneratedAtUtc,
                 callsExternalApis = true,
                 externalApiCalled = true,
                 readOnly = dryRun,
@@ -5510,21 +5666,21 @@ public static class ResultsDebugEndpoints
                     range.ToDate
                 },
                 request = requestDiagnostics,
-                discoveredFixtureCount = discovered.Count,
-                completedFixtureCount = completed.Length,
-                skippedFixtureCount = skipped.Count,
-                importedFixtureCount = results.Count,
-                failedFixtureCount = failures.Count,
-                resultRowsPreviewed = totalPreviewed,
-                resultRowsWritten = totalWritten,
-                resultRowsInserted = totalInserted,
-                resultRowsUpdated = totalUpdated,
-                apiCallsUsed = CountDateRangeDays(range.FromDate, range.ToDate) + completed.Length,
-                coverageByDate,
-                completedFixtures = completed,
-                skippedFixtures = skipped,
-                imports = results,
-                failures
+                importResult.DiscoveredFixtureCount,
+                importResult.CompletedFixtureCount,
+                importResult.SkippedFixtureCount,
+                importResult.ImportedFixtureCount,
+                importResult.FailedFixtureCount,
+                importResult.ResultRowsPreviewed,
+                importResult.ResultRowsWritten,
+                importResult.ResultRowsInserted,
+                importResult.ResultRowsUpdated,
+                importResult.ApiCallsUsed,
+                coverageByDate = importResult.CoverageByDate,
+                completedFixtures = importResult.CompletedFixtures,
+                skippedFixtures = importResult.SkippedFixtures,
+                imports = importResult.Imports,
+                failures = importResult.Failures
             });
         })
         .WithName("ApiSportsSoccerWorldCupBackfillCompletedDebug")
@@ -6070,6 +6226,174 @@ public static class ResultsDebugEndpoints
             GetNestedString(GetPropertyOrDefault(teams, "home"), "name"),
             GetNestedInt(GetPropertyOrDefault(teams, "away"), "id"),
             GetNestedString(GetPropertyOrDefault(teams, "away"), "name"));
+    }
+
+    internal static async Task<ApiSportsWorldCupBackfillCompletedResult> RunApiSportsWorldCupBackfillCompletedAsync(
+        IApiSportsFootballClient client,
+        ApplicationDbContext dbContext,
+        DateOnly fromDate,
+        DateOnly toDate,
+        bool dryRun,
+        int? maxCompletedFixtures,
+        CancellationToken cancellationToken)
+    {
+        var discovered = await DiscoverApiSportsWorldCupFixturesAsync(client, fromDate, toDate, cancellationToken);
+        var completed = discovered.Where(row => IsApiSportsFixtureCompleted(row.StatusShort, row.StatusLong)).ToArray();
+        var completedToImport = maxCompletedFixtures.HasValue
+            ? completed.Take(Math.Max(0, maxCompletedFixtures.Value)).ToArray()
+            : completed;
+        var skipped = discovered
+            .Where(row => !IsApiSportsFixtureCompleted(row.StatusShort, row.StatusLong))
+            .Select(row => new ApiSportsWorldCupSkippedFixture(row.FixtureId, row.EventDate, row.StatusShort, row.StatusLong, GetApiSportsFixtureSkipReason(row)))
+            .ToList();
+        var results = new List<ApiSportsWorldCupFixtureImportOutcome>();
+        var failures = new List<ApiSportsWorldCupFixtureImportFailure>();
+        var scheduledOutcomes = new List<ApiSportsWorldCupScheduledFixtureOutcome>();
+        var totalPreviewed = 0;
+        var totalWritten = 0;
+        var totalInserted = 0;
+        var totalUpdated = 0;
+
+        foreach (var fixture in skipped)
+        {
+            scheduledOutcomes.Add(new ApiSportsWorldCupScheduledFixtureOutcome(
+                fixture.FixtureId,
+                fixture.EventDate,
+                null,
+                null,
+                null,
+                fixture.StatusShort,
+                fixture.StatusLong,
+                "Pending",
+                fixture.Reason,
+                0,
+                0,
+                0,
+                0,
+                null));
+        }
+
+        foreach (var fixture in completed.Except(completedToImport).ToArray())
+        {
+            scheduledOutcomes.Add(new ApiSportsWorldCupScheduledFixtureOutcome(
+                fixture.FixtureId,
+                fixture.EventDate,
+                fixture.KickoffUtc,
+                fixture.HomeTeamName,
+                fixture.AwayTeamName,
+                fixture.StatusShort,
+                fixture.StatusLong,
+                "Skipped",
+                "MaxFixturesPerRunLimit",
+                0,
+                0,
+                0,
+                0,
+                null));
+        }
+
+        foreach (var fixture in completedToImport)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            try
+            {
+                var import = await ImportApiSportsSoccerFixtureAsync(
+                    client,
+                    dbContext,
+                    fixture.FixtureId,
+                    dryRun,
+                    cancellationToken);
+                totalPreviewed += import.ResultRowsPreviewed;
+                totalWritten += import.ResultRowsWritten;
+                totalInserted += import.ResultRowsInserted;
+                totalUpdated += import.ResultRowsUpdated;
+                results.Add(new ApiSportsWorldCupFixtureImportOutcome(
+                    fixture.FixtureId,
+                    fixture.EventDate,
+                    fixture.KickoffUtc,
+                    fixture.HomeTeamName,
+                    fixture.AwayTeamName,
+                    fixture.StatusShort,
+                    fixture.StatusLong,
+                    import.ResultRowsPreviewed,
+                    import.ResultRowsWritten,
+                    import.ResultRowsInserted,
+                    import.ResultRowsUpdated,
+                    import.Preview.UnsupportedSkipped,
+                    import.MappingDiagnostics,
+                    import.RuleConfidenceCounts));
+                scheduledOutcomes.Add(new ApiSportsWorldCupScheduledFixtureOutcome(
+                    fixture.FixtureId,
+                    fixture.EventDate,
+                    fixture.KickoffUtc,
+                    fixture.HomeTeamName,
+                    fixture.AwayTeamName,
+                    fixture.StatusShort,
+                    fixture.StatusLong,
+                    "Imported",
+                    null,
+                    import.ResultRowsPreviewed,
+                    import.ResultRowsWritten,
+                    import.ResultRowsInserted,
+                    import.ResultRowsUpdated,
+                    null));
+            }
+            catch (Exception exception) when (exception is not OperationCanceledException)
+            {
+                failures.Add(new ApiSportsWorldCupFixtureImportFailure(
+                    fixture.FixtureId,
+                    fixture.EventDate,
+                    fixture.StatusShort,
+                    fixture.StatusLong,
+                    exception.GetType().Name,
+                    exception.Message));
+                scheduledOutcomes.Add(new ApiSportsWorldCupScheduledFixtureOutcome(
+                    fixture.FixtureId,
+                    fixture.EventDate,
+                    fixture.KickoffUtc,
+                    fixture.HomeTeamName,
+                    fixture.AwayTeamName,
+                    fixture.StatusShort,
+                    fixture.StatusLong,
+                    "Failed",
+                    null,
+                    0,
+                    0,
+                    0,
+                    0,
+                    $"{exception.GetType().Name}: {exception.Message}"));
+            }
+        }
+
+        var coverageByDate = BuildApiSportsWorldCupBackfillCoverageByDate(
+            fromDate,
+            toDate,
+            discovered,
+            skipped,
+            results,
+            failures);
+
+        return new ApiSportsWorldCupBackfillCompletedResult(
+            DateTimeOffset.UtcNow,
+            discovered.Count,
+            completed.Length,
+            skipped.Count,
+            results.Count,
+            failures.Count,
+            totalPreviewed,
+            totalWritten,
+            totalInserted,
+            totalUpdated,
+            CountDateRangeDays(fromDate, toDate) + completedToImport.Length,
+            completed,
+            skipped,
+            results,
+            failures,
+            coverageByDate,
+            scheduledOutcomes
+                .OrderBy(row => row.EventDate)
+                .ThenBy(row => row.FixtureId, StringComparer.OrdinalIgnoreCase)
+                .ToArray());
     }
 
     private static async Task<ApiSportsSoccerFixtureImportResult> ImportApiSportsSoccerFixtureAsync(
@@ -9001,6 +9325,61 @@ public static class ResultsDebugEndpoints
         return values.FirstOrDefault(value => !string.IsNullOrWhiteSpace(value));
     }
 
+    private static string ResolveSoccerResultWorkerStatus(
+        SoccerResultImportWorkerOptions options,
+        string? apiSportsConfigError,
+        SoccerResultImportState? state)
+    {
+        if (!options.Enabled)
+        {
+            return "Disabled";
+        }
+
+        if (!string.IsNullOrWhiteSpace(apiSportsConfigError))
+        {
+            return "NotConfigured";
+        }
+
+        return state?.LastStatus?.ToLowerInvariant() switch
+        {
+            "running" => "Running",
+            "failed" or "partial_failure" => "Failed",
+            "not_configured" => "NotConfigured",
+            "succeeded" or "completed_with_pending_fixtures" => "Idle",
+            _ => "Idle"
+        };
+    }
+
+    private static bool IsSuccessfulSoccerResultWorkerStatus(string? status)
+    {
+        return string.Equals(status, "succeeded", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(status, "completed_with_pending_fixtures", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string BuildSoccerResultWorkerStatusReason(string status, string? apiSportsConfigError)
+    {
+        return status switch
+        {
+            "Disabled" => "Soccer World Cup API-Sports result/stat import worker is registered but disabled by configuration.",
+            "NotConfigured" => $"Soccer World Cup API-Sports result/stat import worker is registered but cannot run because {apiSportsConfigError}",
+            "Running" => "Soccer World Cup API-Sports result/stat import worker is currently running.",
+            "Failed" => "Soccer World Cup API-Sports result/stat import worker recorded a failed or partially failed run. Inspect latestErrorSummary and fixture states.",
+            _ => "Soccer World Cup API-Sports result/stat import worker is registered and waiting for the next scheduled cycle."
+        };
+    }
+
+    private static string BuildSoccerResultWorkerRecommendedAction(string status)
+    {
+        return status switch
+        {
+            "Disabled" => "Enable SoccerResultImportWorker when automatic World Cup outcome/stat import should run locally.",
+            "NotConfigured" => "Configure ApiSports:Enabled, ApiSports:ApiKey, and ApiSports:Football:BaseUrl before enabling scheduled Soccer result import.",
+            "Failed" => "Review failed fixture states and application logs before rerunning the worker or manual backfill.",
+            "Running" => "Wait for the active Soccer result import cycle to complete, then recheck this status endpoint.",
+            _ => "No action required if recent completed World Cup fixtures are being imported; use manual backfill for targeted recovery."
+        };
+    }
+
     private static string? ResolveOpponent(string? teamName, string? homeTeam, string? awayTeam)
     {
         var normalizedTeam = NormalizeResultPlayerName(teamName);
@@ -11682,6 +12061,16 @@ public static class ResultsDebugEndpoints
             JsonValueKind.String when int.TryParse(property.GetString(), NumberStyles.Integer, CultureInfo.InvariantCulture, out var value) => value,
             _ => null
         };
+    }
+
+    private static string? BuildEventName(string? awayTeam, string? homeTeam)
+    {
+        if (!string.IsNullOrWhiteSpace(awayTeam) && !string.IsNullOrWhiteSpace(homeTeam))
+        {
+            return $"{awayTeam} @ {homeTeam}";
+        }
+
+        return FirstNonBlank(awayTeam, homeTeam);
     }
 
     private static bool TryGetJsonPropertyIgnoreCase(JsonElement element, string propertyName, out JsonElement property)
@@ -14377,7 +14766,7 @@ public static class ResultsDebugEndpoints
         int? AwayTeamId,
         string? AwayTeamName);
 
-    private sealed record ApiSportsFixtureDiscoveryRow(
+    internal sealed record ApiSportsFixtureDiscoveryRow(
         string FixtureId,
         DateOnly? EventDate,
         DateTimeOffset? KickoffUtc,
@@ -14390,14 +14779,14 @@ public static class ResultsDebugEndpoints
 
     private sealed record ApiSportsWorldCupDateRange(DateOnly FromDate, DateOnly ToDate);
 
-    private sealed record ApiSportsWorldCupSkippedFixture(
+    internal sealed record ApiSportsWorldCupSkippedFixture(
         string FixtureId,
         DateOnly? EventDate,
         string? StatusShort,
         string? StatusLong,
         string Reason);
 
-    private sealed record ApiSportsWorldCupFixtureImportOutcome(
+    internal sealed record ApiSportsWorldCupFixtureImportOutcome(
         string FixtureId,
         DateOnly? EventDate,
         DateTimeOffset? KickoffUtc,
@@ -14413,13 +14802,48 @@ public static class ResultsDebugEndpoints
         object MappingDiagnostics,
         object RuleConfidenceCounts);
 
-    private sealed record ApiSportsWorldCupFixtureImportFailure(
+    internal sealed record ApiSportsWorldCupFixtureImportFailure(
         string FixtureId,
         DateOnly? EventDate,
         string? StatusShort,
         string? StatusLong,
         string ExceptionType,
         string Message);
+
+    internal sealed record ApiSportsWorldCupScheduledFixtureOutcome(
+        string FixtureId,
+        DateOnly? EventDate,
+        DateTimeOffset? KickoffUtc,
+        string? HomeTeamName,
+        string? AwayTeamName,
+        string? StatusShort,
+        string? StatusLong,
+        string ImportStatus,
+        string? SkipReason,
+        int ResultRowsPreviewed,
+        int ResultRowsWritten,
+        int ResultRowsInserted,
+        int ResultRowsUpdated,
+        string? ErrorMessage);
+
+    internal sealed record ApiSportsWorldCupBackfillCompletedResult(
+        DateTimeOffset GeneratedAtUtc,
+        int DiscoveredFixtureCount,
+        int CompletedFixtureCount,
+        int SkippedFixtureCount,
+        int ImportedFixtureCount,
+        int FailedFixtureCount,
+        int ResultRowsPreviewed,
+        int ResultRowsWritten,
+        int ResultRowsInserted,
+        int ResultRowsUpdated,
+        int ApiCallsUsed,
+        IReadOnlyList<ApiSportsFixtureDiscoveryRow> CompletedFixtures,
+        IReadOnlyList<ApiSportsWorldCupSkippedFixture> SkippedFixtures,
+        IReadOnlyList<ApiSportsWorldCupFixtureImportOutcome> Imports,
+        IReadOnlyList<ApiSportsWorldCupFixtureImportFailure> Failures,
+        IReadOnlyList<ApiSportsWorldCupDateCoverageRow> CoverageByDate,
+        IReadOnlyList<ApiSportsWorldCupScheduledFixtureOutcome> ScheduledOutcomes);
 
     private sealed record ApiSportsHistoricalFixturePreviewOutcome(
         string FixtureId,
@@ -14446,7 +14870,7 @@ public static class ResultsDebugEndpoints
         int ResultRows,
         int DistinctPlayers);
 
-    private sealed record ApiSportsWorldCupDateCoverageRow(
+    internal sealed record ApiSportsWorldCupDateCoverageRow(
         DateOnly Date,
         int? FixtureCount,
         int? CompletedFixtureCount,
@@ -15685,7 +16109,7 @@ public static class ResultsDebugEndpoints
         string Notes,
         string ExternalSourceIdentifier);
 
-    private sealed record ApiSportsSoccerUnsupportedSkippedRow(
+    internal sealed record ApiSportsSoccerUnsupportedSkippedRow(
         int? PlayerId,
         string? PlayerName,
         string PropType,
