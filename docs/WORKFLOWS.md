@@ -70,7 +70,7 @@ Production-style frontend reads should use the non-debug persisted-data endpoint
 Invoke-RestMethod -Uri "http://localhost:5299/api/markets/freshness?freshnessMinutes=30"
 Invoke-RestMethod -Uri "http://localhost:5299/api/markets/provider-status"
 Invoke-RestMethod -Uri "http://localhost:5299/api/markets/refresh-plan"
-Invoke-RestMethod -Uri "http://localhost:5299/api/markets/top-picks?sport=MLB&take=10&freshnessMinutes=30"
+Invoke-RestMethod -Uri "http://localhost:5299/api/markets/top-picks?take=10&freshnessMinutes=30"
 Invoke-RestMethod -Uri "http://localhost:5299/api/markets/line-shopping?sport=MLB&take=25&freshnessMinutes=30&includeBookmakerPrices=false"
 Invoke-RestMethod -Uri "http://localhost:5299/api/dfs/entry-rules"
 ```

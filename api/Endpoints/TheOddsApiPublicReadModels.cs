@@ -209,7 +209,7 @@ public static partial class TheOddsApiDebugEndpoints
             providerCategory,
             dbContext,
             cancellationToken);
-        var requestedTake = Math.Clamp(take ?? 10, 1, 100);
+        var requestedTake = Math.Clamp(take ?? 10, 1, 500);
         var generatedAtUtc = DateTimeOffset.UtcNow;
         var lifecycleFreshnessMinutes = Math.Clamp(freshnessMinutes ?? DefaultTheOddsLineShoppingFreshnessMinutes, 1, 1440);
         var platformProps = await LoadScopedTheOddsPlatformPropsAsync(dbContext, providerCategory, cancellationToken);
@@ -398,7 +398,8 @@ public static partial class TheOddsApiDebugEndpoints
         SoccerTopPicksOptions soccerTopPicksOptions,
         ApplicationDbContext dbContext,
         CancellationToken cancellationToken,
-        bool includePlayerHistory = true)
+        bool includePlayerHistory = true,
+        int? evaluationTake = null)
     {
         var totalStopwatch = Stopwatch.StartNew();
         var stepStopwatch = Stopwatch.StartNew();
@@ -406,6 +407,7 @@ public static partial class TheOddsApiDebugEndpoints
         var generatedAtUtc = DateTimeOffset.UtcNow;
         var lifecycleFreshnessMinutes = Math.Clamp(freshnessMinutes ?? DefaultTheOddsLineShoppingFreshnessMinutes, 1, 1440);
         var requestedTake = Math.Clamp(take ?? 50, 1, 500);
+        var requestedEvaluationTake = Math.Clamp(evaluationTake ?? requestedTake, 1, 1000);
         AddTimingStage(timingStages, stepStopwatch, "request/filter normalization", rowCount: null);
         var latestSoccerRun = await dbContext.TheOddsRefreshRuns
             .AsNoTracking()
@@ -432,7 +434,7 @@ public static partial class TheOddsApiDebugEndpoints
             .ThenBy(group => group.Player)
             .ThenBy(group => group.NormalizedPropType)
             .ThenBy(group => group.Line)
-            .Take(requestedTake)
+            .Take(requestedEvaluationTake)
             .ToArray();
         AddTimingStage(timingStages, stepStopwatch, "line-shopping grouping", groups.Length);
         var playerHistoryEnrichment = includePlayerHistory
@@ -494,6 +496,7 @@ public static partial class TheOddsApiDebugEndpoints
                 timingStages,
                 lifecycleFreshnessMinutes,
                 take = requestedTake,
+                evaluationTake = requestedEvaluationTake,
                 topOnly = false,
                 includeBookmakerPrices,
                 includePlayerHistory
@@ -847,7 +850,7 @@ public static partial class TheOddsApiDebugEndpoints
             return null;
         }
 
-        var requestedTake = Math.Clamp(take ?? 10, 1, 100);
+        var requestedTake = Math.Clamp(take ?? 10, 1, 500);
         var query = dbContext.MarketTopPickSnapshots
             .AsNoTracking()
             .Where(row => refreshRunIds.Contains(row.TheOddsRefreshRunId));

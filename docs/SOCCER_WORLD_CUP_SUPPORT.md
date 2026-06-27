@@ -17,7 +17,7 @@ The production market endpoints accept `sport=SOCCER` for persisted snapshot rea
 - `/api/markets/top-picks?sport=SOCCER`
 - `/api/markets/line-shopping?sport=SOCCER`
 
-These endpoints are read-only and do not call external APIs. They return Soccer / World Cup rows only when persisted snapshots exist.
+These endpoints are read-only and do not call external APIs. Public Top Picks also includes eligible Soccer / World Cup sportsbook recommendations in the all-sports response when `/api/markets/top-picks` is called without a `sport` filter. Soccer Line Shopping can fall back to persisted provider context rows when snapshots do not exist.
 
 Phase 1 public app behavior is intentionally narrow:
 

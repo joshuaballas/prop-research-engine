@@ -28,11 +28,11 @@ export function getScheduledRefreshStatus(signal?: AbortSignal) {
   return apiGet<ScheduledRefreshStatusDto>('/api/markets/refresh-plan', signal);
 }
 
-export function getTopPicks(signal?: AbortSignal, take = 25, sport = 'MLB', providerCategory?: 'DFS' | 'Sportsbook') {
+export function getTopPicks(signal?: AbortSignal, take = 25, sport?: string, providerCategory?: 'DFS' | 'Sportsbook') {
   return apiGet<PublicTopPicksResponseDto>(
     `/api/markets/top-picks${buildQuery({
       sport,
-      competition: competitionForSport(sport),
+      competition: sport ? competitionForSport(sport) : undefined,
       take,
       providerCategory,
       freshnessMinutes: 30

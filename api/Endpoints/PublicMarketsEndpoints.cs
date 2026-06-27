@@ -18,6 +18,9 @@ public static class PublicMarketsEndpoints
 {
     private static readonly string[] SupportedMarketSports = ["MLB", "SOCCER"];
     private static readonly string[] SupportedMarketCompetitions = ["MLB", "World Cup"];
+    private const int TopPicksDefaultTake = 25;
+    private const int TopPicksMaxTake = 500;
+    private const int TopPicksInternalEvaluationTake = 500;
     private const string SoccerCompetitionName = "World Cup";
     private const string DfsExpectedValueUnavailableReason = "EV is hidden for DFS props because sportsbook odds/break-even pricing is not available.";
     private const string SportsbookExpectedValueUnavailableReason = "Sportsbook EV requires odds/break-even pricing.";
@@ -233,6 +236,24 @@ public static class PublicMarketsEndpoints
             IOptions<SoccerTopPicksOptions> soccerTopPicksOptions,
             CancellationToken cancellationToken) =>
         {
+            if (string.IsNullOrWhiteSpace(sport))
+            {
+                return Results.Ok(await BuildAllMarketTopPicksResponseAsync(
+                    runId,
+                    take,
+                    freshnessMinutes,
+                    providerCategory,
+                    bookmakerPreset,
+                    dbContext,
+                    probabilityService,
+                    predictionGenerationOptions.Value,
+                    soccerPredictionService,
+                    soccerPredictionOptions.Value,
+                    soccerGradingOptions.Value,
+                    soccerTopPicksOptions.Value,
+                    cancellationToken));
+            }
+
             var marketSport = ResolveMarketSport(sport);
             if (marketSport.UnsupportedResponse is not null)
             {
@@ -1137,7 +1158,8 @@ public static class PublicMarketsEndpoints
                 soccerTopPicksOptions,
                 dbContext,
                 cancellationToken,
-                includePlayerHistory: false);
+                includePlayerHistory: false,
+                evaluationTake: TopPicksInternalEvaluationTake);
             var soccerTopPickFilteringStopwatch = Stopwatch.StartNew();
             var soccerTopPickCandidates = soccerLineShopping.ComparisonGroups
                 .Select(group => JsonSerializer.SerializeToNode(group) as JsonObject)
@@ -1264,6 +1286,127 @@ public static class PublicMarketsEndpoints
         };
     }
 
+    private static async Task<object> BuildAllMarketTopPicksResponseAsync(
+        Guid? runId,
+        int? take,
+        int? freshnessMinutes,
+        string? providerCategory,
+        string? bookmakerPreset,
+        ApplicationDbContext dbContext,
+        IPredictionProbabilityService probabilityService,
+        PredictionGenerationOptions predictionGenerationOptions,
+        ISoccerWorldCupPredictionService soccerPredictionService,
+        SoccerPredictionsOptions soccerPredictionOptions,
+        SoccerGradingOptions soccerGradingOptions,
+        SoccerTopPicksOptions soccerTopPicksOptions,
+        CancellationToken cancellationToken)
+    {
+        providerCategory = NormalizePublicProviderCategoryFilter(providerCategory);
+        var requestedTake = Math.Clamp(take ?? TopPicksDefaultTake, 1, TopPicksMaxTake);
+        var internalTake = Math.Max(requestedTake, TopPicksInternalEvaluationTake);
+
+        var mlbResponse = await BuildMarketTopPicksResponseAsync(
+            requestedSport: "MLB",
+            effectiveSport: "MLB",
+            runId,
+            internalTake,
+            freshnessMinutes,
+            providerCategory,
+            bookmakerPreset,
+            dbContext,
+            probabilityService,
+            predictionGenerationOptions,
+            soccerPredictionService,
+            soccerPredictionOptions,
+            soccerGradingOptions,
+            soccerTopPicksOptions,
+            cancellationToken);
+        var soccerResponse = await BuildMarketTopPicksResponseAsync(
+            requestedSport: "SOCCER",
+            effectiveSport: "SOCCER",
+            runId,
+            internalTake,
+            freshnessMinutes,
+            providerCategory,
+            bookmakerPreset,
+            dbContext,
+            probabilityService,
+            predictionGenerationOptions,
+            soccerPredictionService,
+            soccerPredictionOptions,
+            soccerGradingOptions,
+            soccerTopPicksOptions,
+            cancellationToken);
+
+        var allCandidates = ExtractTopPickRows(mlbResponse)
+            .Select(row => EnsureTopPickSportMetadata(row, "MLB", "MLB"))
+            .Concat(ExtractTopPickRows(soccerResponse).Select(row => EnsureTopPickSportMetadata(row, "SOCCER", SoccerCompetitionName)))
+            .Where(IsPublicRecommendationRow)
+            .OrderByDescending(row => GetTopPickDecimal(row, "displayExpectedValue", "bestEstimatedEv") ?? decimal.MinValue)
+            .ThenByDescending(row => GetTopPickDecimal(row, "selectedSideProbability", "bestProbability") ?? decimal.MinValue)
+            .ThenByDescending(row => GetTopPickDecimal(row, "rankingScore") ?? decimal.MinValue)
+            .ThenBy(row => GetTopPickString(row, "sport") ?? string.Empty, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(row => GetTopPickString(row, "player") ?? string.Empty, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        var selectedTopPicks = allCandidates.Take(requestedTake).ToArray();
+
+        return new
+        {
+            generatedAtUtc = DateTimeOffset.UtcNow,
+            callsExternalApis = false,
+            readOnly = true,
+            supportedSports = SupportedMarketSports,
+            supportedCompetitions = BuildSupportedCompetitionDiagnostics(soccerGradingOptions.Enabled),
+            requestedSport = (string?)null,
+            effectiveSport = "ALL",
+            competition = (string?)null,
+            resultGradingSupported = true,
+            publicSoccerGradingEnabled = soccerGradingOptions.Enabled,
+            soccerPredictionsEnabled = soccerPredictionOptions.Enabled,
+            soccerTopPicksEnabled = soccerTopPicksOptions.Enabled,
+            limitation = BuildMarketReadLimitation(soccerPredictionOptions.Enabled, soccerGradingOptions.Enabled),
+            snapshotBacked = false,
+            refreshRunId = (Guid?)null,
+            fallbackReason = selectedTopPicks.Length == 0
+                ? "No supported sport currently has public Top Picks that meet recommendation, lifecycle, and safety gates."
+                : null,
+            diagnostics = new
+            {
+                allSportsMerged = true,
+                requestedTake,
+                internalEvaluationTake = internalTake,
+                providerCategory,
+                sportsEvaluated = SupportedMarketSports,
+                totalRecommendationCandidates = allCandidates.Length
+            },
+            summary = new
+            {
+                allSportsMerged = true,
+                requestedTake,
+                internalEvaluationTake = internalTake,
+                activeCandidateCount = selectedTopPicks.Length,
+                returnedTopPicks = selectedTopPicks.Length,
+                totalRecommendationCandidates = allCandidates.Length,
+                entryActionableCandidateCount = selectedTopPicks.Count(row => GetTopPickBool(row, "entryActionableForUser") == true),
+                actionableCandidateCount = selectedTopPicks.Count(row => GetTopPickBool(row, "entryActionableForUser") == true),
+                recommendationActionableCount = selectedTopPicks.Count(row => GetTopPickBool(row, "recommendationActionableForUser") == true),
+                dfsCandidateCount = selectedTopPicks.Count(row => string.Equals(GetTopPickString(row, "providerCategory"), "DFS", StringComparison.OrdinalIgnoreCase)),
+                sportsbookContextCandidateCount = selectedTopPicks.Count(row => string.Equals(GetTopPickString(row, "providerCategory"), "Sportsbook", StringComparison.OrdinalIgnoreCase)),
+                sportBreakdown = selectedTopPicks
+                    .GroupBy(row => GetTopPickString(row, "sport") ?? "Unknown", StringComparer.OrdinalIgnoreCase)
+                    .Select(group => new { sport = group.Key, count = group.Count() })
+                    .OrderBy(row => row.sport)
+                    .ToArray(),
+                providerCategoryBreakdown = selectedTopPicks
+                    .GroupBy(row => GetTopPickString(row, "providerCategory") ?? "Unknown", StringComparer.OrdinalIgnoreCase)
+                    .Select(group => new { providerCategory = group.Key, count = group.Count() })
+                    .OrderBy(row => row.providerCategory)
+                    .ToArray()
+            },
+            topPicks = selectedTopPicks
+        };
+    }
+
     private static async Task<object> BuildGenericMarketTopPicksResponseAsync(
         string? requestedSport,
         string effectiveSport,
@@ -1339,6 +1482,101 @@ public static class PublicMarketsEndpoints
                 .Select(row => BuildSnapshotDetails(row.DetailsJson, row.Sport, row.EventName, row.EventStartTime))
                 .ToArray()
         };
+    }
+
+    private static JsonObject[] ExtractTopPickRows(object response)
+    {
+        var node = JsonSerializer.SerializeToNode(response);
+        if (node is not JsonObject obj)
+        {
+            return [];
+        }
+
+        var topPicksNode = obj["topPicks"] ?? obj["TopPicks"];
+        if (topPicksNode is not JsonArray topPicks)
+        {
+            return [];
+        }
+
+        return topPicks
+            .Select(row => JsonSerializer.SerializeToNode(row) as JsonObject)
+            .Where(row => row is not null)
+            .Select(row => row!)
+            .ToArray();
+    }
+
+    private static bool IsPublicRecommendationRow(JsonObject row)
+    {
+        return GetTopPickBool(row, "isRecommendation", "IsRecommendation") == true
+            && GetTopPickBool(row, "recommendationActionableForUser", "RecommendationActionableForUser") == true;
+    }
+
+    private static JsonObject EnsureTopPickSportMetadata(JsonObject row, string sport, string competition)
+    {
+        if (string.IsNullOrWhiteSpace(GetTopPickString(row, "sport", "Sport")))
+        {
+            row["sport"] = sport;
+        }
+
+        if (string.IsNullOrWhiteSpace(GetTopPickString(row, "competition", "Competition")))
+        {
+            row["competition"] = competition;
+        }
+
+        return row;
+    }
+
+    private static string? GetTopPickString(JsonObject obj, params string[] keys)
+    {
+        foreach (var key in keys)
+        {
+            if (obj.TryGetPropertyValue(key, out var value) &&
+                value is not null &&
+                value.GetValueKind() == JsonValueKind.String)
+            {
+                return value.GetValue<string>();
+            }
+        }
+
+        return null;
+    }
+
+    private static bool? GetTopPickBool(JsonObject obj, params string[] keys)
+    {
+        foreach (var key in keys)
+        {
+            if (!obj.TryGetPropertyValue(key, out var value) || value is null)
+            {
+                continue;
+            }
+
+            if (value.GetValueKind() is JsonValueKind.True or JsonValueKind.False &&
+                value.AsValue().TryGetValue<bool>(out var boolean))
+            {
+                return boolean;
+            }
+        }
+
+        return null;
+    }
+
+    private static decimal? GetTopPickDecimal(JsonObject obj, params string[] keys)
+    {
+        foreach (var key in keys)
+        {
+            if (!obj.TryGetPropertyValue(key, out var value) || value is null)
+            {
+                continue;
+            }
+
+            if (value.GetValueKind() == JsonValueKind.Number &&
+                value.AsValue().TryGetValue<decimal>(out var number))
+            {
+                return number;
+            }
+        }
+
+        return null;
     }
 
     private static async Task<object> BuildMarketLineShoppingResponseAsync(

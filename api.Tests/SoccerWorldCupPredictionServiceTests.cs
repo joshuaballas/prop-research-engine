@@ -175,6 +175,34 @@ public sealed class SoccerWorldCupPredictionServiceTests
     }
 
     [Fact]
+    public async Task PublicTopPicksWithoutSport_ReturnsSoccerRecommendationsFromAllSportsRead()
+    {
+        await using var factory = CreateFactory(predictionsEnabled: true, gradingEnabled: true, topPicksEnabled: true);
+        await SeedSoccerScenarioAsync(
+            factory,
+            historicalValues: BuildSoccerHistory(overWins: 60, underWins: 15),
+            line: 0.5m,
+            priceOver: -220,
+            priceOverDecimal: 1.454545m);
+        using var client = factory.CreateClient();
+
+        var response = await client.GetAsync("/api/markets/top-picks?take=1");
+
+        response.EnsureSuccessStatusCode();
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        var pick = Assert.Single(json.GetProperty("topPicks").EnumerateArray());
+        Assert.Equal("ALL", json.GetProperty("effectiveSport").GetString());
+        Assert.True(json.GetProperty("summary").GetProperty("allSportsMerged").GetBoolean());
+        Assert.Equal(1, json.GetProperty("summary").GetProperty("returnedTopPicks").GetInt32());
+        Assert.Equal("SOCCER", pick.GetProperty("sport").GetString());
+        Assert.Equal("World Cup", pick.GetProperty("competition").GetString());
+        Assert.True(pick.GetProperty("isRecommendation").GetBoolean());
+        Assert.True(pick.GetProperty("recommendationActionableForUser").GetBoolean());
+        Assert.False(pick.GetProperty("entryActionableForUser").GetBoolean());
+        Assert.Equal(0, factory.TheOddsAdapter.CallCount);
+    }
+
+    [Fact]
     public async Task PublicSoccerTopPicks_DoesNotReturnResearchOnlyLowSampleRows()
     {
         await using var factory = CreateFactory(predictionsEnabled: true, gradingEnabled: true, topPicksEnabled: true);

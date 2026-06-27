@@ -4699,6 +4699,8 @@ public static partial class TheOddsApiDebugEndpoints
 
         return new
         {
+            sport = "MLB",
+            competition = "MLB",
             eventId = group.EventId,
             eventStartTime = group.EventStartTime,
             eventStartTimeUtc = group.EventStartTimeUtc,

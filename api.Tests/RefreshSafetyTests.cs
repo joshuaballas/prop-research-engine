@@ -2657,7 +2657,7 @@ public sealed class RefreshSafetyTests
     {
         var config = ApiSportsLiveConfig();
         config["SoccerResultImportWorker:Enabled"] = "true";
-        config["SoccerResultImportWorker:RecentWindowDays"] = "15";
+        config["SoccerResultImportWorker:RecentWindowDays"] = "30";
         config["SoccerResultImportWorker:MaxFixturesPerRun"] = "1";
         await using var factory = new SafetyTestApplicationFactory(config);
         await factory.EnsureDatabaseAsync();
@@ -2678,10 +2678,25 @@ public sealed class RefreshSafetyTests
         Assert.Equal(2, state.LastSkippedPendingFixtureCount);
         Assert.Equal(1, state.LastImportedFixtureCount);
         Assert.True(state.LastResultRowsWritten > 0);
-        Assert.Contains(fixtureStates, row => row.FixtureId == "1489393" && row.ImportStatus == "Imported");
-        Assert.Contains(fixtureStates, row => row.FixtureId == "22222" && row.ImportStatus == "Pending");
-        Assert.Contains(fixtureStates, row => row.FixtureId == "33333" && row.ImportStatus == "Pending");
-        Assert.Contains(fixtureStates, row => row.FixtureId == "99999" && row.ImportStatus == "Skipped");
+        var imported = Assert.Single(fixtureStates, row => row.FixtureId == "1489393");
+        Assert.Equal("Imported", imported.ImportStatus);
+        Assert.Null(imported.LastErrorMessage);
+        Assert.True(imported.ResultRowsWritten > 0);
+
+        var notStarted = Assert.Single(fixtureStates, row => row.FixtureId == "22222");
+        Assert.Equal("Pending", notStarted.ImportStatus);
+        Assert.Equal("Scheduled", notStarted.SkipReason);
+        Assert.Null(notStarted.LastErrorMessage);
+
+        var live = Assert.Single(fixtureStates, row => row.FixtureId == "33333");
+        Assert.Equal("Pending", live.ImportStatus);
+        Assert.Equal("InProgress", live.SkipReason);
+        Assert.Null(live.LastErrorMessage);
+
+        var maxLimited = Assert.Single(fixtureStates, row => row.FixtureId == "99999");
+        Assert.Equal("Skipped", maxLimited.ImportStatus);
+        Assert.Equal("MaxFixturesPerRunLimit", maxLimited.SkipReason);
+        Assert.Null(maxLimited.LastErrorMessage);
         Assert.True(factory.ApiSportsFootballClient.FixturesCallCount > 0);
         Assert.Equal(1, factory.ApiSportsFootballClient.FixturePlayerStatsCallCount);
     }

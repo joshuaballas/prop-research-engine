@@ -54,7 +54,7 @@ export function TopPicksPage() {
   const { isMobile } = useResponsiveView();
   const [filters, setFilters] = useState<TopPickFilterValues>(defaultTopPickFilters);
   const [page, setPage] = useState(1);
-  const topPicksQuery = useTopPicksData(30, 'top-pick');
+  const topPicksQuery = useTopPicksData(500, 'top-pick');
   const topPicks = topPicksQuery.markets;
   const availableSportCodes = useMemo(() => getAvailableSportCodes(topPicks), [topPicks]);
   const sportFilterLabels = useMemo(() => {
