@@ -104,11 +104,13 @@ public static class PublicMarketsEndpoints
 
         endpoints.MapGet("/api/markets/refresh-plan", async (
             bool? persistDecision,
+            IOptions<TheOddsScheduledRefreshOptions> scheduledRefreshOptions,
             ITheOddsRefreshPlannerService planner,
             CancellationToken cancellationToken) =>
         {
             return Results.Ok(await BuildMarketRefreshPlanResponseAsync(
                 persistDecision ?? false,
+                scheduledRefreshOptions.Value,
                 planner,
                 cancellationToken));
         })
@@ -786,10 +788,19 @@ public static class PublicMarketsEndpoints
 
     private static async Task<object> BuildMarketRefreshPlanResponseAsync(
         bool persistDecision,
+        TheOddsScheduledRefreshOptions scheduledOptions,
         ITheOddsRefreshPlannerService planner,
         CancellationToken cancellationToken)
     {
         var plan = await planner.BuildPlanAsync(cancellationToken);
+        var postRefreshReadBuffer = scheduledOptions.GetPostRefreshReadBuffer();
+        var nextRefreshDueUtc = scheduledOptions.Enabled
+            ? plan.Targets
+                .Where(target => target.Enabled)
+                .Select(target => (DateTimeOffset?)target.NextEligibleRefreshUtc)
+                .Min() ?? plan.NextEligibleRefreshUtc
+            : (DateTimeOffset?)null;
+        var nextDataAvailableEstimateUtc = nextRefreshDueUtc?.Add(postRefreshReadBuffer);
         TheOddsRefreshPlannerDecision? persistedDecision = null;
         if (persistDecision)
         {
@@ -803,6 +814,27 @@ public static class PublicMarketsEndpoints
             readOnly = !persistDecision,
             decisionPersisted = persistedDecision is not null,
             decisionId = persistedDecision?.Id,
+            enabled = scheduledOptions.Enabled,
+            allowScheduledLiveRefresh = scheduledOptions.AllowScheduledLiveRefresh,
+            intervalMinutes = scheduledOptions.IntervalMinutes,
+            effectiveIntervalMinutes = (int)scheduledOptions.GetInterval().TotalMinutes,
+            postRefreshReadBufferSeconds = (int)postRefreshReadBuffer.TotalSeconds,
+            nextRefreshDueUtc,
+            nextDataAvailableEstimateUtc,
+            nextRunEstimateUtc = nextRefreshDueUtc,
+            willCallExternalApis = plan.Targets.Any(target => target.ShouldRefresh),
+            currentPlan = new
+            {
+                plan.GeneratedAtUtc,
+                plan.ShouldRefresh,
+                plan.SkipReason,
+                plan.EstimatedApiCalls,
+                plan.EstimateSource,
+                plan.ProviderAvailable,
+                plan.ProviderStatus,
+                plan.ProviderRejectedKeyDetected,
+                plan.RecommendedAction
+            },
             providerStatus = new
             {
                 provider = "The Odds API",

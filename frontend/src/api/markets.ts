@@ -25,7 +25,7 @@ export function getProviderStatus(signal?: AbortSignal) {
 }
 
 export function getScheduledRefreshStatus(signal?: AbortSignal) {
-  return apiGet<ScheduledRefreshStatusDto>('/api/debug/the-odds/mlb/scheduled-refresh/status', signal);
+  return apiGet<ScheduledRefreshStatusDto>('/api/markets/refresh-plan', signal);
 }
 
 export function getTopPicks(signal?: AbortSignal, take = 25, sport = 'MLB', providerCategory?: 'DFS' | 'Sportsbook') {

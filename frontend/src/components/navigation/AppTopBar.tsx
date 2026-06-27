@@ -202,8 +202,8 @@ function buildSyncDisplay({
   }
 
   const enabled = scheduledRefresh?.enabled ?? scheduledRefresh?.Enabled ?? false;
-  const willCallExternalApis = scheduledRefresh?.willCallExternalApis ?? scheduledRefresh?.WillCallExternalApis ?? false;
-  if (!enabled || !willCallExternalApis) {
+  const allowScheduledLiveRefresh = scheduledRefresh?.allowScheduledLiveRefresh ?? scheduledRefresh?.AllowScheduledLiveRefresh ?? false;
+  if (!enabled || !allowScheduledLiveRefresh) {
     return {
       primary,
       secondary: 'Auto-sync off',
@@ -304,7 +304,7 @@ function getDueSyncMs(scheduledRefresh?: ScheduledRefreshStatusDto, freshness?: 
 
 function getSyncCycleMs(scheduledRefresh?: ScheduledRefreshStatusDto) {
   const effectiveIntervalMinutes = readNumber(scheduledRefresh, 'effectiveIntervalMinutes', 'EffectiveIntervalMinutes') ?? 15;
-  return Math.max(1, effectiveIntervalMinutes * 60000 + getPostRefreshReadBufferSeconds(scheduledRefresh) * 1000);
+  return Math.max(1, effectiveIntervalMinutes * 60000);
 }
 
 function getLatestSuccessfulRefreshCompletedAt(scheduledRefresh?: ScheduledRefreshStatusDto, freshness?: MarketFreshnessDto) {
