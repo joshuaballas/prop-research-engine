@@ -4,9 +4,8 @@ import RemoveCircleOutlineRoundedIcon from '@mui/icons-material/RemoveCircleOutl
 import TuneRoundedIcon from '@mui/icons-material/TuneRounded';
 import { Box, Button, Collapse, Grid, MenuItem, Stack, TableBody, TableCell, TableHead, TableRow, TextField, Typography } from '@mui/material';
 import { useEffect, useMemo, useState } from 'react';
-import { getTopPickConfidence, TopPickCard } from '../../components/markets/TopPickCard';
+import { TopPickCard } from '../../components/markets/TopPickCard';
 import { MetricLabelWithHelp } from '../../components/metrics/MetricLabelWithHelp';
-import { TrustValue } from '../../components/metrics/TrustValue';
 import { PropDetailsModal } from '../../components/prop-history/PropDetailsModal';
 import { ProviderLabel } from '../../components/providers/ProviderLabel';
 import { PageHeader } from '../../components/ui/PageHeader';
@@ -24,19 +23,20 @@ import { useResponsiveView } from '../../hooks/useResponsiveView';
 import { palette } from '../../theme/palette';
 import type { MarketOpportunity } from '../../types/markets';
 import { formatPercent } from '../../utils/formatters';
-import { marketTagLabel, marketTagValue } from '../../utils/marketTags';
 import { marketDisplayLabel } from '../../utils/marketDisplay';
 import { buildAvailableSportOptions, getAvailableSportCodes } from '../../utils/sportOptions';
-import { normalizeTrustLevel } from '../../utils/trustColors';
 
 type TopPickFilterValues = {
   search: string;
   sport: string;
   providerCategory: string;
   provider: string;
-  opportunity: string;
-  trust: string;
   sort: string;
+};
+
+type SelectOption = {
+  label: string;
+  value: string;
 };
 
 const defaultTopPickFilters: TopPickFilterValues = {
@@ -44,9 +44,7 @@ const defaultTopPickFilters: TopPickFilterValues = {
   sport: 'All',
   providerCategory: 'All',
   provider: 'All',
-  opportunity: 'All',
-  trust: 'All',
-  sort: 'Edge'
+  sort: 'Hit chance'
 };
 
 export function TopPicksPage() {
@@ -57,17 +55,15 @@ export function TopPicksPage() {
   const topPicksQuery = useTopPicksData(500, 'top-pick');
   const topPicks = topPicksQuery.markets;
   const availableSportCodes = useMemo(() => getAvailableSportCodes(topPicks), [topPicks]);
-  const sportFilterLabels = useMemo(() => {
-    const labels = buildAvailableSportOptions(availableSportCodes).map((sport) => sport.label);
-    return labels.length ? labels : ['All'];
+  const sportFilterOptions = useMemo<SelectOption[]>(() => {
+    const options = buildAvailableSportOptions(availableSportCodes).map((sport) => ({
+      label: sport.label,
+      value: sport.code === 'ALL' ? 'All' : sport.code
+    }));
+    return options.length ? options : [{ label: 'All', value: 'All' }];
   }, [availableSportCodes]);
   const providerOptions = useMemo(() => buildStringOptions(topPicks.map((market) => market.provider)), [topPicks]);
   const providerCategoryOptions = useMemo(() => buildStringOptions(topPicks.map((market) => market.providerCategory)), [topPicks]);
-  const opportunityOptions = useMemo(
-    () => buildStringOptions(topPicks.map((market) => marketTagValue(market)), marketTagLabel),
-    [topPicks]
-  );
-  const showOpportunityFilter = opportunityOptions.length > 2;
   const visibleTopPicks = useMemo(() => sortTopPicks(filterTopPicks(topPicks, filters), filters.sort), [filters, topPicks]);
   const pageSize = isMobile ? 8 : 20;
   const pageCount = Math.max(1, Math.ceil(visibleTopPicks.length / pageSize));
@@ -87,16 +83,14 @@ export function TopPicksPage() {
 
   return (
     <Stack spacing={{ xs: 2, md: 3 }}>
-      <PageHeader title="Top Picks" description="Curated picks ranked by model edge, hit chance, trust, provider fit, and freshness." />
+      <PageHeader title="Top Picks" description="Curated props ranked by likely hit chance, line quality, provider fit, and freshness." />
       <TopPickControls
         isMobile={isMobile}
         filters={filters}
         onFiltersChange={setFilters}
-        sportOptions={sportFilterLabels}
+        sportOptions={sportFilterOptions}
         providerOptions={providerOptions}
         providerCategoryOptions={providerCategoryOptions}
-        opportunityOptions={opportunityOptions}
-        showOpportunityFilter={showOpportunityFilter}
       />
 
       {topPicksQuery.loading ? (
@@ -118,7 +112,7 @@ export function TopPicksPage() {
               <Typography variant="h5" fontWeight={950}>
                 All Ranked Picks
               </Typography>
-              <MarketTableSkeleton rows={8} columns={7} minWidth={1040} />
+              <MarketTableSkeleton rows={8} columns={6} minWidth={1040} />
             </Stack>
           </>
         )
@@ -206,8 +200,6 @@ function filterTopPicks(markets: MarketOpportunity[], filters: TopPickFilterValu
     if (filters.sport !== 'All' && market.sport !== filters.sport) return false;
     if (filters.providerCategory !== 'All' && market.providerCategory !== filters.providerCategory) return false;
     if (filters.provider !== 'All' && market.provider !== filters.provider) return false;
-    if (filters.opportunity !== 'All' && marketTagLabel(marketTagValue(market)) !== filters.opportunity) return false;
-    if (filters.trust !== 'All' && normalizeTrustLevel(getTopPickConfidence(market)) !== filters.trust) return false;
     return true;
   });
 }
@@ -220,20 +212,14 @@ function sortTopPicks(markets: MarketOpportunity[], sort: string) {
       return rows.sort((a, b) => (b.probabilityEdge ?? Number.NEGATIVE_INFINITY) - (a.probabilityEdge ?? Number.NEGATIVE_INFINITY));
     case 'Hit chance':
       return rows.sort((a, b) => (b.modelProbability ?? Number.NEGATIVE_INFINITY) - (a.modelProbability ?? Number.NEGATIVE_INFINITY));
-    case 'Trust':
-      return rows.sort((a, b) => trustSortRank(b) - trustSortRank(a) || (b.probabilityEdge ?? Number.NEGATIVE_INFINITY) - (a.probabilityEdge ?? Number.NEGATIVE_INFINITY));
     case 'Rank':
       return rows.sort((a, b) => (a.rank ?? Number.MAX_SAFE_INTEGER) - (b.rank ?? Number.MAX_SAFE_INTEGER));
     default:
-      return rows.sort((a, b) => (b.probabilityEdge ?? Number.NEGATIVE_INFINITY) - (a.probabilityEdge ?? Number.NEGATIVE_INFINITY));
+      return rows.sort((a, b) =>
+        (b.topPickScore ?? Number.NEGATIVE_INFINITY) - (a.topPickScore ?? Number.NEGATIVE_INFINITY) ||
+        (b.modelProbability ?? Number.NEGATIVE_INFINITY) - (a.modelProbability ?? Number.NEGATIVE_INFINITY)
+      );
   }
-}
-
-function trustSortRank(market: MarketOpportunity) {
-  const trust = normalizeTrustLevel(getTopPickConfidence(market));
-  if (trust === 'High') return 3;
-  if (trust === 'Medium') return 2;
-  return 1;
 }
 
 function TopPickControls({
@@ -242,25 +228,21 @@ function TopPickControls({
   onFiltersChange,
   sportOptions,
   providerOptions,
-  providerCategoryOptions,
-  opportunityOptions,
-  showOpportunityFilter
+  providerCategoryOptions
 }: {
   isMobile: boolean;
   filters: TopPickFilterValues;
   onFiltersChange: (filters: TopPickFilterValues) => void;
-  sportOptions: string[];
+  sportOptions: SelectOption[];
   providerOptions: string[];
   providerCategoryOptions: string[];
-  opportunityOptions: string[];
-  showOpportunityFilter: boolean;
 }) {
   const [filtersOpen, setFiltersOpen] = useState(false);
   const updateFilter = (key: keyof TopPickFilterValues, value: string) => {
     onFiltersChange({ ...filters, [key]: value });
   };
   const clearFilters = () => onFiltersChange(defaultTopPickFilters);
-  const sortOptions = ['Edge', 'Hit chance', 'Trust', 'Rank'];
+  const sortOptions = ['Hit chance', 'Edge', 'Rank'];
 
   if (isMobile) {
     return (
@@ -304,8 +286,8 @@ function TopPickControls({
             <Stack spacing={1} sx={{ pt: 0.25 }}>
               <TextField id="top-picks-mobile-sport" name="top-picks-mobile-sport" label="Sport" size="small" select value={filters.sport} onChange={(event) => updateFilter('sport', event.target.value)} fullWidth>
                 {sportOptions.map((item) => (
-                  <MenuItem key={item} value={item}>
-                    {item}
+                  <MenuItem key={item.value} value={item.value}>
+                    {item.label}
                   </MenuItem>
                 ))}
               </TextField>
@@ -318,22 +300,6 @@ function TopPickControls({
               </TextField>
               <TextField id="top-picks-mobile-provider-category" name="top-picks-mobile-provider-category" label="Category" size="small" select value={filters.providerCategory} onChange={(event) => updateFilter('providerCategory', event.target.value)} fullWidth>
                 {providerCategoryOptions.map((item) => (
-                  <MenuItem key={item} value={item}>
-                    {item}
-                  </MenuItem>
-                ))}
-              </TextField>
-              {showOpportunityFilter ? (
-                <TextField id="top-picks-mobile-opportunity" name="top-picks-mobile-opportunity" label="Opportunity" size="small" select value={filters.opportunity} onChange={(event) => updateFilter('opportunity', event.target.value)} fullWidth>
-                  {opportunityOptions.map((item) => (
-                    <MenuItem key={item} value={item}>
-                      {item}
-                    </MenuItem>
-                  ))}
-                </TextField>
-              ) : null}
-              <TextField id="top-picks-mobile-trust" name="top-picks-mobile-trust" label="Trust" size="small" select value={filters.trust} onChange={(event) => updateFilter('trust', event.target.value)} fullWidth>
-                {['All', 'High', 'Medium', 'Low'].map((item) => (
                   <MenuItem key={item} value={item}>
                     {item}
                   </MenuItem>
@@ -369,8 +335,8 @@ function TopPickControls({
         />
         <TextField id="top-picks-desktop-sport" name="top-picks-desktop-sport" label="Sport" size="small" select value={filters.sport} onChange={(event) => updateFilter('sport', event.target.value)} sx={{ width: 122 }}>
           {sportOptions.map((item) => (
-            <MenuItem key={item} value={item}>
-              {item}
+            <MenuItem key={item.value} value={item.value}>
+              {item.label}
             </MenuItem>
           ))}
         </TextField>
@@ -383,22 +349,6 @@ function TopPickControls({
         </TextField>
         <TextField id="top-picks-desktop-provider-category" name="top-picks-desktop-provider-category" label="Category" size="small" select value={filters.providerCategory} onChange={(event) => updateFilter('providerCategory', event.target.value)} sx={{ width: 132 }}>
           {providerCategoryOptions.map((item) => (
-            <MenuItem key={item} value={item}>
-              {item}
-            </MenuItem>
-          ))}
-        </TextField>
-        {showOpportunityFilter ? (
-          <TextField id="top-picks-desktop-opportunity" name="top-picks-desktop-opportunity" label="Opportunity" size="small" select value={filters.opportunity} onChange={(event) => updateFilter('opportunity', event.target.value)} sx={{ width: 138 }}>
-            {opportunityOptions.map((item) => (
-              <MenuItem key={item} value={item}>
-                {item}
-              </MenuItem>
-            ))}
-          </TextField>
-        ) : null}
-        <TextField id="top-picks-desktop-trust" name="top-picks-desktop-trust" label="Trust" size="small" select value={filters.trust} onChange={(event) => updateFilter('trust', event.target.value)} sx={{ width: 132 }}>
-          {['All', 'High', 'Medium', 'Low'].map((item) => (
             <MenuItem key={item} value={item}>
               {item}
             </MenuItem>
@@ -444,13 +394,11 @@ function RankedPicksTable({ markets, rankOffset, builder }: { markets: MarketOpp
               <TableCell>Provider</TableCell>
               <TableCell align="right"><MetricLabelWithHelp metric="edge" align="right" variant="table" /></TableCell>
               <TableCell align="right"><MetricLabelWithHelp metric="hitChance" align="right" variant="table" /></TableCell>
-              <TableCell><MetricLabelWithHelp metric="trust" variant="table" /></TableCell>
               <TableCell align="center" sx={stickyActionHeaderCellSx}>Action</TableCell>
             </TableRow>
           </TableHead>
           <TableBody>
             {markets.map((market, index) => {
-              const confidence = getTopPickConfidence(market);
               const selected = builder.isSelected(market.id);
               const incompatible = !selected && !builder.isCompatible(market);
               const entryDisabled = isEntryBuilderDisabled(market) && !selected;
@@ -487,9 +435,6 @@ function RankedPicksTable({ markets, rankOffset, builder }: { markets: MarketOpp
                 </TableCell>
                 <TableCell align="right"><AppTableMetricValue>{formatPercent(market.probabilityEdge, { signed: true })}</AppTableMetricValue></TableCell>
                 <TableCell align="right"><AppTableMetricValue>{formatPercent(market.modelProbability)}</AppTableMetricValue></TableCell>
-                <TableCell>
-                  <TrustValue level={confidence} />
-                </TableCell>
                 <TableCell data-sticky-action="true" align="center" sx={{ ...stickyActionCellSx, minWidth: 130 }}>
                   <AppRowActions sx={{ mx: 'auto' }}>
                     <Button

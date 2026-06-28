@@ -1541,7 +1541,10 @@ public sealed class RefreshSafetyTests
         Assert.False(pick.GetProperty("entryActionableForUser").GetBoolean());
         Assert.Equal("Sportsbook", pick.GetProperty("entryProviderCategory").GetString());
         Assert.Equal("MLB sportsbook recommendation. Entry Builder is available only for DFS entries.", pick.GetProperty("entryRuleWarning").GetString());
-        Assert.True(pick.GetProperty("selectedSideProbability").GetDecimal() > 0.5m);
+        Assert.True(pick.GetProperty("selectedSideProbability").GetDecimal() >= 0.65m);
+        Assert.Equal(0.65m, pick.GetProperty("publicTopPickMinimumHitChance").GetDecimal());
+        Assert.True(pick.GetProperty("hitChanceGatePassed").GetBoolean());
+        Assert.True(pick.GetProperty("publicTopPickHitChanceGatePassed").GetBoolean());
         Assert.True(pick.GetProperty("modelProbabilityAvailable").GetBoolean());
         Assert.Equal("EmpiricalMeanFromProbabilityPlayerHistory", pick.GetProperty("recommendationProjectionSource").GetString());
         Assert.True(pick.GetProperty("isProjectionRecommendationAligned").GetBoolean());
@@ -1556,7 +1559,7 @@ public sealed class RefreshSafetyTests
     }
 
     [Fact]
-    public async Task MlbSportsbookTopPicks_ExcludeNegativeAndSuppressedEvRows()
+    public async Task MlbSportsbookTopPicks_AreLikelyHitFirstAndSuppressUnsafeEvDisplay()
     {
         await using var factory = new SafetyTestApplicationFactory();
         using var client = factory.CreateClient();
@@ -1568,12 +1571,31 @@ public sealed class RefreshSafetyTests
         var json = await response.Content.ReadFromJsonAsync<JsonElement>();
         var picks = json.GetProperty("topPicks").EnumerateArray().ToArray();
 
-        Assert.DoesNotContain(picks, row => row.GetProperty("player").GetString() == "Low Sample Huge EV Sportsbook Player");
+        Assert.DoesNotContain(picks, row => row.GetProperty("player").GetString() == "Borderline Sportsbook Inventory Player");
         Assert.DoesNotContain(picks, row => row.GetProperty("player").GetString() == "Negative EV Sportsbook Player");
+        var unsafeEvPick = picks.Single(row => row.GetProperty("player").GetString() == "Low Sample Huge EV Sportsbook Player");
+        Assert.True(unsafeEvPick.GetProperty("isRecommendation").GetBoolean());
+        Assert.True(unsafeEvPick.GetProperty("recommendationActionableForUser").GetBoolean());
+        Assert.True(unsafeEvPick.GetProperty("selectedSideProbability").GetDecimal() >= 0.65m);
+        Assert.True(unsafeEvPick.GetProperty("publicTopPickHitChanceGatePassed").GetBoolean());
+        Assert.False(unsafeEvPick.GetProperty("showExpectedValue").GetBoolean());
+        Assert.Equal(JsonValueKind.Null, unsafeEvPick.GetProperty("displayExpectedValue").ValueKind);
+        Assert.Contains("model-vs-market", unsafeEvPick.GetProperty("evSuppressedReason").GetString(), StringComparison.OrdinalIgnoreCase);
         Assert.All(picks, row =>
         {
-            Assert.True(row.GetProperty("displayExpectedValue").GetDecimal() > 0m);
-            Assert.Equal(JsonValueKind.Null, row.GetProperty("evSuppressedReason").ValueKind);
+            Assert.True(row.GetProperty("isRecommendation").GetBoolean());
+            Assert.True(row.GetProperty("recommendationActionableForUser").GetBoolean());
+            if (string.Equals(row.GetProperty("providerCategory").GetString(), "Sportsbook", StringComparison.OrdinalIgnoreCase))
+            {
+                Assert.True(row.GetProperty("selectedSideProbability").GetDecimal() >= 0.65m);
+                Assert.True(row.GetProperty("publicTopPickHitChanceGatePassed").GetBoolean());
+            }
+
+            if (row.GetProperty("showExpectedValue").GetBoolean())
+            {
+                Assert.True(row.GetProperty("displayExpectedValue").GetDecimal() > 0m);
+                Assert.Equal(JsonValueKind.Null, row.GetProperty("evSuppressedReason").ValueKind);
+            }
         });
         Assert.Equal(0, factory.TheOddsAdapter.CallCount);
     }
@@ -1592,14 +1614,17 @@ public sealed class RefreshSafetyTests
         var groups = json.GetProperty("comparisonGroups").EnumerateArray().ToArray();
         var hugeEv = groups.Single(row => row.GetProperty("player").GetString() == "Low Sample Huge EV Sportsbook Player");
         var negativeEv = groups.Single(row => row.GetProperty("player").GetString() == "Negative EV Sportsbook Player");
+        var borderline = groups.Single(row => row.GetProperty("player").GetString() == "Borderline Sportsbook Inventory Player");
+
+        Assert.True(borderline.GetProperty("modelProbabilityAvailable").GetBoolean());
 
         Assert.True(hugeEv.GetProperty("rawExpectedValue").GetDecimal() > 0.30m);
-        Assert.True(hugeEv.GetProperty("calibratedExpectedValue").GetDecimal() > 0.20m);
+        Assert.True(hugeEv.GetProperty("calibratedExpectedValue").GetDecimal() > 0m);
         Assert.Equal(JsonValueKind.Null, hugeEv.GetProperty("displayExpectedValue").ValueKind);
         Assert.False(hugeEv.GetProperty("showExpectedValue").GetBoolean());
         Assert.False(hugeEv.GetProperty("isCandidate").GetBoolean());
         Assert.False(hugeEv.GetProperty("isRecommendation").GetBoolean());
-        Assert.Contains("threshold", hugeEv.GetProperty("evSuppressedReason").GetString(), StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("model-vs-market", hugeEv.GetProperty("evSuppressedReason").GetString(), StringComparison.OrdinalIgnoreCase);
 
         Assert.True(negativeEv.GetProperty("rawExpectedValue").GetDecimal() <= 0m);
         Assert.True(negativeEv.GetProperty("calibratedExpectedValue").GetDecimal() <= 0m);
@@ -1608,6 +1633,35 @@ public sealed class RefreshSafetyTests
         Assert.False(negativeEv.GetProperty("isCandidate").GetBoolean());
         Assert.False(negativeEv.GetProperty("isRecommendation").GetBoolean());
         Assert.Equal("Calibrated EV is not positive.", negativeEv.GetProperty("evSuppressedReason").GetString());
+        Assert.Equal(0, factory.TheOddsAdapter.CallCount);
+    }
+
+    [Fact]
+    public async Task LikelyHitOpportunityAudit_ReportsSportsbookPublicTopPickHitChanceGate()
+    {
+        await using var factory = new SafetyTestApplicationFactory();
+        using var client = factory.CreateClient();
+        await factory.SeedMlbDfsHitProbabilitySelectionScenarioAsync();
+
+        var response = await client.GetAsync("/api/debug/model/likely-hit/opportunity-audit?sport=MLB&providerCategory=Sportsbook&includeRejected=true&take=50");
+
+        await EnsureSuccessWithBodyAsync(response);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.False(json.GetProperty("callsExternalApis").GetBoolean());
+        Assert.True(json.GetProperty("readOnly").GetBoolean());
+        Assert.False(json.GetProperty("writesRows").GetBoolean());
+        Assert.True(json.GetProperty("summary").GetProperty("sportsbookRowsBlockedByPublicHitChance").GetInt32() > 0);
+        var borderline = json.GetProperty("rows")
+            .EnumerateArray()
+            .Single(row => row.GetProperty("player").GetString() == "Borderline Sportsbook Inventory Player");
+
+        Assert.Equal(0.65m, borderline.GetProperty("publicTopPickMinimumHitChance").GetDecimal());
+        Assert.InRange(borderline.GetProperty("hitChance").GetDecimal(), 0.60m, 0.649999m);
+        Assert.False(borderline.GetProperty("publicTopPickHitChanceGatePassed").GetBoolean());
+        Assert.False(borderline.GetProperty("topPickEligible").GetBoolean());
+        Assert.Contains(
+            borderline.GetProperty("fatalConflictCodes").EnumerateArray(),
+            reason => reason.GetString() == "BelowSportsbookPublicTopPickHitChance");
         Assert.Equal(0, factory.TheOddsAdapter.CallCount);
     }
 
@@ -1657,6 +1711,257 @@ public sealed class RefreshSafetyTests
             Assert.True(row.GetProperty("displayExpectedValue").GetDecimal() is > 0m and <= 0.30m);
             Assert.Equal(JsonValueKind.Null, row.GetProperty("evSuppressedReason").ValueKind);
             Assert.True(row.GetProperty("isRecommendation").GetBoolean());
+        });
+        Assert.Equal(0, factory.TheOddsAdapter.CallCount);
+    }
+
+    [Fact]
+    public async Task LikelyHitReplay_IsReadOnlyAndReportsCalibrationBuckets()
+    {
+        await using var factory = new SafetyTestApplicationFactory();
+        using var client = factory.CreateClient();
+        await factory.SeedMlbDfsHitProbabilitySelectionScenarioAsync();
+        var before = await factory.CountArtifactsAsync();
+        var propResultCountBefore = await factory.CountPropResultsAsync();
+
+        var response = await client.GetAsync("/api/debug/model/likely-hit/replay?sport=MLB&providerCategory=Sportsbook&includeSamples=true&sampleTake=5&maxRows=100");
+
+        await EnsureSuccessWithBodyAsync(response);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.False(json.GetProperty("callsExternalApis").GetBoolean());
+        Assert.True(json.GetProperty("readOnly").GetBoolean());
+        Assert.False(json.GetProperty("writesRows").GetBoolean());
+        Assert.Equal("LikelyHitV1", json.GetProperty("modelVersion").GetString());
+        Assert.True(json.GetProperty("replayRowsEvaluated").GetInt32() > 0);
+        Assert.True(json.GetProperty("replayableRows").GetInt32() >= 0);
+        Assert.NotEmpty(json.GetProperty("hitChanceBuckets").EnumerateArray());
+        Assert.NotEmpty(json.GetProperty("propShapeBuckets").EnumerateArray());
+        Assert.NotEmpty(json.GetProperty("oddsBuckets").EnumerateArray());
+        Assert.NotEmpty(json.GetProperty("sideBuckets").EnumerateArray());
+        Assert.NotEmpty(json.GetProperty("effectiveSampleBuckets").EnumerateArray());
+        var borderline = json.GetProperty("borderlineHitChanceAnalysis");
+        Assert.Equal("60-65", borderline.GetProperty("bucket").GetString());
+        Assert.Equal("Sportsbook", borderline.GetProperty("providerCategory").GetString());
+        Assert.True(borderline.GetProperty("diagnosticOnly").GetBoolean());
+        var borderlineSegments = borderline.GetProperty("segments");
+        Assert.True(borderlineSegments.TryGetProperty("oddsBucket", out _));
+        Assert.True(borderlineSegments.TryGetProperty("breakEvenMarginBucket", out _));
+        Assert.True(borderlineSegments.TryGetProperty("propShape", out _));
+        Assert.True(borderlineSegments.TryGetProperty("effectiveSampleSizeBucket", out _));
+        Assert.True(borderlineSegments.TryGetProperty("recentAgreementBucket", out _));
+        Assert.True(borderlineSegments.TryGetProperty("marketGapBucket", out _));
+        Assert.True(borderlineSegments.TryGetProperty("bookmaker", out _));
+        Assert.True(borderlineSegments.TryGetProperty("side", out _));
+        Assert.True(borderline.GetProperty("total").GetInt32() > 0);
+        Assert.True(json.TryGetProperty("borderlineProfileRecommendations", out _));
+        Assert.True(json.TryGetProperty("currentBoardBorderlineSummary", out _));
+        Assert.False(json.GetProperty("simulation").GetProperty("enabled").GetBoolean());
+        Assert.True(json.GetProperty("borderlineSamples").TryGetProperty("best", out _));
+        var publicPerformance = json.GetProperty("publicTopPickPerformanceAnalysis");
+        Assert.True(publicPerformance.GetProperty("diagnosticOnly").GetBoolean());
+        Assert.True(publicPerformance.GetProperty("total").GetInt32() >= 0);
+        var publicSegments = publicPerformance.GetProperty("segments");
+        Assert.True(publicSegments.TryGetProperty("hitChanceBucket", out var publicHitChanceBuckets));
+        Assert.True(publicSegments.TryGetProperty("propShape", out var publicPropShapeBuckets));
+        Assert.True(publicSegments.TryGetProperty("oddsBucket", out _));
+        Assert.True(publicSegments.TryGetProperty("breakEvenMarginBucket", out _));
+        Assert.True(publicSegments.TryGetProperty("effectiveSampleSizeBucket", out _));
+        Assert.True(publicSegments.TryGetProperty("side", out _));
+        Assert.True(publicSegments.TryGetProperty("bookmaker", out _));
+        Assert.True(publicSegments.TryGetProperty("providerCategory", out _));
+        Assert.True(publicSegments.TryGetProperty("sportCompetition", out _));
+        Assert.True(publicSegments.TryGetProperty("balancedUtilityBucket", out _));
+        Assert.True(publicSegments.TryGetProperty("payoutQualityBucket", out _));
+        Assert.True(publicSegments.TryGetProperty("sweetSpotScoreBucket", out _));
+        Assert.NotEmpty(publicHitChanceBuckets.EnumerateArray());
+        Assert.NotEmpty(publicPropShapeBuckets.EnumerateArray());
+        Assert.All(publicHitChanceBuckets.EnumerateArray(), bucket =>
+            Assert.NotEqual("<65", bucket.GetProperty("key").GetString()));
+        var concentration = json.GetProperty("publicTopPickConcentrationAnalysis");
+        Assert.True(concentration.GetProperty("diagnosticOnly").GetBoolean());
+        Assert.Equal(json.GetProperty("topPickRows").GetInt32(), concentration.GetProperty("currentTopPickCount").GetInt32());
+        Assert.True(concentration.GetProperty("topPropShapes").EnumerateArray().Any());
+        Assert.True(concentration.GetProperty("maxShapeShare").GetDecimal() > 0.25m);
+        Assert.True(concentration.GetProperty("overConcentratedShapes").EnumerateArray().Any());
+        var profileRecommendations = json.GetProperty("publicTopPickProfileRecommendations").EnumerateArray().ToArray();
+        Assert.NotEmpty(profileRecommendations);
+        Assert.Contains(profileRecommendations, profile => profile.GetProperty("recommendation").GetString() == "NeedsMoreData");
+        Assert.All(profileRecommendations, profile =>
+        {
+            Assert.True(profile.TryGetProperty("profileKey", out _));
+            Assert.True(profile.TryGetProperty("hitChanceBucket", out _));
+            Assert.True(profile.TryGetProperty("recommendation", out _));
+        });
+        var publicSimulation = json.GetProperty("publicTopPickSimulation");
+        Assert.False(publicSimulation.GetProperty("enabled").GetBoolean());
+        Assert.True(publicSimulation.GetProperty("diagnosticOnly").GetBoolean());
+        Assert.Equal(publicPerformance.GetProperty("total").GetInt32(), publicSimulation.GetProperty("baselineTopPickRows").GetInt32());
+        Assert.Equal("NoHistoricalGradedRows", publicSimulation.GetProperty("simulationUnavailableReason").GetString());
+        var currentSummary = json.GetProperty("currentPublicTopPickSummary");
+        Assert.Equal(json.GetProperty("topPickRows").GetInt32(), currentSummary.GetProperty("currentTopPickCount").GetInt32());
+        Assert.True(currentSummary.TryGetProperty("byPropShape", out _));
+        Assert.True(currentSummary.TryGetProperty("byOddsBucket", out _));
+        Assert.True(currentSummary.TryGetProperty("byHitChanceBucket", out _));
+        Assert.True(currentSummary.TryGetProperty("byBreakEvenMargin", out _));
+        Assert.True(currentSummary.TryGetProperty("byEffectiveSampleBucket", out _));
+        Assert.True(currentSummary.TryGetProperty("byBookmaker", out _));
+        Assert.True(currentSummary.TryGetProperty("bySide", out _));
+        var publicSamples = json.GetProperty("publicTopPickSamples");
+        Assert.True(publicSamples.TryGetProperty("best", out _));
+        Assert.True(publicSamples.TryGetProperty("worst", out _));
+        Assert.True(publicSamples.TryGetProperty("largestConcentration", out _));
+        Assert.True(publicSamples.TryGetProperty("ungradedCurrent", out _));
+        Assert.False(json.GetProperty("recommendations").GetProperty("below60TopPickLeakDetected").GetBoolean());
+        Assert.Equal(0, factory.TheOddsAdapter.CallCount);
+        Assert.Equal(before, await factory.CountArtifactsAsync());
+        Assert.Equal(propResultCountBefore, await factory.CountPropResultsAsync());
+    }
+
+    [Fact]
+    public async Task LikelyHitReplay_PublicTopPickPerformanceUsesHistoricalReplayRows()
+    {
+        await using var factory = new SafetyTestApplicationFactory();
+        using var client = factory.CreateClient();
+        await factory.SeedMlbLikelyHitHistoricalReplaySnapshotsAsync();
+        var before = await factory.CountArtifactsAsync();
+        var propResultCountBefore = await factory.CountPropResultsAsync();
+
+        var response = await client.GetAsync("/api/debug/model/likely-hit/replay?sport=MLB&providerCategory=Sportsbook&includeSamples=true&sampleTake=5&maxRows=100");
+
+        await EnsureSuccessWithBodyAsync(response);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        var publicPerformance = json.GetProperty("publicTopPickPerformanceAnalysis");
+        Assert.Equal(3, publicPerformance.GetProperty("total").GetInt32());
+        Assert.Equal(3, publicPerformance.GetProperty("replayable").GetInt32());
+        Assert.Equal(3, publicPerformance.GetProperty("graded").GetInt32());
+        Assert.Equal(2, publicPerformance.GetProperty("wins").GetInt32());
+        Assert.Equal(1, publicPerformance.GetProperty("losses").GetInt32());
+        Assert.Equal(0, publicPerformance.GetProperty("pushes").GetInt32());
+        Assert.Equal(0.666667m, publicPerformance.GetProperty("hitRate").GetDecimal());
+        Assert.True(publicPerformance.GetProperty("roi").GetDecimal() > 0m);
+        Assert.True(publicPerformance.GetProperty("averageHitChance").GetDecimal() >= 0.65m);
+        Assert.NotEmpty(publicPerformance.GetProperty("segments").GetProperty("propShape").EnumerateArray());
+
+        var currentSummary = json.GetProperty("currentPublicTopPickSummary");
+        Assert.Equal(json.GetProperty("topPickRows").GetInt32(), currentSummary.GetProperty("currentTopPickCount").GetInt32());
+        var concentration = json.GetProperty("publicTopPickConcentrationAnalysis");
+        var topShape = concentration.GetProperty("topPropShapes").EnumerateArray().First();
+        Assert.Equal(3, topShape.GetProperty("currentCount").GetInt32());
+        Assert.Equal(3, topShape.GetProperty("historicalReplayTotal").GetInt32());
+        Assert.Equal(3, topShape.GetProperty("historicalReplayable").GetInt32());
+        Assert.Equal(3, topShape.GetProperty("historicalGraded").GetInt32());
+        Assert.Equal(0.666667m, topShape.GetProperty("historicalHitRate").GetDecimal());
+
+        var profile = json.GetProperty("publicTopPickProfileRecommendations").EnumerateArray().Single();
+        Assert.Equal(3, profile.GetProperty("total").GetInt32());
+        Assert.Equal(3, profile.GetProperty("replayable").GetInt32());
+        Assert.Equal(3, profile.GetProperty("graded").GetInt32());
+        Assert.Equal("NeedsMoreData", profile.GetProperty("recommendation").GetString());
+        Assert.Contains(profile.GetProperty("reasonCodes").EnumerateArray(), reason => reason.GetString() == "GradedSampleBelow30");
+
+        var samples = json.GetProperty("publicTopPickSamples");
+        Assert.NotEmpty(samples.GetProperty("best").EnumerateArray());
+        Assert.NotEmpty(samples.GetProperty("worst").EnumerateArray());
+        Assert.All(samples.GetProperty("best").EnumerateArray(), sample =>
+            Assert.True(sample.GetProperty("isReplayTopPick").GetBoolean()));
+
+        Assert.Equal(0, factory.TheOddsAdapter.CallCount);
+        Assert.Equal(before, await factory.CountArtifactsAsync());
+        Assert.Equal(propResultCountBefore, await factory.CountPropResultsAsync());
+    }
+
+    [Fact]
+    public async Task LikelyHitReplay_BorderlineSimulationReportsWhatIfWithoutChangingPublicTopPicks()
+    {
+        await using var factory = new SafetyTestApplicationFactory();
+        using var client = factory.CreateClient();
+        await factory.SeedMlbDfsHitProbabilitySelectionScenarioAsync();
+
+        var beforePublicResponse = await client.GetAsync("/api/markets/top-picks?sport=MLB&providerCategory=Sportsbook&take=25");
+        await EnsureSuccessWithBodyAsync(beforePublicResponse);
+        var beforePublic = await beforePublicResponse.Content.ReadFromJsonAsync<JsonElement>();
+        var beforeTopPickCount = beforePublic.GetProperty("topPicks").EnumerateArray().Count();
+
+        var simulationResponse = await client.GetAsync("/api/debug/model/likely-hit/replay?sport=MLB&providerCategory=Sportsbook&simulateBorderlineProfileGate=true&minBorderlineBreakEvenMargin=0.05&minBorderlineEffectiveSampleSize=30&borderlineWorstAllowedFavoriteAmericanOdds=-125&borderlineBestAllowedUnderdogAmericanOdds=150&requireBorderlineProfileAllow=true&includeSamples=true&sampleTake=5&maxRows=100");
+
+        await EnsureSuccessWithBodyAsync(simulationResponse);
+        var simulationJson = await simulationResponse.Content.ReadFromJsonAsync<JsonElement>();
+        var simulation = simulationJson.GetProperty("simulation");
+        Assert.True(simulation.GetProperty("enabled").GetBoolean());
+        Assert.True(simulation.GetProperty("diagnosticOnly").GetBoolean());
+        Assert.True(simulation.GetProperty("baselineTopPickRows").GetInt32() >= simulation.GetProperty("simulatedTopPickRows").GetInt32());
+        Assert.True(simulation.TryGetProperty("removedBucketBreakdown", out _));
+        Assert.True(simulation.TryGetProperty("keptBucketBreakdown", out _));
+
+        var afterPublicResponse = await client.GetAsync("/api/markets/top-picks?sport=MLB&providerCategory=Sportsbook&take=25");
+        await EnsureSuccessWithBodyAsync(afterPublicResponse);
+        var afterPublic = await afterPublicResponse.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal(beforeTopPickCount, afterPublic.GetProperty("topPicks").EnumerateArray().Count());
+        Assert.Equal(0, factory.TheOddsAdapter.CallCount);
+    }
+
+    [Fact]
+    public async Task LikelyHitReplay_PublicTopPickSimulationCapsPropShapesWithoutChangingPublicTopPicks()
+    {
+        await using var factory = new SafetyTestApplicationFactory();
+        using var client = factory.CreateClient();
+        await factory.SeedMlbLikelyHitHistoricalReplaySnapshotsAsync();
+
+        var beforePublicResponse = await client.GetAsync("/api/markets/top-picks?sport=MLB&providerCategory=Sportsbook&take=25");
+        await EnsureSuccessWithBodyAsync(beforePublicResponse);
+        var beforePublic = await beforePublicResponse.Content.ReadFromJsonAsync<JsonElement>();
+        var beforeTopPickCount = beforePublic.GetProperty("topPicks").EnumerateArray().Count();
+
+        var simulationResponse = await client.GetAsync("/api/debug/model/likely-hit/replay?sport=MLB&providerCategory=Sportsbook&simulatePublicTopPickProfileGate=true&maxRowsPerPropShape=1&includeSamples=true&sampleTake=5&maxRows=100");
+
+        await EnsureSuccessWithBodyAsync(simulationResponse);
+        var simulationJson = await simulationResponse.Content.ReadFromJsonAsync<JsonElement>();
+        var simulation = simulationJson.GetProperty("publicTopPickSimulation");
+        Assert.True(simulation.GetProperty("enabled").GetBoolean());
+        Assert.True(simulation.GetProperty("diagnosticOnly").GetBoolean());
+        Assert.True(simulation.GetProperty("baselineTopPickRows").GetInt32() >= simulation.GetProperty("simulatedTopPickRows").GetInt32());
+        Assert.True(simulation.GetProperty("removedRows").GetInt32() > 0, simulation.GetRawText());
+        Assert.NotEqual(JsonValueKind.Null, simulation.GetProperty("baselineHitRate").ValueKind);
+        Assert.NotEqual(JsonValueKind.Null, simulation.GetProperty("simulatedHitRate").ValueKind);
+        Assert.NotEqual(JsonValueKind.Null, simulation.GetProperty("baselineRoi").ValueKind);
+        Assert.NotEqual(JsonValueKind.Null, simulation.GetProperty("simulatedRoi").ValueKind);
+        Assert.Equal(JsonValueKind.Null, simulation.GetProperty("simulationUnavailableReason").ValueKind);
+        Assert.True(simulation.TryGetProperty("removedBucketBreakdown", out _));
+        Assert.True(simulation.TryGetProperty("keptBucketBreakdown", out _));
+        Assert.Equal(1, simulation.GetProperty("criteria").GetProperty("maxRowsPerPropShape").GetInt32());
+
+        var afterPublicResponse = await client.GetAsync("/api/markets/top-picks?sport=MLB&providerCategory=Sportsbook&take=25");
+        await EnsureSuccessWithBodyAsync(afterPublicResponse);
+        var afterPublic = await afterPublicResponse.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal(beforeTopPickCount, afterPublic.GetProperty("topPicks").EnumerateArray().Count());
+        Assert.Equal(0, factory.TheOddsAdapter.CallCount);
+    }
+
+    [Fact]
+    public async Task LikelyHitReplay_IgnoresOldPersistedCandidateFlags()
+    {
+        await using var factory = new SafetyTestApplicationFactory();
+        using var client = factory.CreateClient();
+        await factory.SeedExpectedValueDisplaySnapshotsAsync();
+
+        var response = await client.GetAsync("/api/debug/model/likely-hit/replay?sport=MLB&providerCategory=Sportsbook&includeSamples=true&sampleTake=10&maxRows=100");
+
+        await EnsureSuccessWithBodyAsync(response);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.True(json.GetProperty("replayRowsEvaluated").GetInt32() > 0);
+        Assert.Equal(0, json.GetProperty("topPickRows").GetInt32());
+        Assert.Equal(0, json.GetProperty("publicTopPickPerformanceAnalysis").GetProperty("total").GetInt32());
+        Assert.Equal(0, json.GetProperty("currentPublicTopPickSummary").GetProperty("currentTopPickCount").GetInt32());
+        Assert.False(json.GetProperty("recommendations").GetProperty("below60TopPickLeakDetected").GetBoolean());
+        Assert.All(json.GetProperty("samples").GetProperty("rejected").EnumerateArray(), sample =>
+        {
+            if (string.Equals(sample.GetProperty("providerCategory").GetString(), "Sportsbook", StringComparison.OrdinalIgnoreCase))
+            {
+                Assert.False(sample.GetProperty("isTopPick").GetBoolean());
+                Assert.Contains(
+                    sample.GetProperty("fatalConflictCodes").EnumerateArray(),
+                    reason => reason.GetString() is "BelowBalancedMinimumHitChance" or "BelowSportsbookPublicTopPickHitChance" or "MissingApprovedPlayerMappingOrHistory");
+            }
         });
         Assert.Equal(0, factory.TheOddsAdapter.CallCount);
     }
@@ -7430,18 +7735,39 @@ public sealed class SafetyTestApplicationFactory : WebApplicationFactory<Program
             "Priced Sportsbook Player",
             line: 6.5m,
             projection: 4.0m,
-            overResults: 5,
+            overResults: 18,
             pushResults: 0,
-            underResults: 55,
+            underResults: 42,
             providerCategory: "Sportsbook",
             bookmakerKey: "draftkings",
             bookmakerTitle: "DraftKings",
             region: "us",
             entryActionable: false,
             overAmericanPrice: -110,
-            underAmericanPrice: -400,
+            underAmericanPrice: -180,
             overDecimalPrice: 1.91m,
-            underDecimalPrice: 1.25m);
+            underDecimalPrice: 1.555556m);
+        await AddMlbDfsSelectionScenarioPlayerAsync(
+            dbContext,
+            league,
+            propType,
+            platform,
+            run,
+            "Borderline Sportsbook Inventory Player",
+            line: 6.5m,
+            projection: 4.0m,
+            overResults: 21,
+            pushResults: 0,
+            underResults: 39,
+            providerCategory: "Sportsbook",
+            bookmakerKey: "fanduel",
+            bookmakerTitle: "FanDuel",
+            region: "us",
+            entryActionable: false,
+            overAmericanPrice: -110,
+            underAmericanPrice: -110,
+            overDecimalPrice: 1.91m,
+            underDecimalPrice: 1.91m);
         await AddMlbDfsSelectionScenarioPlayerAsync(
             dbContext,
             league,
@@ -7451,18 +7777,18 @@ public sealed class SafetyTestApplicationFactory : WebApplicationFactory<Program
             "Low Sample Huge EV Sportsbook Player",
             line: 6.5m,
             projection: 4.0m,
-            overResults: 2,
+            overResults: 1,
             pushResults: 0,
-            underResults: 18,
+            underResults: 19,
             providerCategory: "Sportsbook",
             bookmakerKey: "betmgm",
             bookmakerTitle: "BetMGM",
             region: "us",
             entryActionable: false,
             overAmericanPrice: -110,
-            underAmericanPrice: 200,
+            underAmericanPrice: 100,
             overDecimalPrice: 1.91m,
-            underDecimalPrice: 3.0m);
+            underDecimalPrice: 2.0m);
         await AddMlbDfsSelectionScenarioPlayerAsync(
             dbContext,
             league,
@@ -7527,6 +7853,60 @@ public sealed class SafetyTestApplicationFactory : WebApplicationFactory<Program
             overDecimalPrice: 1.91m,
             underDecimalPrice: 1.91m,
             historicalValues: Enumerable.Repeat(1m, 21).Concat(Enumerable.Repeat(5m, 9)).ToArray());
+
+        await dbContext.SaveChangesAsync();
+    }
+
+    public async Task SeedMlbLikelyHitHistoricalReplaySnapshotsAsync()
+    {
+        using var scope = Services.CreateScope();
+        var dbContext = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+        await dbContext.Database.EnsureDeletedAsync();
+        await dbContext.Database.EnsureCreatedAsync();
+
+        var sport = new Sport { Id = Guid.NewGuid(), Code = "MLB", Name = "Baseball" };
+        var league = new League { Id = Guid.NewGuid(), SportId = sport.Id, Code = "MLB", Name = "Major League Baseball" };
+        var propType = new PropType
+        {
+            Id = Guid.NewGuid(),
+            SportId = sport.Id,
+            Name = "Pitcher Strikeouts",
+            StatKey = "PITCHER_STRIKEOUTS",
+            ValueType = "numeric"
+        };
+        var eventDate = DateOnly.FromDateTime(DateTime.UtcNow.Date).AddDays(-1);
+        var refreshRun = new TheOddsRefreshRun
+        {
+            Id = Guid.NewGuid(),
+            Provider = "The Odds API",
+            Sport = "MLB",
+            SlateDate = eventDate,
+            StartedAtUtc = DateTimeOffset.UtcNow.AddDays(-1).AddMinutes(-10),
+            CompletedAtUtc = DateTimeOffset.UtcNow.AddDays(-1).AddMinutes(-9),
+            Succeeded = true,
+            Failed = false,
+            Blocked = false,
+            DryRun = false,
+            ForceLive = true,
+            BookmakerPreset = "sportsbook",
+            ProviderCategoriesIncluded = "Sportsbook",
+            SportsbookBookmakersRequested = "draftkings",
+            MarketsRequested = "pitcher_strikeouts",
+            EstimatedApiCalls = 1,
+            ActualApiCalls = 1,
+            PredictionCount = 3,
+            LineShoppingGroupCount = 3,
+            DiagnosticsJson = JsonSerializer.SerializeToDocument(new { })
+        };
+
+        dbContext.Sports.Add(sport);
+        dbContext.Leagues.Add(league);
+        dbContext.PropTypes.Add(propType);
+        dbContext.TheOddsRefreshRuns.Add(refreshRun);
+
+        AddHistoricalLikelyHitReplayPlayer(dbContext, league, propType, refreshRun, eventDate, "Replay Win One", actualResult: 4m);
+        AddHistoricalLikelyHitReplayPlayer(dbContext, league, propType, refreshRun, eventDate, "Replay Win Two", actualResult: 5m);
+        AddHistoricalLikelyHitReplayPlayer(dbContext, league, propType, refreshRun, eventDate, "Replay Loss One", actualResult: 8m);
 
         await dbContext.SaveChangesAsync();
     }
@@ -7871,6 +8251,135 @@ public sealed class SafetyTestApplicationFactory : WebApplicationFactory<Program
         }
 
         await Task.CompletedTask;
+    }
+
+    private static void AddHistoricalLikelyHitReplayPlayer(
+        ApplicationDbContext dbContext,
+        League league,
+        PropType propType,
+        TheOddsRefreshRun refreshRun,
+        DateOnly eventDate,
+        string playerName,
+        decimal actualResult)
+    {
+        var player = new Player
+        {
+            Id = Guid.NewGuid(),
+            LeagueId = league.Id,
+            DisplayName = playerName,
+            Position = "P"
+        };
+        dbContext.Players.Add(player);
+
+        for (var index = 0; index < 40; index++)
+        {
+            dbContext.PropResults.Add(new PropResult
+            {
+                Id = Guid.NewGuid(),
+                PlayerId = player.Id,
+                LeagueId = league.Id,
+                PropTypeId = propType.Id,
+                EventDate = eventDate.AddDays(-(index + 1)),
+                ActualResultValue = 4m,
+                ExternalSource = "mlb",
+                ExternalSourceIdentifier = $"likely-hit-replay-history:{player.Id:N}:{index}",
+                CreatedAt = DateTimeOffset.UtcNow.AddDays(-(index + 2)),
+                UpdatedAt = DateTimeOffset.UtcNow.AddDays(-(index + 2))
+            });
+        }
+
+        dbContext.PropResults.Add(new PropResult
+        {
+            Id = Guid.NewGuid(),
+            PlayerId = player.Id,
+            LeagueId = league.Id,
+            PropTypeId = propType.Id,
+            EventDate = eventDate,
+            ActualResultValue = actualResult,
+            ExternalSource = "mlb",
+            ExternalSourceIdentifier = $"likely-hit-replay-result:{player.Id:N}",
+            CreatedAt = DateTimeOffset.UtcNow.AddDays(-1),
+            UpdatedAt = DateTimeOffset.UtcNow.AddDays(-1)
+        });
+
+        var eventStart = new DateTimeOffset(eventDate.ToDateTime(TimeOnly.FromTimeSpan(TimeSpan.FromHours(23))), TimeSpan.Zero);
+        var details = JsonSerializer.SerializeToDocument(new
+        {
+            sport = "MLB",
+            competition = "MLB",
+            eventId = $"historical-replay-event-{player.Id:N}",
+            eventStartTime = eventStart,
+            eventStartTimeUtc = eventStart,
+            expectedResultDate = eventDate,
+            eventDate,
+            homeTeam = "Home",
+            awayTeam = "Away",
+            player = playerName,
+            playerId = player.Id,
+            canonicalPlayerId = player.Id,
+            normalizedPropType = "Pitcher Strikeouts",
+            line = 6.5m,
+            providerCategory = "Sportsbook",
+            entryProviderCategory = "Sportsbook",
+            bestBookmaker = "DraftKings",
+            bestSide = "Under",
+            bestAmericanPrice = -150,
+            bestDecimalPrice = 1.666667m,
+            bestProbability = 0.70m,
+            selectedSideProbability = 0.70m,
+            rawSelectedSideProbability = 0.70m,
+            bestImpliedProbability = 0.60m,
+            rawPriorUnderRate = 0.50m,
+            historicalSampleSize = 40,
+            lifecycleStatus = "Active",
+            isFresh = true,
+            isStale = false,
+            isExpired = false,
+            entryProvider = "DraftKings",
+            entryActionableForUser = false
+        });
+
+        dbContext.MarketLineShoppingSnapshots.Add(new MarketLineShoppingSnapshot
+        {
+            Id = Guid.NewGuid(),
+            TheOddsRefreshRunId = refreshRun.Id,
+            PredictionRunId = null,
+            Sport = "MLB",
+            SlateDate = eventDate,
+            GeneratedAtUtc = eventStart.AddHours(-4),
+            BookmakerPreset = "sportsbook",
+            ProviderCategory = "Sportsbook",
+            Provider = "The Odds API",
+            Bookmaker = "DraftKings",
+            Player = playerName,
+            EventId = $"historical-replay-event-{player.Id:N}",
+            EventName = "Away @ Home",
+            EventStartTime = eventStart,
+            LifecycleStatus = "Active",
+            IsStale = false,
+            IsExpired = false,
+            PropType = "Pitcher Strikeouts",
+            Line = 6.5m,
+            BestSide = "Under",
+            BestBookmaker = "DraftKings",
+            BestAmericanPrice = -150,
+            BestDecimalPrice = 1.666667m,
+            BestProbability = 0.70m,
+            BestImpliedProbability = 0.60m,
+            BestProbabilityEdge = 0.10m,
+            BestEstimatedEv = 0.166667m,
+            StrategyClassification = "Candidate",
+            StrategyTier = "LikelyHitV1",
+            IsCandidate = true,
+            IsWatchlist = false,
+            IsAvoid = false,
+            IsResearchOnly = false,
+            EntryProvider = "DraftKings",
+            EntryCompatibilityGroup = "DraftKings",
+            EntryProviderCategory = "Sportsbook",
+            EntryActionableForUser = false,
+            DetailsJson = details
+        });
     }
 
     private static MarketLineShoppingSnapshot BuildExpectedValueDisplaySnapshot(
@@ -9138,6 +9647,13 @@ public sealed class SafetyTestApplicationFactory : WebApplicationFactory<Program
             await dbContext.MarketTopPickSnapshots.CountAsync(),
             await dbContext.MarketLineShoppingSnapshots.CountAsync(),
             await dbContext.TheOddsRefreshPlannerDecisions.CountAsync());
+    }
+
+    public async Task<int> CountPropResultsAsync()
+    {
+        using var scope = Services.CreateScope();
+        var dbContext = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+        return await dbContext.PropResults.CountAsync();
     }
 }
 

@@ -24,7 +24,7 @@ Phase 1 public app behavior is intentionally narrow:
 - Line Shopping may surface persisted World Cup sportsbook context with `sport=SOCCER&competition=World Cup`.
 - If Soccer line-shopping snapshots do not exist because no Soccer prediction-backed groups were generated, public Line Shopping builds read-only research groups directly from persisted The Odds `platform_props` context rows.
 - Public Line Shopping fallback rows include compact `playerHistorySummary` when an approved `api-sports-football` bridge link resolves the platform player to persisted API-Sports `prop_results`. Unlinked rows return an unavailable summary.
-- Top Picks remains disabled unless `SoccerTopPicks:Enabled=true`. When enabled, Soccer Top Picks return only non-stale sportsbook recommendations that pass model-probability, sample-size, lifecycle, and supported-prop gates; research-only Soccer rows are excluded from Top Picks.
+- Top Picks remains disabled unless `SoccerTopPicks:Enabled=true`. When enabled, Soccer Top Picks use the shared `TopPicksModel` contract. With `TopPicksModel:ActiveModel=LikelyHitV1`, only non-stale sportsbook rows that pass selected-side hit chance, reliability, effective sample, lifecycle, and supported-prop gates can be promoted; research/context rows are excluded from Top Picks.
 - Soccer rows remain non-entry-actionable sportsbook context: `providerCategory=Sportsbook` and `entryActionableForUser=false`, even when a row is promoted to a sportsbook recommendation.
 - With `SoccerPredictions:Enabled=false`, Soccer rows keep null model hit chance fields and unavailable reasons.
 - With `SoccerPredictions:Enabled=true`, the backend may expose model probabilities for Goals, Assists, Shots, and Shots On Target only, using persisted approved API-Sports links and local `prop_results`.
@@ -32,7 +32,7 @@ Phase 1 public app behavior is intentionally narrow:
 - EV is shown only when a sportsbook row has real odds plus model probability. No DFS-style or fake EV is generated.
 - Entry Builder must not treat Soccer sportsbook context as playable DFS legs.
 
-Soccer Top Picks gates are separate from Line Shopping display. The current defaults are `SoccerPredictions:MinimumSampleSize=10`, `SoccerTopPicks:MinimumTopPickSampleSize=20`, `SoccerTopPicks:MinimumHitProbability=0.55`, and explicit `SoccerTopPicks:AllowNegativeEv`. Rows that fail these gates remain Line Shopping context with specific blockers instead of appearing as Top Picks.
+Soccer Top Picks gates are separate from Line Shopping display. The current Likely-Hit defaults are `TopPicksModel:SoccerWorldCupMinimumHitChance=0.60`, `TopPicksModel:SoccerWorldCupMinimumReliability=0.70`, `TopPicksModel:MinimumEffectiveSampleSize=10`, sportsbook Balanced favorite cutoff `TopPicksModel:SportsbookBalancedMaxFavoriteAmericanOdds=-300`, sportsbook underdog cutoff `TopPicksModel:SportsbookBalancedMaxUnderdogAmericanOdds=250`, and suspicious model-vs-market gap cutoff `TopPicksModel:SportsbookBalancedSuspiciousMarketGap=0.25`. Rows that fail these gates, including heavy-favorite sportsbook rows below the Balanced cutoff or longshots above the Balanced underdog cutoff, remain Line Shopping context with specific blockers instead of appearing as Top Picks. Soccer sportsbook rows may be recommendations while still returning `entryActionableForUser=false`; Soccer Entry Builder remains disabled.
 
 ## Prediction And Grading Guardrails
 
@@ -51,7 +51,7 @@ Supported prediction/grading stats:
 
 Blocked stats include Cards, Tackles, Saves, Goals Allowed, Goal + Assist, fantasy/combo/special props, and any unknown Soccer market key.
 
-The current model is intentionally simple and local-only: empirical over/under hit rate versus the provider line, recent last-5/last-10 averages, full-sample average, and low-sample warnings. It reads persisted The Odds context rows, approved `api-sports-football` provider links, and persisted API-Sports `prop_results`; it does not call providers and does not write prediction rows from public endpoints.
+The current model is local-only: selected-side hit probability versus the provider line, effective sample/reliability scoring, bounded recent-form adjustment, and lifecycle/supported-prop blockers. It reads persisted The Odds context rows, approved `api-sports-football` provider links, and persisted API-Sports `prop_results`; it does not call providers and does not write prediction rows from public endpoints.
 
 Debug diagnostics:
 

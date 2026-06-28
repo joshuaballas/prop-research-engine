@@ -7,14 +7,12 @@ import { formatAmericanOdds, formatDecimal, formatPercent } from '../../utils/fo
 import { marketDisplayLabel } from '../../utils/marketDisplay';
 import type { MarketOpportunity } from '../../types/markets';
 import { MetricLabelWithHelp } from '../metrics/MetricLabelWithHelp';
-import { TrustValue } from '../metrics/TrustValue';
 import { PropDetailsModal } from '../prop-history/PropDetailsModal';
 import { StatusPill } from '../ui/StatusPill';
 import { ProjectionModifierBadge } from './ProjectionModifierBadge';
 import { compactActionButtonSx, lockedActionButtonSx, removeActionButtonSx, secondaryGhostButtonSx } from '../ui/buttonStyles';
 import { mobileCardActionButtonSx, mobileCardDetailsButtonSx } from '../ui/AppRowActions';
 import { OpportunityCardLayout, OpportunityMetricGrid, OpportunityMetricItem, OpportunityPickText, OpportunityProviderRow } from '../ui/OpportunityCard';
-import { hasRenderableWarning, renderOpportunityCautionText, renderWarningText } from '../../utils/warnings';
 import { getDisplayExpectedValue } from '../../utils/expectedValueDisplay';
 
 interface TopPickCardProps {
@@ -28,8 +26,6 @@ interface TopPickCardProps {
 
 export function TopPickCard({ market, onAdd, hideActions = false, variant = 'default', selected = false, incompatible = false }: TopPickCardProps) {
   const [detailsOpen, setDetailsOpen] = useState(false);
-  const warningText = renderOpportunityCautionText(market.warnings);
-  const confidence = resolveConfidence(market);
   const compact = variant === 'compact';
   const featured = variant === 'featured';
   const actions = hideActions ? undefined : (
@@ -46,14 +42,13 @@ export function TopPickCard({ market, onAdd, hideActions = false, variant = 'def
         compact={compact}
         actionMode={compact ? 'stacked' : 'inline'}
         shellSx={{ height: '100%' }}
-        context={<TopPickStatus market={market} includeRank={!compact} label={featured || compact ? 'Top Pick' : market.strategyClassification} />}
+        context={<TopPickStatus market={market} includeRank={!compact} label="Top Pick" />}
         title={featured ? <Typography variant="h5" lineHeight={1.08}>{market.player}</Typography> : market.player}
-        value={<TopPickEv market={market} compact={compact} />}
+        value={<TopPickHitChance market={market} compact={compact} />}
         event={`${market.event} - ${market.startTime}`}
         market={<OpportunityPickText side={market.side} propType={market.propType} line={market.line} />}
-        provider={<TopPickProviderRow market={market} confidence={confidence} showTrust={!compact} />}
-        metrics={<TopPickMetrics market={market} detailed={!compact} confidence={confidence} />}
-        caution={warningText}
+        provider={<TopPickProviderRow market={market} />}
+        metrics={<TopPickMetrics market={market} detailed={!compact} />}
         actions={actions}
       />
       <PropDetailsModal market={market} open={detailsOpen} onClose={() => setDetailsOpen(false)} />
@@ -83,56 +78,30 @@ function TopPickStatus({
   );
 }
 
-function TopPickEv({ market, compact = false }: { market: MarketOpportunity; compact?: boolean }) {
-  const displayEv = getDisplayExpectedValue(market);
-  const value = displayEv ?? market.probabilityEdge;
+function TopPickHitChance({ market, compact = false }: { market: MarketOpportunity; compact?: boolean }) {
   return (
     <Stack spacing={0.1} alignItems="flex-end">
-      {displayEv === null ? (
-        <MetricLabelWithHelp metric="edge" align="right" />
-      ) : (
-        <MetricLabelWithHelp metric="ev" align="right" />
-      )}
+      <MetricLabelWithHelp metric="hitChance" align="right" />
       <Typography
-        color={value === null ? 'text.secondary' : value >= 0 ? 'success.main' : 'error.main'}
+        color={market.modelProbability === null ? 'text.secondary' : 'success.main'}
         fontWeight={950}
         fontSize={compact ? 14 : undefined}
         whiteSpace="nowrap"
         lineHeight={1.1}
       >
-        {formatPercent(value, { signed: true })}
+        {formatPercent(market.modelProbability)}
       </Typography>
     </Stack>
   );
 }
 
-function TopPickProviderRow({ market, confidence, showTrust = true }: { market: MarketOpportunity; confidence: 'Strong' | 'Medium' | 'Weak'; showTrust?: boolean }) {
-  return (
-    <OpportunityProviderRow provider={market.provider} category={market.providerCategory}>
-      {showTrust ? (
-        <Stack
-          direction="row"
-          alignItems="center"
-          gap={0.65}
-          sx={{
-            '& .MuiTypography-root': {
-              lineHeight: 1.1
-            }
-          }}
-        >
-          <MetricLabelWithHelp metric="trust" iconPosition="before" />
-          <Typography component="span" color="text.secondary" aria-hidden sx={{ lineHeight: 1.1 }}>
-            ·
-          </Typography>
-          <TrustValue level={confidence} size="small" />
-        </Stack>
-      ) : null}
-    </OpportunityProviderRow>
-  );
+function TopPickProviderRow({ market }: { market: MarketOpportunity }) {
+  return <OpportunityProviderRow provider={market.provider} category={market.providerCategory} />;
 }
 
-function TopPickMetrics({ market, detailed, confidence }: { market: MarketOpportunity; detailed: boolean; confidence: 'Strong' | 'Medium' | 'Weak' }) {
+function TopPickMetrics({ market, detailed }: { market: MarketOpportunity; detailed: boolean }) {
   const showSportsbookPricing = detailed && market.isSportsbook;
+  const displayEv = getDisplayExpectedValue(market);
   return (
     <OpportunityMetricGrid columns={{ xs: 2, sm: detailed ? 4 : 3 }} sx={{ borderTop: 0, pt: 0 }}>
       {showSportsbookPricing ? (
@@ -148,13 +117,8 @@ function TopPickMetrics({ market, detailed, confidence }: { market: MarketOpport
       <OpportunityMetricItem label="Hit chance" value={formatPercent(market.modelProbability)} metric="hitChance" />
       {showSportsbookPricing ? <OpportunityMetricItem label="Break-even" value={formatPercent(market.impliedProbability)} /> : null}
       <OpportunityMetricItem label="Edge" value={formatPercent(market.probabilityEdge, { signed: true })} metric="edge" />
-      {detailed && market.showExpectedValue ? (
-        <OpportunityMetricItem label="EV" value={formatPercent(market.displayExpectedValue ?? 0, { signed: true })} metric="ev" />
-      ) : null}
-      {!detailed ? (
-        <>
-          <OpportunityMetricItem label="Trust" value={<TrustValue level={confidence} sx={{ fontSize: 14, fontWeight: 950, lineHeight: 1.5 }} />} metric="trust" />
-        </>
+      {detailed && displayEv !== null ? (
+        <OpportunityMetricItem label="EV" value={formatPercent(displayEv, { signed: true })} metric="ev" />
       ) : null}
     </OpportunityMetricGrid>
   );
@@ -230,62 +194,12 @@ function TopPickMobileActions({
   );
 }
 
-function resolveConfidence(market: MarketOpportunity): 'Strong' | 'Medium' | 'Weak' {
-  if (market.isRecommendation && market.recommendationActionableForUser && isDisplayableTrustLevel(market.trustLevel)) {
-    return market.trustLevel;
-  }
-
-  const warningText = renderWarningText(market.warnings).toLowerCase();
-  const hasMajorCaution =
-    market.estimatedEv <= 0 ||
-    market.freshness === 'Unavailable' ||
-    warningText.includes('low sample') ||
-    warningText.includes('limited') ||
-    warningText.includes('non-positive');
-
-  if (hasMajorCaution || market.historicalSampleSize < 35) {
-    return 'Weak';
-  }
-
-  const hasModerateCaution = hasRenderableWarning(market.warnings) || market.projectionModifier !== 'Normal' || market.historicalSampleSize < 90;
-
-  const edge = market.probabilityEdge ?? 0;
-  if (edge > 0.1 && market.historicalSampleSize >= 90 && !hasModerateCaution) {
-    return 'Strong';
-  }
-
-  return edge > 0 ? 'Medium' : 'Weak';
-}
-
 function isEntryBuilderDisabled(market: MarketOpportunity) {
   return !market.canAddToEntry;
 }
 
 function entryDisabledReason(market: MarketOpportunity) {
   return market.entryRuleWarning ?? market.entryUnavailableReason ?? (market.providerCategory === 'Sportsbook' ? 'Entry Builder is available only for DFS entries.' : 'Entry Builder unavailable for this row.');
-}
-
-function isDisplayableTrustLevel(value: MarketOpportunity['trustLevel']): value is 'Strong' | 'Medium' | 'Weak' {
-  return value === 'Strong' || value === 'Medium' || value === 'Weak';
-}
-
-function cleanWarning(warning: string) {
-  const replacements: Record<string, string> = {
-    'Provider limited for this sport': 'Limited coverage',
-    'Confirm final payout in provider app': 'Payout may vary',
-    'NBA sample is thin for this market': 'Limited history',
-    'Low sample size': 'Low sample'
-  };
-
-  return replacements[warning] ?? warning;
-}
-
-export function getTopPickConfidence(market: MarketOpportunity): 'Strong' | 'Medium' | 'Weak' {
-  return resolveConfidence(market);
-}
-
-export function formatTopPickWarning(market: MarketOpportunity) {
-  return renderWarningText(market.warnings, '-');
 }
 
 const actionButtonSx = {

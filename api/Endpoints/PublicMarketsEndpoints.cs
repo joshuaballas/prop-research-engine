@@ -229,7 +229,9 @@ public static class PublicMarketsEndpoints
             string? bookmakerPreset,
             ApplicationDbContext dbContext,
             IPredictionProbabilityService probabilityService,
+            ILikelyHitModelService likelyHitModel,
             IOptions<PredictionGenerationOptions> predictionGenerationOptions,
+            IOptions<TopPicksModelOptions> topPicksModelOptions,
             ISoccerWorldCupPredictionService soccerPredictionService,
             IOptions<SoccerPredictionsOptions> soccerPredictionOptions,
             IOptions<SoccerGradingOptions> soccerGradingOptions,
@@ -246,7 +248,9 @@ public static class PublicMarketsEndpoints
                     bookmakerPreset,
                     dbContext,
                     probabilityService,
+                    likelyHitModel,
                     predictionGenerationOptions.Value,
+                    topPicksModelOptions.Value,
                     soccerPredictionService,
                     soccerPredictionOptions.Value,
                     soccerGradingOptions.Value,
@@ -270,7 +274,9 @@ public static class PublicMarketsEndpoints
                 bookmakerPreset,
                 dbContext,
                 probabilityService,
+                likelyHitModel,
                 predictionGenerationOptions.Value,
+                topPicksModelOptions.Value,
                 soccerPredictionService,
                 soccerPredictionOptions.Value,
                 soccerGradingOptions.Value,
@@ -288,7 +294,9 @@ public static class PublicMarketsEndpoints
             string? bookmakerPreset,
             ApplicationDbContext dbContext,
             IPredictionProbabilityService probabilityService,
+            ILikelyHitModelService likelyHitModel,
             IOptions<PredictionGenerationOptions> predictionGenerationOptions,
+            IOptions<TopPicksModelOptions> topPicksModelOptions,
             ISoccerWorldCupPredictionService soccerPredictionService,
             IOptions<SoccerPredictionsOptions> soccerPredictionOptions,
             IOptions<SoccerGradingOptions> soccerGradingOptions,
@@ -305,7 +313,9 @@ public static class PublicMarketsEndpoints
                 bookmakerPreset,
                 dbContext,
                 probabilityService,
+                likelyHitModel,
                 predictionGenerationOptions.Value,
+                topPicksModelOptions.Value,
                 soccerPredictionService,
                 soccerPredictionOptions.Value,
                 soccerGradingOptions.Value,
@@ -1121,7 +1131,9 @@ public static class PublicMarketsEndpoints
         string? bookmakerPreset,
         ApplicationDbContext dbContext,
         IPredictionProbabilityService probabilityService,
+        ILikelyHitModelService likelyHitModel,
         PredictionGenerationOptions predictionGenerationOptions,
+        TopPicksModelOptions topPicksModelOptions,
         ISoccerWorldCupPredictionService soccerPredictionService,
         SoccerPredictionsOptions soccerPredictionOptions,
         SoccerGradingOptions soccerGradingOptions,
@@ -1161,6 +1173,14 @@ public static class PublicMarketsEndpoints
                 includePlayerHistory: false,
                 evaluationTake: TopPicksInternalEvaluationTake);
             var soccerTopPickFilteringStopwatch = Stopwatch.StartNew();
+            var soccerLikelyHitRows = TheOddsApiDebugEndpoints.BuildLikelyHitTopPickRows(
+                soccerLineShopping.ComparisonGroups
+                    .Select(group => JsonSerializer.SerializeToNode(group) as JsonObject)
+                    .Where(group => group is not null)
+                    .Select(group => group!),
+                likelyHitModel,
+                topPicksModelOptions,
+                Math.Clamp(take ?? 25, 1, 250));
             var soccerTopPickCandidates = soccerLineShopping.ComparisonGroups
                 .Select(group => JsonSerializer.SerializeToNode(group) as JsonObject)
                 .Where(group => group is not null
@@ -1192,10 +1212,12 @@ public static class PublicMarketsEndpoints
                     && sampleSize.GetValueKind() == JsonValueKind.Number
                     && sampleSize.GetValue<int>() < soccerTopPicksOptions.MinimumTopPickSampleSize);
             var staleOrExpiredSoccerCandidates = soccerTopPickCandidates.Count(group => !IsActiveSoccerTopPickGroup(group));
-            var soccerTopPicks = soccerTopPickCandidates
-                .Where(group => IsActiveSoccerTopPickGroup(group) && IsSoccerRecommendationGroup(group))
-                .Take(Math.Clamp(take ?? 25, 1, 250))
-                .ToArray();
+            var soccerTopPicks = topPicksModelOptions.IsLikelyHitV1Enabled
+                ? soccerLikelyHitRows
+                : soccerTopPickCandidates
+                    .Where(group => IsActiveSoccerTopPickGroup(group) && IsSoccerRecommendationGroup(group))
+                    .Take(Math.Clamp(take ?? 25, 1, 250))
+                    .ToArray();
             soccerTopPickFilteringStopwatch.Stop();
             var soccerTopPicksFallbackReason = soccerTopPicks.Length == 0
                 ? soccerTopPickCandidates.Length > 0 && staleOrExpiredSoccerCandidates == soccerTopPickCandidates.Length
@@ -1234,11 +1256,12 @@ public static class PublicMarketsEndpoints
                 soccerLineShopping.Run,
                 summary = new
                 {
+                    modelVersion = topPicksModelOptions.IsLikelyHitV1Enabled ? LikelyHitModelService.ModelVersion : TopPicksModelOptions.Legacy,
                     activeCandidateCount = soccerTopPicks.Length,
                     entryActionableCandidateCount = 0,
                     actionableCandidateCount = 0,
                     returnedTopPicks = soccerTopPicks.Length,
-                    recommendationEligibleCount = soccerTopPickCandidates.Length,
+                    recommendationEligibleCount = topPicksModelOptions.IsLikelyHitV1Enabled ? soccerLikelyHitRows.Length : soccerTopPickCandidates.Length,
                     modelEligibleBeforeLifecycleCount = soccerTopPickCandidates.Length,
                     staleOrExpiredModelEligibleCount = staleOrExpiredSoccerCandidates,
                     sampleBlockedCount = sampleBlockedSoccerCandidates,
@@ -1263,7 +1286,9 @@ public static class PublicMarketsEndpoints
             providerCategory,
             dbContext,
             probabilityService,
+            likelyHitModel,
             predictionGenerationOptions,
+            topPicksModelOptions,
             cancellationToken);
 
         return new
@@ -1294,7 +1319,9 @@ public static class PublicMarketsEndpoints
         string? bookmakerPreset,
         ApplicationDbContext dbContext,
         IPredictionProbabilityService probabilityService,
+        ILikelyHitModelService likelyHitModel,
         PredictionGenerationOptions predictionGenerationOptions,
+        TopPicksModelOptions topPicksModelOptions,
         ISoccerWorldCupPredictionService soccerPredictionService,
         SoccerPredictionsOptions soccerPredictionOptions,
         SoccerGradingOptions soccerGradingOptions,
@@ -1315,7 +1342,9 @@ public static class PublicMarketsEndpoints
             bookmakerPreset,
             dbContext,
             probabilityService,
+            likelyHitModel,
             predictionGenerationOptions,
+            topPicksModelOptions,
             soccerPredictionService,
             soccerPredictionOptions,
             soccerGradingOptions,
@@ -1331,7 +1360,9 @@ public static class PublicMarketsEndpoints
             bookmakerPreset,
             dbContext,
             probabilityService,
+            likelyHitModel,
             predictionGenerationOptions,
+            topPicksModelOptions,
             soccerPredictionService,
             soccerPredictionOptions,
             soccerGradingOptions,
@@ -1342,9 +1373,8 @@ public static class PublicMarketsEndpoints
             .Select(row => EnsureTopPickSportMetadata(row, "MLB", "MLB"))
             .Concat(ExtractTopPickRows(soccerResponse).Select(row => EnsureTopPickSportMetadata(row, "SOCCER", SoccerCompetitionName)))
             .Where(IsPublicRecommendationRow)
-            .OrderByDescending(row => GetTopPickDecimal(row, "displayExpectedValue", "bestEstimatedEv") ?? decimal.MinValue)
+            .OrderByDescending(row => GetTopPickDecimal(row, "topPickScore") ?? decimal.MinValue)
             .ThenByDescending(row => GetTopPickDecimal(row, "selectedSideProbability", "bestProbability") ?? decimal.MinValue)
-            .ThenByDescending(row => GetTopPickDecimal(row, "rankingScore") ?? decimal.MinValue)
             .ThenBy(row => GetTopPickString(row, "sport") ?? string.Empty, StringComparer.OrdinalIgnoreCase)
             .ThenBy(row => GetTopPickString(row, "player") ?? string.Empty, StringComparer.OrdinalIgnoreCase)
             .ToArray();

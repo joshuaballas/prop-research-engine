@@ -50,6 +50,7 @@ builder.Services.Configure<SoccerIdentityResolutionOptions>(builder.Configuratio
 builder.Services.Configure<SoccerPredictionsOptions>(builder.Configuration.GetSection(SoccerPredictionsOptions.SectionName));
 builder.Services.Configure<SoccerGradingOptions>(builder.Configuration.GetSection(SoccerGradingOptions.SectionName));
 builder.Services.Configure<SoccerTopPicksOptions>(builder.Configuration.GetSection(SoccerTopPicksOptions.SectionName));
+builder.Services.Configure<TopPicksModelOptions>(builder.Configuration.GetSection(TopPicksModelOptions.SectionName));
 builder.Services.Configure<PredictionGenerationOptions>(builder.Configuration.GetSection(PredictionGenerationOptions.LegacySectionName));
 builder.Services.Configure<PredictionGenerationOptions>(builder.Configuration.GetSection(PredictionGenerationOptions.SectionName));
 builder.Services.AddHttpClient<IUnderdogAdapter, UnderdogAdapter>(client =>
@@ -90,6 +91,7 @@ builder.Services.AddScoped<IPlayerIdentityAliasService, PlayerIdentityAliasServi
 builder.Services.AddScoped<IPredictionFeatureService, PredictionFeatureService>();
 builder.Services.AddScoped<IPredictionGenerationService, PredictionGenerationService>();
 builder.Services.AddScoped<IPredictionProbabilityService, PredictionProbabilityService>();
+builder.Services.AddScoped<ILikelyHitModelService, LikelyHitModelService>();
 builder.Services.AddScoped<IPlayerExternalRefRepository, PlayerExternalRefRepository>();
 builder.Services.AddScoped<IPlayerResolutionService, PlayerResolutionService>();
 builder.Services.AddScoped<IApplicationErrorLogger, ApplicationErrorLogger>();

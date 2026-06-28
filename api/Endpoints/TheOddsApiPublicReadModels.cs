@@ -185,12 +185,14 @@ public static partial class TheOddsApiDebugEndpoints
         string? providerCategory,
         ApplicationDbContext dbContext,
         IPredictionProbabilityService probabilityService,
+        ILikelyHitModelService likelyHitModel,
         PredictionGenerationOptions selectionOptions,
+        TopPicksModelOptions topPicksModelOptions,
         CancellationToken cancellationToken)
     {
         providerCategory = NormalizePublicProviderCategoryFilter(providerCategory);
 
-        if (!runId.HasValue)
+        if (!runId.HasValue && !topPicksModelOptions.IsLikelyHitV1Enabled)
         {
             var snapshot = await TryBuildTopPicksSnapshotResponseAsync(
                 take,
@@ -213,6 +215,18 @@ public static partial class TheOddsApiDebugEndpoints
         var generatedAtUtc = DateTimeOffset.UtcNow;
         var lifecycleFreshnessMinutes = Math.Clamp(freshnessMinutes ?? DefaultTheOddsLineShoppingFreshnessMinutes, 1, 1440);
         var platformProps = await LoadScopedTheOddsPlatformPropsAsync(dbContext, providerCategory, cancellationToken);
+        if (platformProps.Count == 0 && !runId.HasValue)
+        {
+            var snapshot = await TryBuildTopPicksSnapshotResponseAsync(
+                take,
+                providerCategory,
+                dbContext,
+                cancellationToken);
+            if (snapshot is not null)
+            {
+                return snapshot;
+            }
+        }
 
         var activePlatformProps = platformProps
             .Where(row =>
@@ -246,13 +260,24 @@ public static partial class TheOddsApiDebugEndpoints
             })
             .Where(row => row.Strategy.IsCandidate)
             .ToArray();
-        var topPicks = candidateGroups
-            .OrderByDescending(row => row.Group.BestProbability ?? decimal.MinValue)
-            .ThenByDescending(row => row.Group.BestProjectionEdge ?? decimal.MinValue)
-            .ThenByDescending(row => row.Group.RankingScore)
-            .Take(requestedTake)
-            .Select(row => ToLineShoppingResponseGroup(row.Group, includeBookmakerPrices: false))
-            .ToArray();
+        var topPicks = topPicksModelOptions.IsLikelyHitV1Enabled
+            ? BuildLikelyHitTopPickRows(
+                groups.Select(group =>
+                    JsonSerializer.SerializeToNode(ToLineShoppingResponseGroup(group, includeBookmakerPrices: false)) as JsonObject)
+                    .Where(row => row is not null)
+                    .Select(row => row!),
+                likelyHitModel,
+                topPicksModelOptions,
+                requestedTake)
+                .Cast<object>()
+                .ToArray()
+            : candidateGroups
+                .OrderByDescending(row => row.Group.BestProbability ?? decimal.MinValue)
+                .ThenByDescending(row => row.Group.BestProjectionEdge ?? decimal.MinValue)
+                .ThenByDescending(row => row.Group.RankingScore)
+                .Take(requestedTake)
+                .Select(row => ToLineShoppingResponseGroup(row.Group, includeBookmakerPrices: false))
+                .ToArray();
         totalStopwatch.Stop();
 
         return new MlbTopPicksReadResponse(
@@ -274,10 +299,14 @@ public static partial class TheOddsApiDebugEndpoints
             Summary: new
             {
                 totalActiveComparisonGroups = groups.Count,
-                activeCandidateCount = candidateGroups.Length,
-                actionableCandidateCount = candidateGroups.Count(row => row.Group.IsActionableForUser),
-                sportsbookContextCandidateCount = candidateGroups.Count(row => !row.Group.IsActionableForUser),
-                dfsCandidateCount = candidateGroups.Count(row => string.Equals(row.Group.ProviderCategory, "DFS", StringComparison.OrdinalIgnoreCase)),
+                activeCandidateCount = topPicksModelOptions.IsLikelyHitV1Enabled ? topPicks.Length : candidateGroups.Length,
+                actionableCandidateCount = topPicks.Count(row =>
+                    JsonSerializer.SerializeToNode(row) is JsonObject obj && ReadLikelyHitBool(obj, "entryActionableForUser") == true),
+                sportsbookContextCandidateCount = topPicks.Count(row =>
+                    JsonSerializer.SerializeToNode(row) is JsonObject obj && string.Equals(ReadLikelyHitString(obj, "providerCategory"), "Sportsbook", StringComparison.OrdinalIgnoreCase)),
+                dfsCandidateCount = topPicks.Count(row =>
+                    JsonSerializer.SerializeToNode(row) is JsonObject obj && string.Equals(ReadLikelyHitString(obj, "providerCategory"), "DFS", StringComparison.OrdinalIgnoreCase)),
+                modelVersion = topPicksModelOptions.IsLikelyHitV1Enabled ? LikelyHitModelService.ModelVersion : TopPicksModelOptions.Legacy,
                 topPicksProviderCategoryBehavior = "Mixed DFS and Sportsbook recommendations are eligible; providerCategory filters can isolate one category.",
                 activeWatchlistCount = groups.Count(group => ClassifyTheOddsLineShoppingStrategy(group).IsWatchlist),
                 returnedTopPicks = topPicks.Length

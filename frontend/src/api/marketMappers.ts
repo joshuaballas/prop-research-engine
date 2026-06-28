@@ -37,6 +37,17 @@ function mapMarketGroupToOpportunity(group: MarketGroupDto, index: number, sourc
   const evCalibrationMethod = readString(group, 'evCalibrationMethod', 'EvCalibrationMethod') ?? null;
   const evSuppressedReason = readString(group, 'evSuppressedReason', 'EvSuppressedReason') ?? null;
   const selectedSideProbability = readNumber(group, 'selectedSideProbability', 'SelectedSideProbability', 'bestProbability', 'BestProbability') ?? null;
+  const hitChance = readNumber(group, 'hitChance') ?? selectedSideProbability;
+  const topPickScore = readNumber(group, 'topPickScore') ?? null;
+  const payoutQualityScore = readNumber(group, 'payoutQualityScore') ?? null;
+  const priceGateStatus = readString(group, 'priceGateStatus') ?? null;
+  const priceGateReason = readString(group, 'priceGateReason') ?? null;
+  const playablePriceEligible = readBoolean(group, 'playablePriceEligible') ?? null;
+  const topPickQualityEligible = readBoolean(group, 'topPickQualityEligible') ?? null;
+  const lineUtilityScore = readNumber(group, 'lineUtilityScore') ?? null;
+  const effectiveAmericanOdds = readNumber(group, 'effectiveAmericanOdds') ?? null;
+  const alternateLineGroupKey = readString(group, 'alternateLineGroupKey') ?? null;
+  const selectedRecommendedLine = readBoolean(group, 'selectedRecommendedLine') ?? null;
   const rawSelectedSideProbability = readNumber(group, 'rawSelectedSideProbability', 'RawSelectedSideProbability') ?? null;
   const calibratedSelectedSideProbability = readNumber(group, 'calibratedSelectedSideProbability', 'CalibratedSelectedSideProbability') ?? null;
   const probabilityCalibrationMethod = readString(group, 'probabilityCalibrationMethod', 'ProbabilityCalibrationMethod') ?? null;
@@ -147,8 +158,22 @@ function mapMarketGroupToOpportunity(group: MarketGroupDto, index: number, sourc
     canAddToEntry: providerCategory === 'DFS' && entryActionable && !isExpired && (!lifecycleStatusNormalized || lifecycleStatusNormalized === 'active'),
     bestAmericanPrice: readNumber(group, 'bestAmericanPrice', 'BestAmericanPrice') ?? 0,
     bestDecimalPrice: readNumber(group, 'bestDecimalPrice', 'BestDecimalPrice') ?? 0,
-    modelProbability: selectedSideProbability,
+    modelProbability: hitChance,
+    hitChance,
     selectedSideProbability,
+    topPickScore,
+    payoutQualityScore,
+    priceGateStatus,
+    priceGateReason,
+    playablePriceEligible,
+    topPickQualityEligible,
+    lineUtilityScore,
+    effectiveAmericanOdds,
+    alternateLineGroupKey,
+    selectedRecommendedLine,
+    modelVersion: readString(group, 'modelVersion') ?? null,
+    probabilityModelVersion: readString(group, 'probabilityModelVersion') ?? null,
+    recommendationContractVersion: readString(group, 'recommendationContractVersion') ?? null,
     rawSelectedSideProbability,
     calibratedSelectedSideProbability,
     probabilityCalibrationMethod,

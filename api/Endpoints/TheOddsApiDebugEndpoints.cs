@@ -7,6 +7,7 @@ using System.Diagnostics;
 using System.Globalization;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using SportsBetting.Api.Data;
 using SportsBetting.Api.Integrations.Results.Mlb;
 using SportsBetting.Api.Integrations.Results.Soccer;
@@ -245,7 +246,9 @@ public static partial class TheOddsApiDebugEndpoints
             int? freshnessMinutes,
             ApplicationDbContext dbContext,
             IPredictionProbabilityService probabilityService,
+            ILikelyHitModelService likelyHitModel,
             IOptions<PredictionGenerationOptions> predictionGenerationOptions,
+            IOptions<TopPicksModelOptions> topPicksModelOptions,
             CancellationToken cancellationToken) =>
         {
             var totalStopwatch = Stopwatch.StartNew();
@@ -310,13 +313,24 @@ public static partial class TheOddsApiDebugEndpoints
                 })
                 .Where(row => row.Strategy.IsCandidate)
                 .ToArray();
-            var topPicks = candidateGroups
-                .OrderByDescending(row => row.Group.BestProbability ?? decimal.MinValue)
-                .ThenByDescending(row => row.Group.BestProjectionEdge ?? decimal.MinValue)
-                .ThenByDescending(row => row.Group.RankingScore)
-                .Take(requestedTake)
-                .Select(row => ToLineShoppingResponseGroup(row.Group, includeBookmakerPrices: false))
-                .ToArray();
+            var topPicks = topPicksModelOptions.Value.IsLikelyHitV1Enabled
+                ? BuildLikelyHitTopPickRows(
+                    groups.Select(group =>
+                        JsonSerializer.SerializeToNode(ToLineShoppingResponseGroup(group, includeBookmakerPrices: false)) as JsonObject)
+                        .Where(row => row is not null)
+                        .Select(row => row!),
+                    likelyHitModel,
+                    topPicksModelOptions.Value,
+                    requestedTake)
+                    .Cast<object>()
+                    .ToArray()
+                : candidateGroups
+                    .OrderByDescending(row => row.Group.BestProbability ?? decimal.MinValue)
+                    .ThenByDescending(row => row.Group.BestProjectionEdge ?? decimal.MinValue)
+                    .ThenByDescending(row => row.Group.RankingScore)
+                    .Take(requestedTake)
+                    .Select(row => ToLineShoppingResponseGroup(row.Group, includeBookmakerPrices: false))
+                    .ToArray();
             var responseBuildMs = stepStopwatch.ElapsedMilliseconds;
             totalStopwatch.Stop();
 
@@ -353,10 +367,14 @@ public static partial class TheOddsApiDebugEndpoints
                 summary = new
                 {
                     totalActiveComparisonGroups = groups.Count,
-                    activeCandidateCount = candidateGroups.Length,
-                    actionableCandidateCount = candidateGroups.Count(row => row.Group.IsActionableForUser),
-                    sportsbookContextCandidateCount = candidateGroups.Count(row => !row.Group.IsActionableForUser),
-                    dfsCandidateCount = candidateGroups.Count(row => string.Equals(row.Group.ProviderCategory, "DFS", StringComparison.OrdinalIgnoreCase)),
+                    activeCandidateCount = topPicksModelOptions.Value.IsLikelyHitV1Enabled ? topPicks.Length : candidateGroups.Length,
+                    actionableCandidateCount = topPicks.Count(row =>
+                        JsonSerializer.SerializeToNode(row) is JsonObject obj && ReadLikelyHitBool(obj, "entryActionableForUser") == true),
+                    sportsbookContextCandidateCount = topPicks.Count(row =>
+                        JsonSerializer.SerializeToNode(row) is JsonObject obj && string.Equals(ReadLikelyHitString(obj, "providerCategory"), "Sportsbook", StringComparison.OrdinalIgnoreCase)),
+                    dfsCandidateCount = topPicks.Count(row =>
+                        JsonSerializer.SerializeToNode(row) is JsonObject obj && string.Equals(ReadLikelyHitString(obj, "providerCategory"), "DFS", StringComparison.OrdinalIgnoreCase)),
+                    modelVersion = topPicksModelOptions.Value.IsLikelyHitV1Enabled ? LikelyHitModelService.ModelVersion : TopPicksModelOptions.Legacy,
                     topPicksProviderCategoryBehavior = "Mixed DFS and Sportsbook recommendations are eligible; providerCategory filters can isolate one category.",
                     activeWatchlistCount = groups.Count(group => ClassifyTheOddsLineShoppingStrategy(group).IsWatchlist),
                     returnedTopPicks = topPicks.Length
@@ -369,6 +387,338 @@ public static partial class TheOddsApiDebugEndpoints
         })
         .WithName("TheOddsApiMlbTopPicksDebug")
         .WithSummary("Read-only lightweight top picks for active persisted The Odds API MLB line-shopping groups.");
+
+        endpoints.MapGet("/api/debug/model/likely-hit/opportunity-audit", async (
+            string? sport,
+            string? competition,
+            string? playerName,
+            string? propType,
+            string? providerCategory,
+            string? eventId,
+            bool? includeRejected,
+            int? take,
+            int? freshnessMinutes,
+            ApplicationDbContext dbContext,
+            IPredictionProbabilityService probabilityService,
+            ILikelyHitModelService likelyHitModel,
+            ISoccerWorldCupPredictionService soccerPredictionService,
+            IOptions<PredictionGenerationOptions> predictionGenerationOptions,
+            IOptions<TopPicksModelOptions> topPicksModelOptions,
+            IOptions<SoccerPredictionsOptions> soccerPredictionOptions,
+            IOptions<SoccerGradingOptions> soccerGradingOptions,
+            IOptions<SoccerTopPicksOptions> soccerTopPicksOptions,
+            CancellationToken cancellationToken) =>
+        {
+            var generatedAtUtc = DateTimeOffset.UtcNow;
+            var requestedTake = Math.Clamp(take ?? 100, 1, 500);
+            var shouldIncludeRejected = includeRejected ?? false;
+            var normalizedSport = string.IsNullOrWhiteSpace(sport)
+                ? "MLB"
+                : sport.Trim().ToUpperInvariant() is "WORLD_CUP" or "WORLDCUP" or "FIFA_WORLD_CUP" ? "SOCCER" : sport.Trim().ToUpperInvariant();
+            var normalizedProviderCategory = NormalizePublicProviderCategoryFilter(providerCategory);
+            var sourceRows = new List<JsonObject>();
+
+            if (string.Equals(normalizedSport, "SOCCER", StringComparison.OrdinalIgnoreCase))
+            {
+                var soccerRows = await BuildSoccerWorldCupLineShoppingContextResponseAsync(
+                    requestedTake,
+                    includeBookmakerPrices: false,
+                    freshnessMinutes,
+                    normalizedProviderCategory,
+                    soccerPredictionService,
+                    soccerPredictionOptions.Value,
+                    soccerGradingOptions.Value,
+                    soccerTopPicksOptions.Value,
+                    dbContext,
+                    cancellationToken,
+                    includePlayerHistory: false,
+                    evaluationTake: Math.Max(requestedTake, 500));
+
+                sourceRows.AddRange(soccerRows.ComparisonGroups
+                    .Select(row => JsonSerializer.SerializeToNode(row) as JsonObject)
+                    .Where(row => row is not null)
+                    .Select(row => row!));
+            }
+            else
+            {
+                var lifecycleFreshnessMinutes = Math.Clamp(freshnessMinutes ?? DefaultTheOddsLineShoppingFreshnessMinutes, 1, 1440);
+                var platformProps = await LoadScopedTheOddsPlatformPropsAsync(dbContext, normalizedProviderCategory, cancellationToken);
+                var activePlatformProps = platformProps
+                    .Where(row =>
+                    {
+                        var lifecycle = BuildTheOddsLineShoppingLifecycle(
+                            row.EventStartTime,
+                            row.ObservedAt,
+                            generatedAtUtc,
+                            lifecycleFreshnessMinutes);
+                        return string.Equals(lifecycle.Status, "Active", StringComparison.OrdinalIgnoreCase)
+                            && !lifecycle.IsStale
+                            && !lifecycle.IsExpired;
+                    })
+                    .ToList();
+                var probabilityAnalysis = await LoadProbabilityAnalysisAsync(
+                    runId: null,
+                    activePlatformProps.Select(row => row.PropId).Distinct().ToArray(),
+                    probabilityService,
+                    cancellationToken);
+                var freshnessCutoff = generatedAtUtc.AddHours(-FreshnessWindowHours);
+                var rows = BuildTheOddsLineShoppingRows(activePlatformProps, probabilityAnalysis, freshnessCutoff);
+                var groups = BuildTheOddsLineShoppingGroups(rows, generatedAtUtc, lifecycleFreshnessMinutes, predictionGenerationOptions.Value);
+
+                sourceRows.AddRange(groups
+                    .Select(group => JsonSerializer.SerializeToNode(ToLineShoppingResponseGroup(group, includeBookmakerPrices: false)) as JsonObject)
+                    .Where(row => row is not null)
+                    .Select(row => row!));
+            }
+
+            var evaluatedSourceRows = sourceRows
+                .Select(row =>
+                {
+                    var result = ApplyLikelyHitMetadata(row, likelyHitModel, topPicksModelOptions.Value);
+                    return new { Row = row, Result = result };
+                })
+                .ToArray();
+
+            var selectedRecommendedLineRows = evaluatedSourceRows
+                .Where(row => row.Result.CanShowAsPick)
+                .GroupBy(row => ReadLikelyHitString(row.Row, "alternateLineGroupKey") ?? string.Empty, StringComparer.OrdinalIgnoreCase)
+                .Select(group => group
+                    .OrderByDescending(row => row.Result.LineUtilityScore ?? decimal.MinValue)
+                    .ThenByDescending(row => row.Result.TopPickScore ?? decimal.MinValue)
+                    .ThenByDescending(row => row.Result.HitChance ?? decimal.MinValue)
+                    .ThenByDescending(row => ReadLikelyHitDecimal(row.Row, "bestDecimalPrice") ?? decimal.MinValue)
+                    .First())
+                .Select(row => row.Row)
+                .ToHashSet(ReferenceEqualityComparer.Instance);
+
+            foreach (var row in evaluatedSourceRows)
+            {
+                var selectedRecommendedLine = selectedRecommendedLineRows.Contains(row.Row);
+                row.Row["selectedRecommendedLine"] = selectedRecommendedLine;
+                if (selectedRecommendedLine)
+                {
+                    row.Row["balancedLineSelectionReason"] = "SelectedBestBalancedLineInAlternateLadder";
+                }
+                else if (row.Result.CanShowAsPick)
+                {
+                    row.Row["balancedLineSelectionReason"] = "PlayableButLowerBalancedLineUtility";
+                }
+            }
+
+            var audited = evaluatedSourceRows
+                .Where(row => string.IsNullOrWhiteSpace(playerName) ||
+                    (ReadLikelyHitString(row.Row, "player") ?? string.Empty).Contains(playerName, StringComparison.OrdinalIgnoreCase))
+                .Where(row => string.IsNullOrWhiteSpace(propType) ||
+                    string.Equals(ReadLikelyHitString(row.Row, "normalizedPropType"), propType, StringComparison.OrdinalIgnoreCase))
+                .Where(row => string.IsNullOrWhiteSpace(eventId) ||
+                    string.Equals(ReadLikelyHitString(row.Row, "eventId"), eventId, StringComparison.OrdinalIgnoreCase))
+                .Where(row => string.IsNullOrWhiteSpace(competition) ||
+                    string.Equals(ReadLikelyHitString(row.Row, "competition"), competition, StringComparison.OrdinalIgnoreCase))
+                .Where(row => shouldIncludeRejected || row.Result.CanShowAsPick)
+                .OrderByDescending(row => row.Result.CanShowAsPick)
+                .ThenByDescending(row => row.Result.TopPickScore ?? decimal.MinValue)
+                .ThenByDescending(row => row.Result.HitChance ?? decimal.MinValue)
+                .Take(requestedTake)
+                .ToArray();
+
+            return Results.Ok(new
+            {
+                generatedAtUtc,
+                callsExternalApis = false,
+                readOnly = true,
+                writesRows = false,
+                modelVersion = LikelyHitModelService.ModelVersion,
+                probabilityModelVersion = LikelyHitModelService.ProbabilityModelVersion,
+                recommendationContractVersion = LikelyHitModelService.RecommendationContractVersion,
+                filters = new
+                {
+                    sport = normalizedSport,
+                    competition,
+                    playerName,
+                    propType,
+                    providerCategory = normalizedProviderCategory,
+                    eventId,
+                    includeRejected = shouldIncludeRejected,
+                    take = requestedTake
+                },
+                summary = new
+                {
+                    sourceRowsEvaluated = sourceRows.Count,
+                    returnedRows = audited.Length,
+                    topPickEligibleRows = evaluatedSourceRows.Count(row => row.Result.CanShowAsPick),
+                    rejectedRows = evaluatedSourceRows.Count(row => !row.Result.CanShowAsPick),
+                    playablePriceEligibleRows = evaluatedSourceRows.Count(row => row.Result.PlayablePriceEligible),
+                    sportsbookRowsBlockedByBalancedPrice = evaluatedSourceRows.Count(row =>
+                        row.Result.FatalConflictCodes.Contains("SportsbookPriceTooExpensiveForBalancedTopPick", StringComparer.OrdinalIgnoreCase)),
+                    sportsbookRowsBlockedByBalancedLongshot = evaluatedSourceRows.Count(row =>
+                        row.Result.FatalConflictCodes.Contains("SportsbookPriceTooLongshotForBalancedTopPick", StringComparer.OrdinalIgnoreCase)),
+                    sportsbookRowsBlockedBySuspiciousMarketGap = evaluatedSourceRows.Count(row =>
+                        row.Result.FatalConflictCodes.Contains("SportsbookSuspiciousModelMarketGap", StringComparer.OrdinalIgnoreCase)),
+                    sportsbookRowsBlockedByPublicHitChance = evaluatedSourceRows.Count(row =>
+                        row.Result.FatalConflictCodes.Contains("BelowSportsbookPublicTopPickHitChance", StringComparer.OrdinalIgnoreCase)),
+                    selectedRecommendedLineRows = selectedRecommendedLineRows.Count,
+                    rejectedByFatalConflict = evaluatedSourceRows
+                        .Select(row => row.Row)
+                        .SelectMany(row => row.TryGetPropertyValue("fatalConflictCodes", out var codes) && codes is JsonArray arr
+                            ? arr.Select(code => code?.GetValue<string>()).Where(code => !string.IsNullOrWhiteSpace(code))!
+                            : Array.Empty<string>())
+                        .GroupBy(code => code!, StringComparer.OrdinalIgnoreCase)
+                        .Select(group => new { code = group.Key, count = group.Count() })
+                        .OrderByDescending(row => row.count)
+                        .ThenBy(row => row.code)
+                        .ToArray()
+                },
+                rows = audited.Select(row => new
+                {
+                    sport = ReadLikelyHitString(row.Row, "sport"),
+                    competition = ReadLikelyHitString(row.Row, "competition"),
+                    player = ReadLikelyHitString(row.Row, "player"),
+                    propType = ReadLikelyHitString(row.Row, "normalizedPropType"),
+                    side = ReadLikelyHitString(row.Row, "bestSide"),
+                    line = ReadLikelyHitDecimal(row.Row, "line"),
+                    providerCategory = ReadLikelyHitString(row.Row, "providerCategory"),
+                    providerOrBook = ReadLikelyHitString(row.Row, "bestBookmaker") ?? ReadLikelyHitString(row.Row, "entryProvider"),
+                    americanPrice = ReadLikelyHitInt(row.Row, "bestAmericanPrice"),
+                    decimalPrice = ReadLikelyHitDecimal(row.Row, "bestDecimalPrice"),
+                    impliedProbability = ReadLikelyHitDecimal(row.Row, "bestImpliedProbability"),
+                    rawWeightedProbability = row.Result.RawWeightedProbability,
+                    smoothedProbability = row.Result.SmoothedProbability,
+                    priorProbability = row.Result.PriorProbability,
+                    priorWeight = row.Result.PriorWeight,
+                    recentModifier = row.Result.RecentModifier,
+                    marketCalibrationAdjustment = row.Result.MarketCalibrationAdjustment,
+                    uncertaintyPenalty = row.Result.UncertaintyPenalty,
+                    hitChance = row.Result.HitChance,
+                    publicTopPickMinimumHitChance = row.Result.PublicTopPickMinimumHitChance,
+                    publicTopPickHitChanceGatePassed = row.Result.PublicTopPickHitChanceGatePassed,
+                    effectiveSampleSize = row.Result.EffectiveSampleSize,
+                    weightedHits = row.Result.WeightedHits,
+                    weightedLosses = row.Result.WeightedLosses,
+                    weightedPushes = row.Result.WeightedPushes,
+                    reliabilityScore = row.Result.ReliabilityScore,
+                    payoutQualityScore = row.Result.PayoutQualityScore,
+                    sweetSpotScore = row.Result.SweetSpotScore,
+                    hitChanceScore = row.Result.HitChanceScore,
+                    balancedLineUtility = row.Result.BalancedLineUtility,
+                    priceGateStatus = row.Result.PriceGateStatus,
+                    priceGateReason = row.Result.PriceGateReason,
+                    playablePriceEligible = row.Result.PlayablePriceEligible,
+                    favoritePriceCeiling = row.Result.FavoritePriceCeiling,
+                    underdogPriceCeiling = row.Result.UnderdogPriceCeiling,
+                    suspiciousMarketGap = row.Result.SuspiciousMarketGap,
+                    marketGap = row.Result.MarketGap,
+                    topPickQualityEligible = row.Result.TopPickQualityEligible,
+                    lineUtilityScore = row.Result.LineUtilityScore,
+                    alternateLineGroupKey = ReadLikelyHitString(row.Row, "alternateLineGroupKey"),
+                    balancedLineSelectionReason = ReadLikelyHitString(row.Row, "balancedLineSelectionReason"),
+                    fatalConflictCodes = row.Result.FatalConflictCodes,
+                    topPickEligible = row.Result.CanShowAsPick,
+                    topPickScore = row.Result.TopPickScore,
+                    selectedRecommendedLine = ReadLikelyHitBool(row.Row, "selectedRecommendedLine") == true,
+                    row.Result.ModelVersion,
+                    row.Result.ProbabilityModelVersion
+                }).ToArray()
+            });
+        })
+        .WithName("LikelyHitOpportunityAudit")
+        .WithSummary("Read-only Likely-Hit Top Picks model audit over persisted market rows.");
+
+        endpoints.MapGet("/api/debug/model/likely-hit/replay", async (
+            string? sport,
+            string? competition,
+            string? providerCategory,
+            DateOnly? dateFrom,
+            DateOnly? dateTo,
+            string? propType,
+            string? side,
+            bool? includeSamples,
+            int? sampleTake,
+            string? baselineMode,
+            int? maxRows,
+            int? freshnessMinutes,
+            bool? simulateBorderlineProfileGate,
+            decimal? minBorderlineBreakEvenMargin,
+            decimal? minBorderlineEffectiveSampleSize,
+            int? borderlineWorstAllowedFavoriteAmericanOdds,
+            int? borderlineBestAllowedUnderdogAmericanOdds,
+            bool? requireBorderlineProfileAllow,
+            bool? simulatePublicTopPickProfileGate,
+            bool? requirePublicProfileAllow,
+            bool? blockPublicProfileBlock,
+            bool? penalizePublicProfilePenalize,
+            decimal? maxPropShapeShare,
+            int? maxRowsPerPropShape,
+            decimal? minPublicBreakEvenMargin,
+            decimal? minPublicBalancedUtility,
+            ApplicationDbContext dbContext,
+            IPredictionProbabilityService probabilityService,
+            ILikelyHitModelService likelyHitModel,
+            IOptions<PredictionGenerationOptions> predictionGenerationOptions,
+            IOptions<TopPicksModelOptions> topPicksModelOptions,
+            CancellationToken cancellationToken) =>
+        {
+            var generatedAtUtc = DateTimeOffset.UtcNow;
+            var normalizedSport = string.IsNullOrWhiteSpace(sport)
+                ? "MLB"
+                : sport.Trim().ToUpperInvariant() is "WORLD_CUP" or "WORLDCUP" or "FIFA_WORLD_CUP" ? "SOCCER" : sport.Trim().ToUpperInvariant();
+            var normalizedProviderCategory = NormalizePublicProviderCategoryFilter(providerCategory);
+            var requestedMaxRows = Math.Clamp(maxRows ?? 5000, 1, 20000);
+            var requestedSampleTake = Math.Clamp(sampleTake ?? 20, 1, 100);
+
+            var sourceRows = await BuildLikelyHitReplaySourceRowsAsync(
+                normalizedSport,
+                competition,
+                normalizedProviderCategory,
+                dateFrom,
+                dateTo,
+                propType,
+                side,
+                requestedMaxRows,
+                generatedAtUtc,
+                Math.Clamp(freshnessMinutes ?? DefaultTheOddsLineShoppingFreshnessMinutes, 1, 1440),
+                dbContext,
+                probabilityService,
+                predictionGenerationOptions.Value,
+                cancellationToken);
+
+            var response = await BuildLikelyHitReplayResponseAsync(
+                sourceRows,
+                generatedAtUtc,
+                normalizedSport,
+                competition,
+                normalizedProviderCategory,
+                dateFrom,
+                dateTo,
+                propType,
+                side,
+                includeSamples ?? false,
+                requestedSampleTake,
+                baselineMode,
+                new LikelyHitBorderlineSimulationOptions(
+                    simulateBorderlineProfileGate ?? false,
+                    minBorderlineBreakEvenMargin ?? 0.05m,
+                    minBorderlineEffectiveSampleSize ?? 30m,
+                    borderlineWorstAllowedFavoriteAmericanOdds ?? -125,
+                    borderlineBestAllowedUnderdogAmericanOdds ?? 150,
+                    requireBorderlineProfileAllow ?? true),
+                new LikelyHitPublicTopPickSimulationOptions(
+                    simulatePublicTopPickProfileGate ?? false,
+                    requirePublicProfileAllow ?? false,
+                    blockPublicProfileBlock ?? true,
+                    penalizePublicProfilePenalize ?? false,
+                    maxPropShapeShare ?? 0m,
+                    maxRowsPerPropShape ?? 0,
+                    minPublicBreakEvenMargin,
+                    minPublicBalancedUtility),
+                likelyHitModel,
+                topPicksModelOptions.Value,
+                dbContext,
+                cancellationToken);
+
+            return Results.Ok(response);
+        })
+        .WithName("LikelyHitReplayAudit")
+        .WithSummary("Read-only Likely-Hit v1 replay and calibration audit over persisted market opportunities.");
 
         endpoints.MapGet("/api/debug/the-odds/mlb/projection-probability-conflicts", async (
             Guid? runId,
