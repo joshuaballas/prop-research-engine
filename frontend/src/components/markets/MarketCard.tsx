@@ -7,7 +7,6 @@ import { useEntryBuilder } from '../../hooks/useEntryBuilder';
 import type { MarketOpportunity } from '../../types/markets';
 import { formatPercent } from '../../utils/formatters';
 import { entryBuilderUnavailableReason, getOperationalMarketCautions, isEntryBuilderAddableMarket } from '../../utils/marketCautions';
-import { TrustValue } from '../metrics/TrustValue';
 import { PropDetailsModal } from '../prop-history/PropDetailsModal';
 import { StatusPill } from '../ui/StatusPill';
 import { ProjectionModifierBadge } from './ProjectionModifierBadge';
@@ -20,9 +19,7 @@ import {
   OpportunityPickText,
   OpportunityProviderRow
 } from '../ui/OpportunityCard';
-import { marketTagLabel } from '../../utils/marketTags';
 import { CautionLabels } from './CautionLabels';
-import { getDisplayExpectedValue } from '../../utils/expectedValueDisplay';
 import { marketDisplayLabel } from '../../utils/marketDisplay';
 
 export function MarketCard({ market }: { market: MarketOpportunity }) {
@@ -34,8 +31,7 @@ export function MarketCard({ market }: { market: MarketOpportunity }) {
   const canAddFromScanner = addable && !incompatible;
   const cautions = getOperationalMarketCautions(market, { locked: incompatible && addable });
   const locked = !selected && !canAddFromScanner;
-  const displayEv = getDisplayExpectedValue(market);
-  const headlineValue = displayEv ?? market.probabilityEdge;
+  const headlineValue = market.probabilityEdge;
   const displayLabel = marketDisplayLabel(market);
   const actions = (
     <>
@@ -66,7 +62,7 @@ export function MarketCard({ market }: { market: MarketOpportunity }) {
         value={
           <Stack spacing={0.1} alignItems="flex-end">
             <Typography variant="caption" color="text.secondary" fontWeight={850} lineHeight={1}>
-              {displayEv === null ? 'Edge' : 'EV'}
+              Edge
             </Typography>
             <Typography color={(headlineValue ?? 0) > 0 ? 'success.main' : 'error.main'} fontWeight={950} whiteSpace="nowrap" lineHeight={1.1}>
               {formatPercent(headlineValue, { signed: true })}
@@ -96,10 +92,9 @@ export function MarketCard({ market }: { market: MarketOpportunity }) {
         }
         metrics={
           <Box>
-            <OpportunityMetricGrid columns={{ xs: 2, sm: 4 }} sx={{ borderTop: 0, pt: 0 }}>
+            <OpportunityMetricGrid columns={{ xs: 2, sm: 2 }} sx={{ borderTop: 0, pt: 0 }}>
               <OpportunityMetricItem label="Edge" value={formatPercent(market.probabilityEdge, { signed: true })} metric="edge" />
               <OpportunityMetricItem label="Hit chance" value={formatPercent(market.modelProbability)} metric="hitChance" />
-              <OpportunityMetricItem label="Trust" value={<TrustValue level={market.trustLevel} sx={{ fontSize: 14, fontWeight: 950, lineHeight: 1.5 }} />} metric="trust" />
             </OpportunityMetricGrid>
           </Box>
         }
@@ -115,7 +110,6 @@ function StatusRow({ market }: { market: MarketOpportunity }) {
   return (
     <Stack direction="row" gap={0.6} flexWrap="wrap" useFlexGap justifyContent="flex-end">
       {market.providerCategory === 'Sportsbook' ? <StatusPill label={market.recommendationActionableForUser ? 'Sportsbook pick' : 'Sportsbook line'} /> : null}
-      <StatusPill label={marketTagLabel(market.strategyClassification)} />
       {market.projectionModifier === 'Unknown Promo' ? null : <ProjectionModifierBadge modifier={market.projectionModifier} />}
     </Stack>
   );

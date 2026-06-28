@@ -16,8 +16,8 @@ export function mapPerformanceSummaryToGroups(summary: MarketPerformanceSummaryD
     ...(summary.groups.byProvider ?? []).map((row) => mapPerformanceGroup(row, 'Provider')),
     ...(summary.groups.byProviderCategory ?? []).map((row) => mapPerformanceGroup(row, 'Provider')),
     ...(summary.groups.byPropType ?? []).map((row) => mapPerformanceGroup(row, 'Prop Type')),
-    ...(summary.groups.byStrategyClassification ?? []).map((row) => mapPerformanceGroup(row, 'Trust')),
-    ...(summary.groups.byStrategyTier ?? []).map((row) => mapPerformanceGroup(row, 'Strategy')),
+    ...(summary.groups.byStrategyClassification ?? []).map((row) => mapPerformanceGroup(row, 'Model Segment')),
+    ...(summary.groups.byStrategyTier ?? []).map((row) => mapPerformanceGroup(row, 'Model Segment')),
     ...(summary.groups.byProviderAndPropType ?? []).map((row) => mapPerformanceGroup(row, 'Provider + Prop Type'))
   ];
 }
@@ -69,10 +69,10 @@ function mapMarketGroupToOpportunity(group: MarketGroupDto, index: number, sourc
   const expectedValueUnavailableReason =
     readString(group, 'expectedValueUnavailableReason', 'ExpectedValueUnavailableReason') ??
     (isDfs
-      ? 'EV is hidden for DFS props because sportsbook odds/break-even pricing is not available.'
+      ? 'Expected value is hidden for DFS props because sportsbook odds/break-even pricing is not available.'
       : showExpectedValue
         ? undefined
-        : 'Sportsbook EV requires odds/break-even pricing.');
+        : 'Sportsbook expected value requires odds/break-even pricing.');
   const provider = resolveDisplayProvider(group, providerCategory);
   const entryCompatibilityGroup = readString(group, 'entryCompatibilityGroup', 'EntryCompatibilityGroup') ?? provider.replace(/\s+/g, '');
   const propType = readString(group, 'normalizedPropType', 'NormalizedPropType') ?? 'Market';
@@ -386,8 +386,8 @@ function normalizePerformanceGroupType(groupType: string, fallback: string) {
     provider: 'Provider',
     providerCategory: 'Provider',
     propType: 'Prop Type',
-    strategyClassification: 'Trust',
-    strategyTier: 'Strategy',
+    strategyClassification: 'Model Segment',
+    strategyTier: 'Model Segment',
     providerAndPropType: 'Provider + Prop Type'
   };
 

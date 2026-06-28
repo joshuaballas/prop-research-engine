@@ -2,23 +2,22 @@ import type { MarketOpportunity, StrategyClassification } from '../types/markets
 import { palette } from '../theme/palette';
 
 const tagLabels: Record<string, string> = {
-  Candidate: 'Candidate',
+  Candidate: 'Featured',
   TopPick: 'Top Pick',
   'Top Pick': 'Top Pick',
   Watchlist: 'Watchlist',
   Research: 'Research',
-  ResearchOnly: 'Research',
-  'Research only': 'Research',
-  'Research-only': 'Research',
-  Avoid: 'Avoid'
+  Avoid: 'Blocked'
 };
 
 export const marketTagTextColors: Record<string, string> = {
   Candidate: '#FACC15',
+  Featured: '#FACC15',
   'Top Pick': '#FACC15',
   Watchlist: palette.warning,
   Research: '#CBD5E1',
-  Avoid: palette.danger
+  Avoid: palette.danger,
+  Blocked: palette.danger
 };
 
 export function marketTagValue(market: MarketOpportunity) {

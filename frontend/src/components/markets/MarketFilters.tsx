@@ -23,11 +23,13 @@ interface MarketFiltersProps {
   useToggleButtons?: boolean;
   classificationLabel?: string;
   candidateOnly?: boolean;
+  candidateOnlyLabel?: string;
   dfsActionableOnly?: boolean;
   dfsActionableLabel?: string;
   onCandidateOnlyChange?: (value: boolean) => void;
   onDfsActionableOnlyChange?: (value: boolean) => void;
   showClassificationFilter?: boolean;
+  showOpportunityFilter?: boolean;
   scannerFields?: boolean;
   compactMobile?: boolean;
   idPrefix?: string;
@@ -46,13 +48,15 @@ interface MarketFiltersProps {
 
 export function MarketFilters({
   useToggleButtons = false,
-  classificationLabel = 'Strategy',
+  classificationLabel = 'Model segment',
   candidateOnly,
+  candidateOnlyLabel = 'Featured only',
   dfsActionableOnly,
   dfsActionableLabel = 'DFS actionable',
   onCandidateOnlyChange,
   onDfsActionableOnlyChange,
   showClassificationFilter = true,
+  showOpportunityFilter = true,
   scannerFields = false,
   compactMobile = false,
   idPrefix = 'market-filters',
@@ -148,7 +152,7 @@ export function MarketFilters({
           {...fieldProps('trust')}
           sx={{ minWidth: { xs: '100%', md: 126 }, width: { md: 126 } }}
         >
-          {(trustOptions ?? (classificationLabel === 'Trust' ? ['All', 'Strong', 'Medium', 'Weak'] : ['All', 'Candidate', 'Watchlist', 'Research', 'Avoid']).map((item) => ({ label: item, value: item }))).map((item) => (
+          {(trustOptions ?? ['All', 'Featured', 'Watchlist', 'Review', 'Blocked'].map((item) => ({ label: item, value: item }))).map((item) => (
             <MenuItem key={item.value} value={item.value}>
               {item.label}
             </MenuItem>
@@ -157,7 +161,7 @@ export function MarketFilters({
       ) : null}
       {scannerFields ? (
         <>
-          {(opportunityOptions?.length ?? 0) > 1 || !controlled ? (
+          {showOpportunityFilter && ((opportunityOptions?.length ?? 0) > 1 || !controlled) ? (
             <TextField
               {...accessibilityProps('opportunity', variant)}
               label="Opportunity"
@@ -196,7 +200,7 @@ export function MarketFilters({
     <Stack direction="row" spacing={0.75} useFlexGap alignItems="center" sx={{ flex: '0 0 auto', flexWrap: 'wrap', userSelect: 'none' }}>
       {candidateOnly !== undefined && onCandidateOnlyChange ? (
         <FilterToggleButton
-          label="Candidate only"
+          label={candidateOnlyLabel}
           active={candidateOnly}
           onToggle={() => onCandidateOnlyChange(!candidateOnly)}
         />
@@ -217,6 +221,7 @@ export function MarketFilters({
   ) : useToggleButtons ? (
     <FilterToggleGroup
       candidateOnly={candidateOnly}
+      candidateOnlyLabel={candidateOnlyLabel}
       dfsActionableOnly={dfsActionableOnly}
       dfsActionableLabel={dfsActionableLabel}
       onCandidateOnlyChange={onCandidateOnlyChange}
@@ -336,12 +341,14 @@ function FilterToggleButton({ label, active, onToggle }: { label: string; active
 
 function FilterToggleGroup({
   candidateOnly,
+  candidateOnlyLabel,
   dfsActionableOnly,
   dfsActionableLabel,
   onCandidateOnlyChange,
   onDfsActionableOnlyChange
 }: {
   candidateOnly?: boolean;
+  candidateOnlyLabel?: string;
   dfsActionableOnly?: boolean;
   dfsActionableLabel?: string;
   onCandidateOnlyChange?: (value: boolean) => void;
@@ -353,7 +360,7 @@ function FilterToggleGroup({
   const activeDfsActionableOnly = dfsActionableOnly ?? localDfsActionableOnly;
   const filters = [
     {
-      label: 'Candidate only',
+      label: candidateOnlyLabel ?? 'Featured only',
       active: activeCandidateOnly,
       onToggle: () => {
         const nextValue = !activeCandidateOnly;
@@ -412,7 +419,7 @@ function CheckboxGroup() {
     <Stack direction="row" spacing={0.35} flexWrap="wrap" useFlexGap sx={{ flexShrink: 0 }}>
       <FormControlLabel
         control={<Checkbox id="market-filters-uncontrolled-candidate-only" name="market-filters-uncontrolled-candidate-only" defaultChecked size="small" />}
-        label="Candidate only"
+        label="Featured only"
         sx={{ mr: 0, whiteSpace: 'nowrap', '& .MuiFormControlLabel-label': { fontSize: 13, fontWeight: 800 } }}
       />
       <FormControlLabel

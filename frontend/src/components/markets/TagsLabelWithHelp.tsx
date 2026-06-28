@@ -2,11 +2,11 @@ import { Box, Stack, Tooltip, Typography } from '@mui/material';
 import { marketTagTextColors } from '../../utils/marketTags';
 
 const tagDefinitions = [
-  ['Top Pick', 'Higher-priority opportunity based on hit chance, edge, trust, and line context.'],
+  ['Top Pick', 'Higher-priority opportunity based on hit chance, edge, and line context.'],
   ['Watchlist', 'Worth monitoring, but not strong enough to treat as a top pick yet.'],
   ['Research', 'Useful for review, but not recommended for adding directly to an entry.'],
-  ['Avoid', 'Low-quality, stale, risky, or historically weak. Review only.'],
-  ['Candidate', 'A row that currently passes candidate criteria.']
+  ['Blocked', 'Low-quality, stale, risky, or historically weak. Review only.'],
+  ['Featured', 'A row that currently passes featured-row criteria.']
 ];
 
 const tagsHelp = (

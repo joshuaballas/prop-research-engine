@@ -21,7 +21,6 @@ import { palette } from '../../theme/palette';
 import type { EntryLeg } from '../../types/entryBuilder';
 import type { buildEntryReview } from '../../utils/entryReview';
 import { formatPercent } from '../../utils/formatters';
-import { TrustValue } from '../metrics/TrustValue';
 import { ProviderLabel } from '../providers/ProviderLabel';
 import { AppCard } from '../ui/AppCard';
 import { OpportunityPickText } from '../ui/OpportunityCard';
@@ -148,7 +147,6 @@ export function EntryReceiptDialog({ open, onClose, legs, review, amount }: Entr
                       <TableCell>Game</TableCell>
                       <TableCell align="right">Edge</TableCell>
                       <TableCell align="right">Hit chance</TableCell>
-                      <TableCell>Trust</TableCell>
                       {showNotesColumn ? <TableCell>Notes</TableCell> : null}
                     </TableRow>
                   </TableHead>
@@ -171,7 +169,6 @@ export function EntryReceiptDialog({ open, onClose, legs, review, amount }: Entr
                         </TableCell>
                         <TableCell align="right">{formatPercent(leg.probabilityEdge, { signed: true })}</TableCell>
                         <TableCell align="right">{formatPercent(leg.modelProbability)}</TableCell>
-                        <TableCell><TrustValue level={leg.trustLevel} /></TableCell>
                         {showNotesColumn ? (
                           <TableCell>
                             <Typography variant="body2" color="text.secondary">
@@ -204,7 +201,6 @@ export function EntryReceiptDialog({ open, onClose, legs, review, amount }: Entr
                         </Typography>
                         <Typography fontWeight={950}>{leg.player}</Typography>
                       </Box>
-                      <TrustValue level={leg.trustLevel} />
                     </Stack>
                     <OpportunityPickText side={leg.side} propType={leg.propType} line={leg.line} />
                     <Typography variant="body2" color="text.secondary">

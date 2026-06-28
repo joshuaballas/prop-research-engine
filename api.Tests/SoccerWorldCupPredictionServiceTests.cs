@@ -142,6 +142,7 @@ public sealed class SoccerWorldCupPredictionServiceTests
             line: 0.5m,
             priceOver: -220,
             priceOverDecimal: 1.454545m);
+        await SeedPromotedSoccerTopPickSnapshotAsync(factory, line: 0.5m);
         using var client = factory.CreateClient();
 
         var response = await client.GetAsync("/api/markets/top-picks?sport=SOCCER&competition=World%20Cup&take=10");
@@ -184,6 +185,7 @@ public sealed class SoccerWorldCupPredictionServiceTests
             line: 0.5m,
             priceOver: -220,
             priceOverDecimal: 1.454545m);
+        await SeedPromotedSoccerTopPickSnapshotAsync(factory, line: 0.5m);
         using var client = factory.CreateClient();
 
         var response = await client.GetAsync("/api/markets/top-picks?take=1");
@@ -219,7 +221,8 @@ public sealed class SoccerWorldCupPredictionServiceTests
         var lineGroup = Assert.Single(lineShopping.GetProperty("comparisonGroups").EnumerateArray());
 
         Assert.Empty(topPicks.GetProperty("topPicks").EnumerateArray());
-        Assert.Equal(1, topPicks.GetProperty("summary").GetProperty("sampleBlockedCount").GetInt32());
+        Assert.False(topPicks.GetProperty("snapshotBacked").GetBoolean());
+        Assert.Contains("No active persisted Soccer / World Cup top-pick snapshots", topPicks.GetProperty("fallbackReason").GetString());
         Assert.True(lineGroup.GetProperty("modelProbabilityAvailable").GetBoolean());
         Assert.True(lineGroup.GetProperty("isResearchOnly").GetBoolean());
         Assert.Equal("ResearchOnly", lineGroup.GetProperty("strategyTier").GetString());
@@ -234,6 +237,7 @@ public sealed class SoccerWorldCupPredictionServiceTests
             historicalValues: BuildSoccerHistory(overWins: 18, underWins: 5),
             line: 0.5m,
             eventStart: DateTimeOffset.UtcNow.AddDays(-1));
+        await SeedPromotedSoccerTopPickSnapshotAsync(factory, line: 0.5m, lifecycleStatus: "Expired", isExpired: true);
         using var client = factory.CreateClient();
 
         var response = await client.GetAsync("/api/markets/top-picks?sport=SOCCER&competition=World%20Cup&take=10");
@@ -242,9 +246,8 @@ public sealed class SoccerWorldCupPredictionServiceTests
         var json = await response.Content.ReadFromJsonAsync<JsonElement>();
         Assert.Empty(json.GetProperty("topPicks").EnumerateArray());
         Assert.Equal(0, json.GetProperty("summary").GetProperty("activeCandidateCount").GetInt32());
-        Assert.Equal(1, json.GetProperty("summary").GetProperty("modelEligibleBeforeLifecycleCount").GetInt32());
-        Assert.Equal(1, json.GetProperty("summary").GetProperty("staleOrExpiredModelEligibleCount").GetInt32());
-        Assert.Contains("stale, expired, or already started", json.GetProperty("fallbackReason").GetString());
+        Assert.False(json.GetProperty("snapshotBacked").GetBoolean());
+        Assert.Contains("No active persisted Soccer / World Cup top-pick snapshots", json.GetProperty("fallbackReason").GetString());
     }
 
     [Fact]
@@ -257,6 +260,7 @@ public sealed class SoccerWorldCupPredictionServiceTests
             line: 0.5m,
             eventStart: DateTimeOffset.UtcNow.AddDays(1),
             observedAt: DateTimeOffset.UtcNow.AddHours(-2));
+        await SeedPromotedSoccerTopPickSnapshotAsync(factory, line: 0.5m, lifecycleStatus: "Stale", isStale: true);
         using var client = factory.CreateClient();
 
         var response = await client.GetAsync("/api/markets/top-picks?sport=SOCCER&competition=World%20Cup&take=10&freshnessMinutes=30");
@@ -265,8 +269,8 @@ public sealed class SoccerWorldCupPredictionServiceTests
         var json = await response.Content.ReadFromJsonAsync<JsonElement>();
         Assert.Empty(json.GetProperty("topPicks").EnumerateArray());
         Assert.Equal(0, json.GetProperty("summary").GetProperty("activeCandidateCount").GetInt32());
-        Assert.Equal(1, json.GetProperty("summary").GetProperty("modelEligibleBeforeLifecycleCount").GetInt32());
-        Assert.Equal(1, json.GetProperty("summary").GetProperty("staleOrExpiredModelEligibleCount").GetInt32());
+        Assert.False(json.GetProperty("snapshotBacked").GetBoolean());
+        Assert.Contains("No active persisted Soccer / World Cup top-pick snapshots", json.GetProperty("fallbackReason").GetString());
     }
 
     [Fact]
@@ -521,6 +525,142 @@ public sealed class SoccerWorldCupPredictionServiceTests
             PriceOverDecimal: priceOverDecimal,
             PriceUnder: priceUnder,
             PriceUnderDecimal: priceUnderDecimal));
+    }
+
+    private static async Task SeedPromotedSoccerTopPickSnapshotAsync(
+        SafetyTestApplicationFactory factory,
+        decimal line,
+        string lifecycleStatus = "Active",
+        bool isStale = false,
+        bool isExpired = false)
+    {
+        using var scope = factory.Services.CreateScope();
+        var dbContext = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+        var now = DateTimeOffset.UtcNow;
+        var platformProp = await dbContext.PlatformProps
+            .Include(row => row.Prop)
+                .ThenInclude(prop => prop!.Player)
+            .Include(row => row.Prop)
+                .ThenInclude(prop => prop!.PropType)
+            .SingleAsync();
+        var prop = platformProp.Prop!;
+        var player = prop.Player!;
+        var propType = prop.PropType!;
+        var eventStart = prop.StartsAt;
+        var refreshRun = new TheOddsRefreshRun
+        {
+            Id = Guid.NewGuid(),
+            Provider = "The Odds API",
+            Sport = "SOCCER",
+            SlateDate = DateOnly.FromDateTime(eventStart.UtcDateTime.Date),
+            StartedAtUtc = now.AddMinutes(-4),
+            CompletedAtUtc = now.AddMinutes(-3),
+            Succeeded = true,
+            Failed = false,
+            Blocked = false,
+            DryRun = false,
+            ForceLive = true,
+            BookmakerPreset = "sportsbookContext",
+            ProviderCategoriesIncluded = "Sportsbook",
+            SportsbookBookmakersRequested = "fanduel",
+            DfsBookmakersRequested = string.Empty,
+            MarketsRequested = "player_shots",
+            EstimatedApiCalls = 1,
+            ActualApiCalls = 1,
+            PredictionCount = 1,
+            LineShoppingGroupCount = 1,
+            ActiveCandidateCount = lifecycleStatus == "Active" && !isStale && !isExpired ? 1 : 0,
+            DiagnosticsJson = JsonSerializer.SerializeToDocument(new { sport = "SOCCER", competition = "World Cup" })
+        };
+        var details = JsonSerializer.SerializeToDocument(new
+        {
+            player = player.DisplayName,
+            playerName = player.DisplayName,
+            normalizedPropType = propType.Name,
+            propType = propType.Name,
+            side = "Over",
+            bestSide = "Over",
+            line,
+            provider = "FanDuel",
+            bookmaker = "FanDuel",
+            bestBookmaker = "FanDuel",
+            providerCategory = "Sportsbook",
+            entryProviderCategory = "Sportsbook",
+            entryProvider = "FanDuel",
+            entryActionableForUser = false,
+            sportsbookContextResearchOnly = false,
+            isResearchOnly = false,
+            resultGradingSupported = true,
+            publicSoccerGradingEnabled = true,
+            isRecommendation = true,
+            recommendationActionableForUser = true,
+            recommendationType = "Sportsbook",
+            modelProbabilityAvailable = true,
+            selectedSideProbability = 0.8m,
+            rawSelectedSideProbability = 0.8m,
+            displayExpectedValue = 0.08m,
+            rawExpectedValue = 0.08m,
+            calibratedExpectedValue = 0.08m,
+            showExpectedValue = true,
+            evSuppressedReason = (string?)null,
+            riskTags = Array.Empty<string>(),
+            strategyClassification = "SoccerSportsbookRecommendation",
+            strategyTier = "SoccerSportsbookRecommendation",
+            trustLevel = "Strong",
+            entryRuleWarning = "Soccer sportsbook recommendation. Entry Builder is disabled for Soccer.",
+            entryUnavailableReason = "Soccer sportsbook recommendation. Entry Builder is disabled for Soccer.",
+            sport = "SOCCER",
+            competition = "World Cup",
+            eventName = "Cape Verde @ Uruguay",
+            eventStartTimeUtc = eventStart
+        });
+
+        dbContext.TheOddsRefreshRuns.Add(refreshRun);
+        dbContext.MarketTopPickSnapshots.Add(new MarketTopPickSnapshot
+        {
+            Id = Guid.NewGuid(),
+            TheOddsRefreshRunId = refreshRun.Id,
+            PredictionRunId = null,
+            Sport = "SOCCER",
+            SlateDate = refreshRun.SlateDate,
+            GeneratedAtUtc = now,
+            BookmakerPreset = "sportsbookContext",
+            ProviderCategory = "Sportsbook",
+            Provider = "The Odds API",
+            Bookmaker = "FanDuel",
+            Player = player.DisplayName,
+            EventId = "real-event-1",
+            EventName = "Cape Verde @ Uruguay",
+            EventStartTime = eventStart,
+            LifecycleStatus = lifecycleStatus,
+            IsStale = isStale,
+            IsExpired = isExpired,
+            PropType = propType.Name,
+            Line = line,
+            BestSide = "Over",
+            BestBookmaker = "FanDuel",
+            BestAmericanPrice = -220,
+            BestDecimalPrice = 1.454545m,
+            BestProbability = 0.8m,
+            BestImpliedProbability = 0.6875m,
+            BestProbabilityEdge = 0.1125m,
+            BestEstimatedEv = 0.08m,
+            StrategyClassification = "SoccerSportsbookRecommendation",
+            StrategyTier = "SoccerSportsbookRecommendation",
+            ModelVersion = "LikelyHitV1",
+            RecommendationContractVersion = "LikelyHitV1",
+            ProbabilityModelVersion = "SoccerEmpirical",
+            IsCandidate = lifecycleStatus == "Active" && !isStale && !isExpired,
+            IsWatchlist = false,
+            IsAvoid = false,
+            IsResearchOnly = false,
+            EntryProvider = "FanDuel",
+            EntryCompatibilityGroup = "SportsbookContext",
+            EntryProviderCategory = "Sportsbook",
+            EntryActionableForUser = false,
+            DetailsJson = details
+        });
+        await dbContext.SaveChangesAsync();
     }
 
     private static JsonDocument BuildWorldCupMetadata(

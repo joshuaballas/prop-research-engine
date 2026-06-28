@@ -191,6 +191,64 @@ public static partial class TheOddsApiDebugEndpoints
         CancellationToken cancellationToken)
     {
         providerCategory = NormalizePublicProviderCategoryFilter(providerCategory);
+        var totalStopwatch = Stopwatch.StartNew();
+        var requestedTake = Math.Clamp(take ?? 10, 1, 500);
+        var snapshot = await TryBuildTopPicksSnapshotResponseAsync(
+            take,
+            providerCategory,
+            dbContext,
+            cancellationToken);
+        if (snapshot is not null)
+        {
+            totalStopwatch.Stop();
+            return snapshot with
+            {
+                Diagnostics = BuildPublicTopPicksSnapshotDiagnostics(
+                    snapshot.TopPicks.Count,
+                    providerCategory,
+                    totalStopwatch.ElapsedMilliseconds,
+                    snapshotBacked: true,
+                    fallbackReason: null)
+            };
+        }
+
+        totalStopwatch.Stop();
+        var fallbackReason = await BuildSnapshotFallbackReasonAsync(
+            topPickSnapshots: true,
+            providerCategory,
+            dbContext,
+            cancellationToken);
+
+        return new MlbTopPicksReadResponse(
+            DateTimeOffset.UtcNow,
+            SnapshotBacked: false,
+            RefreshRunId: null,
+            FallbackReason: fallbackReason ?? "No persisted MLB top-pick snapshots are available for the requested filters.",
+            Diagnostics: BuildPublicTopPicksSnapshotDiagnostics(
+                returnedRows: 0,
+                providerCategory,
+                totalStopwatch.ElapsedMilliseconds,
+                snapshotBacked: false,
+                fallbackReason),
+            Run: new { runId = (Guid?)null, refreshRunIds = Array.Empty<Guid>(), predictionCount = 0 },
+            Summary: BuildTopPickSnapshotSummary(Array.Empty<JsonObject>()),
+            StrategyClassificationSummary: Array.Empty<object>(),
+            TopPicks: Array.Empty<object>());
+    }
+
+    internal static async Task<MlbTopPicksReadResponse> BuildMlbDynamicTopPicksResponseAsync(
+        Guid? runId,
+        int? take,
+        int? freshnessMinutes,
+        string? providerCategory,
+        ApplicationDbContext dbContext,
+        IPredictionProbabilityService probabilityService,
+        ILikelyHitModelService likelyHitModel,
+        PredictionGenerationOptions selectionOptions,
+        TopPicksModelOptions topPicksModelOptions,
+        CancellationToken cancellationToken)
+    {
+        providerCategory = NormalizePublicProviderCategoryFilter(providerCategory);
 
         if (!runId.HasValue && !topPicksModelOptions.IsLikelyHitV1Enabled)
         {
@@ -1430,6 +1488,30 @@ public static partial class TheOddsApiDebugEndpoints
         };
     }
 
+    private static object BuildPublicTopPicksSnapshotDiagnostics(
+        int returnedRows,
+        string? providerCategory,
+        long totalServerMs,
+        bool snapshotBacked,
+        string? fallbackReason)
+    {
+        return new
+        {
+            endpointKind = "top-picks",
+            source = snapshotBacked ? "persistedTopPickSnapshots" : "persistedTopPickSnapshotsUnavailable",
+            callsTheOddsApi = false,
+            usesPersistedDatabaseRowsOnly = true,
+            snapshotBacked,
+            snapshotReadMs = totalServerMs,
+            projectionMs = 0,
+            totalServerMs,
+            snapshotCount = returnedRows,
+            returnedTopPicks = returnedRows,
+            providerCategory,
+            fallbackReason
+        };
+    }
+
     private static object BuildSnapshotSummary(IReadOnlyCollection<MarketTopPickSnapshot> rows)
     {
         return new
@@ -1609,8 +1691,14 @@ public static partial class TheOddsApiDebugEndpoints
         if (string.Equals(GetString(obj, "providerCategory"), "Sportsbook", StringComparison.OrdinalIgnoreCase))
         {
             var displayExpectedValue = GetDecimal(obj, "displayExpectedValue");
-            return displayExpectedValue is > 0m and <= SportsbookRecommendationEvHardSuppressThreshold
-                && string.IsNullOrWhiteSpace(GetString(obj, "evSuppressedReason"));
+            if (displayExpectedValue is > 0m and <= SportsbookRecommendationEvHardSuppressThreshold)
+            {
+                return true;
+            }
+
+            var calibratedExpectedValue = GetDecimal(obj, "calibratedExpectedValue");
+            return !string.IsNullOrWhiteSpace(GetString(obj, "evSuppressedReason"))
+                && calibratedExpectedValue is > 0m and <= SportsbookRecommendationEvHardSuppressThreshold;
         }
 
         return true;
@@ -1669,9 +1757,8 @@ public static partial class TheOddsApiDebugEndpoints
             obj["bestProbabilityEdge"] = Math.Round(calibration.SelectedSideProbability.Value - impliedProbability.Value, 6);
         }
 
-        var shouldSuppressRecommendation = calibration.DisplayExpectedValue is not > 0m
-            || calibration.DisplayExpectedValue > SportsbookRecommendationEvHardSuppressThreshold
-            || !string.IsNullOrWhiteSpace(calibration.EvSuppressedReason);
+        var shouldSuppressRecommendation = calibration.CalibratedExpectedValue is not > 0m
+            || calibration.CalibratedExpectedValue > SportsbookRecommendationEvHardSuppressThreshold;
         if (!shouldSuppressRecommendation)
         {
             return;

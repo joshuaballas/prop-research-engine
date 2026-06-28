@@ -7,9 +7,9 @@ export type CautionKey =
   | 'Locked'
   | 'Provider issue'
   | 'Stale'
-  | 'Research only'
+  | 'Market context'
   | 'Low sample'
-  | 'Non-positive EV'
+  | 'Pricing caution'
   | 'Model caution';
 
 export interface MarketCaution {
@@ -25,9 +25,9 @@ const priority: CautionKey[] = [
   'Locked',
   'Provider issue',
   'Stale',
-  'Research only',
+  'Market context',
   'Low sample',
-  'Non-positive EV',
+  'Pricing caution',
   'Model caution'
 ];
 
@@ -38,9 +38,9 @@ const descriptions: Record<CautionKey, string> = {
   Locked: 'Entry is locked to another provider.',
   'Provider issue': 'Provider availability or line status may be unreliable.',
   Stale: 'Line may be stale based on the latest refresh.',
-  'Research only': 'This row is for research and should not be added directly.',
+  'Market context': 'This row is market context and should not be added directly.',
   'Low sample': 'Limited historical sample. Treat the estimate with extra caution.',
-  'Non-positive EV': 'Estimated value is not positive. Review only.',
+  'Pricing caution': 'Pricing signal is not strong enough for a primary recommendation.',
   'Model caution': 'Similar rows showed weak early performance testing.'
 };
 
@@ -80,12 +80,12 @@ export function getMarketCautions(market: MarketOpportunity, options: { locked?:
   const keys = new Set<CautionKey>();
 
   if (options.locked) keys.add('Locked');
-  if (market.providerCategory === 'Sportsbook' && !market.isRecommendation) keys.add('Research only');
+  if (market.providerCategory === 'Sportsbook' && !market.isRecommendation) keys.add('Market context');
   if (market.freshness === 'Stale') keys.add('Stale');
   if (market.freshness === 'Unavailable') keys.add('Provider issue');
-  if (market.estimatedEv <= 0) keys.add('Non-positive EV');
+  if (market.estimatedEv <= 0) keys.add('Pricing caution');
   if (market.historicalSampleSize > 0 && market.historicalSampleSize < 35) keys.add('Low sample');
-  if (market.strategyClassification === 'Research' || market.strategyClassification === 'ResearchOnly') keys.add('Research only');
+  if (market.strategyClassification === 'Research' || market.strategyClassification === 'ResearchOnly') keys.add('Market context');
   if (market.strategyClassification === 'Avoid') keys.add('Model caution');
 
   for (const raw of [...(market.warnings ?? []), ...(market.reasons ?? [])]) {
@@ -132,9 +132,9 @@ function cautionKeyFromText(value: string | null | undefined): CautionKey | null
   if (normalized.includes('locked')) return 'Locked';
   if (normalized.includes('provider unavailable') || normalized.includes('provider issue') || normalized.includes('provider limited')) return 'Provider issue';
   if (normalized.includes('stale')) return 'Stale';
-  if (normalized.includes('research row') || normalized.includes('research only')) return 'Research only';
+  if (normalized.includes('research row') || normalized.includes('research only')) return 'Market context';
   if (normalized.includes('low sample') || normalized.includes('insufficient historical sample') || normalized.includes('sample is thin')) return 'Low sample';
-  if (normalized.includes('non positive ev') || normalized.includes('non-positive ev')) return 'Non-positive EV';
+  if (normalized.includes('non positive ev') || normalized.includes('non-positive ev')) return 'Pricing caution';
   if (normalized.includes('underperformed') || normalized.includes('backtest') || normalized.includes('model caution')) return 'Model caution';
 
   return null;

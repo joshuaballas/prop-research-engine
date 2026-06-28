@@ -13,7 +13,6 @@ import { ProjectionModifierBadge } from './ProjectionModifierBadge';
 import { compactActionButtonSx, lockedActionButtonSx, removeActionButtonSx, secondaryGhostButtonSx } from '../ui/buttonStyles';
 import { mobileCardActionButtonSx, mobileCardDetailsButtonSx } from '../ui/AppRowActions';
 import { OpportunityCardLayout, OpportunityMetricGrid, OpportunityMetricItem, OpportunityPickText, OpportunityProviderRow } from '../ui/OpportunityCard';
-import { getDisplayExpectedValue } from '../../utils/expectedValueDisplay';
 
 interface TopPickCardProps {
   market: MarketOpportunity;
@@ -101,7 +100,6 @@ function TopPickProviderRow({ market }: { market: MarketOpportunity }) {
 
 function TopPickMetrics({ market, detailed }: { market: MarketOpportunity; detailed: boolean }) {
   const showSportsbookPricing = detailed && market.isSportsbook;
-  const displayEv = getDisplayExpectedValue(market);
   return (
     <OpportunityMetricGrid columns={{ xs: 2, sm: detailed ? 4 : 3 }} sx={{ borderTop: 0, pt: 0 }}>
       {showSportsbookPricing ? (
@@ -117,9 +115,6 @@ function TopPickMetrics({ market, detailed }: { market: MarketOpportunity; detai
       <OpportunityMetricItem label="Hit chance" value={formatPercent(market.modelProbability)} metric="hitChance" />
       {showSportsbookPricing ? <OpportunityMetricItem label="Break-even" value={formatPercent(market.impliedProbability)} /> : null}
       <OpportunityMetricItem label="Edge" value={formatPercent(market.probabilityEdge, { signed: true })} metric="edge" />
-      {detailed && displayEv !== null ? (
-        <OpportunityMetricItem label="EV" value={formatPercent(displayEv, { signed: true })} metric="ev" />
-      ) : null}
     </OpportunityMetricGrid>
   );
 }

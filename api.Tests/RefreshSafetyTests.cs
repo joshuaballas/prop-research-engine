@@ -1614,6 +1614,7 @@ public sealed class RefreshSafetyTests
         await using var factory = new SafetyTestApplicationFactory();
         using var client = factory.CreateClient();
         await factory.SeedMlbDfsHitProbabilitySelectionScenarioAsync();
+        await factory.SeedMlbLikelyHitSportsbookTopPickSnapshotsForPublicReadAsync(includeSuppressedEvPick: false);
 
         var response = await client.GetAsync("/api/markets/top-picks?sport=MLB&providerCategory=Sportsbook&take=10");
 
@@ -1656,6 +1657,7 @@ public sealed class RefreshSafetyTests
         await using var factory = new SafetyTestApplicationFactory();
         using var client = factory.CreateClient();
         await factory.SeedMlbDfsHitProbabilitySelectionScenarioAsync();
+        await factory.SeedMlbLikelyHitSportsbookTopPickSnapshotsForPublicReadAsync(includeSuppressedEvPick: true);
 
         var response = await client.GetAsync("/api/markets/top-picks?sport=MLB&providerCategory=Sportsbook&take=25");
 
@@ -1865,7 +1867,7 @@ public sealed class RefreshSafetyTests
         Assert.False(json.GetProperty("callsExternalApis").GetBoolean());
         Assert.True(json.GetProperty("readOnly").GetBoolean());
         Assert.Equal(TopPicksModelOptions.DefaultLikelyHitV1ModelEra, json.GetProperty("currentModelEra").GetString());
-        Assert.Equal("dynamicPublicTopPicksReadModel", json.GetProperty("publicTopPickSource").GetString());
+        Assert.Equal("persistedTopPickSnapshots", json.GetProperty("publicTopPickSource").GetString());
         var publicTopPickCount = json.GetProperty("publicTopPickCount").GetInt32();
         Assert.True(publicTopPickCount > 0);
         Assert.Equal(0, json.GetProperty("recommendationLedgerCountForCurrentSlate").GetInt32());
@@ -8023,6 +8025,68 @@ public sealed class SafetyTestApplicationFactory : WebApplicationFactory<Program
         await dbContext.SaveChangesAsync();
     }
 
+    public async Task SeedMlbLikelyHitSportsbookTopPickSnapshotsForPublicReadAsync(bool includeSuppressedEvPick)
+    {
+        using var scope = Services.CreateScope();
+        var dbContext = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+
+        var slateDate = DateOnly.FromDateTime(DateTime.UtcNow);
+        var refreshRun = new TheOddsRefreshRun
+        {
+            Id = Guid.NewGuid(),
+            Provider = "The Odds API",
+            Sport = "MLB",
+            SlateDate = slateDate,
+            StartedAtUtc = DateTimeOffset.UtcNow.AddMinutes(-5),
+            CompletedAtUtc = DateTimeOffset.UtcNow.AddMinutes(-4),
+            Succeeded = true,
+            Failed = false,
+            Blocked = false,
+            DryRun = false,
+            ForceLive = true,
+            BookmakerPreset = "sportsbook",
+            ProviderCategoriesIncluded = "Sportsbook",
+            SportsbookBookmakersRequested = "draftkings,betmgm",
+            MarketsRequested = "pitcher_strikeouts",
+            EstimatedApiCalls = 1,
+            ActualApiCalls = 1,
+            PredictionCount = includeSuppressedEvPick ? 2 : 1,
+            LineShoppingGroupCount = includeSuppressedEvPick ? 2 : 1,
+            ActiveCandidateCount = includeSuppressedEvPick ? 2 : 1,
+            DiagnosticsJson = JsonSerializer.SerializeToDocument(new { source = "test" })
+        };
+
+        dbContext.TheOddsRefreshRuns.Add(refreshRun);
+        dbContext.MarketTopPickSnapshots.Add(BuildLikelyHitSportsbookTopPickSnapshot(
+            refreshRun,
+            player: "Priced Sportsbook Player",
+            bookmaker: "DraftKings",
+            americanPrice: -180,
+            decimalPrice: 1.555556m,
+            impliedProbability: 0.642857m,
+            rawSelectedSideProbability: 0.80m,
+            historicalSampleSize: 60,
+            confidenceScore: 0.80m,
+            sampleWarning: "None"));
+
+        if (includeSuppressedEvPick)
+        {
+            dbContext.MarketTopPickSnapshots.Add(BuildLikelyHitSportsbookTopPickSnapshot(
+                refreshRun,
+                player: "Low Sample Huge EV Sportsbook Player",
+                bookmaker: "BetMGM",
+                americanPrice: -150,
+                decimalPrice: 1.666667m,
+                impliedProbability: 0.60m,
+                rawSelectedSideProbability: 0.95m,
+                historicalSampleSize: 20,
+                confidenceScore: 0.80m,
+                sampleWarning: "LowSample"));
+        }
+
+        await dbContext.SaveChangesAsync();
+    }
+
     public async Task SeedMlbLikelyHitHistoricalReplaySnapshotsAsync()
     {
         using var scope = Services.CreateScope();
@@ -8756,6 +8820,123 @@ public sealed class SafetyTestApplicationFactory : WebApplicationFactory<Program
             EntryProviderCategory = lineShoppingSnapshot.EntryProviderCategory,
             EntryActionableForUser = lineShoppingSnapshot.EntryActionableForUser,
             DetailsJson = lineShoppingSnapshot.DetailsJson
+        };
+    }
+
+    private static MarketTopPickSnapshot BuildLikelyHitSportsbookTopPickSnapshot(
+        TheOddsRefreshRun refreshRun,
+        string player,
+        string bookmaker,
+        int americanPrice,
+        decimal decimalPrice,
+        decimal impliedProbability,
+        decimal rawSelectedSideProbability,
+        int historicalSampleSize,
+        decimal confidenceScore,
+        string sampleWarning)
+    {
+        var eventStart = DateTimeOffset.UtcNow.AddHours(3);
+        var eventId = $"event-{player.Replace(" ", "-", StringComparison.OrdinalIgnoreCase).ToLowerInvariant()}";
+        var details = JsonSerializer.SerializeToDocument(new
+        {
+            sport = "MLB",
+            eventId,
+            eventStartTime = eventStart,
+            eventStartTimeUtc = eventStart,
+            homeTeam = "Home",
+            awayTeam = "Away",
+            player,
+            playerName = player,
+            normalizedPropType = "Pitcher Strikeouts",
+            line = 6.5m,
+            provider = "The Odds API",
+            providerCategory = "Sportsbook",
+            entryProviderCategory = "Sportsbook",
+            bestBookmaker = bookmaker,
+            bookmaker,
+            bestSide = "Under",
+            selectedSide = "Under",
+            bestAmericanPrice = americanPrice,
+            bestDecimalPrice = decimalPrice,
+            bestImpliedProbability = impliedProbability,
+            selectedSideProbability = rawSelectedSideProbability,
+            rawSelectedSideProbability,
+            bestProbability = rawSelectedSideProbability,
+            modelOverProbability = 1m - rawSelectedSideProbability,
+            modelUnderProbability = rawSelectedSideProbability,
+            probabilitySource = "LikelyHitV1",
+            historicalSampleSize,
+            playerSampleSize = historicalSampleSize,
+            sampleWarning,
+            confidenceScore,
+            entryProvider = bookmaker,
+            entryActionableForUser = false,
+            entryRuleWarning = "MLB sportsbook recommendation. Entry Builder is available only for DFS entries.",
+            strategyClassification = "Candidate",
+            strategyTier = "MlbSportsbookRecommendation",
+            isCandidate = true,
+            isRecommendation = true,
+            recommendationActionableForUser = true,
+            recommendationType = "Sportsbook",
+            lifecycleStatus = "Active",
+            publicTopPickMinimumHitChance = 0.65m,
+            hitChanceGatePassed = true,
+            publicTopPickHitChanceGatePassed = true,
+            usesAggregateProbability = false,
+            recommendationProjectionSource = "EmpiricalMeanFromProbabilityPlayerHistory",
+            displayProjectionSource = "EmpiricalMeanFromProbabilityPlayerHistory",
+            isProjectionRecommendationAligned = true,
+            projectionProbabilityConflict = false,
+            recentWeightedProjectionProbabilityConflict = false,
+            selectedSideHistoryConsistencyGuardApplied = true,
+            selectedSideHistoryConsistencyGuardPassed = true,
+            fatalSelectedSideHistoryConsistencyCodes = Array.Empty<string>()
+        });
+
+        return new MarketTopPickSnapshot
+        {
+            Id = Guid.NewGuid(),
+            TheOddsRefreshRunId = refreshRun.Id,
+            PredictionRunId = null,
+            Sport = "MLB",
+            SlateDate = refreshRun.SlateDate,
+            GeneratedAtUtc = DateTimeOffset.UtcNow.AddMinutes(-4),
+            BookmakerPreset = "sportsbook",
+            ProviderCategory = "Sportsbook",
+            Provider = "The Odds API",
+            Bookmaker = bookmaker,
+            Player = player,
+            EventId = eventId,
+            EventName = "Away @ Home",
+            EventStartTime = eventStart,
+            LifecycleStatus = "Active",
+            IsStale = false,
+            IsExpired = false,
+            PropType = "Pitcher Strikeouts",
+            Line = 6.5m,
+            BestSide = "Under",
+            BestBookmaker = bookmaker,
+            BestAmericanPrice = americanPrice,
+            BestDecimalPrice = decimalPrice,
+            BestProbability = rawSelectedSideProbability,
+            BestImpliedProbability = impliedProbability,
+            BestProbabilityEdge = Math.Round(rawSelectedSideProbability - impliedProbability, 6),
+            BestEstimatedEv = Math.Round((rawSelectedSideProbability * decimalPrice) - 1m, 6),
+            StrategyClassification = "Candidate",
+            StrategyTier = "MlbSportsbookRecommendation",
+            ModelVersion = "LikelyHitV1",
+            RecommendationContractVersion = "LikelyHitV1",
+            ProbabilityModelVersion = "LikelyHitV1",
+            ModelEra = "LikelyHitV1_SportsbookBalanced_65Plus_ConsistencyGuarded",
+            IsCandidate = true,
+            IsWatchlist = false,
+            IsAvoid = false,
+            IsResearchOnly = false,
+            EntryProvider = bookmaker,
+            EntryCompatibilityGroup = "Sportsbook",
+            EntryProviderCategory = "Sportsbook",
+            EntryActionableForUser = false,
+            DetailsJson = details
         };
     }
 

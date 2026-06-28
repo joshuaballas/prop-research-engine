@@ -5,7 +5,6 @@ import { formatPercent } from '../../utils/formatters';
 import { marketDisplayLabel } from '../../utils/marketDisplay';
 import { renderOpportunityCautionText } from '../../utils/warnings';
 import { ProjectionModifierBadge } from '../markets/ProjectionModifierBadge';
-import { TrustValue } from '../metrics/TrustValue';
 import { mobileCardActionButtonSx } from '../ui/AppRowActions';
 import { removeActionButtonSx } from '../ui/buttonStyles';
 import { OpportunityCardLayout, OpportunityMetricGrid, OpportunityMetricItem, OpportunityPickText, OpportunityProviderRow } from '../ui/OpportunityCard';
@@ -32,10 +31,9 @@ export function EntryLegCard({ leg, onRemove }: { leg: EntryLeg; onRemove?: (id:
         </OpportunityProviderRow>
       }
       metrics={
-        <OpportunityMetricGrid columns={{ xs: 2, sm: 4 }} sx={{ borderTop: 0, pt: 0 }}>
+        <OpportunityMetricGrid columns={{ xs: 2, sm: 2 }} sx={{ borderTop: 0, pt: 0 }}>
           <OpportunityMetricItem label="Edge" value={formatSignedPercent(leg.probabilityEdge)} metric="edge" />
           <OpportunityMetricItem label="Hit chance" value={formatPercent(leg.modelProbability)} metric="hitChance" />
-          <OpportunityMetricItem label="Trust" value={<TrustValue level={leg.trustLevel} sx={{ fontSize: 14, fontWeight: 950, lineHeight: 1.5 }} />} metric="trust" />
         </OpportunityMetricGrid>
       }
       caution={warning}

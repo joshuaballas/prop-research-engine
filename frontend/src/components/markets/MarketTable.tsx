@@ -8,35 +8,21 @@ import type { MarketOpportunity } from '../../types/markets';
 import { formatPercent } from '../../utils/formatters';
 import { entryBuilderUnavailableReason, isEntryBuilderAddableMarket } from '../../utils/marketCautions';
 import { MetricLabelWithHelp } from '../metrics/MetricLabelWithHelp';
-import { TrustValue } from '../metrics/TrustValue';
 import { PropDetailsModal } from '../prop-history/PropDetailsModal';
-import { StatusPill } from '../ui/StatusPill';
-import { ProjectionModifierBadge } from './ProjectionModifierBadge';
 import { ProviderLabel } from '../providers/ProviderLabel';
 import { removeActionButtonSx } from '../ui/buttonStyles';
 import { appTableRowSx, stickyActionCellSx, stickyActionHeaderCellSx } from '../ui/appTableStyles';
 import { AppDataTable } from '../ui/AppDataTable';
 import { AppRowActions, desktopRowActionButtonSx, desktopRowDetailsButtonSx } from '../ui/AppRowActions';
-import { AppTableEvValue, AppTableMetricValue, AppTablePrimaryText, AppTableSecondaryText } from '../ui/AppTableTypography';
+import { AppTableMetricValue, AppTablePrimaryText, AppTableSecondaryText } from '../ui/AppTableTypography';
 import { OpportunityPickText } from '../ui/OpportunityCard';
 import { marketDisplayLabel } from '../../utils/marketDisplay';
-import { TagsLabelWithHelp } from './TagsLabelWithHelp';
-import { marketTagLabel } from '../../utils/marketTags';
-import { getDisplayExpectedValue } from '../../utils/expectedValueDisplay';
 
 export function MarketTable({ markets }: { markets: MarketOpportunity[] }) {
   const builder = useEntryBuilder();
   const [detailsMarket, setDetailsMarket] = useState<MarketOpportunity | null>(null);
   const showSportColumn = new Set(markets.map((market) => market.sport)).size > 1;
-  const meaningfulTags = new Set(
-    markets.flatMap((market) => [
-      marketTagLabel(market.strategyClassification),
-      market.projectionModifier === 'Unknown Promo' || market.projectionModifier === 'Normal' ? null : market.projectionModifier
-    ].filter(Boolean))
-  );
-  const showTagsColumn = meaningfulTags.size > 1;
-  const showEvColumn = markets.some((market) => market.showExpectedValue);
-  const minWidth = 1130 - (showSportColumn ? 0 : 100) - (showTagsColumn ? 0 : 200) - (showEvColumn ? 0 : 90);
+  const minWidth = 845 - (showSportColumn ? 0 : 100);
 
   return (
     <>
@@ -45,11 +31,8 @@ export function MarketTable({ markets }: { markets: MarketOpportunity[] }) {
           <col style={{ width: '28%' }} />
           {showSportColumn ? <col style={{ width: 100 }} /> : null}
           <col style={{ width: 150 }} />
-          {showEvColumn ? <col style={{ width: 90 }} /> : null}
           <col style={{ width: 95 }} />
           <col style={{ width: 100 }} />
-          <col style={{ width: 95 }} />
-          {showTagsColumn ? <col style={{ width: 200 }} /> : null}
           <col style={{ width: 130 }} />
         </colgroup>
         <TableHead>
@@ -57,11 +40,8 @@ export function MarketTable({ markets }: { markets: MarketOpportunity[] }) {
             <TableCell>Opportunity</TableCell>
             {showSportColumn ? <TableCell>Sport</TableCell> : null}
             <TableCell>Provider</TableCell>
-            {showEvColumn ? <TableCell align="right"><MetricLabelWithHelp metric="ev" align="right" variant="table" /></TableCell> : null}
             <TableCell align="right"><MetricLabelWithHelp metric="edge" align="right" variant="table" /></TableCell>
             <TableCell align="right"><MetricLabelWithHelp metric="hitChance" align="right" variant="table" /></TableCell>
-            <TableCell><MetricLabelWithHelp metric="trust" variant="table" /></TableCell>
-            {showTagsColumn ? <TableCell><TagsLabelWithHelp /></TableCell> : null}
             <TableCell align="center" sx={{ ...stickyActionHeaderCellSx, pl: 1.5, pr: 2 }}>Action</TableCell>
           </TableRow>
         </TableHead>
@@ -105,32 +85,12 @@ export function MarketTable({ markets }: { markets: MarketOpportunity[] }) {
                     <ProviderLabel provider={market.provider || (market.providerCategory === 'Sportsbook' ? 'Sportsbook' : 'Unknown')} category={market.providerCategory} compact />
                   </Stack>
                 </TableCell>
-                {showEvColumn ? (
-                  <TableCell align="right" sx={{ py: 1.05 }}>
-                    {getDisplayExpectedValue(market) === null ? (
-                      <AppTableSecondaryText>-</AppTableSecondaryText>
-                    ) : (
-                      <AppTableEvValue positive={(getDisplayExpectedValue(market) ?? 0) > 0}>
-                        {formatPercent(getDisplayExpectedValue(market) ?? 0, { signed: true })}
-                      </AppTableEvValue>
-                    )}
-                  </TableCell>
-                ) : null}
                 <TableCell align="right" sx={{ py: 1.05 }}>
                   <AppTableMetricValue>{formatPercent(market.probabilityEdge, { signed: true })}</AppTableMetricValue>
                 </TableCell>
                 <TableCell align="right" sx={{ py: 1.05 }}>
                   <AppTableMetricValue>{formatPercent(market.modelProbability)}</AppTableMetricValue>
                 </TableCell>
-                <TableCell sx={{ py: 1.05 }}><TrustValue level={market.trustLevel} /></TableCell>
-                {showTagsColumn ? (
-                  <TableCell sx={{ overflow: 'hidden', py: 1.05 }}>
-                    <Stack direction="row" gap={0.6} flexWrap="wrap" useFlexGap>
-                      <StatusPill label={marketTagLabel(market.strategyClassification)} />
-                      {market.projectionModifier === 'Unknown Promo' ? null : <ProjectionModifierBadge modifier={market.projectionModifier} />}
-                    </Stack>
-                  </TableCell>
-                ) : null}
                 <TableCell data-sticky-action="true" align="center" sx={{ ...stickyActionCellSx, width: 130, pl: 1.5, pr: 2, py: 1.05 }}>
                   <AppRowActions sx={{ mx: 'auto' }}>
                     <Button

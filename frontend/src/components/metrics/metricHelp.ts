@@ -1,10 +1,6 @@
-export type MetricHelpKey = 'ev' | 'edge' | 'hitChance' | 'trust' | 'sample' | 'warning' | 'caution';
+export type MetricHelpKey = 'edge' | 'hitChance' | 'sample' | 'warning' | 'caution';
 
 export const metricHelp: Record<MetricHelpKey, { label: string; description: string }> = {
-  ev: {
-    label: 'EV',
-    description: 'EV is only shown for sportsbook-priced markets. DFS props use hit chance, edge, and trust instead.'
-  },
   edge: {
     label: 'Edge',
     description: 'Probability edge: model hit chance minus implied probability from the selected book.'
@@ -12,10 +8,6 @@ export const metricHelp: Record<MetricHelpKey, { label: string; description: str
   hitChance: {
     label: 'Hit chance',
     description: 'Model-estimated chance that the selected side hits. If unavailable, historical hit rate is still shown in the chart.'
-  },
-  trust: {
-    label: 'Trust',
-    description: 'Reliability of the estimate based on sample size, model confidence, and data quality.'
   },
   sample: {
     label: 'Sample',

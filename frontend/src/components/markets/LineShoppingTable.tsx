@@ -9,10 +9,9 @@ import type { MarketOpportunity, PlayerHistoryStatSummary, ProviderLine } from '
 import { formatDecimal, formatPercent } from '../../utils/formatters';
 import { entryBuilderUnavailableReason, isEntryBuilderAddableMarket } from '../../utils/marketCautions';
 import { marketDisplayLabel } from '../../utils/marketDisplay';
-import { hasRenderableWarning, renderOpportunityCautionText, renderWarningText } from '../../utils/warnings';
+import { renderOpportunityCautionText } from '../../utils/warnings';
 import { palette } from '../../theme/palette';
 import { MetricLabelWithHelp } from '../metrics/MetricLabelWithHelp';
-import { TrustValue } from '../metrics/TrustValue';
 import { PropDetailsModal } from '../prop-history/PropDetailsModal';
 import { ProviderLabel } from '../providers/ProviderLabel';
 import { appTableRowSx, stickyActionCellSx, stickyActionHeaderCellSx } from '../ui/appTableStyles';
@@ -49,7 +48,7 @@ export function LineShoppingTable({ markets, showActions = true }: { markets: Ma
   const [detailsMarket, setDetailsMarket] = useState<MarketOpportunity | null>(null);
   const visibleMarkets = markets.filter((market) => market.providerCategory === 'DFS' || market.providerCategory === 'Sportsbook');
   const showReferenceLines = visibleMarkets.some(hasReferenceLine);
-  const minWidth = (showActions ? 800 : 680) + 95 - (showReferenceLines ? 0 : 170);
+  const minWidth = (showActions ? 680 : 560) + 95 - (showReferenceLines ? 0 : 170);
 
   return (
     <>
@@ -66,7 +65,6 @@ export function LineShoppingTable({ markets, showActions = true }: { markets: Ma
             {showReferenceLines ? <TableCell>Reference Lines</TableCell> : null}
             <TableCell align="right"><MetricLabelWithHelp metric="edge" align="right" variant="table" /></TableCell>
             <TableCell align="right"><MetricLabelWithHelp metric="hitChance" align="right" variant="table" /></TableCell>
-            <TableCell><MetricLabelWithHelp metric="trust" variant="table" /></TableCell>
             {showActions ? <TableCell align="center" sx={stickyActionHeaderCellSx}>Action</TableCell> : null}
           </TableRow>
         </TableHead>
@@ -92,8 +90,6 @@ function LineShoppingRow({
   showReferenceLines: boolean;
   onDetails: () => void;
 }) {
-  const confidence = resolveConfidence(market);
-
   return (
     <TableRow
       hover
@@ -135,11 +131,6 @@ function LineShoppingRow({
               <TableCell align="right">
                 <AppTableMetricValue>{formatPercent(market.modelProbability)}</AppTableMetricValue>
               </TableCell>
-              <TableCell sx={{ minWidth: 145 }}>
-                <Stack direction="row" gap={0.6} flexWrap="wrap">
-                  <TrustValue level={confidence} />
-                </Stack>
-              </TableCell>
               {showActions ? <LineShoppingActionCell market={market} onDetails={onDetails} /> : null}
     </TableRow>
   );
@@ -175,7 +166,6 @@ function LineShoppingActionCell({ market, onDetails }: { market: MarketOpportuni
 
 export function LineShoppingCard({ market }: { market: MarketOpportunity }) {
   const [detailsOpen, setDetailsOpen] = useState(false);
-  const confidence = resolveConfidence(market);
   const providerLines = orderProviderLines((market.providerLines?.filter((line) => line.providerCategory === market.providerCategory) ?? []).map((line) => ({
     ...line,
     note: `${market.side} ${line.line}`
@@ -295,7 +285,6 @@ export function LineShoppingCard({ market }: { market: MarketOpportunity }) {
             <OpportunityMetricGrid columns={{ xs: 2 }} sx={{ borderTop: 0, pt: 0 }}>
               <OpportunityMetricItem label="Edge" value={formatPercent(market.probabilityEdge, { signed: true })} metric="edge" />
               <OpportunityMetricItem label="Hit chance" value={formatPercent(market.modelProbability)} metric="hitChance" />
-              <OpportunityMetricItem label="Trust" value={<TrustValue level={confidence} sx={{ fontSize: 14, fontWeight: 950, lineHeight: 1.5 }} />} metric="trust" />
             </OpportunityMetricGrid>
             <ProviderLineGroup title="Provider lines" lines={providerLines} marketId={market.id} bestProvider={market.provider} />
             {referenceLines.length ? <ProviderLineGroup title="Reference lines" lines={referenceLines} marketId={market.id} /> : null}
@@ -349,7 +338,6 @@ export function LineShoppingComparisonList({ groups }: { groups: LineShoppingGro
             <TableCell>Best Pick</TableCell>
             <TableCell align="right"><MetricLabelWithHelp metric="edge" align="right" variant="table" /></TableCell>
             <TableCell align="right"><MetricLabelWithHelp metric="hitChance" align="right" variant="table" /></TableCell>
-            <TableCell><MetricLabelWithHelp metric="trust" variant="table" /></TableCell>
             <TableCell align="center" aria-label="Expand details" />
             <TableCell align="center" sx={stickyActionHeaderCellSx}>Action</TableCell>
           </TableRow>
@@ -383,7 +371,6 @@ function LineShoppingComparisonRow({
   onDetails: () => void;
 }) {
   const market = group.bestMarket;
-  const confidence = resolveConfidence(market);
   const canExpand = group.providerLines.length > 1 || group.referenceLines.length > 0 || hasAvailableSoccerHistory(market);
   const expandedVisible = canExpand && expanded;
 
@@ -422,9 +409,6 @@ function LineShoppingComparisonRow({
         <TableCell align="right">
           <AppTableMetricValue>{formatPercent(market.modelProbability)}</AppTableMetricValue>
         </TableCell>
-        <TableCell sx={{ minWidth: 125 }}>
-          <TrustValue level={confidence} />
-        </TableCell>
         <TableCell align="center" sx={{ width: 48 }}>
           {canExpand ? (
             <IconButton
@@ -449,7 +433,7 @@ function LineShoppingComparisonRow({
       </TableRow>
       {canExpand ? (
         <TableRow>
-          <TableCell colSpan={8} sx={{ p: 0, borderBottom: '1px solid rgba(148,163,184,.14)' }}>
+          <TableCell colSpan={7} sx={{ p: 0, borderBottom: '1px solid rgba(148,163,184,.14)' }}>
             <Collapse in={expandedVisible} timeout="auto" unmountOnExit>
               <Box
                 sx={{
@@ -724,7 +708,7 @@ function formatHistoryDate(value?: string | null) {
   }).format(date);
 }
 
-function DetailLine({ label, value, tone = 'text.primary', metric }: { label: string; value: string; tone?: string; metric?: 'ev' | 'edge' | 'hitChance' | 'trust' | 'warning' }) {
+function DetailLine({ label, value, tone = 'text.primary', metric }: { label: string; value: string; tone?: string; metric?: 'edge' | 'hitChance' | 'warning' }) {
   return (
     <Stack spacing={0.15}>
       {metric ? <MetricLabelWithHelp metric={metric} /> : (
@@ -732,7 +716,7 @@ function DetailLine({ label, value, tone = 'text.primary', metric }: { label: st
           {label}
         </Typography>
       )}
-      {metric === 'trust' ? <TrustValue level={value} /> : <Typography fontWeight={900} color={tone}>{value}</Typography>}
+      <Typography fontWeight={900} color={tone}>{value}</Typography>
     </Stack>
   );
 }
@@ -849,35 +833,4 @@ function cleanWarning(warning: string) {
 function hasReferenceLine(market: MarketOpportunity) {
   const context = String(market.sportsbookContext ?? '').trim().toLowerCase();
   return Boolean(context && !context.includes('no sportsbook reference') && context !== 'no reference line' && context !== 'none');
-}
-
-function resolveConfidence(market: MarketOpportunity): 'Strong' | 'Medium' | 'Weak' {
-  if (market.isRecommendation && market.recommendationActionableForUser && isDisplayableTrustLevel(market.trustLevel)) {
-    return market.trustLevel;
-  }
-
-  const warningText = renderWarningText(market.warnings).toLowerCase();
-  const hasMajorCaution =
-    market.estimatedEv <= 0 ||
-    market.freshness === 'Unavailable' ||
-    warningText.includes('low sample') ||
-    warningText.includes('limited') ||
-    warningText.includes('non-positive');
-
-  if (hasMajorCaution || market.historicalSampleSize < 35) {
-    return 'Weak';
-  }
-
-  const hasModerateCaution = hasRenderableWarning(market.warnings) || market.projectionModifier !== 'Normal' || market.historicalSampleSize < 90;
-
-  const edge = market.probabilityEdge ?? 0;
-  if (edge > 0.1 && market.historicalSampleSize >= 90 && !hasModerateCaution) {
-    return 'Strong';
-  }
-
-  return edge > 0 ? 'Medium' : 'Weak';
-}
-
-function isDisplayableTrustLevel(value: MarketOpportunity['trustLevel']): value is 'Strong' | 'Medium' | 'Weak' {
-  return value === 'Strong' || value === 'Medium' || value === 'Weak';
 }

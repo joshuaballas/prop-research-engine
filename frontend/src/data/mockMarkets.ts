@@ -68,7 +68,7 @@ export const mockMarkets: MarketOpportunity[] = [
     historicalSampleSize: 94,
     freshness: 'Fresh',
     projectionModifier: 'Demon',
-    reasons: ['Pitcher strikeouts have favorable early validation', 'Positive EV'],
+    reasons: ['Pitcher strikeouts have favorable early validation', 'Positive model edge'],
     warnings: ['Demon payout may vary by provider'],
     providerLines: [
       { provider: 'Underdog', providerCategory: 'DFS', line: 6.5 },
@@ -220,14 +220,14 @@ export const mockMarkets: MarketOpportunity[] = [
     probabilityEdge: -0.046,
     estimatedEv: -0.067,
     strategyClassification: 'Research',
-    strategyTier: 'NonPositiveEv',
+    strategyTier: 'PricingCaution',
     trustLevel: 'Weak',
-    marketShape: 'Conservative shape, non-positive EV',
+    marketShape: 'Conservative shape, pricing caution',
     historicalSampleSize: 77,
     freshness: 'Fresh',
     projectionModifier: 'Normal',
-    reasons: ['Conservative shape matched, but EV is not positive'],
-    warnings: ['Non-positive EV']
+    reasons: ['Conservative shape matched, but pricing signal is not strong enough'],
+    warnings: ['Pricing caution']
   },
   {
     id: 'mk-8',

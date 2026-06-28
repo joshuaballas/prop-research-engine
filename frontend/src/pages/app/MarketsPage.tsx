@@ -14,7 +14,6 @@ import { palette } from '../../theme/palette';
 import type { MarketOpportunity } from '../../types/markets';
 import { formatPercent } from '../../utils/formatters';
 import { isLineNoLongerAvailable, isPlayableMarket } from '../../utils/marketCautions';
-import { marketTagLabel, marketTagValue } from '../../utils/marketTags';
 
 const defaultFilters: MarketFilterValues = {
   search: '',
@@ -30,7 +29,6 @@ const defaultFilters: MarketFilterValues = {
 const sortOptions: MarketFilterOption[] = [
   { label: 'Edge', value: 'Edge' },
   { label: 'Hit chance', value: 'HitChance' },
-  { label: 'Trust', value: 'Trust' },
   { label: 'Player A-Z', value: 'PlayerAz' },
   { label: 'Starts soon', value: 'StartsSoon' }
 ];
@@ -49,11 +47,6 @@ export function MarketsPage() {
   const providerOptions = useMemo(() => buildOptions(sportFilteredRows.map((market) => market.provider)), [sportFilteredRows]);
   const providerCategoryOptions = useMemo(
     () => buildOptions(sportFilteredRows.map((market) => categoryFilterValue(market.providerCategory)), categoryFilterLabel),
-    [sportFilteredRows]
-  );
-  const trustOptions = useMemo(() => buildOptions(sportFilteredRows.map((market) => trustFilterValue(market)), trustFilterLabel), [sportFilteredRows]);
-  const opportunityOptions = useMemo(
-    () => buildOptions(sportFilteredRows.map((market) => marketTagValue(market)), marketTagLabel),
     [sportFilteredRows]
   );
   const filteredMarkets = useMemo(
@@ -75,10 +68,10 @@ export function MarketsPage() {
       sportOptions,
       providerOptions,
       providerCategoryOptions,
-      trustOptions,
-      opportunityOptions
+      trustOptions: [{ label: 'All', value: 'All' }],
+      opportunityOptions: [{ label: 'All', value: 'All' }]
     }));
-  }, [opportunityOptions, providerCategoryOptions, providerOptions, sportOptions, trustOptions]);
+  }, [providerCategoryOptions, providerOptions, sportOptions]);
 
   useEffect(() => {
     setPage(1);
@@ -90,7 +83,7 @@ export function MarketsPage() {
 
   return (
     <Stack spacing={3} sx={{ px: { xs: 0.75, sm: 0 } }}>
-      <PageHeader title="Prop Scanner" description="Browse current provider props with hit chance, edge, trust, and entry status." />
+      <PageHeader title="Prop Scanner" description="Browse current provider props with hit chance, edge, and entry status." />
 
       {marketsQuery.loading ? (
         <MetricCardSkeleton count={3} />
@@ -112,14 +105,13 @@ export function MarketsPage() {
         idPrefix="prop-scanner-filters"
         scannerFields
         compactMobile
-        classificationLabel="Trust"
+        showClassificationFilter={false}
+        showOpportunityFilter={false}
         values={filters}
         onValuesChange={setFilters}
         sportOptions={sportOptions}
         providerOptions={providerOptions}
         providerCategoryOptions={providerCategoryOptions}
-        trustOptions={trustOptions}
-        opportunityOptions={opportunityOptions}
         sortOptions={sortOptions}
         showCanAddOnly
         onClearFilters={() => setFilters(defaultFilters)}
@@ -193,8 +185,6 @@ function marketMatchesFilters(market: MarketOpportunity, filters: MarketFilterVa
   if (filters.sport !== 'All' && market.sport !== filters.sport) return false;
   if (filters.provider !== 'All' && market.provider !== filters.provider) return false;
   if (filters.providerCategory !== 'All' && categoryFilterValue(market.providerCategory) !== filters.providerCategory) return false;
-  if (filters.trust !== 'All' && trustFilterValue(market) !== filters.trust) return false;
-  if (filters.opportunity !== 'All' && marketTagValue(market) !== filters.opportunity) return false;
   if (filters.canAddOnly && !isPlayableMarket(market)) return false;
 
   const query = filters.search.trim().toLowerCase();
@@ -212,8 +202,6 @@ function sortMarkets(markets: MarketOpportunity[], sort: string) {
       return rows.sort((a, b) => (b.probabilityEdge ?? Number.NEGATIVE_INFINITY) - (a.probabilityEdge ?? Number.NEGATIVE_INFINITY));
     case 'HitChance':
       return rows.sort((a, b) => (b.modelProbability ?? Number.NEGATIVE_INFINITY) - (a.modelProbability ?? Number.NEGATIVE_INFINITY));
-    case 'Trust':
-      return rows.sort((a, b) => trustRank(b) - trustRank(a) || (b.probabilityEdge ?? Number.NEGATIVE_INFINITY) - (a.probabilityEdge ?? Number.NEGATIVE_INFINITY));
     case 'PlayerAz':
       return rows.sort((a, b) => a.player.localeCompare(b.player));
     case 'StartsSoon':
@@ -229,23 +217,6 @@ function categoryFilterValue(category: string) {
 
 function categoryFilterLabel(value: string) {
   return value;
-}
-
-function trustFilterValue(market: MarketOpportunity) {
-  if (market.trustLevel === 'Strong') return 'High';
-  if (market.trustLevel === 'Medium') return 'Medium';
-  return 'Low';
-}
-
-function trustFilterLabel(value: string) {
-  return value;
-}
-
-function trustRank(market: MarketOpportunity) {
-  const value = trustFilterValue(market);
-  if (value === 'High') return 3;
-  if (value === 'Medium') return 2;
-  return 1;
 }
 
 function ApiStateCard({ message, tone = 'default' }: { message: string; tone?: 'default' | 'error' }) {

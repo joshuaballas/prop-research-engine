@@ -6,11 +6,6 @@ export interface GlossaryTerm {
 
 export const glossaryTerms: GlossaryTerm[] = [
   {
-    label: 'EV',
-    definition:
-      'Estimated expected value for sportsbook-priced markets. DFS props hide EV until a verified DFS payout or break-even model is available.'
-  },
-  {
     label: 'Edge',
     definition:
       "The gap between our estimated hit chance and the break-even chance implied by the provider line or price. A positive edge means the model thinks the side hits more often than the provider's line requires to be worthwhile."
@@ -19,28 +14,6 @@ export const glossaryTerms: GlossaryTerm[] = [
     label: 'Hit chance',
     definition:
       "The model-estimated probability that the selected side of the prop hits. For example, if a player's strikeout line is 6.5 and the side is Over, this is the estimated chance the player finishes with 7 or more strikeouts."
-  },
-  {
-    label: 'Trust',
-    definition:
-      'How reliable the app thinks the estimate is. Trust is based on supporting evidence such as sample size, model confidence, data quality, and whether the market is stale, thin, or missing important context.',
-    details: [
-      {
-        label: 'Low',
-        definition:
-          'Limited evidence or weaker data quality. Low trust does not mean the pick is bad; it means the estimate needs extra caution.'
-      },
-      {
-        label: 'Medium',
-        definition:
-          'Usable signal with enough support to review, but not strong enough to treat as highly reliable on its own.'
-      },
-      {
-        label: 'High',
-        definition:
-          'Stronger supporting evidence, cleaner data, and better model confidence. High trust still does not guarantee the pick will hit.'
-      }
-    ]
   },
   {
     label: 'Caution',
@@ -79,7 +52,7 @@ export const glossaryTerms: GlossaryTerm[] = [
   {
     label: 'Top pick',
     definition:
-      'A high-priority opportunity surfaced by the app based on edge, hit chance, trust, caution state, and current line context. Top pick does not mean guaranteed winner.'
+      'A high-priority opportunity surfaced by the app based on edge, hit chance, caution state, and current line context. Top pick does not mean guaranteed winner.'
   },
   {
     label: 'Best DFS line',

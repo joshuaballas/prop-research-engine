@@ -1169,133 +1169,17 @@ public static class PublicMarketsEndpoints
 
         if (IsSoccerSport(effectiveSport))
         {
-            if (!soccerTopPicksOptions.Enabled)
-            {
-                return await BuildGenericMarketTopPicksResponseAsync(
-                    requestedSport,
-                    effectiveSport,
-                    runId,
-                    take,
-                    providerCategory,
-                    soccerPredictionOptions,
-                    soccerGradingOptions,
-                    soccerTopPicksOptions,
-                    dbContext,
-                    cancellationToken);
-            }
-
-            var soccerLineShopping = await TheOddsApiDebugEndpoints.BuildSoccerWorldCupLineShoppingContextResponseAsync(
+            return await BuildGenericMarketTopPicksResponseAsync(
+                requestedSport,
+                effectiveSport,
+                runId,
                 take,
-                includeBookmakerPrices: false,
-                freshnessMinutes,
                 providerCategory,
-                soccerPredictionService,
                 soccerPredictionOptions,
                 soccerGradingOptions,
                 soccerTopPicksOptions,
                 dbContext,
-                cancellationToken,
-                includePlayerHistory: false,
-                evaluationTake: TopPicksInternalEvaluationTake);
-            var soccerTopPickFilteringStopwatch = Stopwatch.StartNew();
-            var soccerLikelyHitRows = TheOddsApiDebugEndpoints.BuildLikelyHitTopPickRows(
-                soccerLineShopping.ComparisonGroups
-                    .Select(group => JsonSerializer.SerializeToNode(group) as JsonObject)
-                    .Where(group => group is not null)
-                    .Select(group => group!),
-                likelyHitModel,
-                topPicksModelOptions,
-                Math.Clamp(take ?? 25, 1, 250));
-            var soccerTopPickCandidates = soccerLineShopping.ComparisonGroups
-                .Select(group => JsonSerializer.SerializeToNode(group) as JsonObject)
-                .Where(group => group is not null
-                    && group.TryGetPropertyValue("modelProbabilityAvailable", out var available)
-                    && available?.GetValue<bool>() == true
-                    && group.TryGetPropertyValue("selectedSideProbability", out var probability)
-                    && probability is not null
-                    && probability.GetValueKind() == JsonValueKind.Number
-                    && probability.GetValue<decimal>() >= soccerTopPicksOptions.MinimumHitProbability
-                    && group.TryGetPropertyValue("historicalSampleSize", out var sampleSize)
-                    && sampleSize is not null
-                    && sampleSize.GetValueKind() == JsonValueKind.Number
-                    && sampleSize.GetValue<int>() >= soccerTopPicksOptions.MinimumTopPickSampleSize)
-                .Select(group => group!)
-                .ToArray();
-            var researchOnlyBlockedSoccerCandidates = soccerLineShopping.ComparisonGroups
-                .Select(group => JsonSerializer.SerializeToNode(group) as JsonObject)
-                .Count(group => group is not null
-                    && HasSoccerModelProbability(group)
-                    && IsActiveSoccerTopPickGroup(group)
-                    && IsResearchOnlySoccerGroup(group));
-            var sampleBlockedSoccerCandidates = soccerLineShopping.ComparisonGroups
-                .Select(group => JsonSerializer.SerializeToNode(group) as JsonObject)
-                .Count(group => group is not null
-                    && HasSoccerModelProbability(group)
-                    && IsActiveSoccerTopPickGroup(group)
-                    && group.TryGetPropertyValue("historicalSampleSize", out var sampleSize)
-                    && sampleSize is not null
-                    && sampleSize.GetValueKind() == JsonValueKind.Number
-                    && sampleSize.GetValue<int>() < soccerTopPicksOptions.MinimumTopPickSampleSize);
-            var staleOrExpiredSoccerCandidates = soccerTopPickCandidates.Count(group => !IsActiveSoccerTopPickGroup(group));
-            var soccerTopPicks = topPicksModelOptions.IsLikelyHitV1Enabled
-                ? soccerLikelyHitRows
-                : soccerTopPickCandidates
-                    .Where(group => IsActiveSoccerTopPickGroup(group) && IsSoccerRecommendationGroup(group))
-                    .Take(Math.Clamp(take ?? 25, 1, 250))
-                    .ToArray();
-            soccerTopPickFilteringStopwatch.Stop();
-            var soccerTopPicksFallbackReason = soccerTopPicks.Length == 0
-                ? soccerTopPickCandidates.Length > 0 && staleOrExpiredSoccerCandidates == soccerTopPickCandidates.Length
-                    ? "Soccer Top Picks found model-eligible rows, but all were stale, expired, or already started."
-                    : "No Soccer / World Cup rows currently meet Top Picks probability, sample, and lifecycle gates."
-                : null;
-
-            return new
-            {
-                generatedAtUtc = soccerLineShopping.GeneratedAtUtc,
-                callsExternalApis = false,
-                readOnly = true,
-                supportedSports = SupportedMarketSports,
-                supportedCompetitions = BuildSupportedCompetitionDiagnostics(soccerGradingOptions.Enabled),
-                requestedSport,
-                effectiveSport,
-                competition = ResolveCompetitionName(effectiveSport),
-                resultGradingSupported = soccerGradingOptions.Enabled,
-                publicSoccerGradingEnabled = soccerGradingOptions.Enabled,
-                limitation = BuildMarketReadLimitation(soccerPredictionOptions.Enabled, soccerGradingOptions.Enabled),
-                snapshotBacked = false,
-                refreshRunId = soccerLineShopping.RefreshRunId,
-                fallbackReason = soccerTopPicksFallbackReason,
-                diagnostics = new
-                {
-                    lineShoppingDiagnostics = soccerLineShopping.Diagnostics,
-                    topPickFiltering = new
-                    {
-                        endpointKind = "top-picks",
-                        elapsedMs = soccerTopPickFilteringStopwatch.ElapsedMilliseconds,
-                        inputComparisonGroups = soccerLineShopping.ComparisonGroups.Count,
-                        recommendationEligibleCount = soccerTopPickCandidates.Length,
-                        returnedTopPicks = soccerTopPicks.Length
-                    }
-                },
-                soccerLineShopping.Run,
-                summary = new
-                {
-                    modelVersion = topPicksModelOptions.IsLikelyHitV1Enabled ? LikelyHitModelService.ModelVersion : TopPicksModelOptions.Legacy,
-                    activeCandidateCount = soccerTopPicks.Length,
-                    entryActionableCandidateCount = 0,
-                    actionableCandidateCount = 0,
-                    returnedTopPicks = soccerTopPicks.Length,
-                    recommendationEligibleCount = topPicksModelOptions.IsLikelyHitV1Enabled ? soccerLikelyHitRows.Length : soccerTopPickCandidates.Length,
-                    modelEligibleBeforeLifecycleCount = soccerTopPickCandidates.Length,
-                    staleOrExpiredModelEligibleCount = staleOrExpiredSoccerCandidates,
-                    sampleBlockedCount = sampleBlockedSoccerCandidates,
-                    researchOnlyBlockedCount = researchOnlyBlockedSoccerCandidates,
-                    totalActiveComparisonGroups = soccerLineShopping.ComparisonGroups.Count
-                },
-                soccerLineShopping.StrategyClassificationSummary,
-                topPicks = soccerTopPicks
-            };
+                cancellationToken);
         }
 
         var freshness = await TheOddsApiDebugEndpoints.BuildMlbRefreshFreshnessResponseAsync(
@@ -1325,6 +1209,7 @@ public static class PublicMarketsEndpoints
             requestedSport,
             effectiveSport,
             limitation = BuildMarketReadLimitation(),
+            source = topPicks.SnapshotBacked ? "persistedTopPickSnapshots" : "persistedTopPickSnapshotsUnavailable",
             freshness = ToPublicFreshnessSummary(freshness),
             topPicks.SnapshotBacked,
             refreshRunId = topPicks.RefreshRunId,
@@ -1332,7 +1217,7 @@ public static class PublicMarketsEndpoints
             topPicks.Run,
             topPicks.Summary,
             topPicks.StrategyClassificationSummary,
-            topPicks.TopPicks
+            topPicks = topPicks.TopPicks.Select(TrimPublicTopPickRow).ToArray()
         };
     }
 
@@ -1357,23 +1242,16 @@ public static class PublicMarketsEndpoints
         var requestedTake = Math.Clamp(take ?? TopPicksDefaultTake, 1, TopPicksMaxTake);
         var internalTake = Math.Max(requestedTake, TopPicksInternalEvaluationTake);
 
-        var mlbResponse = await BuildMarketTopPicksResponseAsync(
-            requestedSport: "MLB",
-            effectiveSport: "MLB",
+        var mlbResponse = await TheOddsApiDebugEndpoints.BuildMlbTopPicksResponseAsync(
             runId,
             internalTake,
             freshnessMinutes,
             providerCategory,
-            bookmakerPreset,
             dbContext,
             probabilityService,
             likelyHitModel,
             predictionGenerationOptions,
             topPicksModelOptions,
-            soccerPredictionService,
-            soccerPredictionOptions,
-            soccerGradingOptions,
-            soccerTopPicksOptions,
             cancellationToken);
         var soccerResponse = await BuildMarketTopPicksResponseAsync(
             requestedSport: "SOCCER",
@@ -1403,7 +1281,7 @@ public static class PublicMarketsEndpoints
             .ThenBy(row => GetTopPickString(row, "sport") ?? string.Empty, StringComparer.OrdinalIgnoreCase)
             .ThenBy(row => GetTopPickString(row, "player") ?? string.Empty, StringComparer.OrdinalIgnoreCase)
             .ToArray();
-        var selectedTopPicks = allCandidates.Take(requestedTake).ToArray();
+        var selectedTopPicks = allCandidates.Take(requestedTake).Select(TrimPublicTopPickRow).ToArray();
 
         return new
         {
@@ -1420,7 +1298,8 @@ public static class PublicMarketsEndpoints
             soccerPredictionsEnabled = soccerPredictionOptions.Enabled,
             soccerTopPicksEnabled = soccerTopPicksOptions.Enabled,
             limitation = BuildMarketReadLimitation(soccerPredictionOptions.Enabled, soccerGradingOptions.Enabled),
-            snapshotBacked = false,
+            source = selectedTopPicks.Length > 0 ? "persistedTopPickSnapshots" : "persistedTopPickSnapshotsUnavailable",
+            snapshotBacked = selectedTopPicks.Length > 0,
             refreshRunId = (Guid?)null,
             fallbackReason = selectedTopPicks.Length == 0
                 ? "No supported sport currently has public Top Picks that meet recommendation, lifecycle, and safety gates."
@@ -1428,6 +1307,8 @@ public static class PublicMarketsEndpoints
             diagnostics = new
             {
                 allSportsMerged = true,
+                source = selectedTopPicks.Length > 0 ? "persistedTopPickSnapshots" : "persistedTopPickSnapshotsUnavailable",
+                snapshotBacked = selectedTopPicks.Length > 0,
                 requestedTake,
                 internalEvaluationTake = internalTake,
                 providerCategory,
@@ -1513,10 +1394,28 @@ public static class PublicMarketsEndpoints
             competition = ResolveCompetitionName(effectiveSport),
             resultGradingSupported = IsSoccerSport(effectiveSport) ? soccerGradingOptions.Enabled : false,
             limitation = BuildMarketReadLimitation(soccerPredictionOptions.Enabled, soccerGradingOptions.Enabled),
-            freshness = await BuildGenericMarketFreshnessResponseAsync(requestedSport, effectiveSport, null, null, null, soccerPredictionOptions, soccerGradingOptions, soccerTopPicksOptions, dbContext, cancellationToken),
+            freshness = new
+            {
+                readOnly = true,
+                callsExternalApis = false,
+                source = "persistedTopPickSnapshots",
+                refreshRunId = latestRunId,
+                topPickSnapshotsOnly = true
+            },
+            source = rows.Length > 0 ? "persistedTopPickSnapshots" : "persistedTopPickSnapshotsUnavailable",
             snapshotBacked = rows.Length > 0,
             refreshRunId = latestRunId,
-            fallbackReason = rows.Length == 0 ? $"No persisted {ResolveSportDisplayName(effectiveSport)} top-pick snapshots are available yet." : null,
+            fallbackReason = rows.Length == 0 ? $"No active persisted {ResolveSportDisplayName(effectiveSport)} top-pick snapshots are available yet." : null,
+            diagnostics = new
+            {
+                endpointKind = "top-picks",
+                source = rows.Length > 0 ? "persistedTopPickSnapshots" : "persistedTopPickSnapshotsUnavailable",
+                callsTheOddsApi = false,
+                usesPersistedDatabaseRowsOnly = true,
+                snapshotBacked = rows.Length > 0,
+                returnedTopPicks = rows.Length,
+                providerCategory
+            },
             run = new
             {
                 runId = latestRunId,
@@ -1535,8 +1434,164 @@ public static class PublicMarketsEndpoints
                 .ToArray(),
             topPicks = rows
                 .Select(row => BuildSnapshotDetails(row.DetailsJson, row.Sport, row.EventName, row.EventStartTime))
+                .Select(TrimPublicTopPickRow)
                 .ToArray()
         };
+    }
+
+    private static readonly string[] PublicTopPickFieldAllowlist =
+    [
+        "rank",
+        "sport",
+        "competition",
+        "player",
+        "playerName",
+        "playerId",
+        "canonicalPlayerId",
+        "homeTeam",
+        "awayTeam",
+        "event",
+        "eventId",
+        "eventName",
+        "eventStartTime",
+        "eventStartTimeUtc",
+        "expectedResultDate",
+        "resolvedMlbDate",
+        "resultDateSource",
+        "normalizedPropType",
+        "propType",
+        "propTypeId",
+        "side",
+        "bestSide",
+        "line",
+        "provider",
+        "bookmaker",
+        "bestBookmaker",
+        "providerCategory",
+        "entryProvider",
+        "entryProviderCategory",
+        "entryCompatibilityGroup",
+        "entryActionableForUser",
+        "entryRuleWarning",
+        "entryUnavailableReason",
+        "recommendationType",
+        "isRecommendation",
+        "recommendationActionableForUser",
+        "isDfs",
+        "isSportsbook",
+        "sportsbookContextResearchOnly",
+        "isResearchOnly",
+        "resultGradingSupported",
+        "resultGradingUnavailableReason",
+        "lifecycleStatus",
+        "isFresh",
+        "isStale",
+        "isExpired",
+        "selectedSideProbability",
+        "hitChance",
+        "bestProbability",
+        "modelProbabilityAvailable",
+        "hitChanceUnavailableReason",
+        "modelOverProbability",
+        "modelUnderProbability",
+        "probabilitySource",
+        "bestProbabilityEdge",
+        "bestImpliedProbability",
+        "bestAmericanPrice",
+        "bestDecimalPrice",
+        "showExpectedValue",
+        "displayExpectedValue",
+        "expectedValueUnavailableReason",
+        "rawExpectedValue",
+        "calibratedExpectedValue",
+        "evCalibrationMethod",
+        "evSuppressedReason",
+        "topPickScore",
+        "lineUtilityScore",
+        "payoutQualityScore",
+        "priceGateStatus",
+        "priceGateReason",
+        "playablePriceEligible",
+        "topPickQualityEligible",
+        "effectiveAmericanOdds",
+        "alternateLineGroupKey",
+        "selectedRecommendedLine",
+        "modelEra",
+        "modelVersion",
+        "probabilityModelVersion",
+        "recommendationContractVersion",
+        "strategyClassification",
+        "strategyTier",
+        "trustLevel",
+        "riskTags",
+        "publicTopPickMinimumHitChance",
+        "hitChanceGatePassed",
+        "publicTopPickHitChanceGatePassed",
+        "recommendationProjectionSource",
+        "isProjectionRecommendationAligned",
+        "projectionProbabilityConflict",
+        "recentWeightedProjectionProbabilityConflict",
+        "usesAggregateProbability",
+        "rawSelectedSideProbability",
+        "calibratedSelectedSideProbability",
+        "selectedSideHistoryConsistencyGuardApplied",
+        "selectedSideHistoryConsistencyGuardPassed",
+        "fatalSelectedSideHistoryConsistencyCodes",
+        "projectionType",
+        "projectionTypeConfidence",
+        "isAlternateMarket",
+        "payoutMultiplierMayDiffer",
+        "specialProjectionWarning",
+        "historicalSampleSize",
+        "marketShape",
+        "playerHistorySummary"
+    ];
+
+    private static JsonObject TrimPublicTopPickRow(object row)
+    {
+        var source = row as JsonObject ?? JsonSerializer.SerializeToNode(row) as JsonObject;
+        if (source is null)
+        {
+            return new JsonObject();
+        }
+
+        return TrimPublicTopPickRow(source);
+    }
+
+    private static JsonObject TrimPublicTopPickRow(JsonElement row)
+    {
+        var source = JsonSerializer.SerializeToNode(row) as JsonObject;
+        if (source is null)
+        {
+            return new JsonObject();
+        }
+
+        return TrimPublicTopPickRow(source);
+    }
+
+    private static JsonObject TrimPublicTopPickRow(JsonObject source)
+    {
+        var trimmed = new JsonObject();
+        foreach (var key in PublicTopPickFieldAllowlist)
+        {
+            if (TryGetJsonProperty(source, key, out var value))
+            {
+                trimmed[key] = value?.DeepClone();
+            }
+        }
+
+        return trimmed;
+    }
+
+    private static bool TryGetJsonProperty(JsonObject source, string camelKey, out JsonNode? value)
+    {
+        if (source.TryGetPropertyValue(camelKey, out value))
+        {
+            return true;
+        }
+
+        var pascalKey = char.ToUpperInvariant(camelKey[0]) + camelKey[1..];
+        return source.TryGetPropertyValue(pascalKey, out value);
     }
 
     private static JsonObject[] ExtractTopPickRows(object response)
@@ -2061,27 +2116,50 @@ public static class PublicMarketsEndpoints
 
         if (IsSoccerSport(sport))
         {
+            var isSoccerRecommendation =
+                ReadNullableBool(details, "isRecommendation", "IsRecommendation") == true ||
+                ReadNullableBool(details, "recommendationActionableForUser", "RecommendationActionableForUser") == true;
+
             details["providerCategory"] = "Sportsbook";
             details["entryProviderCategory"] = "Sportsbook";
             details["entryActionableForUser"] = false;
-            details["sportsbookContextResearchOnly"] = true;
-            details["isResearchOnly"] = true;
             details["supportedEntryTypes"] = new JsonArray();
-            details["entryRuleWarning"] = "Soccer World Cup sportsbook context is research-only and not Entry Builder playable.";
-            details["entryUnavailableReason"] = "Soccer World Cup sportsbook context is research-only and not Entry Builder playable.";
-            details["resultGradingSupported"] = false;
-            details["resultGradingUnavailableReason"] = SoccerUnavailableMessage;
-            details["publicSoccerGradingEnabled"] = false;
-            details["isRecommendation"] = false;
-            details["recommendationActionableForUser"] = false;
-            details["recommendationType"] = null;
-            details["showExpectedValue"] = false;
-            details["displayExpectedValue"] = null;
-            details["expectedValueUnavailableReason"] = "World Cup sportsbook context is research-only until Soccer predictions and grading are enabled.";
-            details["selectedSideProbability"] = null;
-            details["modelProbabilityAvailable"] = false;
-            details["probabilitySource"] = null;
-            details["hitChanceUnavailableReason"] = SoccerUnavailableMessage;
+            if (isSoccerRecommendation)
+            {
+                details["sportsbookContextResearchOnly"] ??= false;
+                details["isResearchOnly"] ??= false;
+                details["entryRuleWarning"] ??= "Soccer sportsbook recommendation. Entry Builder is disabled for Soccer.";
+                details["entryUnavailableReason"] ??= "Soccer sportsbook recommendation. Entry Builder is disabled for Soccer.";
+                details["resultGradingSupported"] ??= true;
+                if (details["publicSoccerGradingEnabled"] is null)
+                {
+                    details["publicSoccerGradingEnabled"] = ReadNullableBool(details, "resultGradingSupported", "ResultGradingSupported") ?? true;
+                }
+
+                details["isRecommendation"] = true;
+                details["recommendationActionableForUser"] = true;
+                details["recommendationType"] ??= "Sportsbook";
+            }
+            else
+            {
+                details["sportsbookContextResearchOnly"] = true;
+                details["isResearchOnly"] = true;
+                details["entryRuleWarning"] = "Soccer World Cup sportsbook context is research-only and not Entry Builder playable.";
+                details["entryUnavailableReason"] = "Soccer World Cup sportsbook context is research-only and not Entry Builder playable.";
+                details["resultGradingSupported"] = false;
+                details["resultGradingUnavailableReason"] = SoccerUnavailableMessage;
+                details["publicSoccerGradingEnabled"] = false;
+                details["isRecommendation"] = false;
+                details["recommendationActionableForUser"] = false;
+                details["recommendationType"] = null;
+                details["showExpectedValue"] = false;
+                details["displayExpectedValue"] = null;
+                details["expectedValueUnavailableReason"] = "World Cup sportsbook context is research-only until Soccer predictions and grading are enabled.";
+                details["selectedSideProbability"] = null;
+                details["modelProbabilityAvailable"] = false;
+                details["probabilitySource"] = null;
+                details["hitChanceUnavailableReason"] = SoccerUnavailableMessage;
+            }
         }
 
         NormalizePublicDetailsJsonCasing(details);
@@ -2128,6 +2206,19 @@ public static class PublicMarketsEndpoints
             if (details[propertyName] is JsonValue value && value.TryGetValue<int>(out var intValue))
             {
                 return intValue;
+            }
+        }
+
+        return null;
+    }
+
+    private static bool? ReadNullableBool(JsonObject details, params string[] propertyNames)
+    {
+        foreach (var propertyName in propertyNames)
+        {
+            if (details[propertyName] is JsonValue value && value.TryGetValue<bool>(out var boolValue))
+            {
+                return boolValue;
             }
         }
 
@@ -3396,7 +3487,18 @@ public static class PublicMarketsEndpoints
         var recommendationLedgerCurrentEraRawCount = currentEraAuditRows.Length;
         var recommendationLedgerCurrentEraEligibleCount = dedupedEligibleCurrentEraAuditRows.Length;
         var recommendationLedgerCurrentEraCount = recommendationLedgerCurrentEraRawCount;
-        var excludedDuplicateLedgerRows = Math.Max(0, eligibleCurrentEraAuditRows.Length - dedupedEligibleCurrentEraAuditRows.Length);
+        var publicAtCaptureEligibleRawRowCount = eligibleCurrentEraAuditRows.Length;
+        var duplicateEligibleGroups = eligibleCurrentEraAuditRows
+            .GroupBy(BuildPublicPerformanceLedgerKey, StringComparer.OrdinalIgnoreCase)
+            .Where(group => group.Count() > 1)
+            .ToArray();
+        var duplicateEligibleRawRowCount = duplicateEligibleGroups.Sum(group => group.Count());
+        var excludedDuplicateLedgerRows = duplicateEligibleGroups.Sum(group => group.Count() - 1);
+        var finalPublicPerformanceRowsByProviderCategory = dedupedEligibleCurrentEraAuditRows
+            .GroupBy(row => string.IsNullOrWhiteSpace(row.ProviderCategory) ? "Unknown" : row.ProviderCategory, StringComparer.OrdinalIgnoreCase)
+            .Select(group => new { providerCategory = group.Key, count = group.Count() })
+            .OrderBy(row => row.providerCategory)
+            .ToArray();
         var excludedNonPublicCurrentEraRows = currentEraAuditRows.Count(row => !row.IsTopPick);
         var excludedInvalidSideRows = currentEraAuditRows.Count(row => !IsOverUnderSide(row.Side));
         var excludedMissingBookmakerRows = currentEraAuditRows.Count(HasMissingPublicPerformanceProviderKey);
@@ -3485,15 +3587,28 @@ public static class PublicMarketsEndpoints
                 unmatchedLedgerRows = unmatchedRows,
                 publicTopPicksCurrentSnapshotCount,
                 publicPerformanceLedgerRowsLoaded = summarySelectedRows.Length,
+                rawLedgerRowCountForSlate = recommendationLedgerCurrentEraRawCount,
+                rawCurrentEraLedgerRowCount = recommendationLedgerCurrentEraRawCount,
                 recommendationLedgerCurrentEraRawCount,
                 recommendationLedgerCurrentEraEligibleCount,
                 recommendationLedgerCurrentEraCount,
+                publicAtCaptureEligibleRawRowCount,
+                finalPublicPerformanceRowCount = summarySelectedRows.Length,
+                finalPublicPerformanceRowsByProviderCategory,
+                exactPublicPickKeyDedupeApplied = applyGuardedPublicPerformanceRules,
                 ledgerCaptureCoveragePercent,
                 publicTopPicksMissingLedgerCount,
+                nonPublicCurrentEraExcludedCount = excludedNonPublicCurrentEraRows,
                 excludedNonPublicCurrentEraRows,
+                duplicateEligibleRawRowCount,
+                duplicateEligibleExcludedRowCount = excludedDuplicateLedgerRows,
+                duplicateEligibleCountedRowCount = 0,
                 excludedDuplicateLedgerRows,
+                invalidSideExcludedCount = excludedInvalidSideRows,
                 excludedInvalidSideRows,
+                staleAtCaptureExcludedCount = excludedStaleAtCaptureRows,
                 excludedStaleAtCaptureRows,
+                missingProviderIdentityExcludedCount = excludedMissingBookmakerRows,
                 excludedMissingBookmakerRows,
                 currentEraPollutedLedgerRows,
                 preFilterRowsForCompletedDate = selectedPreEligibilityRows.Length,

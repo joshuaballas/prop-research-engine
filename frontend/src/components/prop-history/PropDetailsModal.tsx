@@ -8,7 +8,6 @@ import { mockPlayerResearchPlayers } from '../../data/mockPlayerResearch';
 import { palette } from '../../theme/palette';
 import { formatPercent } from '../../utils/formatters';
 import { MetricLabelWithHelp } from '../metrics/MetricLabelWithHelp';
-import { TrustValue } from '../metrics/TrustValue';
 import { ProviderLabel } from '../providers/ProviderLabel';
 import { AppCard } from '../ui/AppCard';
 import { PropHistorySkeleton } from '../ui/LoadingSkeletons';
@@ -173,14 +172,13 @@ function getPropHistoryUnavailableMessage(market: MarketOpportunity, apiHistory?
 }
 
 function MetricStrip({ market, maxWidth }: { market: MarketOpportunity; maxWidth?: number }) {
-  const showExpectedValue = market.showExpectedValue === true && typeof market.displayExpectedValue === 'number';
   return (
     <Box
       sx={{
         display: 'grid',
         gridTemplateColumns: {
           xs: 'repeat(2, minmax(0, 1fr))',
-          md: `repeat(${showExpectedValue ? 4 : 3}, minmax(0, 1fr))`
+          md: 'repeat(2, minmax(0, 1fr))'
         },
         gap: { xs: 1.05, md: 1.25 },
         px: { xs: 1.35, md: 1.6 },
@@ -193,10 +191,6 @@ function MetricStrip({ market, maxWidth }: { market: MarketOpportunity; maxWidth
     >
       <DetailMetric metric="hitChance" value={formatPercent(market.modelProbability)} />
       <DetailMetric metric="edge" value={formatPercent(market.probabilityEdge, { signed: true })} />
-      {showExpectedValue ? (
-        <DetailMetric metric="ev" value={formatPercent(market.displayExpectedValue ?? 0, { signed: true })} tone={(market.displayExpectedValue ?? 0) >= 0 ? 'success.main' : 'error.main'} />
-      ) : null}
-      <DetailMetric metric="trust" value={market.trustLevel === 'Research' ? 'Weak' : market.trustLevel} />
     </Box>
   );
 }
@@ -206,20 +200,16 @@ function DetailMetric({
   value,
   tone = 'text.primary'
 }: {
-  metric: 'ev' | 'edge' | 'hitChance' | 'trust';
+  metric: 'edge' | 'hitChance';
   value: string;
   tone?: string;
 }) {
   return (
     <Stack spacing={0.35} minWidth={0}>
       <MetricLabelWithHelp metric={metric} />
-      {metric === 'trust' ? (
-        <TrustValue level={value} />
-      ) : (
-        <Typography fontWeight={900} sx={{ color: tone, lineHeight: 1.25 }} noWrap>
-          {value}
-        </Typography>
-      )}
+      <Typography fontWeight={900} sx={{ color: tone, lineHeight: 1.25 }} noWrap>
+        {value}
+      </Typography>
     </Stack>
   );
 }

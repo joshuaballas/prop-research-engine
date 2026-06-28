@@ -6,7 +6,7 @@ const colors: Record<string, { bg: string; color: string; border: string }> = {
   'Top Pick': { bg: 'rgba(250,204,21,.15)', color: '#FACC15', border: 'rgba(250,204,21,.42)' },
   Watchlist: { bg: 'rgba(245,158,11,.13)', color: palette.warning, border: 'rgba(245,158,11,.35)' },
   Research: { bg: 'rgba(148,163,184,.12)', color: '#CBD5E1', border: 'rgba(148,163,184,.28)' },
-  'Research only': { bg: 'rgba(148,163,184,.12)', color: palette.textMuted, border: 'rgba(148,163,184,.24)' },
+  'Market context': { bg: 'rgba(148,163,184,.12)', color: palette.textMuted, border: 'rgba(148,163,184,.24)' },
   Avoid: { bg: 'rgba(244,63,94,.13)', color: palette.danger, border: 'rgba(244,63,94,.35)' },
   Fresh: { bg: 'rgba(34,211,238,.13)', color: palette.primary, border: 'rgba(34,211,238,.35)' },
   DFS: { bg: 'rgba(129,140,248,.14)', color: '#C4B5FD', border: 'rgba(129,140,248,.38)' },
@@ -30,7 +30,7 @@ const colors: Record<string, { bg: string; color: string; border: string }> = {
   Locked: { bg: 'rgba(148,163,184,.12)', color: '#CBD5E1', border: 'rgba(148,163,184,.28)' },
   'Provider issue': { bg: 'rgba(245,158,11,.13)', color: palette.warning, border: 'rgba(245,158,11,.35)' },
   'No longer available': { bg: 'rgba(244,63,94,.13)', color: palette.danger, border: 'rgba(244,63,94,.35)' },
-  'Non-positive EV': { bg: 'rgba(245,158,11,.13)', color: palette.warning, border: 'rgba(245,158,11,.35)' },
+  'Pricing caution': { bg: 'rgba(245,158,11,.13)', color: palette.warning, border: 'rgba(245,158,11,.35)' },
   'Model caution': { bg: 'rgba(245,158,11,.13)', color: palette.warning, border: 'rgba(245,158,11,.35)' }
 };
 

@@ -13,7 +13,6 @@ import { palette } from '../../theme/palette';
 import type { MarketOpportunity } from '../../types/markets';
 import { formatPercent } from '../../utils/formatters';
 import { isEntryBuilderAddableMarket, isLineNoLongerAvailable } from '../../utils/marketCautions';
-import { marketTagLabel, marketTagValue } from '../../utils/marketTags';
 
 const defaultLineShoppingFilters: MarketFilterValues = {
   search: '',
@@ -44,10 +43,6 @@ export function LineShoppingPage() {
     () => buildOptions(sportFilteredRows.map((market) => categoryFilterValue(market.providerCategory)), categoryFilterLabel),
     [sportFilteredRows]
   );
-  const opportunityOptions = useMemo(
-    () => buildOptions(sportFilteredRows.map((market) => marketTagValue(market)), marketTagLabel),
-    [sportFilteredRows]
-  );
   const visibleMarkets = useMemo(
     () => lineShoppingMarkets.filter((market) => lineShoppingMarketMatchesFilters(market, filters, candidateOnly, builder)),
     [builder, candidateOnly, filters, lineShoppingMarkets]
@@ -71,9 +66,9 @@ export function LineShoppingPage() {
       sportOptions,
       providerOptions,
       providerCategoryOptions,
-      opportunityOptions
+      opportunityOptions: [{ label: 'All', value: 'All' }]
     }));
-  }, [opportunityOptions, providerCategoryOptions, providerOptions, sportOptions]);
+  }, [providerCategoryOptions, providerOptions, sportOptions]);
 
   useEffect(() => {
     setPage(1);
@@ -115,9 +110,10 @@ export function LineShoppingPage() {
         sportOptions={sportOptions}
         providerOptions={providerOptions}
         providerCategoryOptions={providerCategoryOptions}
-        opportunityOptions={opportunityOptions}
         showClassificationFilter={false}
+        showOpportunityFilter={false}
         candidateOnly={candidateOnly}
+        candidateOnlyLabel="Featured only"
         onCandidateOnlyChange={setCandidateOnly}
         showCanAddOnly
         canAddOnlyLabel="Entry-compatible"
@@ -217,7 +213,6 @@ function lineShoppingMarketMatchesFilters(
   if (filters.sport !== 'All' && market.sport !== filters.sport) return false;
   if (filters.provider !== 'All' && market.provider !== filters.provider) return false;
   if (filters.providerCategory !== 'All' && categoryFilterValue(market.providerCategory) !== filters.providerCategory) return false;
-  if (filters.opportunity !== 'All' && marketTagValue(market) !== filters.opportunity) return false;
   if (candidateOnly && market.strategyClassification !== 'Candidate' && !market.sportsbookContextResearchOnly) return false;
   if (filters.canAddOnly && !isEntryCompatibleMarket(market, builder)) return false;
 

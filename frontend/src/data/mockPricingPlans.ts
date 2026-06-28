@@ -26,7 +26,7 @@ export const mockPricingPlans: PricingPlan[] = [
       'Provider-compatible entry builder',
       'Projection modifier visibility',
       'Line-shopping comparison views',
-      'Strategy performance breakdowns'
+      'Performance breakdowns'
     ],
     entitlements: ['3 seats', 'Unlimited saved entries', 'Advanced filters', 'Priority freshness alerts'],
     checkoutPlanCode: 'research_pro_monthly'

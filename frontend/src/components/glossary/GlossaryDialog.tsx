@@ -1,7 +1,6 @@
 import CloseRoundedIcon from '@mui/icons-material/CloseRounded';
 import { Box, Dialog, DialogContent, DialogTitle, IconButton, Stack, Typography } from '@mui/material';
 import { palette } from '../../theme/palette';
-import { trustColor, type TrustColorLevel } from '../../utils/trustColors';
 import { glossaryTerms } from './glossaryTerms';
 
 interface GlossaryDialogProps {
@@ -74,7 +73,7 @@ export function GlossaryDialog({ open, onClose }: GlossaryDialogProps) {
                 <Stack spacing={0.35} sx={{ mt: 1 }}>
                   {term.details.map((detail) => (
                     <Typography key={detail.label} variant="caption" color="text.secondary">
-                      <Box component="span" sx={{ color: trustDetailColor(detail.label), fontWeight: 850 }}>
+                      <Box component="span" sx={{ color: 'text.primary', fontWeight: 850 }}>
                         {detail.label}:
                       </Box>{' '}
                       {detail.definition}
@@ -88,12 +87,4 @@ export function GlossaryDialog({ open, onClose }: GlossaryDialogProps) {
       </DialogContent>
     </Dialog>
   );
-}
-
-function trustDetailColor(label: string) {
-  if (label === 'Low' || label === 'Medium' || label === 'High') {
-    return trustColor(label as TrustColorLevel);
-  }
-
-  return 'text.primary';
 }

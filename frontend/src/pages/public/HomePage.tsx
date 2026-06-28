@@ -119,7 +119,7 @@ export function HomePage() {
         </Container>
       </Box>
 
-      <LandingSection id="how-it-works" eyebrow="How it works" title="Compare projections, rank candidates, then build by provider.">
+      <LandingSection id="how-it-works" eyebrow="How it works" title="Compare projections, rank opportunities, then build by provider.">
         <WorkflowTimeline />
       </LandingSection>
 
@@ -131,8 +131,8 @@ export function HomePage() {
         <ModifierIntelligence />
       </LandingSection>
 
-      <LandingSection eyebrow="Freshness and trust" title="Clear market-state labels before a row becomes a candidate.">
-        <FreshnessTrustPanel />
+      <LandingSection eyebrow="Freshness and signals" title="Clear market-state labels before review.">
+        <MarketSignalsPanel />
       </LandingSection>
 
       <LandingSection eyebrow="Line shopping preview" title="Scan the best DFS line beside sportsbook reference lines.">
@@ -142,7 +142,7 @@ export function HomePage() {
               <Stack spacing={0.5}>
                 <Typography variant="h5">Market comparison board</Typography>
                 <Typography color="text.secondary">
-                  Candidate rows show the DFS provider, provider entry group, sportsbook context, estimated edge, and caution labels in one pass.
+                  Rows show the DFS provider, provider entry group, sportsbook context, model edge, and caution labels in one pass.
                 </Typography>
               </Stack>
               <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
@@ -275,7 +275,7 @@ function HeroProductPreview({ children }: { children: ReactNode }) {
           <Stack direction="row" justifyContent="space-between" alignItems="center" gap={1.25} flexWrap="wrap" useFlexGap sx={{ px: 0.25 }}>
             <MetadataText tone="fresh">Markets updated 3m ago</MetadataText>
             <Typography variant="caption" color="text.secondary" fontWeight={850}>
-              15 active candidates
+              15 active opportunities
             </Typography>
           </Stack>
           {children}
@@ -300,7 +300,7 @@ function HeroProductPreview({ children }: { children: ReactNode }) {
           <Stack direction="row" justifyContent="space-between" alignItems="center" gap={1}>
             <MetadataText tone="fresh">Markets updated 3m ago</MetadataText>
             <Typography variant="caption" color="text.secondary" fontWeight={850}>
-              15 active candidates
+              15 active opportunities
             </Typography>
           </Stack>
 
@@ -392,7 +392,7 @@ function EntrySummaryPreview({ compact = false }: { compact?: boolean }) {
         </Typography>
         <Stack spacing={compact ? 0.55 : 0.7}>
           <MiniBar label="Compatible legs" value={62} />
-          <MiniBar label="Fresh candidates" value={78} />
+          <MiniBar label="Fresh lines" value={78} />
           <MiniBar label="Modifier checks" value={44} />
         </Stack>
         <Typography variant="caption" color="text.secondary">
@@ -449,13 +449,13 @@ function WorkflowTimeline() {
     },
     {
       icon: <AutoGraphOutlinedIcon />,
-      title: 'Rank candidates',
+      title: 'Rank opportunities',
       body: 'Promote rows with positive model edge, active market status, provider compatibility, and enough history to review.'
     },
     {
       icon: <AccountTreeOutlinedIcon />,
       title: 'Build safely',
-      body: 'Keep candidate legs grouped by provider so PrizePicks, Underdog, Pick6, and Betr Picks stay in their own entry paths.'
+      body: 'Keep selected legs grouped by provider so PrizePicks, Underdog, Pick6, and Betr Picks stay in their own entry paths.'
     }
   ];
 
@@ -531,7 +531,7 @@ function CoverageBoard() {
               ))}
             </Grid>
             <Typography variant="body2" color="text.secondary">
-              DFS rows can become entry candidates when they are fresh, positive-edge, and compatible with that provider's rules.
+              DFS rows can become entry-ready when they are fresh, positive-edge, and compatible with that provider's rules.
             </Typography>
           </Stack>
         </Grid>
@@ -651,7 +651,7 @@ function ModifierIntelligence() {
               ))}
             </Grid>
             <Typography color="text.secondary">
-              Modifier badges stay attached to candidate rows anywhere they can affect line context or estimated payout.
+              Modifier badges stay attached to rows anywhere they can affect line context or estimated payout.
             </Typography>
           </Stack>
         </AppCard>
@@ -739,7 +739,7 @@ function ModifierBadge({ modifier }: { modifier: (typeof modifiers)[number] }) {
   );
 }
 
-function FreshnessTrustPanel() {
+function MarketSignalsPanel() {
   return (
     <Grid container spacing={2.5}>
       <Grid size={{ xs: 12, md: 5 }}>
@@ -773,13 +773,13 @@ function FreshnessTrustPanel() {
       <Grid size={{ xs: 12, md: 7 }}>
         <Grid container spacing={2.5}>
           <Grid size={{ xs: 12, sm: 6 }}>
-            <SignalCard icon={<ShieldOutlinedIcon />} title="Trust labels" value="Strong / Medium / Weak" body="Labels reflect sample size, market shape, strategy class, and row-level warnings." />
+            <SignalCard icon={<ShieldOutlinedIcon />} title="Signal labels" value="Fresh / Stale / Limited" body="Labels reflect market state, line availability, and supporting data quality." />
           </Grid>
           <Grid size={{ xs: 12, sm: 6 }}>
-            <SignalCard icon={<WarningAmberOutlinedIcon />} title="Caution states" value="Low sample size" body="Early or thin markets stay visible without being presented as confident candidates." />
+            <SignalCard icon={<WarningAmberOutlinedIcon />} title="Caution states" value="Limited history" body="Early or thin markets stay visible without being overstated." />
           </Grid>
           <Grid size={{ xs: 12 }}>
-            <SignalCard icon={<InsightsOutlinedIcon />} title="Performance context" value="Research-first" body="Historical performance summaries are treated as evidence to review, not certainty. Sample-size caution remains visible." />
+            <SignalCard icon={<InsightsOutlinedIcon />} title="Performance context" value="Evidence-first" body="Historical performance summaries are treated as evidence to review, not certainty." />
           </Grid>
         </Grid>
       </Grid>

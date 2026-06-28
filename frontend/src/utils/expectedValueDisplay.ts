@@ -1,7 +1,7 @@
 import type { MarketOpportunity } from '../types/markets';
 
 export const dfsExpectedValueTooltip =
-  'EV is only shown for sportsbook-priced markets. DFS props use hit chance, edge, and trust instead.';
+  'Expected value is only shown for sportsbook-priced markets. DFS props use hit chance and edge instead.';
 
 export function shouldShowExpectedValue(market: MarketOpportunity) {
   return market.showExpectedValue === true && typeof market.displayExpectedValue === 'number';

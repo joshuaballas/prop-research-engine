@@ -154,6 +154,26 @@ public static class RecommendationLedgerDebugEndpoints
                 .Select(row => new { Row = row, ExclusionReason = GetLedgerCapturePublicPerformanceExclusionReason(row) })
                 .Where(row => row.ExclusionReason is not null)
                 .ToArray();
+            var rawDuplicateKeyCount = duplicateRawLedgerGroups.Length;
+            var rawDuplicateRowCount = duplicateRawLedgerGroups.Sum(group => group.Count() - 1);
+            var duplicateEligibleExcludedRowCount = duplicateEligibleLedgerGroups.Sum(group => group.Count() - 1);
+            var nonPublicCurrentEraExcludedCount = excludedLedgerRows.Count(row =>
+                string.Equals(row.ExclusionReason, "LegacyCandidateInCurrentEra", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(row.ExclusionReason, "NotPublicTopPickAtCapture", StringComparison.OrdinalIgnoreCase));
+            var invalidSideExcludedCount = excludedLedgerRows.Count(row =>
+                string.Equals(row.ExclusionReason, "MissingSide", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(row.ExclusionReason, "InvalidSide", StringComparison.OrdinalIgnoreCase));
+            var staleAtCaptureExcludedCount = excludedLedgerRows.Count(row =>
+                string.Equals(row.ExclusionReason, "StaleAtCapture", StringComparison.OrdinalIgnoreCase));
+            var missingProviderIdentityExcludedCount = excludedLedgerRows.Count(row =>
+                string.Equals(row.ExclusionReason, "MissingProviderCategory", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(row.ExclusionReason, "MissingBookmaker", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(row.ExclusionReason, "MissingProvider", StringComparison.OrdinalIgnoreCase));
+            var finalPublicPerformanceRowsByProviderCategory = dedupedEligibleLedgerKeys
+                .GroupBy(row => string.IsNullOrWhiteSpace(row.Row.ProviderCategory) ? "Unknown" : row.Row.ProviderCategory, StringComparer.OrdinalIgnoreCase)
+                .Select(group => new { providerCategory = group.Key, count = group.Count() })
+                .OrderBy(row => row.providerCategory)
+                .ToArray();
 
             return Results.Ok(new
             {
@@ -163,7 +183,9 @@ public static class RecommendationLedgerDebugEndpoints
                 currentModelEra,
                 targetDate = date,
                 targetDates,
-                publicTopPickSource = "dynamicPublicTopPicksReadModel",
+                publicTopPickSource = publicTopPicksResponse.SnapshotBacked
+                    ? "persistedTopPickSnapshots"
+                    : "persistedTopPickSnapshotsUnavailable",
                 latestPersistedTopPickSnapshotDate,
                 persistedTopPickSnapshotCount,
                 currentDynamicPublicTopPickCount = publicTopPickRows.Length,
@@ -173,6 +195,8 @@ public static class RecommendationLedgerDebugEndpoints
                     .Select(group => new { providerCategory = group.Key, count = group.Count() })
                     .OrderBy(row => row.providerCategory)
                     .ToArray(),
+                rawLedgerRowCountForSlate = ledgerRows.Length,
+                rawCurrentEraLedgerRowCount = ledgerRows.Length,
                 rawRecommendationLedgerCountForSlate = ledgerRows.Length,
                 recommendationLedgerCountForCurrentSlate = ledgerRows.Length,
                 recommendationLedgerCountByProviderCategory = ledgerRows
@@ -180,7 +204,12 @@ public static class RecommendationLedgerDebugEndpoints
                     .Select(group => new { providerCategory = group.Key, count = group.Count() })
                     .OrderBy(row => row.providerCategory)
                     .ToArray(),
+                publicAtCaptureEligibleRawRowCount = eligibleLedgerKeys.Length,
                 eligiblePublicPerformanceLedgerCountForSlate = dedupedEligibleLedgerKeys.Length,
+                finalPublicPerformanceRowCount = dedupedEligibleLedgerKeys.Length,
+                rowsAfterPerformanceEligibility = dedupedEligibleLedgerKeys.Length,
+                exactPublicPickKeyDedupeApplied = true,
+                finalPublicPerformanceRowsByProviderCategory,
                 eligiblePublicPerformanceLedgerCountByProviderCategory = dedupedEligibleLedgerKeys
                     .GroupBy(row => string.IsNullOrWhiteSpace(row.Row.ProviderCategory) ? "Unknown" : row.Row.ProviderCategory, StringComparer.OrdinalIgnoreCase)
                     .Select(group => new { providerCategory = group.Key, count = group.Count() })
@@ -203,9 +232,18 @@ public static class RecommendationLedgerDebugEndpoints
                     .Take(20)
                     .Select(row => ToLedgerCaptureAuditTopPickExample(row.Row, row.Key))
                     .ToArray(),
-                duplicateRawLedgerCount = duplicateRawLedgerGroups.Sum(group => group.Count() - 1),
-                duplicateEligibleLedgerCount = duplicateEligibleLedgerGroups.Sum(group => group.Count() - 1),
-                duplicateLedgerCount = duplicateRawLedgerGroups.Sum(group => group.Count() - 1),
+                currentPublicTopPicksMissingLedgerExamples = missingLedgerRows
+                    .Take(20)
+                    .Select(row => ToLedgerCaptureAuditTopPickExample(row.Row, row.Key))
+                    .ToArray(),
+                rawDuplicateKeyCount,
+                rawDuplicateRowCount,
+                duplicateEligibleRawRowCount = duplicateEligibleLedgerGroups.Sum(group => group.Count()),
+                duplicateEligibleExcludedRowCount,
+                duplicateEligibleCountedRowCount = 0,
+                duplicateRawLedgerCount = rawDuplicateRowCount,
+                duplicateEligibleLedgerCount = duplicateEligibleExcludedRowCount,
+                duplicateLedgerCount = rawDuplicateRowCount,
                 duplicateLedgerExamples = duplicateRawLedgerGroups
                     .Take(10)
                     .Select(group => new
@@ -215,8 +253,13 @@ public static class RecommendationLedgerDebugEndpoints
                         examples = group.Take(3).Select(row => ToLedgerCaptureAuditLedgerExample(row.Row, row.Key)).ToArray()
                     })
                     .ToArray(),
+                publicAtCaptureButNoLongerCurrentCount = ledgerRowsPublicAtCaptureButNotCurrentlyPublic.Length,
                 ledgerRowsPublicAtCaptureButNotCurrentlyPublicCount = ledgerRowsPublicAtCaptureButNotCurrentlyPublic.Length,
+                nonPublicCurrentEraExcludedCount,
                 ledgerRowsNotPublicAtCaptureExcludedCount = excludedLedgerRows.Length,
+                invalidSideExcludedCount,
+                staleAtCaptureExcludedCount,
+                missingProviderIdentityExcludedCount,
                 invalidSideCount = ledgerRows.Count(row => !IsLedgerCaptureOverUnderSide(row.Side)),
                 missingBookmakerCount = ledgerRows.Count(HasMissingLedgerCaptureProviderKey),
                 staleAtCaptureCount = ledgerRows.Count(IsStaleLedgerCaptureRow),

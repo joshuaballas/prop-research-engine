@@ -9,7 +9,6 @@ import { useEffect, useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
 import { Link as RouterLink } from 'react-router-dom';
 import { ProjectionModifierBadge } from '../../components/markets/ProjectionModifierBadge';
-import { TrustValue } from '../../components/metrics/TrustValue';
 import { SportToggleRail } from '../../components/navigation/SportToggleRail';
 import { PropDetailsModal } from '../../components/prop-history/PropDetailsModal';
 import { ProviderLabel } from '../../components/providers/ProviderLabel';
@@ -27,7 +26,6 @@ import {
 } from '../../components/ui/OpportunityCard';
 import { PageHeader } from '../../components/ui/PageHeader';
 import { SectionHeader } from '../../components/ui/SectionHeader';
-import { StatusPill } from '../../components/ui/StatusPill';
 import { compactActionButtonSx, lockedActionButtonSx, removeActionButtonSx, secondaryGhostButtonSx } from '../../components/ui/buttonStyles';
 import { useEntryBuilder } from '../../hooks/useEntryBuilder';
 import { useLineShoppingData, useMarketFreshnessData, usePerformanceData, useTopPicksData } from '../../hooks/useMarketData';
@@ -36,7 +34,6 @@ import { palette } from '../../theme/palette';
 import type { MarketOpportunity } from '../../types/markets';
 import type { SportCode } from '../../types/sports';
 import { formatPercent } from '../../utils/formatters';
-import { marketTagLabel } from '../../utils/marketTags';
 import { buildAvailableSportOptions, getAvailableSportCodes } from '../../utils/sportOptions';
 import { renderOpportunityCautionText, renderWarningText } from '../../utils/warnings';
 
@@ -256,20 +253,14 @@ function DashboardOpportunityCard({ market, builder }: { market: MarketOpportuni
         provider={
           <OpportunityProviderRow provider={market.provider} category={market.providerCategory}>
             <Stack direction="row" gap={0.75} flexWrap="wrap" justifyContent="flex-end">
-              <StatusPill label={marketTagLabel(market.strategyClassification)} />
               <ProjectionModifierBadge modifier={market.projectionModifier} />
             </Stack>
           </OpportunityProviderRow>
         }
         metrics={
-          <OpportunityMetricGrid columns={{ xs: 2, sm: 3 }} sx={{ borderTop: 0, pt: 0 }}>
+          <OpportunityMetricGrid columns={{ xs: 2, sm: 2 }} sx={{ borderTop: 0, pt: 0 }}>
             <OpportunityMetricItem label="Edge" value={formatPercent(market.probabilityEdge, { signed: true })} metric="edge" />
             <OpportunityMetricItem label="Hit chance" value={formatPercent(market.modelProbability)} metric="hitChance" />
-            <OpportunityMetricItem
-              label="Trust"
-              value={<TrustValue level={market.trustLevel} sx={{ fontSize: '0.875rem', fontWeight: 900, lineHeight: 1.43 }} />}
-              metric="trust"
-            />
           </OpportunityMetricGrid>
         }
         caution={warning}

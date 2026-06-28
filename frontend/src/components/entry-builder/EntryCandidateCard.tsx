@@ -8,10 +8,8 @@ import { palette } from '../../theme/palette';
 import { marketDisplayLabel } from '../../utils/marketDisplay';
 import { renderOpportunityCautionText } from '../../utils/warnings';
 import { MetricLabelWithHelp } from '../metrics/MetricLabelWithHelp';
-import { TrustValue } from '../metrics/TrustValue';
 import { PropDetailsModal } from '../prop-history/PropDetailsModal';
 import { ProjectionModifierBadge } from '../markets/ProjectionModifierBadge';
-import { StatusPill } from '../ui/StatusPill';
 import { compactActionButtonSx, lockedActionButtonSx, removeActionButtonSx, secondaryGhostButtonSx } from '../ui/buttonStyles';
 import {
   OpportunityCardLayout,
@@ -75,7 +73,6 @@ export function EntryCandidateCard({ market, lockedProvider, selected = false, o
             <Typography variant="caption" color="primary.main" fontWeight={900}>
               {marketDisplayLabel(market)}
             </Typography>
-            <StatusPill label={market.strategyClassification} sx={{ height: 22 }} />
             <ProjectionModifierBadge modifier={market.projectionModifier} sx={{ height: 22 }} />
           </>
         }
@@ -94,10 +91,9 @@ export function EntryCandidateCard({ market, lockedProvider, selected = false, o
           <OpportunityProviderRow provider={market.entryProvider} category={market.providerCategory} />
         }
         metrics={
-          <OpportunityMetricGrid columns={{ xs: 2, sm: 4 }} sx={{ borderTop: 0, pt: 0 }}>
+          <OpportunityMetricGrid columns={{ xs: 2, sm: 2 }} sx={{ borderTop: 0, pt: 0 }}>
             <OpportunityMetricItem label="Edge" value={formatSignedPercent(market.probabilityEdge)} metric="edge" />
             <OpportunityMetricItem label="Hit chance" value={formatPercent(market.modelProbability)} metric="hitChance" />
-            <OpportunityMetricItem label="Trust" value={<TrustValue level={market.trustLevel} sx={{ fontSize: 14, fontWeight: 950, lineHeight: 1.5 }} />} metric="trust" />
           </OpportunityMetricGrid>
         }
         caution={warning || (incompatible ? `Locked to ${lockedProvider}` : undefined)}
