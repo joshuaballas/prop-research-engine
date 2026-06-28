@@ -60,6 +60,7 @@ public static partial class TheOddsApiDebugEndpoints
         row["modelVersion"] = result.ModelVersion;
         row["probabilityModelVersion"] = result.ProbabilityModelVersion;
         row["recommendationContractVersion"] = result.RecommendationContractVersion;
+        row["modelEra"] = ResolveCurrentPublicModelEra(topPicksModelOptions);
         row["hitChance"] = result.HitChance;
         row["rawWeightedProbability"] = result.RawWeightedProbability;
         row["smoothedProbability"] = result.SmoothedProbability;

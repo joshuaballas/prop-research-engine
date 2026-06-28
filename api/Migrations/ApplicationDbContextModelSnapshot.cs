@@ -854,6 +854,16 @@ namespace SportsBetting.Api.Migrations
                         .HasColumnType("numeric(12,4)")
                         .HasColumnName("line");
 
+                    b.Property<string>("ModelEra")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("model_era");
+
+                    b.Property<string>("ModelVersion")
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)")
+                        .HasColumnName("model_version");
+
                     b.Property<string>("Player")
                         .IsRequired()
                         .HasMaxLength(300)
@@ -863,6 +873,11 @@ namespace SportsBetting.Api.Migrations
                     b.Property<Guid?>("PredictionRunId")
                         .HasColumnType("uuid")
                         .HasColumnName("prediction_run_id");
+
+                    b.Property<string>("ProbabilityModelVersion")
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)")
+                        .HasColumnName("probability_model_version");
 
                     b.Property<string>("PropType")
                         .IsRequired()
@@ -880,6 +895,11 @@ namespace SportsBetting.Api.Migrations
                         .HasMaxLength(50)
                         .HasColumnType("character varying(50)")
                         .HasColumnName("provider_category");
+
+                    b.Property<string>("RecommendationContractVersion")
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)")
+                        .HasColumnName("recommendation_contract_version");
 
                     b.Property<DateOnly>("SlateDate")
                         .HasColumnType("date")
@@ -915,6 +935,9 @@ namespace SportsBetting.Api.Migrations
 
                     b.HasIndex("GeneratedAtUtc")
                         .HasDatabaseName("ix_market_line_shopping_snapshots_generated_at_utc");
+
+                    b.HasIndex("ModelEra")
+                        .HasDatabaseName("ix_market_line_shopping_snapshots_model_era");
 
                     b.HasIndex("PredictionRunId")
                         .HasDatabaseName("ix_market_line_shopping_snapshots_prediction_run_id");
@@ -1069,6 +1092,16 @@ namespace SportsBetting.Api.Migrations
                         .HasColumnType("numeric(12,4)")
                         .HasColumnName("line");
 
+                    b.Property<string>("ModelEra")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("model_era");
+
+                    b.Property<string>("ModelVersion")
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)")
+                        .HasColumnName("model_version");
+
                     b.Property<string>("Player")
                         .IsRequired()
                         .HasMaxLength(300)
@@ -1078,6 +1111,11 @@ namespace SportsBetting.Api.Migrations
                     b.Property<Guid?>("PredictionRunId")
                         .HasColumnType("uuid")
                         .HasColumnName("prediction_run_id");
+
+                    b.Property<string>("ProbabilityModelVersion")
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)")
+                        .HasColumnName("probability_model_version");
 
                     b.Property<string>("PropType")
                         .IsRequired()
@@ -1095,6 +1133,11 @@ namespace SportsBetting.Api.Migrations
                         .HasMaxLength(50)
                         .HasColumnType("character varying(50)")
                         .HasColumnName("provider_category");
+
+                    b.Property<string>("RecommendationContractVersion")
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)")
+                        .HasColumnName("recommendation_contract_version");
 
                     b.Property<DateOnly>("SlateDate")
                         .HasColumnType("date")
@@ -1130,6 +1173,9 @@ namespace SportsBetting.Api.Migrations
 
                     b.HasIndex("GeneratedAtUtc")
                         .HasDatabaseName("ix_market_top_pick_snapshots_generated_at_utc");
+
+                    b.HasIndex("ModelEra")
+                        .HasDatabaseName("ix_market_top_pick_snapshots_model_era");
 
                     b.HasIndex("PredictionRunId")
                         .HasDatabaseName("ix_market_top_pick_snapshots_prediction_run_id");
@@ -2900,6 +2946,16 @@ namespace SportsBetting.Api.Migrations
                         .HasColumnType("numeric(12,4)")
                         .HasColumnName("line");
 
+                    b.Property<string>("ModelEra")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("model_era");
+
+                    b.Property<string>("ModelVersion")
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)")
+                        .HasColumnName("model_version");
+
                     b.Property<string>("NormalizedPlayerName")
                         .IsRequired()
                         .HasMaxLength(300)
@@ -2941,6 +2997,11 @@ namespace SportsBetting.Api.Migrations
                         .HasColumnType("numeric(8,6)")
                         .HasColumnName("probability_edge");
 
+                    b.Property<string>("ProbabilityModelVersion")
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)")
+                        .HasColumnName("probability_model_version");
+
                     b.Property<string>("PropType")
                         .IsRequired()
                         .HasMaxLength(200)
@@ -2967,6 +3028,11 @@ namespace SportsBetting.Api.Migrations
                         .HasPrecision(18, 6)
                         .HasColumnType("numeric(18,6)")
                         .HasColumnName("ranking_score");
+
+                    b.Property<string>("RecommendationContractVersion")
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)")
+                        .HasColumnName("recommendation_contract_version");
 
                     b.Property<Guid?>("RefreshRunId")
                         .HasColumnType("uuid")
@@ -3045,6 +3111,9 @@ namespace SportsBetting.Api.Migrations
 
                     b.HasIndex("IsExcludedFromPerformance")
                         .HasDatabaseName("ix_recommendation_snapshots_performance_excluded");
+
+                    b.HasIndex("ModelEra")
+                        .HasDatabaseName("ix_recommendation_snapshots_model_era");
 
                     b.HasIndex("PredictionRunId")
                         .HasDatabaseName("ix_recommendation_snapshots_prediction_run_id");

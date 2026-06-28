@@ -31,6 +31,25 @@ public static partial class TheOddsApiDebugEndpoints
 
     public static IEndpointRouteBuilder MapTheOddsApiDebugEndpoints(this IEndpointRouteBuilder endpoints)
     {
+        endpoints.MapGet("/api/debug/the-odds/latest-market-lifecycle-audit", async (
+            string? sport,
+            string? providerCategory,
+            int? freshnessMinutes,
+            int? take,
+            ApplicationDbContext dbContext,
+            CancellationToken cancellationToken) =>
+        {
+            return Results.Ok(await BuildLatestMarketLifecycleAuditAsync(
+                sport,
+                providerCategory,
+                freshnessMinutes,
+                take,
+                dbContext,
+                cancellationToken));
+        })
+        .WithName("TheOddsLatestMarketLifecycleAudit")
+        .WithSummary("Read-only audit explaining why latest persisted market snapshots are active, stale, or expired.");
+
         endpoints.MapGet("/api/debug/the-odds/mlb/line-shopping", async (
             Guid? runId,
             int? freshnessMinutes,

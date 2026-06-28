@@ -568,6 +568,15 @@ public sealed class LikelyHitModelServiceTests
         Assert.Equal(-150, row["bestAmericanPrice"]!.GetValue<int>());
         Assert.True(row["selectedRecommendedLine"]!.GetValue<bool>());
         Assert.True(row["canShowAsPick"]!.GetValue<bool>());
+        Assert.Equal(
+            TopPicksModelOptions.DefaultLikelyHitV1ModelEra,
+            row["modelEra"]!.GetValue<string>());
+        Assert.Equal(
+            LikelyHitModelService.RecommendationContractVersion,
+            row["recommendationContractVersion"]!.GetValue<string>());
+        Assert.Equal(
+            LikelyHitModelService.ProbabilityModelVersion,
+            row["probabilityModelVersion"]!.GetValue<string>());
     }
 
     [Fact]

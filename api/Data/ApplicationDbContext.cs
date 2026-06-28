@@ -679,6 +679,10 @@ public sealed class ApplicationDbContext(DbContextOptions<ApplicationDbContext> 
             entity.Property<decimal?>("BestEstimatedEv").HasPrecision(12, 6);
             entity.Property<string>("StrategyClassification").HasMaxLength(50).IsRequired();
             entity.Property<string>("StrategyTier").HasMaxLength(100).IsRequired();
+            entity.Property<string?>("ModelVersion").HasMaxLength(100);
+            entity.Property<string?>("RecommendationContractVersion").HasMaxLength(100);
+            entity.Property<string?>("ProbabilityModelVersion").HasMaxLength(100);
+            entity.Property<string?>("ModelEra").HasMaxLength(200);
             entity.Property<bool>("IsCandidate");
             entity.Property<bool>("IsWatchlist");
             entity.Property<bool>("IsAvoid");
@@ -704,6 +708,7 @@ public sealed class ApplicationDbContext(DbContextOptions<ApplicationDbContext> 
             entity.HasIndex("GeneratedAtUtc").HasDatabaseName($"{indexPrefix}_generated_at_utc");
             entity.HasIndex("ProviderCategory", "IsCandidate").HasDatabaseName($"{indexPrefix}_provider_category_candidate");
             entity.HasIndex("BestEstimatedEv").HasDatabaseName($"{indexPrefix}_best_estimated_ev");
+            entity.HasIndex("ModelEra").HasDatabaseName($"{indexPrefix}_model_era");
         });
     }
 
@@ -737,6 +742,10 @@ public sealed class ApplicationDbContext(DbContextOptions<ApplicationDbContext> 
             entity.Property(x => x.Warning).HasMaxLength(1000);
             entity.Property(x => x.StrategyClassification).HasMaxLength(50).IsRequired();
             entity.Property(x => x.StrategyTier).HasMaxLength(100).IsRequired();
+            entity.Property(x => x.ModelVersion).HasMaxLength(100);
+            entity.Property(x => x.RecommendationContractVersion).HasMaxLength(100);
+            entity.Property(x => x.ProbabilityModelVersion).HasMaxLength(100);
+            entity.Property(x => x.ModelEra).HasMaxLength(200);
             entity.Property(x => x.RankingScore).HasPrecision(18, 6);
             entity.Property(x => x.LifecycleStatus).HasMaxLength(50).IsRequired();
             entity.Property(x => x.ResultValue).HasPrecision(12, 4);
@@ -768,6 +777,7 @@ public sealed class ApplicationDbContext(DbContextOptions<ApplicationDbContext> 
             entity.HasIndex(x => new { x.ProviderCategory, x.IsCandidate }).HasDatabaseName("ix_recommendation_snapshots_provider_candidate");
             entity.HasIndex(x => x.GradeStatus).HasDatabaseName("ix_recommendation_snapshots_grade_status");
             entity.HasIndex(x => x.IsExcludedFromPerformance).HasDatabaseName("ix_recommendation_snapshots_performance_excluded");
+            entity.HasIndex(x => x.ModelEra).HasDatabaseName("ix_recommendation_snapshots_model_era");
         });
     }
 

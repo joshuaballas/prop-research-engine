@@ -39,6 +39,7 @@ public static partial class TheOddsApiDebugEndpoints
         ITheOddsApiMlbPlayerPropsAdapter adapter,
         IPredictionGenerationService generationService,
         IPredictionProbabilityService probabilityService,
+        IOptions<TopPicksModelOptions> topPicksModelOptions,
         IProviderLineLifecycleService providerLineLifecycleService,
         IServiceScopeFactory scopeFactory,
         ApplicationDbContext dbContext,
@@ -589,6 +590,7 @@ public static partial class TheOddsApiDebugEndpoints
                     generatedAtUtc,
                     lineShopping.Groups,
                     activeCandidates.Take(25).ToArray(),
+                    topPicksModelOptions.Value,
                     dbContext,
                     cancellationToken);
                 await dbContext.SaveChangesAsync(cancellationToken);

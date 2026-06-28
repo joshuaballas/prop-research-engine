@@ -5,6 +5,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using SportsBetting.Api.Data;
 using SportsBetting.Api.Models;
+using SportsBetting.Api.Predictions;
 
 namespace SportsBetting.Api.Tests;
 
@@ -1116,6 +1117,143 @@ public sealed class PerformanceGradingTests
     }
 
     [Fact]
+    public async Task PerformanceSummary_DefaultsToCurrentModelEra_AndQuarantinesLegacyRows()
+    {
+        await using var factory = new SafetyTestApplicationFactory();
+        using var client = factory.CreateClient();
+        var date = new DateOnly(2026, 6, 17);
+        await SeedPerformanceScenarioAsync(
+            factory,
+            date,
+            "Total Bases",
+            "Over",
+            1.5m,
+            2m);
+        await SeedPerformanceScenarioAsync(
+            factory,
+            date,
+            "Total Bases",
+            "Under",
+            1.5m,
+            2m,
+            provider: "LegacyBook",
+            bookmaker: "LegacyBook",
+            resetDatabase: false,
+            modelEra: null);
+
+        var response = await client.GetAsync("/api/markets/performance-summary?sport=MLB&gradingMode=allHistory");
+
+        await EnsureSuccessWithBodyAsync(response);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal(TopPicksModelOptions.DefaultLikelyHitV1ModelEra, json.GetProperty("modelEra").GetString());
+        Assert.False(json.GetProperty("includeLegacy").GetBoolean());
+        Assert.Equal(1, json.GetProperty("summary").GetProperty("gradedPicks").GetInt32());
+        Assert.Equal(1, json.GetProperty("summary").GetProperty("won").GetInt32());
+        Assert.Equal(1, json.GetProperty("dataAvailability").GetProperty("excludedLegacyRows").GetInt32());
+        Assert.Contains(
+            json.GetProperty("diagnostics").GetProperty("modelEraBreakdown").EnumerateArray(),
+            row => row.GetProperty("modelEra").GetString() == "LegacyOrUnknown");
+    }
+
+    [Fact]
+    public async Task PerformanceSummary_IncludeLegacy_BroadensEraQuarantineWithDiagnostics()
+    {
+        await using var factory = new SafetyTestApplicationFactory();
+        using var client = factory.CreateClient();
+        var date = new DateOnly(2026, 6, 17);
+        await SeedPerformanceScenarioAsync(
+            factory,
+            date,
+            "Total Bases",
+            "Over",
+            1.5m,
+            2m);
+        await SeedPerformanceScenarioAsync(
+            factory,
+            date,
+            "Total Bases",
+            "Under",
+            1.5m,
+            2m,
+            provider: "LegacyBook",
+            bookmaker: "LegacyBook",
+            resetDatabase: false,
+            modelEra: null);
+
+        var response = await client.GetAsync("/api/markets/performance-summary?sport=MLB&gradingMode=allHistory&includeLegacy=true");
+
+        await EnsureSuccessWithBodyAsync(response);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.True(json.GetProperty("includeLegacy").GetBoolean());
+        Assert.Equal(2, json.GetProperty("summary").GetProperty("gradedPicks").GetInt32());
+        Assert.Equal(1, json.GetProperty("summary").GetProperty("won").GetInt32());
+        Assert.Equal(1, json.GetProperty("summary").GetProperty("lost").GetInt32());
+        Assert.Equal(0, json.GetProperty("dataAvailability").GetProperty("excludedLegacyRows").GetInt32());
+    }
+
+    [Fact]
+    public async Task PerformanceSummary_ModelEraFilter_UsesRequestedEra()
+    {
+        await using var factory = new SafetyTestApplicationFactory();
+        using var client = factory.CreateClient();
+        var date = new DateOnly(2026, 6, 17);
+        const string alternateEra = "LikelyHitV1_TestAlternateEra";
+        await SeedPerformanceScenarioAsync(
+            factory,
+            date,
+            "Total Bases",
+            "Over",
+            1.5m,
+            2m);
+        await SeedPerformanceScenarioAsync(
+            factory,
+            date,
+            "Pitcher Strikeouts",
+            "Under",
+            5.5m,
+            4m,
+            provider: "AltBook",
+            bookmaker: "AltBook",
+            resetDatabase: false,
+            modelEra: alternateEra);
+
+        var response = await client.GetAsync($"/api/markets/performance-summary?sport=MLB&gradingMode=allHistory&modelEra={alternateEra}");
+
+        await EnsureSuccessWithBodyAsync(response);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal(alternateEra, json.GetProperty("modelEra").GetString());
+        Assert.Equal(alternateEra, json.GetProperty("requestedModelEra").GetString());
+        Assert.Equal(1, json.GetProperty("summary").GetProperty("gradedPicks").GetInt32());
+        Assert.Equal(1, json.GetProperty("summary").GetProperty("won").GetInt32());
+    }
+
+    [Fact]
+    public async Task PerformanceSummary_WarnsWhenOnlyLegacyRowsExist()
+    {
+        await using var factory = new SafetyTestApplicationFactory();
+        using var client = factory.CreateClient();
+        var date = new DateOnly(2026, 6, 17);
+        await SeedPerformanceScenarioAsync(
+            factory,
+            date,
+            "Total Bases",
+            "Over",
+            1.5m,
+            2m,
+            modelEra: null);
+
+        var response = await client.GetAsync("/api/markets/performance-summary?sport=MLB&gradingMode=allHistory");
+
+        await EnsureSuccessWithBodyAsync(response);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal(0, json.GetProperty("summary").GetProperty("gradedPicks").GetInt32());
+        Assert.Equal(1, json.GetProperty("dataAvailability").GetProperty("excludedLegacyRows").GetInt32());
+        Assert.Equal(
+            "No current-era graded picks are available for the selected date/range. Legacy picks are quarantined by default.",
+            json.GetProperty("dataAvailability").GetProperty("warning").GetString());
+    }
+
+    [Fact]
     public async Task PerformanceResultMatchAudit_ReportsNormalizedNameFallbackEvidence()
     {
         await using var factory = new SafetyTestApplicationFactory();
@@ -1208,7 +1346,8 @@ public sealed class PerformanceGradingTests
         decimal estimatedEv = 0.08m,
         bool resultUsesDifferentPlayerIdWithSameName = false,
         bool resultUsesDifferentPropTypeIdWithEquivalentName = false,
-        decimal? additionalSameNameResultValue = null)
+        decimal? additionalSameNameResultValue = null,
+        string? modelEra = TopPicksModelOptions.DefaultLikelyHitV1ModelEra)
     {
         using var scope = factory.Services.CreateScope();
         var dbContext = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
@@ -1296,6 +1435,10 @@ public sealed class PerformanceGradingTests
             HistoricalSampleSize = 20,
             StrategyClassification = "Candidate",
             StrategyTier = "ConservativeCandidate",
+            ModelVersion = LikelyHitModelService.ModelVersion,
+            RecommendationContractVersion = LikelyHitModelService.RecommendationContractVersion,
+            ProbabilityModelVersion = LikelyHitModelService.ProbabilityModelVersion,
+            ModelEra = modelEra,
             RankingScore = rankingScore,
             IsCandidate = isCandidate,
             IsTopPick = isTopPick,

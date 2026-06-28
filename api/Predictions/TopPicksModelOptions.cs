@@ -5,8 +5,10 @@ public sealed class TopPicksModelOptions
     public const string SectionName = "TopPicksModel";
     public const string LikelyHitV1 = "LikelyHitV1";
     public const string Legacy = "Legacy";
+    public const string DefaultLikelyHitV1ModelEra = "LikelyHitV1_SportsbookBalanced_65Plus_NoShapeCap";
 
     public string ActiveModel { get; set; } = LikelyHitV1;
+    public string CurrentModelEra { get; set; } = DefaultLikelyHitV1ModelEra;
     public bool EnableDebugBreakdown { get; set; }
     public decimal MlbMinimumHitChance { get; set; } = 0.58m;
     public decimal MlbMinimumReliability { get; set; } = 0.65m;

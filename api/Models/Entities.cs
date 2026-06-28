@@ -571,6 +571,10 @@ public sealed class MarketTopPickSnapshot
     public decimal? BestEstimatedEv { get; set; }
     public string StrategyClassification { get; set; } = string.Empty;
     public string StrategyTier { get; set; } = string.Empty;
+    public string? ModelVersion { get; set; }
+    public string? RecommendationContractVersion { get; set; }
+    public string? ProbabilityModelVersion { get; set; }
+    public string? ModelEra { get; set; }
     public bool IsCandidate { get; set; }
     public bool IsWatchlist { get; set; }
     public bool IsAvoid { get; set; }
@@ -616,6 +620,10 @@ public sealed class MarketLineShoppingSnapshot
     public decimal? BestEstimatedEv { get; set; }
     public string StrategyClassification { get; set; } = string.Empty;
     public string StrategyTier { get; set; } = string.Empty;
+    public string? ModelVersion { get; set; }
+    public string? RecommendationContractVersion { get; set; }
+    public string? ProbabilityModelVersion { get; set; }
+    public string? ModelEra { get; set; }
     public bool IsCandidate { get; set; }
     public bool IsWatchlist { get; set; }
     public bool IsAvoid { get; set; }
@@ -669,6 +677,10 @@ public sealed class RecommendationSnapshot
     public int? HistoricalSampleSize { get; set; }
     public string StrategyClassification { get; set; } = string.Empty;
     public string StrategyTier { get; set; } = string.Empty;
+    public string? ModelVersion { get; set; }
+    public string? RecommendationContractVersion { get; set; }
+    public string? ProbabilityModelVersion { get; set; }
+    public string? ModelEra { get; set; }
     public decimal RankingScore { get; set; }
     public bool IsCandidate { get; set; }
     public bool IsTopPick { get; set; }

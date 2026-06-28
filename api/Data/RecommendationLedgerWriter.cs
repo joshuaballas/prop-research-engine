@@ -36,6 +36,10 @@ public sealed record RecommendationLedgerCandidate(
     int? HistoricalSampleSize,
     string StrategyClassification,
     string StrategyTier,
+    string? ModelVersion,
+    string? RecommendationContractVersion,
+    string? ProbabilityModelVersion,
+    string? ModelEra,
     decimal RankingScore,
     bool IsCandidate,
     bool IsTopPick,
@@ -184,6 +188,7 @@ public static class RecommendationLedgerWriter
             NormalizeKey(candidate.Provider),
             NormalizeKey(candidate.Bookmaker),
             NormalizeKey(candidate.StrategyClassification),
+            NormalizeKey(candidate.ModelEra),
             candidate.IsCandidate ? "candidate" : "non-candidate"
         });
 
@@ -267,6 +272,10 @@ public static class RecommendationLedgerWriter
         row.HistoricalSampleSize = candidate.HistoricalSampleSize;
         row.StrategyClassification = candidate.StrategyClassification;
         row.StrategyTier = candidate.StrategyTier;
+        row.ModelVersion = candidate.ModelVersion;
+        row.RecommendationContractVersion = candidate.RecommendationContractVersion;
+        row.ProbabilityModelVersion = candidate.ProbabilityModelVersion;
+        row.ModelEra = candidate.ModelEra;
         row.RankingScore = candidate.RankingScore;
         row.IsCandidate = candidate.IsCandidate;
         row.IsTopPick = candidate.IsTopPick;

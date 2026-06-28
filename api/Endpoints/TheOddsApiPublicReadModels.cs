@@ -307,6 +307,9 @@ public static partial class TheOddsApiDebugEndpoints
                 dfsCandidateCount = topPicks.Count(row =>
                     JsonSerializer.SerializeToNode(row) is JsonObject obj && string.Equals(ReadLikelyHitString(obj, "providerCategory"), "DFS", StringComparison.OrdinalIgnoreCase)),
                 modelVersion = topPicksModelOptions.IsLikelyHitV1Enabled ? LikelyHitModelService.ModelVersion : TopPicksModelOptions.Legacy,
+                recommendationContractVersion = topPicksModelOptions.IsLikelyHitV1Enabled ? LikelyHitModelService.RecommendationContractVersion : null,
+                probabilityModelVersion = topPicksModelOptions.IsLikelyHitV1Enabled ? LikelyHitModelService.ProbabilityModelVersion : null,
+                modelEra = ResolveCurrentPublicModelEra(topPicksModelOptions),
                 topPicksProviderCategoryBehavior = "Mixed DFS and Sportsbook recommendations are eligible; providerCategory filters can isolate one category.",
                 activeWatchlistCount = groups.Count(group => ClassifyTheOddsLineShoppingStrategy(group).IsWatchlist),
                 returnedTopPicks = topPicks.Length
@@ -572,6 +575,7 @@ public static partial class TheOddsApiDebugEndpoints
         DateTimeOffset generatedAtUtc,
         IReadOnlyCollection<TheOddsLineShoppingGroup> lineShoppingGroups,
         IReadOnlyCollection<TheOddsLineShoppingGroup> topPickGroups,
+        TopPicksModelOptions topPicksModelOptions,
         ApplicationDbContext dbContext,
         CancellationToken cancellationToken)
     {
@@ -586,9 +590,9 @@ public static partial class TheOddsApiDebugEndpoints
         dbContext.MarketLineShoppingSnapshots.RemoveRange(existingLineShopping);
 
         dbContext.MarketLineShoppingSnapshots.AddRange(lineShoppingGroups.Select(group =>
-            BuildLineShoppingSnapshot(refreshRun, predictionRunId, generatedAtUtc, group)));
+            BuildLineShoppingSnapshot(refreshRun, predictionRunId, generatedAtUtc, group, topPicksModelOptions)));
         dbContext.MarketTopPickSnapshots.AddRange(topPickGroups.Select(group =>
-            BuildTopPickSnapshot(refreshRun, predictionRunId, generatedAtUtc, group)));
+            BuildTopPickSnapshot(refreshRun, predictionRunId, generatedAtUtc, group, topPicksModelOptions)));
 
         var topPickKeys = topPickGroups
             .Select(BuildRecommendationLedgerGroupIdentity)
@@ -604,6 +608,7 @@ public static partial class TheOddsApiDebugEndpoints
                 predictionRunId,
                 generatedAtUtc,
                 group,
+                topPicksModelOptions,
                 topPickKeys.Contains(BuildRecommendationLedgerGroupIdentity(group))))
             .ToArray();
 
@@ -619,6 +624,7 @@ public static partial class TheOddsApiDebugEndpoints
         Guid? predictionRunId,
         DateTimeOffset generatedAtUtc,
         TheOddsLineShoppingGroup group,
+        TopPicksModelOptions topPicksModelOptions,
         bool isTopPick)
     {
         var strategy = ClassifyTheOddsLineShoppingStrategy(group);
@@ -662,6 +668,10 @@ public static partial class TheOddsApiDebugEndpoints
             HistoricalSampleSize: group.HistoricalSampleSize,
             StrategyClassification: strategy.StrategyClassification,
             StrategyTier: strategy.StrategyTier,
+            ModelVersion: ResolveCurrentPublicModelVersion(topPicksModelOptions),
+            RecommendationContractVersion: ResolveCurrentRecommendationContractVersion(topPicksModelOptions),
+            ProbabilityModelVersion: ResolveCurrentProbabilityModelVersion(topPicksModelOptions),
+            ModelEra: ResolveCurrentPublicModelEra(topPicksModelOptions),
             RankingScore: group.RankingScore,
             IsCandidate: strategy.IsCandidate && gradeability.IsGradeable,
             IsTopPick: isTopPick && gradeability.IsGradeable,
@@ -759,7 +769,8 @@ public static partial class TheOddsApiDebugEndpoints
         TheOddsRefreshRun refreshRun,
         Guid? predictionRunId,
         DateTimeOffset generatedAtUtc,
-        TheOddsLineShoppingGroup group)
+        TheOddsLineShoppingGroup group,
+        TopPicksModelOptions topPicksModelOptions)
     {
         var strategy = ClassifyTheOddsLineShoppingStrategy(group);
         var entry = BuildTheOddsEntryCompatibility(group);
@@ -795,6 +806,10 @@ public static partial class TheOddsApiDebugEndpoints
             BestEstimatedEv = group.BestEstimatedEv,
             StrategyClassification = strategy.StrategyClassification,
             StrategyTier = strategy.StrategyTier,
+            ModelVersion = ResolveCurrentPublicModelVersion(topPicksModelOptions),
+            RecommendationContractVersion = ResolveCurrentRecommendationContractVersion(topPicksModelOptions),
+            ProbabilityModelVersion = ResolveCurrentProbabilityModelVersion(topPicksModelOptions),
+            ModelEra = ResolveCurrentPublicModelEra(topPicksModelOptions),
             IsCandidate = strategy.IsCandidate,
             IsWatchlist = strategy.IsWatchlist,
             IsAvoid = strategy.IsAvoid,
@@ -803,7 +818,7 @@ public static partial class TheOddsApiDebugEndpoints
             EntryCompatibilityGroup = entry.EntryCompatibilityGroup,
             EntryProviderCategory = entry.EntryProviderCategory,
             EntryActionableForUser = entry.EntryActionableForUser,
-            DetailsJson = JsonSerializer.SerializeToDocument(ToLineShoppingResponseGroup(group, includeBookmakerPrices: false))
+            DetailsJson = BuildMarketSnapshotDetailsJson(group, includeBookmakerPrices: false, topPicksModelOptions)
         };
     }
 
@@ -811,7 +826,8 @@ public static partial class TheOddsApiDebugEndpoints
         TheOddsRefreshRun refreshRun,
         Guid? predictionRunId,
         DateTimeOffset generatedAtUtc,
-        TheOddsLineShoppingGroup group)
+        TheOddsLineShoppingGroup group,
+        TopPicksModelOptions topPicksModelOptions)
     {
         var strategy = ClassifyTheOddsLineShoppingStrategy(group);
         var entry = BuildTheOddsEntryCompatibility(group);
@@ -847,6 +863,10 @@ public static partial class TheOddsApiDebugEndpoints
             BestEstimatedEv = group.BestEstimatedEv,
             StrategyClassification = strategy.StrategyClassification,
             StrategyTier = strategy.StrategyTier,
+            ModelVersion = ResolveCurrentPublicModelVersion(topPicksModelOptions),
+            RecommendationContractVersion = ResolveCurrentRecommendationContractVersion(topPicksModelOptions),
+            ProbabilityModelVersion = ResolveCurrentProbabilityModelVersion(topPicksModelOptions),
+            ModelEra = ResolveCurrentPublicModelEra(topPicksModelOptions),
             IsCandidate = strategy.IsCandidate,
             IsWatchlist = strategy.IsWatchlist,
             IsAvoid = strategy.IsAvoid,
@@ -855,9 +875,48 @@ public static partial class TheOddsApiDebugEndpoints
             EntryCompatibilityGroup = entry.EntryCompatibilityGroup,
             EntryProviderCategory = entry.EntryProviderCategory,
             EntryActionableForUser = entry.EntryActionableForUser,
-            DetailsJson = JsonSerializer.SerializeToDocument(ToLineShoppingResponseGroup(group, includeBookmakerPrices: true))
+            DetailsJson = BuildMarketSnapshotDetailsJson(group, includeBookmakerPrices: true, topPicksModelOptions)
         };
     }
+
+    private static JsonDocument BuildMarketSnapshotDetailsJson(
+        TheOddsLineShoppingGroup group,
+        bool includeBookmakerPrices,
+        TopPicksModelOptions topPicksModelOptions)
+    {
+        var node = JsonSerializer.SerializeToNode(ToLineShoppingResponseGroup(group, includeBookmakerPrices)) as JsonObject ?? [];
+        AddCurrentPublicModelMetadata(node, topPicksModelOptions);
+        return JsonSerializer.SerializeToDocument(node);
+    }
+
+    private static void AddCurrentPublicModelMetadata(JsonObject node, TopPicksModelOptions topPicksModelOptions)
+    {
+        node["modelVersion"] = ResolveCurrentPublicModelVersion(topPicksModelOptions);
+        node["recommendationContractVersion"] = ResolveCurrentRecommendationContractVersion(topPicksModelOptions);
+        node["probabilityModelVersion"] = ResolveCurrentProbabilityModelVersion(topPicksModelOptions);
+        node["modelEra"] = ResolveCurrentPublicModelEra(topPicksModelOptions);
+    }
+
+    internal static string ResolveCurrentPublicModelEra(TopPicksModelOptions topPicksModelOptions)
+    {
+        if (topPicksModelOptions.IsLikelyHitV1Enabled)
+        {
+            return string.IsNullOrWhiteSpace(topPicksModelOptions.CurrentModelEra)
+                ? TopPicksModelOptions.DefaultLikelyHitV1ModelEra
+                : topPicksModelOptions.CurrentModelEra.Trim();
+        }
+
+        return TopPicksModelOptions.Legacy;
+    }
+
+    private static string ResolveCurrentPublicModelVersion(TopPicksModelOptions topPicksModelOptions) =>
+        topPicksModelOptions.IsLikelyHitV1Enabled ? LikelyHitModelService.ModelVersion : TopPicksModelOptions.Legacy;
+
+    private static string? ResolveCurrentRecommendationContractVersion(TopPicksModelOptions topPicksModelOptions) =>
+        topPicksModelOptions.IsLikelyHitV1Enabled ? LikelyHitModelService.RecommendationContractVersion : null;
+
+    private static string? ResolveCurrentProbabilityModelVersion(TopPicksModelOptions topPicksModelOptions) =>
+        topPicksModelOptions.IsLikelyHitV1Enabled ? LikelyHitModelService.ProbabilityModelVersion : null;
 
     private static async Task<MlbTopPicksReadResponse?> TryBuildTopPicksSnapshotResponseAsync(
         int? take,
@@ -1240,7 +1299,13 @@ public static partial class TheOddsApiDebugEndpoints
             activeCandidateCount = rows.Count(row => row.IsCandidate),
             actionableCandidateCount = rows.Count(row => row.IsCandidate && row.EntryActionableForUser),
             sportsbookContextCandidateCount = rows.Count(row => row.IsCandidate && !row.EntryActionableForUser),
-            dfsCandidateCount = rows.Count(row => row.IsCandidate && string.Equals(row.ProviderCategory, "DFS", StringComparison.OrdinalIgnoreCase))
+            dfsCandidateCount = rows.Count(row => row.IsCandidate && string.Equals(row.ProviderCategory, "DFS", StringComparison.OrdinalIgnoreCase)),
+            modelEraBreakdown = rows
+                .GroupBy(row => string.IsNullOrWhiteSpace(row.ModelEra) ? "LegacyOrUnknown" : row.ModelEra, StringComparer.OrdinalIgnoreCase)
+                .Select(group => new { modelEra = group.Key, count = group.Count() })
+                .OrderByDescending(row => row.count)
+                .ThenBy(row => row.modelEra)
+                .ToArray()
         };
     }
 
@@ -1253,7 +1318,21 @@ public static partial class TheOddsApiDebugEndpoints
             activeCandidateCount = rows.Count(row => GetBool(row, "isCandidate") == true),
             actionableCandidateCount = rows.Count(row => GetBool(row, "isCandidate") == true && GetBool(row, "entryActionableForUser") == true),
             sportsbookContextCandidateCount = rows.Count(row => GetBool(row, "isCandidate") == true && GetBool(row, "entryActionableForUser") != true),
-            dfsCandidateCount = rows.Count(row => GetBool(row, "isCandidate") == true && string.Equals(GetString(row, "providerCategory"), "DFS", StringComparison.OrdinalIgnoreCase))
+            dfsCandidateCount = rows.Count(row => GetBool(row, "isCandidate") == true && string.Equals(GetString(row, "providerCategory"), "DFS", StringComparison.OrdinalIgnoreCase)),
+            modelEra = rows
+                .Select(row => GetString(row, "modelEra"))
+                .Where(value => !string.IsNullOrWhiteSpace(value))
+                .GroupBy(value => value!, StringComparer.OrdinalIgnoreCase)
+                .OrderByDescending(group => group.Count())
+                .ThenBy(group => group.Key)
+                .Select(group => group.Key)
+                .FirstOrDefault(),
+            modelEraBreakdown = rows
+                .GroupBy(row => GetString(row, "modelEra") ?? "LegacyOrUnknown", StringComparer.OrdinalIgnoreCase)
+                .Select(group => new { modelEra = group.Key, count = group.Count() })
+                .OrderByDescending(row => row.count)
+                .ThenBy(row => row.modelEra)
+                .ToArray()
         };
     }
 

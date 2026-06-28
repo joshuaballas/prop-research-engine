@@ -394,8 +394,11 @@ public static class PublicMarketsEndpoints
             bool? includeNoResultDiagnostics,
             bool? includeDiagnostics,
             int? diagnosticSampleSize,
+            string? modelEra,
+            bool? includeLegacy,
             IPlayerIdentityAliasService playerIdentityAliasService,
             IMlbResultCoverageService mlbCoverageService,
+            IOptions<TopPicksModelOptions> topPicksModelOptions,
             ApplicationDbContext dbContext,
             CancellationToken cancellationToken) =>
         {
@@ -431,8 +434,11 @@ public static class PublicMarketsEndpoints
                 includeNoResultDiagnostics ?? false,
                 includeDiagnostics ?? false,
                 diagnosticSampleSize,
+                modelEra,
+                includeLegacy ?? false,
                 playerIdentityAliasService,
                 mlbCoverageService,
+                topPicksModelOptions.Value,
                 dbContext,
                 cancellationToken);
 
@@ -2315,8 +2321,11 @@ public static class PublicMarketsEndpoints
         bool includeNoResultDiagnostics,
         bool includeDiagnostics,
         int? diagnosticSampleSize,
+        string? modelEra,
+        bool includeLegacy,
         IPlayerIdentityAliasService playerIdentityAliasService,
         IMlbResultCoverageService mlbCoverageService,
+        TopPicksModelOptions topPicksModelOptions,
         ApplicationDbContext dbContext,
         CancellationToken cancellationToken)
     {
@@ -2362,6 +2371,9 @@ public static class PublicMarketsEndpoints
             includeNoResultDiagnostics,
             includeDiagnostics,
             diagnosticSampleSize,
+            modelEra,
+            includeLegacy,
+            topPicksModelOptions,
             mlbCoverageService,
             dbContext,
             cancellationToken);
@@ -3019,6 +3031,9 @@ public static class PublicMarketsEndpoints
         bool includeNoResultDiagnostics,
         bool includeDiagnostics,
         int? diagnosticSampleSize,
+        string? modelEra,
+        bool includeLegacy,
+        TopPicksModelOptions topPicksModelOptions,
         IMlbResultCoverageService mlbCoverageService,
         ApplicationDbContext dbContext,
         CancellationToken cancellationToken)
@@ -3046,6 +3061,9 @@ public static class PublicMarketsEndpoints
             .AsNoTracking()
             .Where(row => row.Sport == effectiveSport);
         var ledgerQuery = allLedgerQuery;
+        var requestedModelEra = string.IsNullOrWhiteSpace(modelEra) ? null : modelEra.Trim();
+        var effectiveModelEra = requestedModelEra ?? TheOddsApiDebugEndpoints.ResolveCurrentPublicModelEra(topPicksModelOptions);
+        var hasExplicitModelEraFilter = !string.IsNullOrWhiteSpace(requestedModelEra);
 
         if (!string.IsNullOrWhiteSpace(providerCategory))
         {
@@ -3108,8 +3126,26 @@ public static class PublicMarketsEndpoints
             ledgerQuery = ledgerQuery.Where(row => row.HistoricalSampleSize >= minSampleSize.Value);
         }
 
+        var ledgerPreEraQuery = ledgerQuery;
+        var modelEraBreakdownRows = await BuildModelEraBreakdownRowsAsync(
+            ledgerPreEraQuery,
+            dbContext,
+            cancellationToken);
+        if (hasExplicitModelEraFilter)
+        {
+            ledgerQuery = ledgerQuery.Where(row => row.ModelEra == effectiveModelEra);
+        }
+        else if (!includeLegacy)
+        {
+            ledgerQuery = ledgerQuery.Where(row => row.ModelEra == effectiveModelEra);
+        }
+
+        var ledgerRowsBeforeEraQuarantine = modelEraBreakdownRows.Sum(row => row.RowCount);
         var ledgerTotalAfterFilters = await ledgerQuery.CountAsync(cancellationToken);
-        if (ledgerTotalAfterFilters == 0 && !string.Equals(normalizedGradingMode, "latestCompleted", StringComparison.OrdinalIgnoreCase))
+        var excludedLegacyRows = Math.Max(0, ledgerRowsBeforeEraQuarantine - ledgerTotalAfterFilters);
+        if (ledgerTotalAfterFilters == 0 &&
+            ledgerRowsBeforeEraQuarantine == 0 &&
+            !string.Equals(normalizedGradingMode, "latestCompleted", StringComparison.OrdinalIgnoreCase))
         {
             return null;
         }
@@ -3240,7 +3276,11 @@ public static class PublicMarketsEndpoints
             row.Outcome is null &&
             !IsNoResultFailure(row.MatchFailureReason) &&
             !IsPendingFailure(row.MatchFailureReason));
-        var warning = totalGraded == 0
+        var modelEraQuarantineWarning = !includeLegacy && excludedLegacyRows > 0 && totalGraded == 0
+            ? "No current-era graded picks are available for the selected date/range. Legacy picks are quarantined by default."
+            : null;
+        var warning = modelEraQuarantineWarning
+            ?? (totalGraded == 0
             ? summarySelectedRows.Length == 0 && latestCompletedDate.HasValue
                 ? $"No captured recommendations exist for the latest completed result date ({latestCompletedDate.Value:MMM d})."
                 : summarySelectedRows.Length > 0
@@ -3250,7 +3290,7 @@ public static class PublicMarketsEndpoints
                     : "No captured recommendations exist yet."
             : totalGraded < 30
                 ? "Small graded sample. Treat ROI and hit-rate as directional only."
-                : null;
+                : null);
 
         var selectedGradedDateForCoverage = normalizedGradingMode == "latestGraded" ? latestGradedDate : selectedDate;
         var selectedGradedDateCoverageStatus = ResolveSelectedCoverageStatus(coverageSelection, selectedGradedDateForCoverage);
@@ -3277,6 +3317,9 @@ public static class PublicMarketsEndpoints
             effectiveSport,
             gradingMode = normalizedGradingMode,
             performanceSource = "recommendationLedger",
+            modelEra = effectiveModelEra,
+            requestedModelEra,
+            includeLegacy,
             limitation = "Performance summary uses recommendation_snapshots as the captured-pick ledger and matches rows to prop_results by expected result date, canonical player id, and normalized prop/stat type. Provider, side, and line are not used to find the result row; side and line are used only after a result is found.",
             filters = new
             {
@@ -3293,6 +3336,9 @@ public static class PublicMarketsEndpoints
                 includeStale,
                 includeExcluded,
                 includeNoResultDiagnostics,
+                modelEra = effectiveModelEra,
+                requestedModelEra,
+                includeLegacy,
                 startDate,
                 endDate,
                 fromDate,
@@ -3323,6 +3369,12 @@ public static class PublicMarketsEndpoints
                     ? await ledgerPreExclusionQuery.CountAsync(row => row.ExpectedResultDate == selectedDate.Value && row.IsExcludedFromPerformance, cancellationToken)
                     : await ledgerPreExclusionQuery.CountAsync(row => row.IsExcludedFromPerformance, cancellationToken),
                 includedExcludedRows = includeExcluded ? summarySelectedRows.Count(row => row.IsExcludedFromPerformance) : 0,
+                excludedLegacyRows,
+                excludedLegacyReason = includeLegacy
+                    ? null
+                    : hasExplicitModelEraFilter
+                        ? $"Rows outside requested modelEra '{effectiveModelEra}' are excluded."
+                        : $"Rows missing modelEra or outside current modelEra '{effectiveModelEra}' are excluded by default.",
                 rowsAfterPerformanceEligibility = summarySelectedRows.Length,
                 rowsExcludedWatchlist = selectedPreEligibilityRows.Count(row => row.IsWatchlist && !includeWatchlist),
                 rowsExcludedResearch = selectedPreEligibilityRows.Count(row => !row.IsCandidate && !row.IsTopPick && !row.IsWatchlist && !includeResearch),
@@ -3459,6 +3511,26 @@ public static class PublicMarketsEndpoints
             },
             diagnostics = new
             {
+                modelEra = effectiveModelEra,
+                requestedModelEra,
+                includeLegacy,
+                excludedLegacyRows,
+                excludedLegacyReason = includeLegacy
+                    ? null
+                    : hasExplicitModelEraFilter
+                        ? $"Rows outside requested modelEra '{effectiveModelEra}' are excluded."
+                        : $"Rows missing modelEra or outside current modelEra '{effectiveModelEra}' are excluded by default.",
+                modelEraBreakdown = modelEraBreakdownRows
+                    .Select(row => new
+                    {
+                        modelEra = row.ModelEra,
+                        row.RowCount,
+                        row.GradedCount,
+                        row.HitRate,
+                        roi = row.Roi,
+                        row.DateRange
+                    })
+                    .ToArray(),
                 resultCoverage = new
                 {
                     latestLedgerDate,
@@ -3763,6 +3835,59 @@ public static class PublicMarketsEndpoints
             noResults = rows.Count(row => IsNoResultFailure(row.MatchFailureReason))
         };
     }
+
+    private static async Task<ModelEraBreakdownRow[]> BuildModelEraBreakdownRowsAsync(
+        IQueryable<RecommendationSnapshot> query,
+        ApplicationDbContext dbContext,
+        CancellationToken cancellationToken)
+    {
+        var snapshots = await query
+            .OrderByDescending(row => row.CapturedAtUtc)
+            .ThenByDescending(row => row.RankingScore)
+            .Take(5000)
+            .ToArrayAsync(cancellationToken);
+        if (snapshots.Length == 0)
+        {
+            return [];
+        }
+
+        var gradedRows = await GradeLedgerRowsAsync(snapshots, dbContext, cancellationToken);
+        var gradedRowsBySnapshotId = gradedRows.ToDictionary(row => row.Snapshot.Id);
+
+        return snapshots
+            .GroupBy(row => BuildModelEraBreakdownLabel(row.ModelEra), StringComparer.OrdinalIgnoreCase)
+            .Select(group =>
+            {
+                var groupRows = group.ToArray();
+                var groupGradedRows = groupRows
+                    .Select(row => gradedRowsBySnapshotId.GetValueOrDefault(row.Id))
+                    .Where(row => row is not null && IsGradedOutcome(row.Outcome))
+                    .Select(row => row!)
+                    .ToArray();
+                var wins = groupGradedRows.Count(row => row.Outcome == "Win");
+                var losses = groupGradedRows.Count(row => row.Outcome == "Loss");
+                var decisions = wins + losses;
+                var roi = groupGradedRows.Length == 0
+                    ? (decimal?)null
+                    : Math.Round(groupGradedRows.Sum(row => row.Profit ?? 0m) / groupGradedRows.Length, 4);
+
+                return new ModelEraBreakdownRow(
+                    group.Key,
+                    groupRows.Length,
+                    groupGradedRows.Length,
+                    decisions == 0 ? null : Math.Round(wins / (decimal)decisions, 4),
+                    roi,
+                    new ModelEraDateRange(
+                        groupRows.Select(row => (DateOnly?)row.ExpectedResultDate).Min(),
+                        groupRows.Select(row => (DateOnly?)row.ExpectedResultDate).Max()));
+            })
+            .OrderByDescending(row => row.RowCount)
+            .ThenBy(row => row.ModelEra)
+            .ToArray();
+    }
+
+    private static string BuildModelEraBreakdownLabel(string? modelEra) =>
+        string.IsNullOrWhiteSpace(modelEra) ? "LegacyOrUnknown" : modelEra.Trim();
 
     private static string ToSnapshotGradeStatus(string? outcome)
     {
@@ -6109,6 +6234,18 @@ public static class PublicMarketsEndpoints
         decimal? Profit,
         string? MatchFailureReason,
         string? MatchMethod);
+
+    private sealed record ModelEraBreakdownRow(
+        string ModelEra,
+        int RowCount,
+        int GradedCount,
+        decimal? HitRate,
+        decimal? Roi,
+        ModelEraDateRange DateRange);
+
+    private sealed record ModelEraDateRange(
+        DateOnly? FromDate,
+        DateOnly? ToDate);
 
     private sealed record PerformanceDateDiagnostics(
         DateOnly SlateDate,
