@@ -108,12 +108,14 @@ public static class PublicMarketsEndpoints
         endpoints.MapGet("/api/markets/refresh-plan", async (
             bool? persistDecision,
             IOptions<TheOddsScheduledRefreshOptions> scheduledRefreshOptions,
+            ITheOddsScheduledRefreshState scheduledRefreshState,
             ITheOddsRefreshPlannerService planner,
             CancellationToken cancellationToken) =>
         {
             return Results.Ok(await BuildMarketRefreshPlanResponseAsync(
                 persistDecision ?? false,
                 scheduledRefreshOptions.Value,
+                scheduledRefreshState,
                 planner,
                 cancellationToken));
         })
@@ -398,6 +400,9 @@ public static class PublicMarketsEndpoints
             bool? includeLegacy,
             IPlayerIdentityAliasService playerIdentityAliasService,
             IMlbResultCoverageService mlbCoverageService,
+            IPredictionProbabilityService probabilityService,
+            ILikelyHitModelService likelyHitModel,
+            IOptions<PredictionGenerationOptions> predictionGenerationOptions,
             IOptions<TopPicksModelOptions> topPicksModelOptions,
             ApplicationDbContext dbContext,
             CancellationToken cancellationToken) =>
@@ -438,6 +443,9 @@ public static class PublicMarketsEndpoints
                 includeLegacy ?? false,
                 playerIdentityAliasService,
                 mlbCoverageService,
+                probabilityService,
+                likelyHitModel,
+                predictionGenerationOptions.Value,
                 topPicksModelOptions.Value,
                 dbContext,
                 cancellationToken);
@@ -826,18 +834,16 @@ public static class PublicMarketsEndpoints
     private static async Task<object> BuildMarketRefreshPlanResponseAsync(
         bool persistDecision,
         TheOddsScheduledRefreshOptions scheduledOptions,
+        ITheOddsScheduledRefreshState scheduledRefreshState,
         ITheOddsRefreshPlannerService planner,
         CancellationToken cancellationToken)
     {
         var plan = await planner.BuildPlanAsync(cancellationToken);
-        var postRefreshReadBuffer = scheduledOptions.GetPostRefreshReadBuffer();
-        var nextRefreshDueUtc = scheduledOptions.Enabled
-            ? plan.Targets
-                .Where(target => target.Enabled)
-                .Select(target => (DateTimeOffset?)target.NextEligibleRefreshUtc)
-                .Min() ?? plan.NextEligibleRefreshUtc
-            : (DateTimeOffset?)null;
-        var nextDataAvailableEstimateUtc = nextRefreshDueUtc?.Add(postRefreshReadBuffer);
+        var scheduledSnapshot = scheduledRefreshState.GetSnapshot();
+        var refreshTiming = TheOddsScheduledRefreshTiming.Resolve(
+            scheduledOptions,
+            plan,
+            scheduledSnapshot);
         TheOddsRefreshPlannerDecision? persistedDecision = null;
         if (persistDecision)
         {
@@ -855,10 +861,23 @@ public static class PublicMarketsEndpoints
             allowScheduledLiveRefresh = scheduledOptions.AllowScheduledLiveRefresh,
             intervalMinutes = scheduledOptions.IntervalMinutes,
             effectiveIntervalMinutes = (int)scheduledOptions.GetInterval().TotalMinutes,
-            postRefreshReadBufferSeconds = (int)postRefreshReadBuffer.TotalSeconds,
-            nextRefreshDueUtc,
-            nextDataAvailableEstimateUtc,
-            nextRunEstimateUtc = nextRefreshDueUtc,
+            refreshTiming.PostRefreshReadBufferSeconds,
+            refreshTiming.ExpectedRefreshDurationSeconds,
+            refreshTiming.NextRefreshDueUtc,
+            refreshTiming.NextRefreshStartEstimateUtc,
+            refreshTiming.NextHeaderSyncTargetUtc,
+            refreshTiming.NextDataAvailableEstimateUtc,
+            refreshTiming.ConservativeDataAvailableEstimateUtc,
+            refreshTiming.NextRunEstimateUtc,
+            refreshTiming.SecondsUntilNextRefreshStart,
+            refreshTiming.SecondsUntilNextDataAvailable,
+            refreshTiming.SecondsUntilConservativeDataAvailable,
+            refreshTiming.IsRefreshInProgress,
+            refreshTiming.IsOverdue,
+            refreshTiming.EstimateBasis,
+            scheduledSnapshot.LastRunStartedAtUtc,
+            scheduledSnapshot.LastRunCompletedAtUtc,
+            scheduledSnapshot.LastRunSucceeded,
             willCallExternalApis = plan.Targets.Any(target => target.ShouldRefresh),
             currentPlan = new
             {
@@ -1615,6 +1634,26 @@ public static class PublicMarketsEndpoints
         return null;
     }
 
+    private static DateOnly? GetTopPickDate(JsonObject obj, params string[] keys)
+    {
+        foreach (var key in keys)
+        {
+            if (!obj.TryGetPropertyValue(key, out var value) || value is null)
+            {
+                continue;
+            }
+
+            if (value.GetValueKind() == JsonValueKind.String &&
+                value.AsValue().TryGetValue<string>(out var text) &&
+                DateOnly.TryParse(text, CultureInfo.InvariantCulture, DateTimeStyles.None, out var date))
+            {
+                return date;
+            }
+        }
+
+        return null;
+    }
+
     private static async Task<object> BuildMarketLineShoppingResponseAsync(
         string? requestedSport,
         string effectiveSport,
@@ -2325,6 +2364,9 @@ public static class PublicMarketsEndpoints
         bool includeLegacy,
         IPlayerIdentityAliasService playerIdentityAliasService,
         IMlbResultCoverageService mlbCoverageService,
+        IPredictionProbabilityService probabilityService,
+        ILikelyHitModelService likelyHitModel,
+        PredictionGenerationOptions predictionGenerationOptions,
         TopPicksModelOptions topPicksModelOptions,
         ApplicationDbContext dbContext,
         CancellationToken cancellationToken)
@@ -2374,6 +2416,9 @@ public static class PublicMarketsEndpoints
             modelEra,
             includeLegacy,
             topPicksModelOptions,
+            probabilityService,
+            likelyHitModel,
+            predictionGenerationOptions,
             mlbCoverageService,
             dbContext,
             cancellationToken);
@@ -3034,6 +3079,9 @@ public static class PublicMarketsEndpoints
         string? modelEra,
         bool includeLegacy,
         TopPicksModelOptions topPicksModelOptions,
+        IPredictionProbabilityService probabilityService,
+        ILikelyHitModelService likelyHitModel,
+        PredictionGenerationOptions predictionGenerationOptions,
         IMlbResultCoverageService mlbCoverageService,
         ApplicationDbContext dbContext,
         CancellationToken cancellationToken)
@@ -3140,6 +3188,18 @@ public static class PublicMarketsEndpoints
             ledgerQuery = ledgerQuery.Where(row => row.ModelEra == effectiveModelEra);
         }
 
+        var applyGuardedPublicPerformanceRules = ShouldApplyGuardedPublicPerformanceRules(
+            effectiveSport,
+            effectiveModelEra,
+            includeWatchlist,
+            includeResearch,
+            includeStale,
+            includeLegacy);
+        if (applyGuardedPublicPerformanceRules)
+        {
+            ledgerQuery = ApplyGuardedPublicPerformanceEligibility(ledgerQuery, includeStale);
+        }
+
         var ledgerRowsBeforeEraQuarantine = modelEraBreakdownRows.Sum(row => row.RowCount);
         var ledgerTotalAfterFilters = await ledgerQuery.CountAsync(cancellationToken);
         var excludedLegacyRows = Math.Max(0, ledgerRowsBeforeEraQuarantine - ledgerTotalAfterFilters);
@@ -3196,11 +3256,15 @@ public static class PublicMarketsEndpoints
                 row.ExpectedResultDate
             })
             .ToArrayAsync(cancellationToken);
-        var selectedRowsBeforeGradeability = await baseSelectedQuery
+        var selectedRowsRawBeforeGradeability = await baseSelectedQuery
             .OrderByDescending(row => row.RankingScore)
             .ThenByDescending(row => row.EstimatedEv)
             .Take(5000)
             .ToArrayAsync(cancellationToken);
+        var selectedRowsBeforeGradeability = applyGuardedPublicPerformanceRules
+            ? DeduplicatePublicPerformanceLedgerRows(selectedRowsRawBeforeGradeability)
+            : selectedRowsRawBeforeGradeability;
+        var excludedDuplicateLedgerRowsForSelection = Math.Max(0, selectedRowsRawBeforeGradeability.Length - selectedRowsBeforeGradeability.Length);
         var selectedRows = selectedRowsBeforeGradeability
             .Where(HasPerformanceGradeability)
             .ToArray();
@@ -3302,6 +3366,61 @@ public static class PublicMarketsEndpoints
         var skippedDateValues = coverageSelection.SkippedDates.Select(row => row.Date).ToArray();
         var latestDateWasSkipped = latestResultsImportDate.HasValue
             && coverageSelection.SkippedDates.Any(row => row.Date == latestResultsImportDate.Value);
+        var ledgerCaptureAuditDate = normalizedGradingMode == "currentSlate"
+            ? latestLedgerDate
+            : selectedDate ?? latestLedgerDate;
+        var persistedTopPicksCurrentSnapshotCount = ledgerCaptureAuditDate.HasValue
+            ? await dbContext.MarketTopPickSnapshots
+                .AsNoTracking()
+                .CountAsync(row =>
+                    row.Sport == effectiveSport &&
+                    row.ModelEra == effectiveModelEra &&
+                    row.SlateDate == ledgerCaptureAuditDate.Value,
+                    cancellationToken)
+            : 0;
+        var currentEraAuditRows = ledgerCaptureAuditDate.HasValue
+            ? await allLedgerQuery
+                .Where(row =>
+                    row.ModelEra == effectiveModelEra &&
+                    row.ExpectedResultDate == ledgerCaptureAuditDate.Value)
+                .ToArrayAsync(cancellationToken)
+            : [];
+        var eligibleCurrentEraAuditRows = ShouldApplyGuardedPublicPerformanceRules(effectiveSport, effectiveModelEra)
+            ? currentEraAuditRows
+                .Where(row => GetGuardedPublicPerformanceExclusionReason(row, includeStale: false) is null)
+                .ToArray()
+            : currentEraAuditRows;
+        var dedupedEligibleCurrentEraAuditRows = applyGuardedPublicPerformanceRules
+            ? DeduplicatePublicPerformanceLedgerRows(eligibleCurrentEraAuditRows)
+            : eligibleCurrentEraAuditRows;
+        var recommendationLedgerCurrentEraRawCount = currentEraAuditRows.Length;
+        var recommendationLedgerCurrentEraEligibleCount = dedupedEligibleCurrentEraAuditRows.Length;
+        var recommendationLedgerCurrentEraCount = recommendationLedgerCurrentEraRawCount;
+        var excludedDuplicateLedgerRows = Math.Max(0, eligibleCurrentEraAuditRows.Length - dedupedEligibleCurrentEraAuditRows.Length);
+        var excludedNonPublicCurrentEraRows = currentEraAuditRows.Count(row => !row.IsTopPick);
+        var excludedInvalidSideRows = currentEraAuditRows.Count(row => !IsOverUnderSide(row.Side));
+        var excludedMissingBookmakerRows = currentEraAuditRows.Count(HasMissingPublicPerformanceProviderKey);
+        var excludedStaleAtCaptureRows = currentEraAuditRows.Count(IsStalePublicPerformanceLedgerRow);
+        var currentEraPollutedLedgerRows = Math.Max(0, recommendationLedgerCurrentEraRawCount - recommendationLedgerCurrentEraEligibleCount);
+        var dynamicPublicTopPickCoverage = applyGuardedPublicPerformanceRules && ledgerCaptureAuditDate.HasValue
+            ? await BuildCurrentDynamicMlbPublicTopPickLedgerCoverageAsync(
+                ledgerCaptureAuditDate.Value,
+                dedupedEligibleCurrentEraAuditRows,
+                dbContext,
+                probabilityService,
+                likelyHitModel,
+                predictionGenerationOptions,
+                topPicksModelOptions,
+                cancellationToken)
+            : null;
+        var publicTopPicksCurrentSnapshotCount = dynamicPublicTopPickCoverage?.CurrentDynamicPublicTopPickCount
+            ?? persistedTopPicksCurrentSnapshotCount;
+        var publicTopPicksMissingLedgerCount = dynamicPublicTopPickCoverage?.MissingLedgerCount
+            ?? Math.Max(0, publicTopPicksCurrentSnapshotCount - recommendationLedgerCurrentEraEligibleCount);
+        var ledgerCaptureCoveragePercent = publicTopPicksCurrentSnapshotCount == 0
+            ? (decimal?)null
+            : dynamicPublicTopPickCoverage?.CoveragePercent
+                ?? Math.Round(Math.Min(publicTopPicksCurrentSnapshotCount, recommendationLedgerCurrentEraEligibleCount) / (decimal)publicTopPicksCurrentSnapshotCount, 4);
 
         var groupRows = includeNoResultDiagnostics
             ? summaryRows
@@ -3364,6 +3483,19 @@ public static class PublicMarketsEndpoints
                 pendingLedgerRows = pendingRows,
                 noResultLedgerRows = noResultRows,
                 unmatchedLedgerRows = unmatchedRows,
+                publicTopPicksCurrentSnapshotCount,
+                publicPerformanceLedgerRowsLoaded = summarySelectedRows.Length,
+                recommendationLedgerCurrentEraRawCount,
+                recommendationLedgerCurrentEraEligibleCount,
+                recommendationLedgerCurrentEraCount,
+                ledgerCaptureCoveragePercent,
+                publicTopPicksMissingLedgerCount,
+                excludedNonPublicCurrentEraRows,
+                excludedDuplicateLedgerRows,
+                excludedInvalidSideRows,
+                excludedStaleAtCaptureRows,
+                excludedMissingBookmakerRows,
+                currentEraPollutedLedgerRows,
                 preFilterRowsForCompletedDate = selectedPreEligibilityRows.Length,
                 excludedFromPerformanceRows = selectedDate.HasValue
                     ? await ledgerPreExclusionQuery.CountAsync(row => row.ExpectedResultDate == selectedDate.Value && row.IsExcludedFromPerformance, cancellationToken)
@@ -3384,12 +3516,12 @@ public static class PublicMarketsEndpoints
                     row.Warning.Contains("stale", StringComparison.OrdinalIgnoreCase)),
                 rowsExcludedNonPlayable = selectedPreEligibilityRows.Count(row =>
                     !includeStale &&
-                    (!row.IsActionableForUser || row.LifecycleStatus != "Active")),
+                    row.LifecycleStatus != "Active"),
                 rowsExcludedNotCandidateOrTopPick = selectedPreEligibilityRows.Count(row =>
                     topPickOnly
                         ? !row.IsTopPick
                         : candidateOnly
-                            ? !row.IsCandidate
+                            ? !row.IsCandidate && !row.IsTopPick
                             : !includeResearch && !row.IsCandidate && !row.IsTopPick && !(includeWatchlist && row.IsWatchlist)),
                 rowsExcludedMissingPlayer = summarySelectedRowsBeforeGradeability.Count(row => !row.CanonicalPlayerId.HasValue),
                 rowsExcludedMissingProp = summarySelectedRowsBeforeGradeability.Count(row => !row.PropTypeId.HasValue || string.IsNullOrWhiteSpace(row.NormalizedPropType)),
@@ -3414,15 +3546,12 @@ public static class PublicMarketsEndpoints
                 preFilterWatchlistRows = selectedPreEligibilityRows.Count(row => row.IsWatchlist),
                 preFilterResearchRows = selectedPreEligibilityRows.Count(row => !row.IsCandidate && !row.IsTopPick && !row.IsWatchlist),
                 staleLockedExpiredRows = summarySelectedRows.Count(row =>
-                    !row.IsActionableForUser ||
                     row.LifecycleStatus != "Active" ||
                     (!string.IsNullOrWhiteSpace(row.Warning) && row.Warning.Contains("stale", StringComparison.OrdinalIgnoreCase))),
                 staleOrNonPlayableRows = summarySelectedRows.Count(row =>
-                    !row.IsActionableForUser ||
                     row.LifecycleStatus != "Active" ||
                     (!string.IsNullOrWhiteSpace(row.Warning) && row.Warning.Contains("stale", StringComparison.OrdinalIgnoreCase))),
                 preFilterStaleOrNonPlayableRows = selectedPreEligibilityRows.Count(row =>
-                    !row.IsActionableForUser ||
                     row.LifecycleStatus != "Active" ||
                     (!string.IsNullOrWhiteSpace(row.Warning) && row.Warning.Contains("stale", StringComparison.OrdinalIgnoreCase))),
                 noResultProviderInactiveRows = summaryRows.Count(row => row.MatchFailureReason == "ProviderLineForInactivePlayer"),
@@ -3914,7 +4043,7 @@ public static class PublicMarketsEndpoints
         }
         else if (candidateOnly)
         {
-            query = query.Where(row => row.IsCandidate);
+            query = query.Where(row => row.IsCandidate || row.IsTopPick);
         }
         else if (!includeResearch)
         {
@@ -3937,13 +4066,252 @@ public static class PublicMarketsEndpoints
         if (!includeStale)
         {
             query = query.Where(row =>
-                row.IsActionableForUser &&
                 row.LifecycleStatus == "Active" &&
                 (row.Warning == null || !row.Warning.ToLower().Contains("stale")));
         }
 
         return query;
     }
+
+    private static bool ShouldApplyGuardedPublicPerformanceRules(string effectiveSport, string? modelEra) =>
+        string.Equals(effectiveSport, "MLB", StringComparison.OrdinalIgnoreCase) &&
+        string.Equals(modelEra, TopPicksModelOptions.DefaultLikelyHitV1ModelEra, StringComparison.OrdinalIgnoreCase);
+
+    private static bool ShouldApplyGuardedPublicPerformanceRules(
+        string effectiveSport,
+        string? modelEra,
+        bool includeWatchlist,
+        bool includeResearch,
+        bool includeStale,
+        bool includeLegacy) =>
+        ShouldApplyGuardedPublicPerformanceRules(effectiveSport, modelEra) &&
+        !includeWatchlist &&
+        !includeResearch &&
+        !includeStale &&
+        !includeLegacy;
+
+    private static IQueryable<RecommendationSnapshot> ApplyGuardedPublicPerformanceEligibility(
+        IQueryable<RecommendationSnapshot> query,
+        bool includeStale)
+    {
+        query = query.Where(row =>
+            row.IsTopPick &&
+            (row.Side == "Over" || row.Side == "Under") &&
+            row.ProviderCategory != string.Empty &&
+            (
+                (row.ProviderCategory == "Sportsbook" &&
+                    ((row.Bookmaker != null && row.Bookmaker != string.Empty) ||
+                     row.Provider != string.Empty ||
+                     row.EntryProvider != string.Empty)) ||
+                (row.ProviderCategory != "Sportsbook" &&
+                    (row.Provider != string.Empty || row.EntryProvider != string.Empty || (row.Bookmaker != null && row.Bookmaker != string.Empty)))
+            ));
+
+        if (!includeStale)
+        {
+            query = query.Where(row =>
+                row.LifecycleStatus == "Active" &&
+                (row.Warning == null || !row.Warning.ToLower().Contains("stale")));
+        }
+
+        return query;
+    }
+
+    private static RecommendationSnapshot[] DeduplicatePublicPerformanceLedgerRows(IReadOnlyCollection<RecommendationSnapshot> rows)
+    {
+        return rows
+            .GroupBy(BuildPublicPerformanceLedgerKey, StringComparer.OrdinalIgnoreCase)
+            .Select(group => group
+                .OrderBy(row => row.FirstSeenAtUtc)
+                .ThenBy(row => row.CapturedAtUtc)
+                .ThenBy(row => row.Id)
+                .First())
+            .ToArray();
+    }
+
+    private sealed record CurrentDynamicPublicTopPickLedgerCoverage(
+        int CurrentDynamicPublicTopPickCount,
+        int MissingLedgerCount,
+        decimal? CoveragePercent);
+
+    private static async Task<CurrentDynamicPublicTopPickLedgerCoverage> BuildCurrentDynamicMlbPublicTopPickLedgerCoverageAsync(
+        DateOnly targetDate,
+        IReadOnlyCollection<RecommendationSnapshot> eligibleLedgerRows,
+        ApplicationDbContext dbContext,
+        IPredictionProbabilityService probabilityService,
+        ILikelyHitModelService likelyHitModel,
+        PredictionGenerationOptions predictionGenerationOptions,
+        TopPicksModelOptions topPicksModelOptions,
+        CancellationToken cancellationToken)
+    {
+        var publicTopPicksResponse = await TheOddsApiDebugEndpoints.BuildMlbTopPicksResponseAsync(
+            runId: null,
+            take: 500,
+            freshnessMinutes: null,
+            providerCategory: null,
+            dbContext,
+            probabilityService,
+            likelyHitModel,
+            predictionGenerationOptions,
+            topPicksModelOptions,
+            cancellationToken);
+        var publicTopPickKeys = publicTopPicksResponse.TopPicks
+            .Select(row => JsonSerializer.SerializeToNode(row) as JsonObject)
+            .Where(row => row is not null)
+            .Select(row => row!)
+            .Where(row => (GetTopPickDate(row, "expectedResultDate", "eventDate") ?? default) == targetDate)
+            .Select(BuildPublicPerformanceLedgerCoverageKey)
+            .Where(key => !string.IsNullOrWhiteSpace(key))
+            .ToArray();
+        var eligibleLedgerKeySet = eligibleLedgerRows
+            .Select(BuildPublicPerformanceLedgerCoverageKey)
+            .Where(key => !string.IsNullOrWhiteSpace(key))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var missingCount = publicTopPickKeys.Count(key => !eligibleLedgerKeySet.Contains(key));
+        var coveragePercent = publicTopPickKeys.Length == 0
+            ? (decimal?)null
+            : Math.Round(publicTopPickKeys.Count(key => eligibleLedgerKeySet.Contains(key)) / (decimal)publicTopPickKeys.Length, 4);
+
+        return new CurrentDynamicPublicTopPickLedgerCoverage(
+            publicTopPickKeys.Length,
+            missingCount,
+            coveragePercent);
+    }
+
+    private static string BuildPublicPerformanceLedgerKey(RecommendationSnapshot row)
+    {
+        return string.Join("|", new[]
+        {
+            row.Sport.Trim().ToUpperInvariant(),
+            row.ExpectedResultDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
+            row.EventId?.Trim().ToLowerInvariant() ?? string.Empty,
+            row.CanonicalPlayerId?.ToString("D") ?? RecommendationLedgerWriter.NormalizeKey(row.PlayerName),
+            row.PropTypeId?.ToString("D") ?? RecommendationLedgerWriter.NormalizeKey(row.NormalizedPropType),
+            RecommendationLedgerWriter.NormalizeKey(row.Side),
+            row.Line.ToString("0.####", CultureInfo.InvariantCulture),
+            RecommendationLedgerWriter.NormalizeKey(row.ProviderCategory),
+            RecommendationLedgerWriter.NormalizeKey(row.Bookmaker ?? row.Provider ?? row.EntryProvider),
+            RecommendationLedgerWriter.NormalizeKey(row.ModelEra)
+        });
+    }
+
+    private static string BuildPublicPerformanceLedgerCoverageKey(RecommendationSnapshot row)
+    {
+        return string.Join("|", new[]
+        {
+            row.Sport.Trim().ToUpperInvariant(),
+            row.ExpectedResultDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
+            row.EventId?.Trim().ToLowerInvariant() ?? string.Empty,
+            row.CanonicalPlayerId?.ToString("D") ?? RecommendationLedgerWriter.NormalizeKey(row.PlayerName),
+            row.PropTypeId?.ToString("D") ?? RecommendationLedgerWriter.NormalizeKey(row.PropType),
+            RecommendationLedgerWriter.NormalizeKey(row.Side),
+            row.Line.ToString("0.####", CultureInfo.InvariantCulture),
+            RecommendationLedgerWriter.NormalizeKey(row.ProviderCategory),
+            RecommendationLedgerWriter.NormalizeKey(row.Bookmaker ?? row.Provider ?? row.EntryProvider)
+        });
+    }
+
+    private static string BuildPublicPerformanceLedgerCoverageKey(JsonObject publicTopPick)
+    {
+        var expectedDate = GetTopPickDate(publicTopPick, "expectedResultDate", "eventDate");
+        if (!expectedDate.HasValue)
+        {
+            return string.Empty;
+        }
+
+        var playerIdentity = GetTopPickString(publicTopPick, "canonicalPlayerId")
+            ?? GetTopPickString(publicTopPick, "playerId")
+            ?? RecommendationLedgerWriter.NormalizeKey(GetTopPickString(publicTopPick, "playerName", "player"));
+        var propTypeIdentity = GetTopPickString(publicTopPick, "propTypeId")
+            ?? RecommendationLedgerWriter.NormalizeKey(GetTopPickString(publicTopPick, "normalizedPropType", "propType"));
+        var side = GetTopPickString(publicTopPick, "bestSide", "selectedSide", "side");
+        var bookmaker = GetTopPickString(publicTopPick, "bookmaker", "bestBookmaker", "provider");
+
+        return string.Join("|", new[]
+        {
+            (GetTopPickString(publicTopPick, "sport") ?? "MLB").Trim().ToUpperInvariant(),
+            expectedDate.Value.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
+            GetTopPickString(publicTopPick, "eventId")?.Trim().ToLowerInvariant() ?? string.Empty,
+            playerIdentity,
+            propTypeIdentity,
+            RecommendationLedgerWriter.NormalizeKey(side),
+            (GetTopPickDecimal(publicTopPick, "line") ?? 0m).ToString("0.####", CultureInfo.InvariantCulture),
+            RecommendationLedgerWriter.NormalizeKey(GetTopPickString(publicTopPick, "providerCategory")),
+            RecommendationLedgerWriter.NormalizeKey(bookmaker)
+        });
+    }
+
+    private static string? GetGuardedPublicPerformanceExclusionReason(RecommendationSnapshot row, bool includeStale)
+    {
+        if (row.IsExcludedFromPerformance)
+        {
+            return string.IsNullOrWhiteSpace(row.PerformanceExclusionReason)
+                ? "ExplicitPerformanceExclusion"
+                : row.PerformanceExclusionReason;
+        }
+
+        if (!row.IsTopPick)
+        {
+            return row.IsCandidate ? "LegacyCandidateInCurrentEra" : "NotPublicTopPickAtCapture";
+        }
+
+        if (!IsOverUnderSide(row.Side))
+        {
+            return string.IsNullOrWhiteSpace(row.Side) || string.Equals(row.Side, "None", StringComparison.OrdinalIgnoreCase)
+                ? "MissingSide"
+                : "InvalidSide";
+        }
+
+        if (string.IsNullOrWhiteSpace(row.ProviderCategory))
+        {
+            return "MissingProviderCategory";
+        }
+
+        if (HasMissingPublicPerformanceProviderKey(row))
+        {
+            return string.Equals(row.ProviderCategory, "Sportsbook", StringComparison.OrdinalIgnoreCase)
+                ? "MissingBookmaker"
+                : "MissingProvider";
+        }
+
+        if (!row.CanonicalPlayerId.HasValue)
+        {
+            return "MissingPlayer";
+        }
+
+        if (!row.PropTypeId.HasValue || string.IsNullOrWhiteSpace(row.PropType))
+        {
+            return "MissingPropType";
+        }
+
+        if (string.IsNullOrWhiteSpace(row.EventId) || !row.EventStartTimeUtc.HasValue || row.ExpectedResultDate == default)
+        {
+            return "MissingEventMapping";
+        }
+
+        if (!includeStale && IsStalePublicPerformanceLedgerRow(row))
+        {
+            return "StaleAtCapture";
+        }
+
+        return null;
+    }
+
+    private static bool IsOverUnderSide(string? side) =>
+        string.Equals(side, "Over", StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(side, "Under", StringComparison.OrdinalIgnoreCase);
+
+    private static bool HasMissingPublicPerformanceProviderKey(RecommendationSnapshot row)
+    {
+        var hasAnyProviderKey = !string.IsNullOrWhiteSpace(row.Bookmaker) ||
+            !string.IsNullOrWhiteSpace(row.Provider) ||
+            !string.IsNullOrWhiteSpace(row.EntryProvider);
+        return !hasAnyProviderKey;
+    }
+
+    private static bool IsStalePublicPerformanceLedgerRow(RecommendationSnapshot row) =>
+        !string.Equals(row.LifecycleStatus, "Active", StringComparison.OrdinalIgnoreCase) ||
+        (!string.IsNullOrWhiteSpace(row.Warning) && row.Warning.Contains("stale", StringComparison.OrdinalIgnoreCase));
 
     private static bool HasPerformanceGradeability(RecommendationSnapshot row)
     {

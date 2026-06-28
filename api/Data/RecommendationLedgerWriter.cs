@@ -182,14 +182,12 @@ public static class RecommendationLedgerWriter
             candidate.ExpectedResultDate.ToString("yyyy-MM-dd"),
             candidate.EventId?.Trim().ToLowerInvariant() ?? "no-event",
             candidate.CanonicalPlayerId?.ToString("D") ?? "no-player",
-            NormalizeKey(candidate.PropType),
+            candidate.PropTypeId?.ToString("D") ?? NormalizeKey(candidate.PropType),
             NormalizeKey(candidate.Side),
             candidate.Line.ToString("0.####"),
-            NormalizeKey(candidate.Provider),
-            NormalizeKey(candidate.Bookmaker),
-            NormalizeKey(candidate.StrategyClassification),
-            NormalizeKey(candidate.ModelEra),
-            candidate.IsCandidate ? "candidate" : "non-candidate"
+            NormalizeKey(candidate.ProviderCategory),
+            NormalizeKey(candidate.Bookmaker ?? candidate.Provider ?? candidate.EntryProvider),
+            NormalizeKey(candidate.ModelEra)
         });
 
         var hash = SHA256.HashData(Encoding.UTF8.GetBytes(canonical));

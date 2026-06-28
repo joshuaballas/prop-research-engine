@@ -17,12 +17,14 @@ public sealed class TheOddsScheduledRefreshOptions
     public int FallbackEstimatedApiCalls { get; set; } = 8;
     public int MaxEstimatedCallsPerRun { get; set; } = 0;
     public int PostRefreshReadBufferSeconds { get; set; } = 30;
+    public int ExpectedRefreshDurationSeconds { get; set; } = 60;
     public List<TheOddsScheduledRefreshTargetOptions> Targets { get; set; } = [];
 
     public TimeSpan GetInterval() => TimeSpan.FromMinutes(Math.Max(15, IntervalMinutes));
     public int GetFallbackEstimatedApiCalls() => Math.Max(1, FallbackEstimatedApiCalls);
     public int? GetMaxEstimatedCallsPerRun() => MaxEstimatedCallsPerRun > 0 ? MaxEstimatedCallsPerRun : null;
     public TimeSpan GetPostRefreshReadBuffer() => TimeSpan.FromSeconds(Math.Max(0, PostRefreshReadBufferSeconds));
+    public TimeSpan GetExpectedRefreshDuration() => TimeSpan.FromSeconds(Math.Max(0, ExpectedRefreshDurationSeconds));
 
     public IReadOnlyList<TheOddsScheduledRefreshTargetOptions> GetConfiguredTargets()
     {

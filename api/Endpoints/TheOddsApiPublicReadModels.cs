@@ -260,24 +260,34 @@ public static partial class TheOddsApiDebugEndpoints
             })
             .Where(row => row.Strategy.IsCandidate)
             .ToArray();
-        var topPicks = topPicksModelOptions.IsLikelyHitV1Enabled
-            ? BuildLikelyHitTopPickRows(
-                groups.Select(group =>
-                    JsonSerializer.SerializeToNode(ToLineShoppingResponseGroup(group, includeBookmakerPrices: false)) as JsonObject)
-                    .Where(row => row is not null)
-                    .Select(row => row!),
-                likelyHitModel,
-                topPicksModelOptions,
-                requestedTake)
+        object[] topPicks;
+        if (topPicksModelOptions.IsLikelyHitV1Enabled)
+        {
+            var sourceRows = groups
+                .Select(group => JsonSerializer.SerializeToNode(ToLineShoppingResponseGroup(group, includeBookmakerPrices: false)) as JsonObject)
+                .Where(row => row is not null)
+                .Select(row => row!)
+                .ToArray();
+            topPicks = (await BuildLikelyHitTopPickRowsAsync(
+                    sourceRows,
+                    likelyHitModel,
+                    topPicksModelOptions,
+                    dbContext,
+                    requestedTake,
+                    cancellationToken))
                 .Cast<object>()
-                .ToArray()
-            : candidateGroups
+                .ToArray();
+        }
+        else
+        {
+            topPicks = candidateGroups
                 .OrderByDescending(row => row.Group.BestProbability ?? decimal.MinValue)
                 .ThenByDescending(row => row.Group.BestProjectionEdge ?? decimal.MinValue)
                 .ThenByDescending(row => row.Group.RankingScore)
                 .Take(requestedTake)
                 .Select(row => ToLineShoppingResponseGroup(row.Group, includeBookmakerPrices: false))
                 .ToArray();
+        }
         totalStopwatch.Stop();
 
         return new MlbTopPicksReadResponse(
@@ -575,6 +585,7 @@ public static partial class TheOddsApiDebugEndpoints
         DateTimeOffset generatedAtUtc,
         IReadOnlyCollection<TheOddsLineShoppingGroup> lineShoppingGroups,
         IReadOnlyCollection<TheOddsLineShoppingGroup> topPickGroups,
+        ILikelyHitModelService likelyHitModel,
         TopPicksModelOptions topPicksModelOptions,
         ApplicationDbContext dbContext,
         CancellationToken cancellationToken)
@@ -589,27 +600,53 @@ public static partial class TheOddsApiDebugEndpoints
         dbContext.MarketTopPickSnapshots.RemoveRange(existingTopPicks);
         dbContext.MarketLineShoppingSnapshots.RemoveRange(existingLineShopping);
 
+        var publicTopPickRowsByIdentity = await BuildPublicTopPickRowsByLedgerIdentityAsync(
+            lineShoppingGroups,
+            likelyHitModel,
+            topPicksModelOptions,
+            dbContext,
+            cancellationToken);
+        var resolvedTopPickGroups = topPicksModelOptions.IsLikelyHitV1Enabled
+            ? lineShoppingGroups
+                .Where(group => publicTopPickRowsByIdentity.ContainsKey(BuildRecommendationLedgerGroupIdentity(group)))
+                .ToArray()
+            : topPickGroups.ToArray();
+
         dbContext.MarketLineShoppingSnapshots.AddRange(lineShoppingGroups.Select(group =>
             BuildLineShoppingSnapshot(refreshRun, predictionRunId, generatedAtUtc, group, topPicksModelOptions)));
-        dbContext.MarketTopPickSnapshots.AddRange(topPickGroups.Select(group =>
-            BuildTopPickSnapshot(refreshRun, predictionRunId, generatedAtUtc, group, topPicksModelOptions)));
+        dbContext.MarketTopPickSnapshots.AddRange(resolvedTopPickGroups.Select(group =>
+        {
+            publicTopPickRowsByIdentity.TryGetValue(BuildRecommendationLedgerGroupIdentity(group), out var publicTopPickRow);
+            return BuildTopPickSnapshot(
+                refreshRun,
+                predictionRunId,
+                generatedAtUtc,
+                group,
+                topPicksModelOptions,
+                publicTopPickRow);
+        }));
 
-        var topPickKeys = topPickGroups
+        var topPickKeys = resolvedTopPickGroups
             .Select(BuildRecommendationLedgerGroupIdentity)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
-        var ledgerCandidates = lineShoppingGroups
-            .Where(group =>
-            {
-                var strategy = ClassifyTheOddsLineShoppingStrategy(group);
-                return strategy.IsCandidate || strategy.IsWatchlist || topPickKeys.Contains(BuildRecommendationLedgerGroupIdentity(group));
-            })
+        var ledgerSourceGroups = topPicksModelOptions.IsLikelyHitV1Enabled
+            ? resolvedTopPickGroups
+            : lineShoppingGroups
+                .Where(group =>
+                {
+                    var strategy = ClassifyTheOddsLineShoppingStrategy(group);
+                    return strategy.IsCandidate || strategy.IsWatchlist || topPickKeys.Contains(BuildRecommendationLedgerGroupIdentity(group));
+                })
+                .ToArray();
+        var ledgerCandidates = ledgerSourceGroups
             .Select(group => BuildRecommendationLedgerCandidate(
                 refreshRun,
                 predictionRunId,
                 generatedAtUtc,
                 group,
                 topPicksModelOptions,
-                topPickKeys.Contains(BuildRecommendationLedgerGroupIdentity(group))))
+                topPickKeys.Contains(BuildRecommendationLedgerGroupIdentity(group)),
+                publicTopPickRowsByIdentity.GetValueOrDefault(BuildRecommendationLedgerGroupIdentity(group))))
             .ToArray();
 
         await RecommendationLedgerWriter.UpsertAsync(
@@ -619,23 +656,74 @@ public static partial class TheOddsApiDebugEndpoints
             cancellationToken);
     }
 
+    private static async Task<IReadOnlyDictionary<string, JsonObject>> BuildPublicTopPickRowsByLedgerIdentityAsync(
+        IReadOnlyCollection<TheOddsLineShoppingGroup> lineShoppingGroups,
+        ILikelyHitModelService likelyHitModel,
+        TopPicksModelOptions topPicksModelOptions,
+        ApplicationDbContext dbContext,
+        CancellationToken cancellationToken)
+    {
+        if (!topPicksModelOptions.IsLikelyHitV1Enabled || lineShoppingGroups.Count == 0)
+        {
+            return new Dictionary<string, JsonObject>(StringComparer.OrdinalIgnoreCase);
+        }
+
+        var sourceRows = lineShoppingGroups
+            .Select(group => JsonSerializer.SerializeToNode(ToLineShoppingResponseGroup(group, includeBookmakerPrices: false)) as JsonObject)
+            .Where(row => row is not null)
+            .Select(row => row!)
+            .ToArray();
+        var publicTopPickRows = await BuildLikelyHitTopPickRowsAsync(
+            sourceRows,
+            likelyHitModel,
+            topPicksModelOptions,
+            dbContext,
+            take: 500,
+            cancellationToken: cancellationToken);
+
+        return publicTopPickRows
+            .GroupBy(BuildRecommendationLedgerRowIdentity, StringComparer.OrdinalIgnoreCase)
+            .Where(group => !string.IsNullOrWhiteSpace(group.Key))
+            .ToDictionary(
+                group => group.Key,
+                group => group.OrderBy(row => ReadLikelyHitInt(row, "rank") ?? int.MaxValue).First(),
+                StringComparer.OrdinalIgnoreCase);
+    }
+
+    private static string? ReadPublicTopPickString(JsonObject? row, string propertyName) =>
+        row is null ? null : ReadLikelyHitString(row, propertyName);
+
+    private static decimal? ReadPublicTopPickDecimal(JsonObject? row, string propertyName) =>
+        row is null ? null : ReadLikelyHitDecimal(row, propertyName);
+
+    private static int? ReadPublicTopPickInt(JsonObject? row, string propertyName) =>
+        row is null ? null : ReadLikelyHitInt(row, propertyName);
+
     private static RecommendationLedgerCandidate BuildRecommendationLedgerCandidate(
         TheOddsRefreshRun refreshRun,
         Guid? predictionRunId,
         DateTimeOffset generatedAtUtc,
         TheOddsLineShoppingGroup group,
         TopPicksModelOptions topPicksModelOptions,
-        bool isTopPick)
+        bool isTopPick,
+        JsonObject? publicTopPickRow = null)
     {
         var strategy = ClassifyTheOddsLineShoppingStrategy(group);
         var entry = BuildTheOddsEntryCompatibility(group);
-        var selectedProbability = string.Equals(group.BestSide, "Under", StringComparison.OrdinalIgnoreCase)
+        var selectedProbability = ReadPublicTopPickDecimal(publicTopPickRow, "hitChance")
+            ?? ReadPublicTopPickDecimal(publicTopPickRow, "selectedSideProbability")
+            ?? ReadPublicTopPickDecimal(publicTopPickRow, "bestProbability")
+            ?? (string.Equals(group.BestSide, "Under", StringComparison.OrdinalIgnoreCase)
             ? group.ModelProbabilityUnder
-            : group.ModelProbabilityOver;
+            : group.ModelProbabilityOver);
         var gradeability = BuildRecommendationGradeability(group, entry.EntryActionableForUser);
-        var warning = strategy.StrategyWarnings.FirstOrDefault()
+        var strategyClassification = ReadPublicTopPickString(publicTopPickRow, "strategyClassification") ?? strategy.StrategyClassification;
+        var strategyTier = ReadPublicTopPickString(publicTopPickRow, "strategyTier") ?? strategy.StrategyTier;
+        var warning = ReadPublicTopPickString(publicTopPickRow, "warning")
+            ?? strategy.StrategyWarnings.FirstOrDefault()
             ?? (string.IsNullOrWhiteSpace(group.SampleWarning) ? null : group.SampleWarning)
             ?? gradeability.Warning;
+        var publicRecommendation = publicTopPickRow is not null;
 
         return new RecommendationLedgerCandidate(
             CapturedAtUtc: generatedAtUtc,
@@ -653,29 +741,39 @@ public static partial class TheOddsApiDebugEndpoints
             PropType: group.NormalizedPropType,
             Side: group.BestSide,
             Line: group.Line,
-            Provider: entry.EntryProvider,
-            Bookmaker: group.BestBookmaker,
+            Provider: ReadPublicTopPickString(publicTopPickRow, "provider") ?? entry.EntryProvider,
+            Bookmaker: ReadPublicTopPickString(publicTopPickRow, "bookmaker")
+                ?? ReadPublicTopPickString(publicTopPickRow, "bestBookmaker")
+                ?? group.BestBookmaker,
             ProviderCategory: group.ProviderCategory,
             EntryProvider: entry.EntryProvider,
             EntryCompatibilityGroup: entry.EntryCompatibilityGroup,
             HitChance: selectedProbability,
             ImpliedProbability: group.BestImpliedProbability,
             ProbabilityEdge: group.BestProbabilityEdge,
-            EstimatedEv: group.BestEstimatedEv,
-            TrustLevel: group.TrustLevel,
+            EstimatedEv: ReadPublicTopPickDecimal(publicTopPickRow, "displayExpectedValue")
+                ?? ReadPublicTopPickDecimal(publicTopPickRow, "bestEstimatedEv")
+                ?? group.BestEstimatedEv,
+            TrustLevel: ReadPublicTopPickString(publicTopPickRow, "trustLevel") ?? group.TrustLevel,
             SampleWarning: string.IsNullOrWhiteSpace(group.SampleWarning) ? null : group.SampleWarning,
             Warning: warning,
-            HistoricalSampleSize: group.HistoricalSampleSize,
-            StrategyClassification: strategy.StrategyClassification,
-            StrategyTier: strategy.StrategyTier,
-            ModelVersion: ResolveCurrentPublicModelVersion(topPicksModelOptions),
-            RecommendationContractVersion: ResolveCurrentRecommendationContractVersion(topPicksModelOptions),
-            ProbabilityModelVersion: ResolveCurrentProbabilityModelVersion(topPicksModelOptions),
-            ModelEra: ResolveCurrentPublicModelEra(topPicksModelOptions),
-            RankingScore: group.RankingScore,
-            IsCandidate: strategy.IsCandidate && gradeability.IsGradeable,
+            HistoricalSampleSize: ReadPublicTopPickInt(publicTopPickRow, "effectiveSampleSize")
+                ?? ReadPublicTopPickInt(publicTopPickRow, "historicalSampleSize")
+                ?? group.HistoricalSampleSize,
+            StrategyClassification: strategyClassification,
+            StrategyTier: strategyTier,
+            ModelVersion: ReadPublicTopPickString(publicTopPickRow, "modelVersion") ?? ResolveCurrentPublicModelVersion(topPicksModelOptions),
+            RecommendationContractVersion: ReadPublicTopPickString(publicTopPickRow, "recommendationContractVersion") ?? ResolveCurrentRecommendationContractVersion(topPicksModelOptions),
+            ProbabilityModelVersion: ReadPublicTopPickString(publicTopPickRow, "probabilityModelVersion") ?? ResolveCurrentProbabilityModelVersion(topPicksModelOptions),
+            ModelEra: ReadPublicTopPickString(publicTopPickRow, "modelEra") ?? ResolveCurrentPublicModelEra(topPicksModelOptions),
+            RankingScore: ReadPublicTopPickDecimal(publicTopPickRow, "topPickScore")
+                ?? ReadPublicTopPickDecimal(publicTopPickRow, "rankingScore")
+                ?? group.RankingScore,
+            IsCandidate: (topPicksModelOptions.IsLikelyHitV1Enabled
+                ? publicRecommendation
+                : strategy.IsCandidate) && gradeability.IsGradeable,
             IsTopPick: isTopPick && gradeability.IsGradeable,
-            IsWatchlist: strategy.IsWatchlist || !gradeability.IsGradeable,
+            IsWatchlist: !publicRecommendation && (strategy.IsWatchlist || !gradeability.IsGradeable),
             IsActionableForUser: entry.EntryActionableForUser,
             LifecycleStatus: group.LifecycleStatus);
     }
@@ -765,15 +863,47 @@ public static partial class TheOddsApiDebugEndpoints
         });
     }
 
+    private static string BuildRecommendationLedgerRowIdentity(JsonObject row)
+    {
+        var expectedResultDate = ReadLikelyHitDateOnly(row, "expectedResultDate")
+            ?? ReadLikelyHitDateOnly(row, "eventDate")
+            ?? default;
+        var eventId = ReadLikelyHitString(row, "eventId") ?? string.Empty;
+        var playerId = ReadLikelyHitString(row, "canonicalPlayerId")
+            ?? ReadLikelyHitString(row, "playerId")
+            ?? string.Empty;
+        var propTypeId = ReadLikelyHitString(row, "propTypeId") ?? string.Empty;
+        var side = ReadLikelyHitString(row, "bestSide") ?? string.Empty;
+        var line = ReadLikelyHitDecimal(row, "line") ?? 0m;
+        var providerCategory = ReadLikelyHitString(row, "providerCategory") ?? string.Empty;
+        var bookmaker = ReadLikelyHitString(row, "bestBookmaker")
+            ?? ReadLikelyHitString(row, "bookmaker")
+            ?? string.Empty;
+
+        return string.Join("|", new[]
+        {
+            expectedResultDate.ToString("yyyy-MM-dd"),
+            eventId,
+            playerId,
+            propTypeId,
+            side,
+            line.ToString("0.####"),
+            providerCategory,
+            bookmaker
+        });
+    }
+
     private static MarketTopPickSnapshot BuildTopPickSnapshot(
         TheOddsRefreshRun refreshRun,
         Guid? predictionRunId,
         DateTimeOffset generatedAtUtc,
         TheOddsLineShoppingGroup group,
-        TopPicksModelOptions topPicksModelOptions)
+        TopPicksModelOptions topPicksModelOptions,
+        JsonObject? publicTopPickRow = null)
     {
         var strategy = ClassifyTheOddsLineShoppingStrategy(group);
         var entry = BuildTheOddsEntryCompatibility(group);
+        var isPublicTopPick = publicTopPickRow is not null;
 
         return new MarketTopPickSnapshot
         {
@@ -786,8 +916,12 @@ public static partial class TheOddsApiDebugEndpoints
             BookmakerPreset = refreshRun.BookmakerPreset,
             ProviderCategory = group.ProviderCategory,
             Provider = entry.EntryProvider,
-            Bookmaker = group.BestBookmaker,
-            Player = group.Player,
+            Bookmaker = ReadPublicTopPickString(publicTopPickRow, "bookmaker")
+                ?? ReadPublicTopPickString(publicTopPickRow, "bestBookmaker")
+                ?? group.BestBookmaker,
+            Player = ReadPublicTopPickString(publicTopPickRow, "playerName")
+                ?? ReadPublicTopPickString(publicTopPickRow, "player")
+                ?? group.Player,
             EventId = group.EventId,
             EventName = BuildSnapshotEventName(group),
             EventStartTime = group.EventStartTime,
@@ -800,25 +934,31 @@ public static partial class TheOddsApiDebugEndpoints
             BestBookmaker = group.BestBookmaker,
             BestAmericanPrice = group.BestAmericanPrice,
             BestDecimalPrice = group.BestDecimalPrice,
-            BestProbability = group.BestProbability,
+            BestProbability = ReadPublicTopPickDecimal(publicTopPickRow, "selectedSideProbability")
+                ?? ReadPublicTopPickDecimal(publicTopPickRow, "bestProbability")
+                ?? group.BestProbability,
             BestImpliedProbability = group.BestImpliedProbability,
             BestProbabilityEdge = group.BestProbabilityEdge,
-            BestEstimatedEv = group.BestEstimatedEv,
-            StrategyClassification = strategy.StrategyClassification,
-            StrategyTier = strategy.StrategyTier,
-            ModelVersion = ResolveCurrentPublicModelVersion(topPicksModelOptions),
-            RecommendationContractVersion = ResolveCurrentRecommendationContractVersion(topPicksModelOptions),
-            ProbabilityModelVersion = ResolveCurrentProbabilityModelVersion(topPicksModelOptions),
-            ModelEra = ResolveCurrentPublicModelEra(topPicksModelOptions),
-            IsCandidate = strategy.IsCandidate,
-            IsWatchlist = strategy.IsWatchlist,
+            BestEstimatedEv = ReadPublicTopPickDecimal(publicTopPickRow, "displayExpectedValue")
+                ?? ReadPublicTopPickDecimal(publicTopPickRow, "bestEstimatedEv")
+                ?? group.BestEstimatedEv,
+            StrategyClassification = ReadPublicTopPickString(publicTopPickRow, "strategyClassification") ?? strategy.StrategyClassification,
+            StrategyTier = ReadPublicTopPickString(publicTopPickRow, "strategyTier") ?? strategy.StrategyTier,
+            ModelVersion = ReadPublicTopPickString(publicTopPickRow, "modelVersion") ?? ResolveCurrentPublicModelVersion(topPicksModelOptions),
+            RecommendationContractVersion = ReadPublicTopPickString(publicTopPickRow, "recommendationContractVersion") ?? ResolveCurrentRecommendationContractVersion(topPicksModelOptions),
+            ProbabilityModelVersion = ReadPublicTopPickString(publicTopPickRow, "probabilityModelVersion") ?? ResolveCurrentProbabilityModelVersion(topPicksModelOptions),
+            ModelEra = ReadPublicTopPickString(publicTopPickRow, "modelEra") ?? ResolveCurrentPublicModelEra(topPicksModelOptions),
+            IsCandidate = isPublicTopPick || strategy.IsCandidate,
+            IsWatchlist = !isPublicTopPick && strategy.IsWatchlist,
             IsAvoid = strategy.IsAvoid,
-            IsResearchOnly = strategy.IsResearchOnly,
+            IsResearchOnly = !isPublicTopPick && strategy.IsResearchOnly,
             EntryProvider = entry.EntryProvider,
             EntryCompatibilityGroup = entry.EntryCompatibilityGroup,
             EntryProviderCategory = entry.EntryProviderCategory,
             EntryActionableForUser = entry.EntryActionableForUser,
-            DetailsJson = BuildMarketSnapshotDetailsJson(group, includeBookmakerPrices: false, topPicksModelOptions)
+            DetailsJson = publicTopPickRow is null
+                ? BuildMarketSnapshotDetailsJson(group, includeBookmakerPrices: false, topPicksModelOptions)
+                : JsonSerializer.SerializeToDocument(publicTopPickRow)
         };
     }
 

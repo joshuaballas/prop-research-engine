@@ -1228,6 +1228,210 @@ public sealed class PerformanceGradingTests
     }
 
     [Fact]
+    public async Task PerformanceSummary_DefaultIncludesSportsbookTopPicksThatAreNotEntryActionable()
+    {
+        await using var factory = new SafetyTestApplicationFactory();
+        using var client = factory.CreateClient();
+        var date = new DateOnly(2026, 6, 17);
+        await SeedPerformanceScenarioAsync(
+            factory,
+            date,
+            "Total Bases",
+            "Under",
+            1.5m,
+            0m,
+            provider: "FanDuel",
+            bookmaker: "FanDuel",
+            providerCategory: "Sportsbook",
+            isActionableForUser: false);
+
+        var response = await client.GetAsync("/api/markets/performance-summary?sport=MLB&gradingMode=latestCompleted");
+
+        await EnsureSuccessWithBodyAsync(response);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal(1, json.GetProperty("summary").GetProperty("gradedPicks").GetInt32());
+        Assert.Equal(1, json.GetProperty("summary").GetProperty("won").GetInt32());
+        Assert.Equal(1, json.GetProperty("dataAvailability").GetProperty("rowsAfterPerformanceEligibility").GetInt32());
+        Assert.Equal(0, json.GetProperty("dataAvailability").GetProperty("rowsExcludedNonPlayable").GetInt32());
+        var providerCategoryGroup = Assert.Single(json.GetProperty("groups").GetProperty("byProviderCategory").EnumerateArray());
+        Assert.Equal("Sportsbook", providerCategoryGroup.GetProperty("providerCategory").GetString());
+        Assert.Equal(1, providerCategoryGroup.GetProperty("totalPicks").GetInt32());
+        Assert.Equal(1, providerCategoryGroup.GetProperty("gradedPicks").GetInt32());
+    }
+
+    [Fact]
+    public async Task PerformanceSummary_GuardedEraExcludesLegacyCandidateOnlyRows()
+    {
+        await using var factory = new SafetyTestApplicationFactory();
+        using var client = factory.CreateClient();
+        var date = new DateOnly(2026, 6, 17);
+        await SeedPerformanceScenarioAsync(
+            factory,
+            date,
+            "Total Bases",
+            "Over",
+            1.5m,
+            2m,
+            isCandidate: true,
+            isTopPick: false);
+
+        var response = await client.GetAsync("/api/markets/performance-summary?sport=MLB&gradingMode=latestCompleted");
+
+        await EnsureSuccessWithBodyAsync(response);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal(0, json.GetProperty("summary").GetProperty("gradedPicks").GetInt32());
+        Assert.Equal(0, json.GetProperty("dataAvailability").GetProperty("rowsAfterPerformanceEligibility").GetInt32());
+        Assert.Equal(1, json.GetProperty("dataAvailability").GetProperty("excludedNonPublicCurrentEraRows").GetInt32());
+        Assert.Equal(1, json.GetProperty("dataAvailability").GetProperty("currentEraPollutedLedgerRows").GetInt32());
+    }
+
+    [Fact]
+    public async Task PerformanceSummary_GuardedEraExcludesInvalidSideRows()
+    {
+        await using var factory = new SafetyTestApplicationFactory();
+        using var client = factory.CreateClient();
+        var date = new DateOnly(2026, 6, 17);
+        await SeedPerformanceScenarioAsync(
+            factory,
+            date,
+            "Total Bases",
+            "None",
+            1.5m,
+            2m);
+
+        var response = await client.GetAsync("/api/markets/performance-summary?sport=MLB&gradingMode=latestCompleted");
+
+        await EnsureSuccessWithBodyAsync(response);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal(0, json.GetProperty("dataAvailability").GetProperty("rowsAfterPerformanceEligibility").GetInt32());
+        Assert.Equal(1, json.GetProperty("dataAvailability").GetProperty("excludedInvalidSideRows").GetInt32());
+    }
+
+    [Fact]
+    public async Task PerformanceSummary_GuardedEraExcludesSportsbookRowsMissingBookmakerOrProvider()
+    {
+        await using var factory = new SafetyTestApplicationFactory();
+        using var client = factory.CreateClient();
+        var date = new DateOnly(2026, 6, 17);
+        await SeedPerformanceScenarioAsync(
+            factory,
+            date,
+            "Total Bases",
+            "Under",
+            1.5m,
+            0m,
+            provider: string.Empty,
+            bookmaker: null,
+            providerCategory: "Sportsbook",
+            isActionableForUser: false);
+
+        var response = await client.GetAsync("/api/markets/performance-summary?sport=MLB&gradingMode=latestCompleted");
+
+        await EnsureSuccessWithBodyAsync(response);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal(0, json.GetProperty("dataAvailability").GetProperty("rowsAfterPerformanceEligibility").GetInt32());
+        Assert.Equal(1, json.GetProperty("dataAvailability").GetProperty("excludedMissingBookmakerRows").GetInt32());
+    }
+
+    [Fact]
+    public async Task PerformanceSummary_GuardedEraDedupesExactPublicPickKeys()
+    {
+        await using var factory = new SafetyTestApplicationFactory();
+        using var client = factory.CreateClient();
+        var date = new DateOnly(2026, 6, 17);
+        await SeedPerformanceScenarioAsync(
+            factory,
+            date,
+            "Total Bases",
+            "Over",
+            1.5m,
+            2m,
+            provider: "FanDuel",
+            bookmaker: "FanDuel",
+            providerCategory: "Sportsbook",
+            isActionableForUser: false);
+        using (var scope = factory.Services.CreateScope())
+        {
+            var dbContext = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+            var original = await dbContext.RecommendationSnapshots.AsNoTracking().SingleAsync();
+            dbContext.RecommendationSnapshots.Add(new RecommendationSnapshot
+            {
+                Id = Guid.NewGuid(),
+                IdempotencyKey = Guid.NewGuid().ToString("N"),
+                FirstSeenAtUtc = original.FirstSeenAtUtc.AddMinutes(10),
+                LastSeenAtUtc = original.LastSeenAtUtc.AddMinutes(10),
+                SeenCount = 1,
+                CapturedAtUtc = original.CapturedAtUtc.AddMinutes(10),
+                RefreshRunId = null,
+                PredictionRunId = original.PredictionRunId,
+                Sport = original.Sport,
+                SlateDate = original.SlateDate,
+                ExpectedResultDate = original.ExpectedResultDate,
+                ResultDateSource = original.ResultDateSource,
+                EventId = original.EventId,
+                EventStartTimeUtc = original.EventStartTimeUtc,
+                CanonicalPlayerId = original.CanonicalPlayerId,
+                PlayerName = original.PlayerName,
+                NormalizedPlayerName = original.NormalizedPlayerName,
+                PropTypeId = original.PropTypeId,
+                PropType = original.PropType,
+                NormalizedPropType = original.NormalizedPropType,
+                Side = original.Side,
+                Line = original.Line,
+                Provider = original.Provider,
+                Bookmaker = original.Bookmaker,
+                ProviderCategory = original.ProviderCategory,
+                EntryProvider = original.EntryProvider,
+                EntryCompatibilityGroup = original.EntryCompatibilityGroup,
+                HitChance = original.HitChance,
+                ImpliedProbability = original.ImpliedProbability,
+                ProbabilityEdge = original.ProbabilityEdge,
+                EstimatedEv = original.EstimatedEv,
+                TrustLevel = original.TrustLevel,
+                SampleWarning = original.SampleWarning,
+                Warning = original.Warning,
+                HistoricalSampleSize = original.HistoricalSampleSize,
+                StrategyClassification = original.StrategyClassification,
+                StrategyTier = original.StrategyTier,
+                ModelVersion = original.ModelVersion,
+                RecommendationContractVersion = original.RecommendationContractVersion,
+                ProbabilityModelVersion = original.ProbabilityModelVersion,
+                ModelEra = original.ModelEra,
+                RankingScore = original.RankingScore + 1m,
+                IsCandidate = original.IsCandidate,
+                IsTopPick = original.IsTopPick,
+                IsWatchlist = original.IsWatchlist,
+                IsActionableForUser = original.IsActionableForUser,
+                LifecycleStatus = original.LifecycleStatus,
+                GradeStatus = "Pending"
+            });
+            await dbContext.SaveChangesAsync();
+        }
+
+        var response = await client.GetAsync("/api/markets/performance-summary?sport=MLB&gradingMode=latestCompleted");
+
+        await EnsureSuccessWithBodyAsync(response);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal(1, json.GetProperty("summary").GetProperty("gradedPicks").GetInt32());
+        Assert.Equal(1, json.GetProperty("dataAvailability").GetProperty("rowsAfterPerformanceEligibility").GetInt32());
+        Assert.Equal(1, json.GetProperty("dataAvailability").GetProperty("excludedDuplicateLedgerRows").GetInt32());
+    }
+
+    [Fact]
+    public void RecommendationLedgerWriter_IdempotencyKeyUsesExactPublicPickIdentity()
+    {
+        var date = new DateOnly(2026, 6, 17);
+        var playerId = Guid.NewGuid();
+        var propTypeId = Guid.NewGuid();
+        var first = CreateLedgerCandidate(date, playerId, propTypeId, refreshRunId: Guid.NewGuid(), strategyClassification: "Candidate", isCandidate: true);
+        var second = CreateLedgerCandidate(date, playerId, propTypeId, refreshRunId: Guid.NewGuid(), strategyClassification: "LegacyCandidate", isCandidate: false);
+        var differentLine = CreateLedgerCandidate(date, playerId, propTypeId, refreshRunId: Guid.NewGuid(), strategyClassification: "Candidate", isCandidate: true, line: 2.5m);
+
+        Assert.Equal(RecommendationLedgerWriter.BuildIdempotencyKey(first), RecommendationLedgerWriter.BuildIdempotencyKey(second));
+        Assert.NotEqual(RecommendationLedgerWriter.BuildIdempotencyKey(first), RecommendationLedgerWriter.BuildIdempotencyKey(differentLine));
+    }
+
+    [Fact]
     public async Task PerformanceSummary_WarnsWhenOnlyLegacyRowsExist()
     {
         await using var factory = new SafetyTestApplicationFactory();
@@ -1283,6 +1487,58 @@ public sealed class PerformanceGradingTests
         Assert.True(row.GetProperty("closestCandidateResultRows")[0].GetProperty("whyItDidOrDidNotMatch").GetProperty("wouldMatchCurrentFallback").GetBoolean());
     }
 
+    private static RecommendationLedgerCandidate CreateLedgerCandidate(
+        DateOnly date,
+        Guid playerId,
+        Guid propTypeId,
+        Guid refreshRunId,
+        string strategyClassification,
+        bool isCandidate,
+        decimal line = 1.5m)
+    {
+        return new RecommendationLedgerCandidate(
+            CapturedAtUtc: DateTimeOffset.UtcNow,
+            RefreshRunId: refreshRunId,
+            PredictionRunId: null,
+            Sport: "MLB",
+            SlateDate: date,
+            ExpectedResultDate: date,
+            ResultDateSource: "Test",
+            EventId: "test-game",
+            EventStartTimeUtc: new DateTimeOffset(date.ToDateTime(new TimeOnly(23, 0)), TimeSpan.Zero),
+            CanonicalPlayerId: playerId,
+            PlayerName: "Test Player",
+            PropTypeId: propTypeId,
+            PropType: "Total Bases",
+            Side: "Over",
+            Line: line,
+            Provider: "FanDuel",
+            Bookmaker: "FanDuel",
+            ProviderCategory: "Sportsbook",
+            EntryProvider: "FanDuel",
+            EntryCompatibilityGroup: "FanDuel",
+            HitChance: 0.7m,
+            ImpliedProbability: 0.55m,
+            ProbabilityEdge: 0.15m,
+            EstimatedEv: 0.08m,
+            TrustLevel: "Strong",
+            SampleWarning: null,
+            Warning: null,
+            HistoricalSampleSize: 20,
+            StrategyClassification: strategyClassification,
+            StrategyTier: "LikelyHit",
+            ModelVersion: LikelyHitModelService.ModelVersion,
+            RecommendationContractVersion: LikelyHitModelService.RecommendationContractVersion,
+            ProbabilityModelVersion: LikelyHitModelService.ProbabilityModelVersion,
+            ModelEra: TopPicksModelOptions.DefaultLikelyHitV1ModelEra,
+            RankingScore: 1m,
+            IsCandidate: isCandidate,
+            IsTopPick: true,
+            IsWatchlist: false,
+            IsActionableForUser: false,
+            LifecycleStatus: "Active");
+    }
+
     private static async Task SeedMlbCoverageStateAsync(
         SafetyTestApplicationFactory factory,
         DateOnly date,
@@ -1325,6 +1581,7 @@ public sealed class PerformanceGradingTests
         decimal? resultValue,
         string provider = "Underdog",
         string? bookmaker = "Underdog",
+        string providerCategory = "DFS",
         string? alternateResultPropType = null,
         decimal? alternateResultValue = null,
         decimal? duplicateMatchingResultValue = null,
@@ -1424,7 +1681,7 @@ public sealed class PerformanceGradingTests
             Line = line,
             Provider = provider,
             Bookmaker = bookmaker,
-            ProviderCategory = "DFS",
+            ProviderCategory = providerCategory,
             EntryProvider = provider,
             EntryCompatibilityGroup = provider,
             HitChance = 0.6m,

@@ -110,12 +110,22 @@ public sealed class LikelyHitModelService(IOptions<TopPicksModelOptions> options
         var hitChance = calibratedProbability.HasValue
             ? ClampProbability(calibratedProbability.Value - uncertaintyPenalty)
             : (decimal?)null;
-        var reliabilityScore = CalculateReliabilityScore(input, probability.EffectiveSampleSize, fatalConflicts, recentHistoryConflict);
 
         if (!hitChance.HasValue)
         {
             fatalConflicts.Add("HitChanceUnavailable");
         }
+
+        var selectedSideHistoryConsistency = EvaluateSelectedSideHistoryConsistency(
+            input,
+            selectedSide,
+            input.Line,
+            hitChance,
+            probability,
+            effectiveOptions);
+        fatalConflicts.AddRange(selectedSideHistoryConsistency.FatalConflictCodes);
+
+        var reliabilityScore = CalculateReliabilityScore(input, probability.EffectiveSampleSize, fatalConflicts, recentHistoryConflict);
 
         var isSportsbook = string.Equals(input.ProviderCategory, "Sportsbook", StringComparison.OrdinalIgnoreCase);
         var sportsbookMarketGap = CalculateSportsbookMarketGap(input, hitChance, effectiveOptions);
@@ -244,7 +254,18 @@ public sealed class LikelyHitModelService(IOptions<TopPicksModelOptions> options
             effectiveOptions.SportsbookBalancedMaxUnderdogAmericanOdds,
             effectiveOptions.SportsbookBalancedSuspiciousMarketGap,
             sportsbookMarketGap,
-            balancedLineSelectionReason);
+            balancedLineSelectionReason,
+            selectedSideHistoryConsistency.GuardApplied,
+            selectedSideHistoryConsistency.GuardPassed,
+            selectedSideHistoryConsistency.ConflictCodes,
+            selectedSideHistoryConsistency.FatalConflictCodes,
+            selectedSideHistoryConsistency.Diagnosis,
+            selectedSideHistoryConsistency.ChartHitRate,
+            selectedSideHistoryConsistency.ChartSampleSize,
+            selectedSideHistoryConsistency.ChartClearedCount,
+            selectedSideHistoryConsistency.Recent5Average,
+            selectedSideHistoryConsistency.Recent10Average,
+            selectedSideHistoryConsistency.SeasonAverage);
     }
 
     private static WeightedProbabilityResult EvaluateWeightedHistory(
@@ -376,6 +397,148 @@ public sealed class LikelyHitModelService(IOptions<TopPicksModelOptions> options
         return outcomes.Length == 0
             ? null
             : Math.Round((decimal)outcomes.Count(outcome => outcome > 0) / outcomes.Length, 4);
+    }
+
+    private static SelectedSideHistoryConsistencyResult EvaluateSelectedSideHistoryConsistency(
+        LikelyHitOpportunityInput input,
+        string? selectedSide,
+        decimal? line,
+        decimal? hitChance,
+        WeightedProbabilityResult probability,
+        TopPicksModelOptions effectiveOptions)
+    {
+        if (!effectiveOptions.EnableSelectedSideHistoryConsistencyGuard ||
+            string.IsNullOrWhiteSpace(selectedSide) ||
+            !line.HasValue ||
+            !hitChance.HasValue ||
+            input.History.Count == 0)
+        {
+            return SelectedSideHistoryConsistencyResult.NotApplied;
+        }
+
+        var ordered = input.History
+            .Where(row => row.IsUsable)
+            .OrderByDescending(row => row.EventDate)
+            .ToArray();
+        if (ordered.Length == 0)
+        {
+            return SelectedSideHistoryConsistencyResult.NotApplied;
+        }
+
+        var recent5 = ordered.Take(5).ToArray();
+        var recent10 = ordered.Take(10).ToArray();
+        var seasonRows = input.EventDate.HasValue
+            ? ordered.Where(row => row.EventDate.Year == input.EventDate.Value.Year).ToArray()
+            : ordered;
+        var recent10Outcomes = recent10
+            .Select(row => ClassifyOutcome(row.Value, line.Value, selectedSide))
+            .Where(outcome => outcome != 0)
+            .ToArray();
+        var chartSampleSize = recent10Outcomes.Length;
+        var chartClearedCount = recent10Outcomes.Count(outcome => outcome > 0);
+        var chartHitRate = chartSampleSize == 0
+            ? (decimal?)null
+            : Math.Round((decimal)chartClearedCount / chartSampleSize, 4);
+        var recent5Average = AverageObservationValue(recent5);
+        var recent10Average = AverageObservationValue(recent10);
+        var seasonAverage = AverageObservationValue(seasonRows);
+        var conflictCodes = new List<string>();
+        var fatalConflictCodes = new List<string>();
+
+        if (chartSampleSize >= 5 && chartHitRate.HasValue)
+        {
+            var hitChanceGap = hitChance.Value - chartHitRate.Value;
+            if (hitChanceGap >= effectiveOptions.ConsistencyGuardHighHitChanceGap)
+            {
+                AddConsistencyConflict(conflictCodes, fatalConflictCodes, "HitChanceRecent10HistoryMismatch");
+            }
+
+            if (hitChance.Value >= effectiveOptions.ConsistencyGuardHighHitChance &&
+                chartHitRate.Value <= effectiveOptions.ConsistencyGuardWeakRecent10HitRate)
+            {
+                AddConsistencyConflict(conflictCodes, fatalConflictCodes, "HighHitChanceWeakRecent10SelectedSideHistory");
+            }
+
+            if (hitChance.Value >= effectiveOptions.ConsistencyGuardExtremeHitChance &&
+                chartHitRate.Value <= effectiveOptions.ConsistencyGuardExtremeWeakRecent10HitRate)
+            {
+                AddConsistencyConflict(conflictCodes, fatalConflictCodes, "ExtremeHitChanceWeakRecent10SelectedSideHistory");
+            }
+        }
+
+        if (hitChance.Value >= effectiveOptions.ConsistencyGuardHighHitChance &&
+            chartHitRate.HasValue &&
+            chartHitRate.Value <= effectiveOptions.ConsistencyGuardExtremeWeakRecent10HitRate)
+        {
+            if (string.Equals(selectedSide, "Under", StringComparison.OrdinalIgnoreCase))
+            {
+                if (recent10Average.HasValue && recent10Average.Value > line.Value)
+                {
+                    AddConsistencyConflict(conflictCodes, fatalConflictCodes, "UnderRecent10AverageAboveLineWithWeakSelectedSideHistory");
+                }
+
+                if (seasonAverage.HasValue &&
+                    seasonAverage.Value > line.Value &&
+                    probability.SeasonHitRate.HasValue &&
+                    probability.SeasonHitRate.Value <= effectiveOptions.ConsistencyGuardExtremeWeakRecent10HitRate)
+                {
+                    AddConsistencyConflict(conflictCodes, fatalConflictCodes, "UnderSeasonAverageAboveLineWithWeakSelectedSideHistory");
+                }
+            }
+            else if (string.Equals(selectedSide, "Over", StringComparison.OrdinalIgnoreCase))
+            {
+                if (recent10Average.HasValue && recent10Average.Value < line.Value)
+                {
+                    AddConsistencyConflict(conflictCodes, fatalConflictCodes, "OverRecent10AverageBelowLineWithWeakSelectedSideHistory");
+                }
+
+                if (seasonAverage.HasValue &&
+                    seasonAverage.Value < line.Value &&
+                    probability.SeasonHitRate.HasValue &&
+                    probability.SeasonHitRate.Value <= effectiveOptions.ConsistencyGuardExtremeWeakRecent10HitRate)
+                {
+                    AddConsistencyConflict(conflictCodes, fatalConflictCodes, "OverSeasonAverageBelowLineWithWeakSelectedSideHistory");
+                }
+            }
+        }
+
+        var distinctConflicts = conflictCodes
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        var distinctFatalConflicts = fatalConflictCodes
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+        return new SelectedSideHistoryConsistencyResult(
+            GuardApplied: true,
+            GuardPassed: distinctFatalConflicts.Length == 0,
+            distinctConflicts,
+            distinctFatalConflicts,
+            distinctFatalConflicts.Length == 0
+                ? "Selected-side history is consistent enough for public Top Picks."
+                : "Public Top Pick demoted because selected-side history contradicts the displayed hit chance.",
+            chartHitRate,
+            chartSampleSize,
+            chartClearedCount,
+            recent5Average,
+            recent10Average,
+            seasonAverage);
+    }
+
+    private static void AddConsistencyConflict(
+        ICollection<string> conflictCodes,
+        ICollection<string> fatalConflictCodes,
+        string code)
+    {
+        conflictCodes.Add(code);
+        fatalConflictCodes.Add(code);
+    }
+
+    private static decimal? AverageObservationValue(IReadOnlyCollection<LikelyHitObservation> rows)
+    {
+        return rows.Count == 0
+            ? null
+            : Math.Round(rows.Average(row => row.Value), 4);
     }
 
     private static int SelectPriorWeight(decimal effectiveSampleSize)
@@ -759,6 +922,33 @@ public sealed class LikelyHitModelService(IOptions<TopPicksModelOptions> options
         return Math.Clamp(Math.Round(value, 6), 0.01m, 0.99m);
     }
 
+    private sealed record SelectedSideHistoryConsistencyResult(
+        bool GuardApplied,
+        bool GuardPassed,
+        IReadOnlyList<string> ConflictCodes,
+        IReadOnlyList<string> FatalConflictCodes,
+        string? Diagnosis,
+        decimal? ChartHitRate,
+        int? ChartSampleSize,
+        int? ChartClearedCount,
+        decimal? Recent5Average,
+        decimal? Recent10Average,
+        decimal? SeasonAverage)
+    {
+        public static SelectedSideHistoryConsistencyResult NotApplied { get; } = new(
+            GuardApplied: false,
+            GuardPassed: true,
+            Array.Empty<string>(),
+            Array.Empty<string>(),
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null);
+    }
+
     private sealed record WeightedProbabilityResult(
         decimal? RawWeightedProbability,
         decimal EffectiveSampleSize,
@@ -865,4 +1055,15 @@ public sealed record LikelyHitModelResult(
     int UnderdogPriceCeiling,
     decimal SuspiciousMarketGap,
     decimal? MarketGap,
-    string BalancedLineSelectionReason);
+    string BalancedLineSelectionReason,
+    bool SelectedSideHistoryConsistencyGuardApplied,
+    bool SelectedSideHistoryConsistencyGuardPassed,
+    IReadOnlyList<string> SelectedSideHistoryConsistencyCodes,
+    IReadOnlyList<string> FatalSelectedSideHistoryConsistencyCodes,
+    string? SelectedSideHistoryConsistencyDiagnosis,
+    decimal? SelectedSideChartHitRate,
+    int? SelectedSideChartSampleSize,
+    int? SelectedSideChartClearedCount,
+    decimal? SelectedSideRecent5Average,
+    decimal? SelectedSideRecent10Average,
+    decimal? SelectedSideSeasonAverage);

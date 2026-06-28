@@ -5,7 +5,7 @@ public sealed class TopPicksModelOptions
     public const string SectionName = "TopPicksModel";
     public const string LikelyHitV1 = "LikelyHitV1";
     public const string Legacy = "Legacy";
-    public const string DefaultLikelyHitV1ModelEra = "LikelyHitV1_SportsbookBalanced_65Plus_NoShapeCap";
+    public const string DefaultLikelyHitV1ModelEra = "LikelyHitV1_SportsbookBalanced_65Plus_ConsistencyGuarded";
 
     public string ActiveModel { get; set; } = LikelyHitV1;
     public string CurrentModelEra { get; set; } = DefaultLikelyHitV1ModelEra;
@@ -27,6 +27,12 @@ public sealed class TopPicksModelOptions
     public decimal SportsbookBalancedSuspiciousMarketGap { get; set; } = 0.25m;
     public int SportsbookHeavyFavoritePenaltyStartsAt { get; set; } = -300;
     public bool SportsbookExtremeFavoriteIneligible { get; set; } = true;
+    public bool EnableSelectedSideHistoryConsistencyGuard { get; set; } = true;
+    public decimal ConsistencyGuardHighHitChance { get; set; } = 0.75m;
+    public decimal ConsistencyGuardExtremeHitChance { get; set; } = 0.85m;
+    public decimal ConsistencyGuardWeakRecent10HitRate { get; set; } = 0.50m;
+    public decimal ConsistencyGuardExtremeWeakRecent10HitRate { get; set; } = 0.60m;
+    public decimal ConsistencyGuardHighHitChanceGap { get; set; } = 0.25m;
 
     public bool IsLikelyHitV1Enabled =>
         string.Equals(ActiveModel, LikelyHitV1, StringComparison.OrdinalIgnoreCase);

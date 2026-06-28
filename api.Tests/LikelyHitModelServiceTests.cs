@@ -39,6 +39,34 @@ public sealed class LikelyHitModelServiceTests
     }
 
     [Fact]
+    public void ConsistencyGuard_BlocksHighHitChanceWhenRecentSelectedSideHistoryIsWeak()
+    {
+        var service = CreateService();
+        var recentWeakUnderHistory =
+            new[] { 6m, 3m, 6m, 3m, 6m, 3m, 6m, 3m, 6m, 6m }
+            .Concat(Enumerable.Repeat(3m, 50))
+            .ToArray();
+        var input = CreateInput(
+            selectedSide: "Under",
+            line: 4.5m,
+            historyValues: recentWeakUnderHistory);
+
+        var result = service.Evaluate(input);
+
+        Assert.True(result.HitChance >= 0.75m);
+        Assert.True(result.SelectedSideHistoryConsistencyGuardApplied);
+        Assert.False(result.SelectedSideHistoryConsistencyGuardPassed);
+        Assert.Equal(0.4m, result.SelectedSideChartHitRate);
+        Assert.Equal(10, result.SelectedSideChartSampleSize);
+        Assert.Equal(4, result.SelectedSideChartClearedCount);
+        Assert.True(result.SelectedSideRecent10Average > 4.5m);
+        Assert.False(result.CanShowAsPick);
+        Assert.Contains("HitChanceRecent10HistoryMismatch", result.FatalSelectedSideHistoryConsistencyCodes);
+        Assert.Contains("HighHitChanceWeakRecent10SelectedSideHistory", result.FatalConflictCodes);
+        Assert.Contains("UnderRecent10AverageAboveLineWithWeakSelectedSideHistory", result.FatalConflictCodes);
+    }
+
+    [Fact]
     public void EffectiveSampleBelowTen_BlocksTopPick()
     {
         var service = CreateService();

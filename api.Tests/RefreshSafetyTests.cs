@@ -434,6 +434,78 @@ public sealed class RefreshSafetyTests
     }
 
     [Fact]
+    public async Task RefreshPlan_UsesWorkerWake_WhenWakeIsLaterThanTheoreticalDue()
+    {
+        await using var factory = new SafetyTestApplicationFactory(new Dictionary<string, string?>
+        {
+            ["TheOddsScheduledRefresh:Enabled"] = "true",
+            ["TheOddsScheduledRefresh:AllowScheduledLiveRefresh"] = "true",
+            ["TheOddsScheduledRefresh:ExpectedRefreshDurationSeconds"] = "45",
+            ["TheOddsScheduledRefresh:PostRefreshReadBufferSeconds"] = "30"
+        });
+        using var client = factory.CreateClient();
+        await factory.SeedCreditTelemetryRefreshAsync(requestsUsed: 2360, requestsRemaining: 97640, observedMinutesAgo: 14);
+        var observedAt = DateTimeOffset.UtcNow;
+        var workerWakeAt = observedAt.AddSeconds(90);
+        factory.Services.GetRequiredService<ITheOddsScheduledRefreshState>().MarkWaiting(observedAt, workerWakeAt);
+
+        var response = await client.GetAsync("/api/markets/refresh-plan");
+
+        await EnsureSuccessWithBodyAsync(response);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        var nextRefreshDueUtc = DateTimeOffset.Parse(json.GetProperty("nextRefreshDueUtc").GetString()!, CultureInfo.InvariantCulture);
+        var nextRefreshStartEstimateUtc = DateTimeOffset.Parse(json.GetProperty("nextRefreshStartEstimateUtc").GetString()!, CultureInfo.InvariantCulture);
+        var nextHeaderSyncTargetUtc = DateTimeOffset.Parse(json.GetProperty("nextHeaderSyncTargetUtc").GetString()!, CultureInfo.InvariantCulture);
+        var nextDataAvailableEstimateUtc = DateTimeOffset.Parse(json.GetProperty("nextDataAvailableEstimateUtc").GetString()!, CultureInfo.InvariantCulture);
+        var conservativeDataAvailableEstimateUtc = DateTimeOffset.Parse(json.GetProperty("conservativeDataAvailableEstimateUtc").GetString()!, CultureInfo.InvariantCulture);
+        Assert.True(nextRefreshStartEstimateUtc >= workerWakeAt.AddSeconds(-1));
+        Assert.True(nextRefreshStartEstimateUtc > nextRefreshDueUtc);
+        Assert.Equal("WorkerWakeEstimate", json.GetProperty("estimateBasis").GetString());
+        Assert.Equal(60, json.GetProperty("expectedRefreshDurationSeconds").GetInt32());
+        Assert.Equal(30, json.GetProperty("postRefreshReadBufferSeconds").GetInt32());
+        Assert.Equal(nextRefreshDueUtc.AddSeconds(30), nextHeaderSyncTargetUtc);
+        Assert.Equal(nextHeaderSyncTargetUtc, nextDataAvailableEstimateUtc);
+        Assert.Equal(nextRefreshStartEstimateUtc.AddSeconds(90), conservativeDataAvailableEstimateUtc);
+        Assert.False(json.GetProperty("isRefreshInProgress").GetBoolean());
+        Assert.False(json.GetProperty("isOverdue").GetBoolean());
+        Assert.True(json.GetProperty("secondsUntilNextRefreshStart").GetInt32() > 0);
+        Assert.True(json.GetProperty("secondsUntilConservativeDataAvailable").GetInt32() > json.GetProperty("secondsUntilNextRefreshStart").GetInt32());
+    }
+
+    [Fact]
+    public async Task RefreshPlan_ReportsInProgressOnlyFromWorkerRunningState()
+    {
+        await using var factory = new SafetyTestApplicationFactory(new Dictionary<string, string?>
+        {
+            ["TheOddsScheduledRefresh:Enabled"] = "true",
+            ["TheOddsScheduledRefresh:AllowScheduledLiveRefresh"] = "true",
+            ["TheOddsScheduledRefresh:ExpectedRefreshDurationSeconds"] = "45",
+            ["TheOddsScheduledRefresh:PostRefreshReadBufferSeconds"] = "30"
+        });
+        using var client = factory.CreateClient();
+        await factory.SeedCreditTelemetryRefreshAsync(requestsUsed: 2360, requestsRemaining: 97640, observedMinutesAgo: 15);
+        var startedAt = DateTimeOffset.UtcNow.AddSeconds(-15);
+        factory.Services.GetRequiredService<ITheOddsScheduledRefreshState>().MarkStarted(startedAt);
+
+        var response = await client.GetAsync("/api/markets/refresh-plan");
+
+        await EnsureSuccessWithBodyAsync(response);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        var nextRefreshDueUtc = DateTimeOffset.Parse(json.GetProperty("nextRefreshDueUtc").GetString()!, CultureInfo.InvariantCulture);
+        var nextRefreshStartEstimateUtc = DateTimeOffset.Parse(json.GetProperty("nextRefreshStartEstimateUtc").GetString()!, CultureInfo.InvariantCulture);
+        var nextHeaderSyncTargetUtc = DateTimeOffset.Parse(json.GetProperty("nextHeaderSyncTargetUtc").GetString()!, CultureInfo.InvariantCulture);
+        var nextDataAvailableEstimateUtc = DateTimeOffset.Parse(json.GetProperty("nextDataAvailableEstimateUtc").GetString()!, CultureInfo.InvariantCulture);
+        var conservativeDataAvailableEstimateUtc = DateTimeOffset.Parse(json.GetProperty("conservativeDataAvailableEstimateUtc").GetString()!, CultureInfo.InvariantCulture);
+        Assert.True(json.GetProperty("isRefreshInProgress").GetBoolean());
+        Assert.False(json.GetProperty("isOverdue").GetBoolean());
+        Assert.Equal("ActiveRunStart", json.GetProperty("estimateBasis").GetString());
+        Assert.Equal(startedAt.ToUnixTimeSeconds(), nextRefreshStartEstimateUtc.ToUnixTimeSeconds());
+        Assert.Equal(nextRefreshDueUtc.AddSeconds(30), nextHeaderSyncTargetUtc);
+        Assert.Equal(nextHeaderSyncTargetUtc, nextDataAvailableEstimateUtc);
+        Assert.Equal(nextRefreshStartEstimateUtc.AddSeconds(90), conservativeDataAvailableEstimateUtc);
+    }
+
+    [Fact]
     public async Task Planner_BlocksWithPerRunEstimateExceeded_WhenEnforcementAndPerRunBlockingAreEnabled()
     {
         await using var factory = new SafetyTestApplicationFactory(new Dictionary<string, string?>
@@ -502,7 +574,11 @@ public sealed class RefreshSafetyTests
     [Fact]
     public async Task RefreshPlan_AttributesLatestRunsToExactTargetOnly()
     {
-        await using var factory = new SafetyTestApplicationFactory();
+        await using var factory = new SafetyTestApplicationFactory(new Dictionary<string, string?>
+        {
+            ["TheOddsScheduledRefresh:Enabled"] = "true",
+            ["TheOddsScheduledRefresh:AllowScheduledLiveRefresh"] = "false"
+        });
         using var client = factory.CreateClient();
         var mlbDfsRunId = Guid.NewGuid();
         var mlbSportsbookRunId = Guid.NewGuid();
@@ -592,6 +668,22 @@ public sealed class RefreshSafetyTests
         Assert.Equal(JsonValueKind.Null, epl.GetProperty("latestRunSucceeded").ValueKind);
         Assert.Equal(JsonValueKind.Null, epl.GetProperty("actualApiCalls").ValueKind);
         Assert.Equal(JsonValueKind.Null, epl.GetProperty("rowsCreated").ValueKind);
+
+        var latestEnabledTargetSuccessUtc = targets
+            .Where(row => row.GetProperty("enabled").GetBoolean()
+                && row.GetProperty("latestSuccessfulRefreshCompletedAtUtc").ValueKind == JsonValueKind.String)
+            .Select(row => DateTimeOffset.Parse(
+                row.GetProperty("latestSuccessfulRefreshCompletedAtUtc").GetString()!,
+                CultureInfo.InvariantCulture))
+            .Max();
+        var nextHeaderSyncTargetUtc = DateTimeOffset.Parse(
+            json.GetProperty("nextHeaderSyncTargetUtc").GetString()!,
+            CultureInfo.InvariantCulture);
+        var nextDataAvailableEstimateUtc = DateTimeOffset.Parse(
+            json.GetProperty("nextDataAvailableEstimateUtc").GetString()!,
+            CultureInfo.InvariantCulture);
+        Assert.Equal(latestEnabledTargetSuccessUtc.AddMinutes(15).AddSeconds(30), nextHeaderSyncTargetUtc);
+        Assert.Equal(nextHeaderSyncTargetUtc, nextDataAvailableEstimateUtc);
     }
 
     [Fact]
@@ -1574,6 +1666,9 @@ public sealed class RefreshSafetyTests
         Assert.DoesNotContain(picks, row => row.GetProperty("player").GetString() == "Borderline Sportsbook Inventory Player");
         Assert.DoesNotContain(picks, row => row.GetProperty("player").GetString() == "Negative EV Sportsbook Player");
         var unsafeEvPick = picks.Single(row => row.GetProperty("player").GetString() == "Low Sample Huge EV Sportsbook Player");
+        Assert.Equal("Low Sample Huge EV Sportsbook Player", unsafeEvPick.GetProperty("playerName").GetString());
+        Assert.False(string.IsNullOrWhiteSpace(unsafeEvPick.GetProperty("provider").GetString()));
+        Assert.False(string.IsNullOrWhiteSpace(unsafeEvPick.GetProperty("bookmaker").GetString()));
         Assert.True(unsafeEvPick.GetProperty("isRecommendation").GetBoolean());
         Assert.True(unsafeEvPick.GetProperty("recommendationActionableForUser").GetBoolean());
         Assert.True(unsafeEvPick.GetProperty("selectedSideProbability").GetDecimal() >= 0.65m);
@@ -1589,6 +1684,10 @@ public sealed class RefreshSafetyTests
             {
                 Assert.True(row.GetProperty("selectedSideProbability").GetDecimal() >= 0.65m);
                 Assert.True(row.GetProperty("publicTopPickHitChanceGatePassed").GetBoolean());
+                Assert.False(row.GetProperty("usesAggregateProbability").GetBoolean());
+                Assert.True(row.GetProperty("selectedSideHistoryConsistencyGuardApplied").GetBoolean());
+                Assert.True(row.GetProperty("selectedSideHistoryConsistencyGuardPassed").GetBoolean());
+                Assert.Empty(row.GetProperty("fatalSelectedSideHistoryConsistencyCodes").EnumerateArray());
             }
 
             if (row.GetProperty("showExpectedValue").GetBoolean())
@@ -1597,6 +1696,32 @@ public sealed class RefreshSafetyTests
                 Assert.Equal(JsonValueKind.Null, row.GetProperty("evSuppressedReason").ValueKind);
             }
         });
+        Assert.Equal(0, factory.TheOddsAdapter.CallCount);
+    }
+
+    [Fact]
+    public async Task LikelyHitTopPickConsistencyAudit_IsReadOnlyAndReportsSelectedSideHistory()
+    {
+        await using var factory = new SafetyTestApplicationFactory();
+        using var client = factory.CreateClient();
+        await factory.SeedMlbDfsHitProbabilitySelectionScenarioAsync();
+
+        var response = await client.GetAsync("/api/debug/model/likely-hit/top-pick-consistency-audit?providerCategory=Sportsbook&take=50");
+
+        await EnsureSuccessWithBodyAsync(response);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.False(json.GetProperty("callsExternalApis").GetBoolean());
+        Assert.True(json.GetProperty("readOnly").GetBoolean());
+        Assert.False(json.GetProperty("writesRows").GetBoolean());
+        Assert.Equal(TopPicksModelOptions.DefaultLikelyHitV1ModelEra, json.GetProperty("currentModelEra").GetString());
+        Assert.True(json.GetProperty("totalRowsEvaluated").GetInt32() > 0);
+        Assert.True(json.GetProperty("totalPublicTopPicks").GetInt32() >= 1);
+
+        var examples = json.GetProperty("examples").EnumerateArray().ToArray();
+        Assert.NotEmpty(examples);
+        Assert.Contains(examples, row => row.TryGetProperty("selectedSideHistoryConsistencyGuardApplied", out _));
+        Assert.Contains(examples, row => row.TryGetProperty("chartHitRate", out _));
+        Assert.Contains(examples, row => row.TryGetProperty("recent10Average", out _));
         Assert.Equal(0, factory.TheOddsAdapter.CallCount);
     }
 
@@ -1712,6 +1837,42 @@ public sealed class RefreshSafetyTests
             Assert.Equal(JsonValueKind.Null, row.GetProperty("evSuppressedReason").ValueKind);
             Assert.True(row.GetProperty("isRecommendation").GetBoolean());
         });
+        Assert.Equal(0, factory.TheOddsAdapter.CallCount);
+    }
+
+    [Fact]
+    public async Task TopPickLedgerCaptureAudit_ReportsMissingCurrentEraSportsbookLedgerRows()
+    {
+        await using var factory = new SafetyTestApplicationFactory();
+        using var client = factory.CreateClient();
+        await factory.SeedExpectedValueDisplaySnapshotsAsync();
+        using (var scope = factory.Services.CreateScope())
+        {
+            var dbContext = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+            var snapshots = await dbContext.MarketTopPickSnapshots.ToArrayAsync();
+            foreach (var snapshot in snapshots)
+            {
+                snapshot.ModelEra = TopPicksModelOptions.DefaultLikelyHitV1ModelEra;
+            }
+
+            await dbContext.SaveChangesAsync();
+        }
+
+        var response = await client.GetAsync("/api/debug/performance/top-pick-ledger-capture-audit");
+
+        await EnsureSuccessWithBodyAsync(response);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.False(json.GetProperty("callsExternalApis").GetBoolean());
+        Assert.True(json.GetProperty("readOnly").GetBoolean());
+        Assert.Equal(TopPicksModelOptions.DefaultLikelyHitV1ModelEra, json.GetProperty("currentModelEra").GetString());
+        Assert.Equal("dynamicPublicTopPicksReadModel", json.GetProperty("publicTopPickSource").GetString());
+        var publicTopPickCount = json.GetProperty("publicTopPickCount").GetInt32();
+        Assert.True(publicTopPickCount > 0);
+        Assert.Equal(0, json.GetProperty("recommendationLedgerCountForCurrentSlate").GetInt32());
+        Assert.Equal(publicTopPickCount, json.GetProperty("missingLedgerCount").GetInt32());
+        Assert.Contains(
+            json.GetProperty("missingLedgerByProviderCategory").EnumerateArray(),
+            row => row.GetProperty("providerCategory").GetString() == "Sportsbook" && row.GetProperty("count").GetInt32() > 0);
         Assert.Equal(0, factory.TheOddsAdapter.CallCount);
     }
 
@@ -7750,7 +7911,8 @@ public sealed class SafetyTestApplicationFactory : WebApplicationFactory<Program
             overAmericanPrice: -110,
             underAmericanPrice: -180,
             overDecimalPrice: 1.91m,
-            underDecimalPrice: 1.555556m);
+            underDecimalPrice: 1.555556m,
+            historicalValues: Enumerable.Repeat(5.5m, 42).Concat(Enumerable.Repeat(7.5m, 18)).ToArray());
         await AddMlbDfsSelectionScenarioPlayerAsync(
             dbContext,
             league,

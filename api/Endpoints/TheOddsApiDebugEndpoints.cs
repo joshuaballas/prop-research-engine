@@ -407,6 +407,35 @@ public static partial class TheOddsApiDebugEndpoints
         .WithName("TheOddsApiMlbTopPicksDebug")
         .WithSummary("Read-only lightweight top picks for active persisted The Odds API MLB line-shopping groups.");
 
+        endpoints.MapGet("/api/debug/model/likely-hit/top-pick-consistency-audit", async (
+            string? providerCategory,
+            string? playerName,
+            int? take,
+            int? freshnessMinutes,
+            ApplicationDbContext dbContext,
+            IPredictionProbabilityService probabilityService,
+            ILikelyHitModelService likelyHitModel,
+            IOptions<PredictionGenerationOptions> predictionGenerationOptions,
+            IOptions<TopPicksModelOptions> topPicksModelOptions,
+            CancellationToken cancellationToken) =>
+        {
+            var response = await BuildLikelyHitTopPickConsistencyAuditAsync(
+                providerCategory,
+                playerName,
+                take,
+                freshnessMinutes,
+                dbContext,
+                probabilityService,
+                likelyHitModel,
+                predictionGenerationOptions.Value,
+                topPicksModelOptions.Value,
+                cancellationToken);
+
+            return Results.Ok(response);
+        })
+        .WithName("LikelyHitTopPickConsistencyAudit")
+        .WithSummary("Read-only Likely-Hit public Top Picks consistency audit against persisted selected-side history.");
+
         endpoints.MapGet("/api/debug/model/likely-hit/opportunity-audit", async (
             string? sport,
             string? competition,
@@ -1631,12 +1660,10 @@ public static partial class TheOddsApiDebugEndpoints
             var plannerInterval = plannerConfig.GetPlannerInterval();
             var executionBlockedReason = ResolveScheduledRefreshExecutionBlockedReason(scheduledOptions, plannerConfig);
             var willCallExternalApis = executionBlockedReason is null && currentPlan.Targets.Any(target => target.ShouldRefresh);
-            var postRefreshReadBuffer = scheduledOptions.GetPostRefreshReadBuffer();
-            var nextRefreshDueUtc = scheduledOptions.Enabled
-                ? currentPlan.Targets.Where(target => target.Enabled).Select(target => (DateTimeOffset?)target.NextEligibleRefreshUtc).Min()
-                    ?? currentPlan.NextEligibleRefreshUtc
-                : (DateTimeOffset?)null;
-            var nextDataAvailableEstimateUtc = nextRefreshDueUtc?.Add(postRefreshReadBuffer);
+            var refreshTiming = TheOddsScheduledRefreshTiming.Resolve(
+                scheduledOptions,
+                currentPlan,
+                snapshot);
             var soccerResultImportState = await dbContext.SoccerResultImportStates
                 .AsNoTracking()
                 .SingleOrDefaultAsync(row => row.Source == SoccerResultImportWorker.Source
@@ -1723,11 +1750,22 @@ public static partial class TheOddsApiDebugEndpoints
                 snapshot.LastPlanEstimatedApiCalls,
                 snapshot.LastPlanBudgetAllowed,
                 snapshot.LastPlanProviderAvailable,
-                nextRefreshDueUtc,
-                nextDataAvailableEstimateUtc,
+                refreshTiming.NextRefreshDueUtc,
+                refreshTiming.NextRefreshStartEstimateUtc,
+                refreshTiming.NextHeaderSyncTargetUtc,
+                refreshTiming.NextDataAvailableEstimateUtc,
+                refreshTiming.ConservativeDataAvailableEstimateUtc,
+                refreshTiming.NextRunEstimateUtc,
+                refreshTiming.SecondsUntilNextRefreshStart,
+                refreshTiming.SecondsUntilNextDataAvailable,
+                refreshTiming.SecondsUntilConservativeDataAvailable,
+                refreshTiming.IsRefreshInProgress,
+                refreshTiming.IsOverdue,
+                refreshTiming.ExpectedRefreshDurationSeconds,
+                refreshTiming.EstimateBasis,
                 requireForceLive = scheduledOptions.RequireForceLive,
                 allowScheduledLiveRefresh = scheduledOptions.AllowScheduledLiveRefresh,
-                postRefreshReadBufferSeconds = (int)postRefreshReadBuffer.TotalSeconds,
+                refreshTiming.PostRefreshReadBufferSeconds,
                 currentPlan = new
                 {
                     currentPlan.GeneratedAtUtc,
@@ -1888,12 +1926,10 @@ public static partial class TheOddsApiDebugEndpoints
                 latestSuccessfulRefresh?.CompletedAtUtc ?? latestSuccessfulRefresh?.StartedAtUtc;
             var executionBlockedReason = ResolveScheduledRefreshExecutionBlockedReason(scheduledOptions, plannerConfig);
             var willCallExternalApis = executionBlockedReason is null;
-            var postRefreshReadBuffer = scheduledOptions.GetPostRefreshReadBuffer();
-            var nextRefreshDueUtc = scheduledOptions.Enabled
-                ? currentPlan.NextEligibleRefreshUtc
-                : (DateTimeOffset?)null;
-            var nextDataAvailableEstimateUtc = nextRefreshDueUtc?.Add(postRefreshReadBuffer);
-            var nextRunEstimateUtc = nextDataAvailableEstimateUtc;
+            var refreshTiming = TheOddsScheduledRefreshTiming.Resolve(
+                scheduledOptions,
+                currentPlan,
+                snapshot);
             var status = scheduledOptions.Enabled && snapshot.Status == "disabled"
                 ? "waiting"
                 : snapshot.Status;
@@ -1919,7 +1955,8 @@ public static partial class TheOddsApiDebugEndpoints
                 freshnessMinutes = scheduledOptions.FreshnessMinutes,
                 requireForceLive = scheduledOptions.RequireForceLive,
                 allowScheduledLiveRefresh = scheduledOptions.AllowScheduledLiveRefresh,
-                postRefreshReadBufferSeconds = (int)postRefreshReadBuffer.TotalSeconds,
+                refreshTiming.PostRefreshReadBufferSeconds,
+                refreshTiming.ExpectedRefreshDurationSeconds,
                 plannerIntervalSeconds = plannerConfig.PlannerIntervalSeconds,
                 effectivePlannerIntervalSeconds = (int)plannerInterval.TotalSeconds,
                 workerRegistered = true,
@@ -1999,8 +2036,18 @@ public static partial class TheOddsApiDebugEndpoints
                     budgetSummary = currentPlan.Budget,
                     recommendedAction = currentPlanRecommendedAction
                 },
-                nextRefreshDueUtc,
-                nextDataAvailableEstimateUtc,
+                refreshTiming.NextRefreshDueUtc,
+                refreshTiming.NextRefreshStartEstimateUtc,
+                refreshTiming.NextHeaderSyncTargetUtc,
+                refreshTiming.NextDataAvailableEstimateUtc,
+                refreshTiming.ConservativeDataAvailableEstimateUtc,
+                refreshTiming.NextRunEstimateUtc,
+                refreshTiming.SecondsUntilNextRefreshStart,
+                refreshTiming.SecondsUntilNextDataAvailable,
+                refreshTiming.SecondsUntilConservativeDataAvailable,
+                refreshTiming.IsRefreshInProgress,
+                refreshTiming.IsOverdue,
+                refreshTiming.EstimateBasis,
                 refreshedTargets = latestSuccessfulRefresh is null
                     ? Array.Empty<object>()
                     : new object[]
@@ -2026,7 +2073,6 @@ public static partial class TheOddsApiDebugEndpoints
                             currentPlan.RecommendedAction
                         }
                     },
-                nextRunEstimateUtc,
                 callsExternalApis = false,
                 willCallExternalApis,
                 executionBlockedReason,
@@ -5088,9 +5134,11 @@ public static partial class TheOddsApiDebugEndpoints
             homeTeam = group.HomeTeam,
             awayTeam = group.AwayTeam,
             player = group.Player,
+            playerName = group.Player,
             playerId = group.PlayerId,
             canonicalPlayerId = group.PlayerId,
             normalizedPropType = group.NormalizedPropType,
+            propTypeId = group.PropTypeId,
             line = group.Line,
             marketKey = group.MarketKey,
             marketClassification = group.MarketClassification,
@@ -5165,6 +5213,8 @@ public static partial class TheOddsApiDebugEndpoints
             largestPriceSpread = group.LargestPriceSpread,
             bestSide = group.BestSide,
             bestBookmaker = group.BestBookmaker,
+            provider = group.BestBookmaker ?? entryCompatibility.EntryProvider,
+            bookmaker = group.BestBookmaker,
             bestAmericanPrice = group.BestAmericanPrice,
             bestDecimalPrice = group.BestDecimalPrice,
             bestProbability = group.BestProbability,

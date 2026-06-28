@@ -49,12 +49,165 @@ public static partial class TheOddsApiDebugEndpoints
         return evaluatedRows;
     }
 
+    internal static async Task<JsonObject[]> BuildLikelyHitTopPickRowsAsync(
+        IEnumerable<JsonObject> sourceRows,
+        ILikelyHitModelService likelyHitModel,
+        TopPicksModelOptions topPicksModelOptions,
+        ApplicationDbContext dbContext,
+        int take,
+        CancellationToken cancellationToken)
+    {
+        var clones = sourceRows
+            .Select(row => row.DeepClone().AsObject())
+            .ToArray();
+        var historiesByRow = await LoadLikelyHitHistoriesForRowsAsync(
+            clones,
+            dbContext,
+            cancellationToken);
+        var evaluatedRows = clones
+            .Select(row =>
+            {
+                var history = historiesByRow.GetValueOrDefault(row) ?? Array.Empty<LikelyHitObservation>();
+                var result = ApplyLikelyHitMetadata(row, likelyHitModel, topPicksModelOptions, history);
+                return new { Row = row, Result = result };
+            })
+            .Where(row => row.Result.CanShowAsPick)
+            .GroupBy(row => BuildLikelyHitExposureKey(row.Row), StringComparer.OrdinalIgnoreCase)
+            .Select(group => group
+                .OrderByDescending(row => row.Result.LineUtilityScore ?? decimal.MinValue)
+                .ThenByDescending(row => row.Result.TopPickScore ?? decimal.MinValue)
+                .ThenByDescending(row => row.Result.HitChance ?? decimal.MinValue)
+                .ThenByDescending(row => ReadLikelyHitDecimal(row.Row, "bestDecimalPrice") ?? decimal.MinValue)
+                .First())
+            .OrderByDescending(row => row.Result.TopPickScore ?? decimal.MinValue)
+            .ThenByDescending(row => row.Result.HitChance ?? decimal.MinValue)
+            .ThenBy(row => ReadLikelyHitString(row.Row, "player") ?? string.Empty, StringComparer.OrdinalIgnoreCase)
+            .Take(take)
+            .Select(row => row.Row)
+            .ToArray();
+
+        for (var index = 0; index < evaluatedRows.Length; index++)
+        {
+            evaluatedRows[index]["rank"] = index + 1;
+            evaluatedRows[index]["selectedRecommendedLine"] = true;
+            evaluatedRows[index]["balancedLineSelectionReason"] = "SelectedBestBalancedLineInAlternateLadder";
+        }
+
+        return evaluatedRows;
+    }
+
+    internal static async Task<IReadOnlyDictionary<JsonObject, IReadOnlyList<LikelyHitObservation>>> LoadLikelyHitHistoriesForRowsAsync(
+        IReadOnlyCollection<JsonObject> rows,
+        ApplicationDbContext dbContext,
+        CancellationToken cancellationToken)
+    {
+        if (rows.Count == 0)
+        {
+            return new Dictionary<JsonObject, IReadOnlyList<LikelyHitObservation>>();
+        }
+
+        var propTypes = await dbContext.PropTypes
+            .AsNoTracking()
+            .Select(propType => new
+            {
+                propType.Id,
+                propType.Name,
+                Sport = propType.Sport == null ? null : propType.Sport.Code
+            })
+            .ToListAsync(cancellationToken);
+        var propTypeIdsBySportAndName = propTypes
+            .GroupBy(row => $"{row.Sport ?? string.Empty}|{CanonicalTheOddsPropTypeName(row.Name)}", StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(
+                group => group.Key,
+                group => group.Select(row => row.Id).Distinct().ToArray(),
+                StringComparer.OrdinalIgnoreCase);
+        var propTypeIdsByName = propTypes
+            .GroupBy(row => CanonicalTheOddsPropTypeName(row.Name), StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(
+                group => group.Key,
+                group => group.Select(row => row.Id).Distinct().ToArray(),
+                StringComparer.OrdinalIgnoreCase);
+
+        var seeds = rows
+            .Select(row =>
+            {
+                var sport = ReadLikelyHitString(row, "sport") ?? "MLB";
+                var propType = ReadLikelyHitString(row, "normalizedPropType") ?? string.Empty;
+                var propKey = CanonicalTheOddsPropTypeName(propType);
+                var propTypeIds = propTypeIdsBySportAndName.TryGetValue($"{sport}|{propKey}", out var sportIds)
+                    ? sportIds
+                    : propTypeIdsByName.GetValueOrDefault(propKey) ?? Array.Empty<Guid>();
+                return new LikelyHitHistorySeed(
+                    row,
+                    ReadLikelyHitGuid(row, "canonicalPlayerId") ?? ReadLikelyHitGuid(row, "playerId"),
+                    propTypeIds,
+                    ReadLikelyHitDateOnly(row, "expectedResultDate") ?? ReadLikelyHitDateOnly(row, "eventDate"));
+            })
+            .ToArray();
+
+        var playerIds = seeds
+            .Where(row => row.PlayerId.HasValue)
+            .Select(row => row.PlayerId!.Value)
+            .Distinct()
+            .ToArray();
+        var allPropTypeIds = seeds
+            .SelectMany(row => row.PropTypeIds)
+            .Distinct()
+            .ToArray();
+        var maxDate = seeds
+            .Where(row => row.EventDate.HasValue)
+            .Select(row => row.EventDate!.Value)
+            .DefaultIfEmpty(DateOnly.MaxValue)
+            .Max();
+
+        var resultRows = playerIds.Length == 0 || allPropTypeIds.Length == 0
+            ? []
+            : await dbContext.PropResults
+                .AsNoTracking()
+                .Where(result => playerIds.Contains(result.PlayerId)
+                    && allPropTypeIds.Contains(result.PropTypeId)
+                    && result.ExternalSource == "mlb"
+                    && result.EventDate < maxDate)
+                .Select(result => new
+                {
+                    result.PlayerId,
+                    result.PropTypeId,
+                    result.EventDate,
+                    result.ActualResultValue
+                })
+                .ToListAsync(cancellationToken);
+
+        var historiesByRow = new Dictionary<JsonObject, IReadOnlyList<LikelyHitObservation>>();
+        foreach (var seed in seeds)
+        {
+            var matchingResults = seed.PlayerId.HasValue && seed.PropTypeIds.Length > 0
+                ? resultRows
+                    .Where(resultRow => resultRow.PlayerId == seed.PlayerId.Value
+                        && seed.PropTypeIds.Contains(resultRow.PropTypeId)
+                        && (!seed.EventDate.HasValue || resultRow.EventDate < seed.EventDate.Value))
+                    .OrderByDescending(resultRow => resultRow.EventDate)
+                    .Select(resultRow => new LikelyHitObservation(
+                        resultRow.EventDate,
+                        resultRow.ActualResultValue,
+                        ReadLikelyHitString(seed.Row, "competition"),
+                        SameCompetition: true,
+                        Role: "Normal"))
+                    .ToArray()
+                : Array.Empty<LikelyHitObservation>();
+
+            historiesByRow[seed.Row] = matchingResults;
+        }
+
+        return historiesByRow;
+    }
+
     internal static LikelyHitModelResult ApplyLikelyHitMetadata(
         JsonObject row,
         ILikelyHitModelService likelyHitModel,
-        TopPicksModelOptions topPicksModelOptions)
+        TopPicksModelOptions topPicksModelOptions,
+        IReadOnlyList<LikelyHitObservation>? history = null)
     {
-        var input = BuildLikelyHitInput(row);
+        var input = BuildLikelyHitInput(row, history);
         var result = likelyHitModel.Evaluate(input);
 
         row["modelVersion"] = result.ModelVersion;
@@ -110,6 +263,17 @@ public static partial class TheOddsApiDebugEndpoints
         row["reliabilityThreshold"] = result.ReliabilityThreshold;
         row["valueScore"] = result.ValueScore;
         row["freshnessScore"] = result.FreshnessScore;
+        row["selectedSideHistoryConsistencyGuardApplied"] = result.SelectedSideHistoryConsistencyGuardApplied;
+        row["selectedSideHistoryConsistencyGuardPassed"] = result.SelectedSideHistoryConsistencyGuardPassed;
+        row["selectedSideHistoryConsistencyCodes"] = new JsonArray(result.SelectedSideHistoryConsistencyCodes.Select(code => JsonValue.Create(code)).ToArray<JsonNode?>());
+        row["fatalSelectedSideHistoryConsistencyCodes"] = new JsonArray(result.FatalSelectedSideHistoryConsistencyCodes.Select(code => JsonValue.Create(code)).ToArray<JsonNode?>());
+        row["selectedSideHistoryConsistencyDiagnosis"] = result.SelectedSideHistoryConsistencyDiagnosis;
+        row["selectedSideChartHitRate"] = result.SelectedSideChartHitRate;
+        row["selectedSideChartSampleSize"] = result.SelectedSideChartSampleSize;
+        row["selectedSideChartClearedCount"] = result.SelectedSideChartClearedCount;
+        row["selectedSideRecent5Average"] = result.SelectedSideRecent5Average;
+        row["selectedSideRecent10Average"] = result.SelectedSideRecent10Average;
+        row["selectedSideSeasonAverage"] = result.SelectedSideSeasonAverage;
 
         if (topPicksModelOptions.IsLikelyHitV1Enabled && result.HitChance.HasValue)
         {
@@ -252,6 +416,202 @@ public static partial class TheOddsApiDebugEndpoints
                 string.Equals(ReadLikelyHitString(row, "priceGateReason"), "SportsbookPriceTooLongshotForBalancedTopPick", StringComparison.OrdinalIgnoreCase)),
             sportsbookRowsBlockedBySuspiciousMarketGap = rows.Count(row =>
                 ReadLikelyHitString(row, "balancedLineSelectionReason")?.Contains("SportsbookSuspiciousModelMarketGap", StringComparison.OrdinalIgnoreCase) == true)
+        };
+    }
+
+    internal static async Task<object> BuildLikelyHitTopPickConsistencyAuditAsync(
+        string? providerCategory,
+        string? playerName,
+        int? take,
+        int? freshnessMinutes,
+        ApplicationDbContext dbContext,
+        IPredictionProbabilityService probabilityService,
+        ILikelyHitModelService likelyHitModel,
+        PredictionGenerationOptions selectionOptions,
+        TopPicksModelOptions topPicksModelOptions,
+        CancellationToken cancellationToken)
+    {
+        var generatedAtUtc = DateTimeOffset.UtcNow;
+        var requestedTake = Math.Clamp(take ?? 100, 1, 500);
+        var lifecycleFreshnessMinutes = Math.Clamp(freshnessMinutes ?? DefaultTheOddsLineShoppingFreshnessMinutes, 1, 1440);
+        var normalizedProviderCategory = NormalizePublicProviderCategoryFilter(providerCategory);
+        var platformProps = await LoadScopedTheOddsPlatformPropsAsync(dbContext, normalizedProviderCategory, cancellationToken);
+        var activePlatformProps = platformProps
+            .Where(row =>
+            {
+                var lifecycle = BuildTheOddsLineShoppingLifecycle(
+                    row.EventStartTime,
+                    row.ObservedAt,
+                    generatedAtUtc,
+                    lifecycleFreshnessMinutes);
+                return string.Equals(lifecycle.Status, "Active", StringComparison.OrdinalIgnoreCase)
+                    && !lifecycle.IsStale
+                    && !lifecycle.IsExpired;
+            })
+            .ToList();
+        var probabilityAnalysis = await LoadProbabilityAnalysisAsync(
+            runId: null,
+            activePlatformProps.Select(row => row.PropId).Distinct().ToArray(),
+            probabilityService,
+            cancellationToken);
+        var freshnessCutoff = generatedAtUtc.AddHours(-FreshnessWindowHours);
+        var rows = BuildTheOddsLineShoppingRows(activePlatformProps, probabilityAnalysis, freshnessCutoff);
+        var groups = BuildTheOddsLineShoppingGroups(rows, generatedAtUtc, lifecycleFreshnessMinutes, selectionOptions);
+        var sourceRows = groups
+            .Select(group => JsonSerializer.SerializeToNode(ToLineShoppingResponseGroup(group, includeBookmakerPrices: false)) as JsonObject)
+            .Where(row => row is not null)
+            .Select(row => row!)
+            .Where(row => string.IsNullOrWhiteSpace(playerName) ||
+                (ReadLikelyHitString(row, "player") ?? string.Empty).Contains(playerName, StringComparison.OrdinalIgnoreCase))
+            .ToArray();
+        var historiesByRow = await LoadLikelyHitHistoriesForRowsAsync(sourceRows, dbContext, cancellationToken);
+        var evaluated = sourceRows
+            .Select(row =>
+            {
+                var clone = row.DeepClone().AsObject();
+                var history = historiesByRow.GetValueOrDefault(row) ?? Array.Empty<LikelyHitObservation>();
+                var result = ApplyLikelyHitMetadata(clone, likelyHitModel, topPicksModelOptions, history);
+                return new LikelyHitReplayEvaluatedRow(clone, result);
+            })
+            .ToArray();
+        var selectedPublicTopPickRows = evaluated
+            .Where(row => row.Result.CanShowAsPick)
+            .GroupBy(row => BuildLikelyHitExposureKey(row.Row), StringComparer.OrdinalIgnoreCase)
+            .Select(group => group
+                .OrderByDescending(row => row.Result.LineUtilityScore ?? decimal.MinValue)
+                .ThenByDescending(row => row.Result.TopPickScore ?? decimal.MinValue)
+                .ThenByDescending(row => row.Result.HitChance ?? decimal.MinValue)
+                .ThenByDescending(row => ReadLikelyHitDecimal(row.Row, "bestDecimalPrice") ?? decimal.MinValue)
+                .First())
+            .OrderByDescending(row => row.Result.TopPickScore ?? decimal.MinValue)
+            .ThenByDescending(row => row.Result.HitChance ?? decimal.MinValue)
+            .Take(requestedTake)
+            .ToArray();
+        var selectedSet = selectedPublicTopPickRows
+            .Select(row => row.Row)
+            .ToHashSet(ReferenceEqualityComparer.Instance);
+        var suspiciousRows = evaluated
+            .Where(row => row.Result.SelectedSideHistoryConsistencyCodes.Count > 0)
+            .ToArray();
+        var fatalRows = evaluated
+            .Where(row => row.Result.FatalSelectedSideHistoryConsistencyCodes.Count > 0)
+            .ToArray();
+
+        return new
+        {
+            generatedAtUtc,
+            callsExternalApis = false,
+            readOnly = true,
+            writesRows = false,
+            currentModelEra = ResolveCurrentPublicModelEra(topPicksModelOptions),
+            modelVersion = LikelyHitModelService.ModelVersion,
+            probabilityModelVersion = LikelyHitModelService.ProbabilityModelVersion,
+            recommendationContractVersion = LikelyHitModelService.RecommendationContractVersion,
+            filters = new
+            {
+                sport = "MLB",
+                providerCategory = normalizedProviderCategory,
+                playerName,
+                take = requestedTake,
+                freshnessMinutes = lifecycleFreshnessMinutes
+            },
+            totalRowsEvaluated = evaluated.Length,
+            totalPublicTopPicks = selectedPublicTopPickRows.Length,
+            suspiciousCount = suspiciousRows.Length,
+            fatalMismatchCount = fatalRows.Length,
+            missingSelectedSideHistoryCount = evaluated.Count(row => !row.Result.SelectedSideHistoryConsistencyGuardApplied),
+            consistencyGuardEnabled = topPicksModelOptions.EnableSelectedSideHistoryConsistencyGuard,
+            byPropType = BuildLikelyHitConsistencyBreakdown(evaluated, row => ReadLikelyHitString(row.Row, "normalizedPropType") ?? "Unknown"),
+            byProviderCategory = BuildLikelyHitConsistencyBreakdown(evaluated, row => ReadLikelyHitString(row.Row, "providerCategory") ?? "Unknown"),
+            byProvider = BuildLikelyHitConsistencyBreakdown(evaluated, row =>
+                ReadLikelyHitString(row.Row, "bestBookmaker")
+                    ?? ReadLikelyHitString(row.Row, "bookmaker")
+                    ?? ReadLikelyHitString(row.Row, "provider")
+                    ?? ReadLikelyHitString(row.Row, "entryProvider")
+                    ?? "Unknown"),
+            examples = evaluated
+                .OrderByDescending(row => row.Result.FatalSelectedSideHistoryConsistencyCodes.Count)
+                .ThenByDescending(row => row.Result.SelectedSideHistoryConsistencyCodes.Count)
+                .ThenByDescending(row => row.Result.HitChance ?? decimal.MinValue)
+                .Take(requestedTake)
+                .Select(row => ToLikelyHitConsistencyAuditRow(row.Row, row.Result, selectedSet.Contains(row.Row)))
+                .ToArray()
+        };
+    }
+
+    private static object[] BuildLikelyHitConsistencyBreakdown(
+        IReadOnlyCollection<LikelyHitReplayEvaluatedRow> rows,
+        Func<LikelyHitReplayEvaluatedRow, string> keySelector)
+    {
+        return rows
+            .GroupBy(keySelector, StringComparer.OrdinalIgnoreCase)
+            .Select(group =>
+            {
+                var groupedRows = group.ToArray();
+                return new
+                {
+                    key = group.Key,
+                    total = groupedRows.Length,
+                    suspicious = groupedRows.Count(row => row.Result.SelectedSideHistoryConsistencyCodes.Count > 0),
+                    fatal = groupedRows.Count(row => row.Result.FatalSelectedSideHistoryConsistencyCodes.Count > 0),
+                    guardApplied = groupedRows.Count(row => row.Result.SelectedSideHistoryConsistencyGuardApplied),
+                    averageHitChance = AverageLikelyHitDecimal(groupedRows.Select(row => row.Result.HitChance)),
+                    averageRecent10HitRate = AverageLikelyHitDecimal(groupedRows.Select(row => row.Result.Recent10HitRate)),
+                    averageChartHitRate = AverageLikelyHitDecimal(groupedRows.Select(row => row.Result.SelectedSideChartHitRate))
+                };
+            })
+            .OrderByDescending(row => row.fatal)
+            .ThenByDescending(row => row.suspicious)
+            .ThenByDescending(row => row.total)
+            .ThenBy(row => row.key)
+            .ToArray<object>();
+    }
+
+    private static object ToLikelyHitConsistencyAuditRow(
+        JsonObject row,
+        LikelyHitModelResult result,
+        bool publicTopPick)
+    {
+        return new
+        {
+            publicTopPick,
+            player = ReadLikelyHitString(row, "player"),
+            playerId = ReadLikelyHitString(row, "playerId"),
+            canonicalPlayerId = ReadLikelyHitString(row, "canonicalPlayerId"),
+            propType = ReadLikelyHitString(row, "normalizedPropType"),
+            selectedSide = ReadLikelyHitString(row, "bestSide"),
+            line = ReadLikelyHitDecimal(row, "line"),
+            providerCategory = ReadLikelyHitString(row, "providerCategory"),
+            provider = ReadLikelyHitString(row, "bestBookmaker") ?? ReadLikelyHitString(row, "provider") ?? ReadLikelyHitString(row, "entryProvider"),
+            hitChance = result.HitChance,
+            rawWeightedProbability = result.RawWeightedProbability,
+            smoothedProbability = result.SmoothedProbability,
+            priorProbability = result.PriorProbability,
+            priorWeight = result.PriorWeight,
+            recentModifier = result.RecentModifier,
+            uncertaintyPenalty = result.UncertaintyPenalty,
+            effectiveSampleSize = result.EffectiveSampleSize,
+            recent5HitRate = result.Recent5HitRate,
+            recent10HitRate = result.Recent10HitRate,
+            seasonHitRate = result.SeasonHitRate,
+            longHistoryHitRate = result.LongHistoryHitRate,
+            chartHitRate = result.SelectedSideChartHitRate,
+            chartSampleSize = result.SelectedSideChartSampleSize,
+            chartClearedCount = result.SelectedSideChartClearedCount,
+            recent5Average = result.SelectedSideRecent5Average,
+            recent10Average = result.SelectedSideRecent10Average,
+            seasonAverage = result.SelectedSideSeasonAverage,
+            selectedSideHistoryConsistencyGuardApplied = result.SelectedSideHistoryConsistencyGuardApplied,
+            selectedSideHistoryConsistencyGuardPassed = result.SelectedSideHistoryConsistencyGuardPassed,
+            selectedSideHistoryConsistencyCodes = result.SelectedSideHistoryConsistencyCodes,
+            fatalSelectedSideHistoryConsistencyCodes = result.FatalSelectedSideHistoryConsistencyCodes,
+            consistencyDiagnosis = result.SelectedSideHistoryConsistencyDiagnosis,
+            fatalConflictCodes = result.FatalConflictCodes,
+            canShowAsPick = result.CanShowAsPick,
+            topPickScore = result.TopPickScore,
+            lineUtilityScore = result.LineUtilityScore,
+            modelEra = ReadLikelyHitString(row, "modelEra"),
+            usesAggregateProbability = result.UsesAggregateProbability
         };
     }
 
@@ -2215,6 +2575,12 @@ public static partial class TheOddsApiDebugEndpoints
             ? guid
             : null;
     }
+
+    private sealed record LikelyHitHistorySeed(
+        JsonObject Row,
+        Guid? PlayerId,
+        Guid[] PropTypeIds,
+        DateOnly? EventDate);
 
     private sealed record LikelyHitReplayEvaluatedRow(JsonObject Row, LikelyHitModelResult Result);
 

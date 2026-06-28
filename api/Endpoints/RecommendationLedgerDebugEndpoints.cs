@@ -1,7 +1,11 @@
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
 using SportsBetting.Api.Data;
 using SportsBetting.Api.Models;
+using SportsBetting.Api.Predictions;
+using System.Globalization;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 
 namespace SportsBetting.Api.Endpoints;
 
@@ -28,6 +32,226 @@ public static class RecommendationLedgerDebugEndpoints
 
     public static IEndpointRouteBuilder MapRecommendationLedgerDebugEndpoints(this IEndpointRouteBuilder endpoints)
     {
+        endpoints.MapGet("/api/debug/performance/top-pick-ledger-capture-audit", async (
+            DateOnly? date,
+            string? modelEra,
+            IPredictionProbabilityService probabilityService,
+            ILikelyHitModelService likelyHitModel,
+            IOptions<PredictionGenerationOptions> predictionGenerationOptions,
+            IOptions<TopPicksModelOptions> topPicksModelOptions,
+            ApplicationDbContext dbContext,
+            CancellationToken cancellationToken) =>
+        {
+            var generatedAtUtc = DateTimeOffset.UtcNow;
+            var currentModelEra = string.IsNullOrWhiteSpace(modelEra)
+                ? TheOddsApiDebugEndpoints.ResolveCurrentPublicModelEra(topPicksModelOptions.Value)
+                : modelEra.Trim();
+
+            var publicTopPicksResponse = await TheOddsApiDebugEndpoints.BuildMlbTopPicksResponseAsync(
+                runId: null,
+                take: 500,
+                freshnessMinutes: null,
+                providerCategory: null,
+                dbContext,
+                probabilityService,
+                likelyHitModel,
+                predictionGenerationOptions.Value,
+                topPicksModelOptions.Value,
+                cancellationToken);
+            var publicTopPickRows = publicTopPicksResponse.TopPicks
+                .Select(row => JsonSerializer.SerializeToNode(row) as JsonObject)
+                .Where(row => row is not null)
+                .Select(row => row!)
+                .Where(row =>
+                    !date.HasValue ||
+                    (ReadLedgerAuditDate(row, "expectedResultDate") ?? ReadLedgerAuditDate(row, "eventDate")) == date.Value)
+                .ToArray();
+            var targetDates = publicTopPickRows
+                .Select(row => ReadLedgerAuditDate(row, "expectedResultDate") ?? ReadLedgerAuditDate(row, "eventDate"))
+                .Where(row => row.HasValue)
+                .Select(row => row!.Value)
+                .Distinct()
+                .OrderBy(row => row)
+                .ToArray();
+            if (date.HasValue && !targetDates.Contains(date.Value))
+            {
+                targetDates = [date.Value];
+            }
+
+            var latestPersistedTopPickSnapshotDate = await dbContext.MarketTopPickSnapshots
+                .AsNoTracking()
+                .Where(row => row.Sport == "MLB" && row.ModelEra == currentModelEra)
+                .OrderByDescending(row => row.SlateDate)
+                .Select(row => (DateOnly?)row.SlateDate)
+                .FirstOrDefaultAsync(cancellationToken);
+            var persistedTopPickSnapshotCount = latestPersistedTopPickSnapshotDate.HasValue
+                ? await dbContext.MarketTopPickSnapshots
+                    .AsNoTracking()
+                    .CountAsync(row =>
+                        row.Sport == "MLB" &&
+                        row.ModelEra == currentModelEra &&
+                        row.SlateDate == latestPersistedTopPickSnapshotDate.Value,
+                        cancellationToken)
+                : 0;
+            var ledgerRows = targetDates.Length > 0
+                ? await dbContext.RecommendationSnapshots
+                    .AsNoTracking()
+                    .Where(row =>
+                        row.Sport == "MLB" &&
+                        row.ModelEra == currentModelEra &&
+                        targetDates.Contains(row.ExpectedResultDate))
+                    .OrderByDescending(row => row.CapturedAtUtc)
+                    .ThenByDescending(row => row.RankingScore)
+                    .ToArrayAsync(cancellationToken)
+                : [];
+
+            var rawLedgerKeys = ledgerRows
+                .Select(row => new { Key = BuildLedgerCaptureAuditKey(row), Row = row })
+                .Where(row => !string.IsNullOrWhiteSpace(row.Key))
+                .ToArray();
+            var eligibleLedgerRows = ledgerRows
+                .Select(row => new { Row = row, ExclusionReason = GetLedgerCapturePublicPerformanceExclusionReason(row) })
+                .Where(row => row.ExclusionReason is null)
+                .Select(row => row.Row)
+                .ToArray();
+            var eligibleLedgerKeys = eligibleLedgerRows
+                .Select(row => new { Key = BuildLedgerCaptureAuditKey(row), Row = row })
+                .Where(row => !string.IsNullOrWhiteSpace(row.Key))
+                .ToArray();
+            var dedupedEligibleLedgerKeys = eligibleLedgerKeys
+                .GroupBy(row => row.Key, StringComparer.OrdinalIgnoreCase)
+                .Select(group => group
+                    .OrderBy(row => row.Row.FirstSeenAtUtc)
+                    .ThenBy(row => row.Row.CapturedAtUtc)
+                    .ThenBy(row => row.Row.Id)
+                    .First())
+                .ToArray();
+            var eligibleLedgerKeySet = dedupedEligibleLedgerKeys
+                .Select(row => row.Key)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var topPickRowsWithKeys = publicTopPickRows
+                .Select(row => new { Key = BuildLedgerCaptureAuditKey(row), Row = row })
+                .Where(row => !string.IsNullOrWhiteSpace(row.Key))
+                .ToArray();
+            var publicKeySet = topPickRowsWithKeys
+                .Select(row => row.Key)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var missingLedgerRows = topPickRowsWithKeys
+                .Where(row => !eligibleLedgerKeySet.Contains(row.Key))
+                .ToArray();
+            var duplicateRawLedgerGroups = rawLedgerKeys
+                .GroupBy(row => row.Key, StringComparer.OrdinalIgnoreCase)
+                .Where(group => group.Count() > 1)
+                .ToArray();
+            var duplicateEligibleLedgerGroups = eligibleLedgerKeys
+                .GroupBy(row => row.Key, StringComparer.OrdinalIgnoreCase)
+                .Where(group => group.Count() > 1)
+                .ToArray();
+            var ledgerRowsPublicAtCaptureButNotCurrentlyPublic = dedupedEligibleLedgerKeys
+                .Where(row => !publicKeySet.Contains(row.Key))
+                .ToArray();
+            var excludedLedgerRows = ledgerRows
+                .Select(row => new { Row = row, ExclusionReason = GetLedgerCapturePublicPerformanceExclusionReason(row) })
+                .Where(row => row.ExclusionReason is not null)
+                .ToArray();
+
+            return Results.Ok(new
+            {
+                generatedAtUtc,
+                callsExternalApis = false,
+                readOnly = true,
+                currentModelEra,
+                targetDate = date,
+                targetDates,
+                publicTopPickSource = "dynamicPublicTopPicksReadModel",
+                latestPersistedTopPickSnapshotDate,
+                persistedTopPickSnapshotCount,
+                currentDynamicPublicTopPickCount = publicTopPickRows.Length,
+                publicTopPickCount = publicTopPickRows.Length,
+                publicTopPickCountByProviderCategory = publicTopPickRows
+                    .GroupBy(row => ReadLedgerAuditString(row, "providerCategory") ?? "Unknown", StringComparer.OrdinalIgnoreCase)
+                    .Select(group => new { providerCategory = group.Key, count = group.Count() })
+                    .OrderBy(row => row.providerCategory)
+                    .ToArray(),
+                rawRecommendationLedgerCountForSlate = ledgerRows.Length,
+                recommendationLedgerCountForCurrentSlate = ledgerRows.Length,
+                recommendationLedgerCountByProviderCategory = ledgerRows
+                    .GroupBy(row => string.IsNullOrWhiteSpace(row.ProviderCategory) ? "Unknown" : row.ProviderCategory, StringComparer.OrdinalIgnoreCase)
+                    .Select(group => new { providerCategory = group.Key, count = group.Count() })
+                    .OrderBy(row => row.providerCategory)
+                    .ToArray(),
+                eligiblePublicPerformanceLedgerCountForSlate = dedupedEligibleLedgerKeys.Length,
+                eligiblePublicPerformanceLedgerCountByProviderCategory = dedupedEligibleLedgerKeys
+                    .GroupBy(row => string.IsNullOrWhiteSpace(row.Row.ProviderCategory) ? "Unknown" : row.Row.ProviderCategory, StringComparer.OrdinalIgnoreCase)
+                    .Select(group => new { providerCategory = group.Key, count = group.Count() })
+                    .OrderBy(row => row.providerCategory)
+                    .ToArray(),
+                currentDynamicPublicTopPickCoveragePercent = topPickRowsWithKeys.Length == 0
+                    ? (decimal?)null
+                    : Math.Round(topPickRowsWithKeys.Count(row => eligibleLedgerKeySet.Contains(row.Key)) / (decimal)topPickRowsWithKeys.Length, 4),
+                ledgerCaptureCoveragePercent = topPickRowsWithKeys.Length == 0
+                    ? (decimal?)null
+                    : Math.Round(topPickRowsWithKeys.Count(row => eligibleLedgerKeySet.Contains(row.Key)) / (decimal)topPickRowsWithKeys.Length, 4),
+                currentDynamicPublicTopPickMissingLedgerCount = missingLedgerRows.Length,
+                missingLedgerCount = missingLedgerRows.Length,
+                missingLedgerByProviderCategory = missingLedgerRows
+                    .GroupBy(row => ReadLedgerAuditString(row.Row, "providerCategory") ?? "Unknown", StringComparer.OrdinalIgnoreCase)
+                    .Select(group => new { providerCategory = group.Key, count = group.Count() })
+                    .OrderBy(row => row.providerCategory)
+                    .ToArray(),
+                missingLedgerExamples = missingLedgerRows
+                    .Take(20)
+                    .Select(row => ToLedgerCaptureAuditTopPickExample(row.Row, row.Key))
+                    .ToArray(),
+                duplicateRawLedgerCount = duplicateRawLedgerGroups.Sum(group => group.Count() - 1),
+                duplicateEligibleLedgerCount = duplicateEligibleLedgerGroups.Sum(group => group.Count() - 1),
+                duplicateLedgerCount = duplicateRawLedgerGroups.Sum(group => group.Count() - 1),
+                duplicateLedgerExamples = duplicateRawLedgerGroups
+                    .Take(10)
+                    .Select(group => new
+                    {
+                        key = group.Key,
+                        count = group.Count(),
+                        examples = group.Take(3).Select(row => ToLedgerCaptureAuditLedgerExample(row.Row, row.Key)).ToArray()
+                    })
+                    .ToArray(),
+                ledgerRowsPublicAtCaptureButNotCurrentlyPublicCount = ledgerRowsPublicAtCaptureButNotCurrentlyPublic.Length,
+                ledgerRowsNotPublicAtCaptureExcludedCount = excludedLedgerRows.Length,
+                invalidSideCount = ledgerRows.Count(row => !IsLedgerCaptureOverUnderSide(row.Side)),
+                missingBookmakerCount = ledgerRows.Count(HasMissingLedgerCaptureProviderKey),
+                staleAtCaptureCount = ledgerRows.Count(IsStaleLedgerCaptureRow),
+                excludedLedgerExamplesByReason = excludedLedgerRows
+                    .GroupBy(row => row.ExclusionReason!, StringComparer.OrdinalIgnoreCase)
+                    .Select(group => new
+                    {
+                        reason = group.Key,
+                        count = group.Count(),
+                        examples = group.Take(5).Select(row => ToLedgerCaptureAuditLedgerExample(row.Row, BuildLedgerCaptureAuditKey(row.Row))).ToArray()
+                    })
+                    .OrderByDescending(row => row.count)
+                    .ThenBy(row => row.reason)
+                    .ToArray(),
+                ledgerRowsNotInCurrentPublicTopPicks = ledgerRowsPublicAtCaptureButNotCurrentlyPublic.Length,
+                ledgerRowsNotInCurrentPublicTopPickExamples = ledgerRowsPublicAtCaptureButNotCurrentlyPublic
+                    .Take(20)
+                    .Select(row => ToLedgerCaptureAuditLedgerExample(row.Row, row.Key))
+                    .ToArray(),
+                keyFields = new[]
+                {
+                    "expectedResultDate/slateDate",
+                    "eventId",
+                    "canonicalPlayerId/playerId",
+                    "propTypeId",
+                    "side",
+                    "line",
+                    "providerCategory",
+                    "bookmaker"
+                }
+            });
+        })
+        .WithName("TopPickLedgerCaptureAudit")
+        .WithSummary("Read-only audit comparing current public Top Picks with the recommendation_snapshots performance ledger.");
+
         endpoints.MapGet("/api/debug/recommendations/ledger/audit", async (
             DateOnly? fromDate,
             DateOnly? toDate,
@@ -2549,6 +2773,255 @@ public static class RecommendationLedgerDebugEndpoints
         return value.EnumerateArray()
             .FirstOrDefault(item => item.ValueKind == JsonValueKind.String)
             .GetString();
+    }
+
+    private static string BuildLedgerCaptureAuditKey(MarketTopPickSnapshot snapshot)
+    {
+        var expectedDate = ExtractDate(snapshot.DetailsJson, "expectedResultDate") ?? snapshot.SlateDate;
+        var playerIdentity = ExtractGuid(snapshot.DetailsJson, "canonicalPlayerId")?.ToString("D")
+            ?? ExtractGuid(snapshot.DetailsJson, "playerId")?.ToString("D")
+            ?? RecommendationLedgerWriter.NormalizeKey(snapshot.Player);
+        var propTypeIdentity = ExtractGuid(snapshot.DetailsJson, "propTypeId")?.ToString("D")
+            ?? RecommendationLedgerWriter.NormalizeKey(snapshot.PropType);
+
+        return string.Join("|", new[]
+        {
+            snapshot.Sport.Trim().ToUpperInvariant(),
+            expectedDate.ToString("yyyy-MM-dd"),
+            snapshot.EventId?.Trim().ToLowerInvariant() ?? string.Empty,
+            playerIdentity,
+            propTypeIdentity,
+            RecommendationLedgerWriter.NormalizeKey(snapshot.BestSide),
+            snapshot.Line.ToString("0.####"),
+            RecommendationLedgerWriter.NormalizeKey(snapshot.ProviderCategory),
+            RecommendationLedgerWriter.NormalizeKey(snapshot.BestBookmaker ?? snapshot.Bookmaker ?? snapshot.Provider)
+        });
+    }
+
+    private static string BuildLedgerCaptureAuditKey(JsonObject publicTopPick)
+    {
+        var expectedDate = ReadLedgerAuditDate(publicTopPick, "expectedResultDate")
+            ?? ReadLedgerAuditDate(publicTopPick, "eventDate")
+            ?? default;
+        var playerIdentity = ReadLedgerAuditString(publicTopPick, "canonicalPlayerId")
+            ?? ReadLedgerAuditString(publicTopPick, "playerId")
+            ?? RecommendationLedgerWriter.NormalizeKey(ReadLedgerAuditString(publicTopPick, "playerName")
+                ?? ReadLedgerAuditString(publicTopPick, "player"));
+        var propTypeIdentity = ReadLedgerAuditString(publicTopPick, "propTypeId")
+            ?? RecommendationLedgerWriter.NormalizeKey(ReadLedgerAuditString(publicTopPick, "normalizedPropType")
+                ?? ReadLedgerAuditString(publicTopPick, "propType"));
+        var side = ReadLedgerAuditString(publicTopPick, "bestSide")
+            ?? ReadLedgerAuditString(publicTopPick, "selectedSide")
+            ?? ReadLedgerAuditString(publicTopPick, "side");
+        var bookmaker = ReadLedgerAuditString(publicTopPick, "bookmaker")
+            ?? ReadLedgerAuditString(publicTopPick, "bestBookmaker")
+            ?? ReadLedgerAuditString(publicTopPick, "provider");
+
+        return string.Join("|", new[]
+        {
+            (ReadLedgerAuditString(publicTopPick, "sport") ?? "MLB").Trim().ToUpperInvariant(),
+            expectedDate.ToString("yyyy-MM-dd"),
+            ReadLedgerAuditString(publicTopPick, "eventId")?.Trim().ToLowerInvariant() ?? string.Empty,
+            playerIdentity,
+            propTypeIdentity,
+            RecommendationLedgerWriter.NormalizeKey(side),
+            (ReadLedgerAuditDecimal(publicTopPick, "line") ?? 0m).ToString("0.####"),
+            RecommendationLedgerWriter.NormalizeKey(ReadLedgerAuditString(publicTopPick, "providerCategory")),
+            RecommendationLedgerWriter.NormalizeKey(bookmaker)
+        });
+    }
+
+    private static string BuildLedgerCaptureAuditKey(RecommendationSnapshot snapshot)
+    {
+        var playerIdentity = snapshot.CanonicalPlayerId?.ToString("D")
+            ?? RecommendationLedgerWriter.NormalizeKey(snapshot.PlayerName);
+        var propTypeIdentity = snapshot.PropTypeId?.ToString("D")
+            ?? RecommendationLedgerWriter.NormalizeKey(snapshot.PropType);
+
+        return string.Join("|", new[]
+        {
+            snapshot.Sport.Trim().ToUpperInvariant(),
+            snapshot.ExpectedResultDate.ToString("yyyy-MM-dd"),
+            snapshot.EventId?.Trim().ToLowerInvariant() ?? string.Empty,
+            playerIdentity,
+            propTypeIdentity,
+            RecommendationLedgerWriter.NormalizeKey(snapshot.Side),
+            snapshot.Line.ToString("0.####"),
+            RecommendationLedgerWriter.NormalizeKey(snapshot.ProviderCategory),
+            RecommendationLedgerWriter.NormalizeKey(snapshot.Bookmaker ?? snapshot.Provider ?? snapshot.EntryProvider)
+        });
+    }
+
+    private static object ToLedgerCaptureAuditTopPickExample(MarketTopPickSnapshot snapshot, string key)
+    {
+        return new
+        {
+            key,
+            snapshotId = snapshot.Id,
+            refreshRunId = snapshot.TheOddsRefreshRunId,
+            snapshot.Sport,
+            snapshot.SlateDate,
+            snapshot.ProviderCategory,
+            playerName = snapshot.Player,
+            provider = snapshot.Provider,
+            bookmaker = snapshot.Bookmaker ?? snapshot.BestBookmaker,
+            propType = snapshot.PropType,
+            side = snapshot.BestSide,
+            snapshot.Line,
+            snapshot.BestProbability,
+            snapshot.BestEstimatedEv,
+            snapshot.ModelEra,
+            snapshot.GeneratedAtUtc
+        };
+    }
+
+    private static object ToLedgerCaptureAuditTopPickExample(JsonObject publicTopPick, string key)
+    {
+        return new
+        {
+            key,
+            sport = ReadLedgerAuditString(publicTopPick, "sport") ?? "MLB",
+            expectedResultDate = ReadLedgerAuditDate(publicTopPick, "expectedResultDate")
+                ?? ReadLedgerAuditDate(publicTopPick, "eventDate"),
+            providerCategory = ReadLedgerAuditString(publicTopPick, "providerCategory"),
+            playerName = ReadLedgerAuditString(publicTopPick, "playerName")
+                ?? ReadLedgerAuditString(publicTopPick, "player"),
+            provider = ReadLedgerAuditString(publicTopPick, "provider"),
+            bookmaker = ReadLedgerAuditString(publicTopPick, "bookmaker")
+                ?? ReadLedgerAuditString(publicTopPick, "bestBookmaker"),
+            propType = ReadLedgerAuditString(publicTopPick, "normalizedPropType")
+                ?? ReadLedgerAuditString(publicTopPick, "propType"),
+            side = ReadLedgerAuditString(publicTopPick, "bestSide")
+                ?? ReadLedgerAuditString(publicTopPick, "selectedSide")
+                ?? ReadLedgerAuditString(publicTopPick, "side"),
+            line = ReadLedgerAuditDecimal(publicTopPick, "line"),
+            hitChance = ReadLedgerAuditDecimal(publicTopPick, "hitChance")
+                ?? ReadLedgerAuditDecimal(publicTopPick, "selectedSideProbability"),
+            displayExpectedValue = ReadLedgerAuditDecimal(publicTopPick, "displayExpectedValue"),
+            modelEra = ReadLedgerAuditString(publicTopPick, "modelEra")
+        };
+    }
+
+    private static object ToLedgerCaptureAuditLedgerExample(RecommendationSnapshot snapshot, string key)
+    {
+        return new
+        {
+            key,
+            recommendationSnapshotId = snapshot.Id,
+            snapshot.RefreshRunId,
+            snapshot.Sport,
+            snapshot.ExpectedResultDate,
+            snapshot.ProviderCategory,
+            playerName = snapshot.PlayerName,
+            provider = snapshot.Provider,
+            bookmaker = snapshot.Bookmaker,
+            propType = snapshot.PropType,
+            side = snapshot.Side,
+            snapshot.Line,
+            hitChance = snapshot.HitChance,
+            estimatedEv = snapshot.EstimatedEv,
+            snapshot.ModelEra,
+            snapshot.IsCandidate,
+            snapshot.IsTopPick,
+            snapshot.IsActionableForUser,
+            snapshot.LifecycleStatus
+        };
+    }
+
+    private static string? GetLedgerCapturePublicPerformanceExclusionReason(RecommendationSnapshot row)
+    {
+        if (row.IsExcludedFromPerformance)
+        {
+            return string.IsNullOrWhiteSpace(row.PerformanceExclusionReason)
+                ? "ExplicitPerformanceExclusion"
+                : row.PerformanceExclusionReason;
+        }
+
+        if (!row.IsTopPick)
+        {
+            return row.IsCandidate ? "LegacyCandidateInCurrentEra" : "NotPublicTopPickAtCapture";
+        }
+
+        if (!IsLedgerCaptureOverUnderSide(row.Side))
+        {
+            return string.IsNullOrWhiteSpace(row.Side) || string.Equals(row.Side, "None", StringComparison.OrdinalIgnoreCase)
+                ? "MissingSide"
+                : "InvalidSide";
+        }
+
+        if (string.IsNullOrWhiteSpace(row.ProviderCategory))
+        {
+            return "MissingProviderCategory";
+        }
+
+        if (HasMissingLedgerCaptureProviderKey(row))
+        {
+            return string.Equals(row.ProviderCategory, "Sportsbook", StringComparison.OrdinalIgnoreCase)
+                ? "MissingBookmaker"
+                : "MissingProvider";
+        }
+
+        if (!row.CanonicalPlayerId.HasValue)
+        {
+            return "MissingPlayer";
+        }
+
+        if (!row.PropTypeId.HasValue || string.IsNullOrWhiteSpace(row.PropType))
+        {
+            return "MissingPropType";
+        }
+
+        if (string.IsNullOrWhiteSpace(row.EventId) || !row.EventStartTimeUtc.HasValue || row.ExpectedResultDate == default)
+        {
+            return "MissingEventMapping";
+        }
+
+        if (IsStaleLedgerCaptureRow(row))
+        {
+            return "StaleAtCapture";
+        }
+
+        return null;
+    }
+
+    private static bool IsLedgerCaptureOverUnderSide(string? side) =>
+        string.Equals(side, "Over", StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(side, "Under", StringComparison.OrdinalIgnoreCase);
+
+    private static bool HasMissingLedgerCaptureProviderKey(RecommendationSnapshot row) =>
+        string.IsNullOrWhiteSpace(row.Bookmaker) &&
+        string.IsNullOrWhiteSpace(row.Provider) &&
+        string.IsNullOrWhiteSpace(row.EntryProvider);
+
+    private static bool IsStaleLedgerCaptureRow(RecommendationSnapshot row) =>
+        !string.Equals(row.LifecycleStatus, "Active", StringComparison.OrdinalIgnoreCase) ||
+        (!string.IsNullOrWhiteSpace(row.Warning) && row.Warning.Contains("stale", StringComparison.OrdinalIgnoreCase));
+
+    private static string? ReadLedgerAuditString(JsonObject row, string propertyName)
+    {
+        if (!row.TryGetPropertyValue(propertyName, out var node) || node is null)
+        {
+            return null;
+        }
+
+        var value = node.ToString();
+        return string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+    }
+
+    private static DateOnly? ReadLedgerAuditDate(JsonObject row, string propertyName)
+    {
+        var value = ReadLedgerAuditString(row, propertyName);
+        return DateOnly.TryParse(value, CultureInfo.InvariantCulture, DateTimeStyles.None, out var parsed)
+            ? parsed
+            : null;
+    }
+
+    private static decimal? ReadLedgerAuditDecimal(JsonObject row, string propertyName)
+    {
+        var value = ReadLedgerAuditString(row, propertyName);
+        return decimal.TryParse(value, NumberStyles.Number, CultureInfo.InvariantCulture, out var parsed)
+            ? parsed
+            : null;
     }
 
     private static bool TryGetProperty(JsonElement element, string propertyName, out JsonElement value)
