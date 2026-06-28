@@ -1656,6 +1656,12 @@ public static partial class TheOddsApiDebugEndpoints
             var plannerConfig = plannerOptions.Value;
             var snapshot = state.GetSnapshot();
             var currentPlan = await planner.BuildPlanAsync(cancellationToken);
+            var latestRefreshRun = await dbContext.TheOddsRefreshRuns
+                .AsNoTracking()
+                .Where(row => row.Provider == "The Odds API")
+                .OrderByDescending(row => row.StartedAtUtc)
+                .ThenByDescending(row => row.CompletedAtUtc)
+                .FirstOrDefaultAsync(cancellationToken);
             var scheduledInterval = scheduledOptions.GetInterval();
             var plannerInterval = plannerConfig.GetPlannerInterval();
             var executionBlockedReason = ResolveScheduledRefreshExecutionBlockedReason(scheduledOptions, plannerConfig);
@@ -1728,6 +1734,7 @@ public static partial class TheOddsApiDebugEndpoints
 
             return Results.Ok(new
             {
+                nowUtc = currentPlan.GeneratedAtUtc,
                 enabled = scheduledOptions.Enabled,
                 intervalMinutes = scheduledOptions.IntervalMinutes,
                 effectiveIntervalMinutes = (int)scheduledInterval.TotalMinutes,
@@ -1738,12 +1745,30 @@ public static partial class TheOddsApiDebugEndpoints
                 status = scheduledOptions.Enabled && snapshot.Status == "disabled" ? "waiting" : snapshot.Status,
                 snapshot.LastWakeAtUtc,
                 snapshot.NextWakeEstimateUtc,
+                workerNextWakeUtc = refreshTiming.WorkerNextWakeUtc,
                 snapshot.LastRunStartedAtUtc,
+                refreshTiming.LastRunScheduledDueUtc,
                 snapshot.LastRunCompletedAtUtc,
                 snapshot.LastRunSucceeded,
                 snapshot.LastRunSkipped,
                 snapshot.LastRunBlocked,
                 snapshot.LastRunError,
+                lastSuccessfulRefreshCompletedAtUtc = refreshTiming.LastSuccessfulRefreshCompletedAtUtc,
+                latestSuccessfulRefreshCompletedAtUtc = refreshTiming.LastSuccessfulRefreshCompletedAtUtc,
+                refreshTiming.NextRefreshAtUtc,
+                refreshTiming.SecondsUntilNextRefresh,
+                currentRunStartedAtUtc = refreshTiming.CurrentRunStartedAtUtc,
+                currentRunScheduledDueUtc = refreshTiming.CurrentRunScheduledDueUtc,
+                currentRunElapsedSeconds = refreshTiming.CurrentRunElapsedSeconds,
+                currentRunEstimatedRemainingSeconds = refreshTiming.CurrentRunEstimatedRemainingSeconds,
+                activeRunDataAvailableTargetUtc = refreshTiming.ActiveRunDataAvailableTargetUtc,
+                nextCycleRefreshDueUtc = refreshTiming.NextCycleRefreshDueUtc,
+                nextCycleDataAvailableEstimateUtc = refreshTiming.NextCycleDataAvailableEstimateUtc,
+                dataAvailableStatus = refreshTiming.DataAvailableStatus,
+                refreshTiming.LastRunStartedDelaySeconds,
+                refreshTiming.LastRunDurationSeconds,
+                lastRunPhaseTimings = BuildTheOddsRefreshPhaseTimingSummary(latestRefreshRun?.DiagnosticsJson),
+                lastError = refreshTiming.LastError,
                 snapshot.LastPlanGeneratedAtUtc,
                 snapshot.LastPlanShouldRefresh,
                 snapshot.LastPlanSkipReason,
@@ -1756,6 +1781,7 @@ public static partial class TheOddsApiDebugEndpoints
                 refreshTiming.NextDataAvailableEstimateUtc,
                 refreshTiming.ConservativeDataAvailableEstimateUtc,
                 refreshTiming.NextRunEstimateUtc,
+                refreshTiming.SecondsUntilNextRefreshDue,
                 refreshTiming.SecondsUntilNextRefreshStart,
                 refreshTiming.SecondsUntilNextDataAvailable,
                 refreshTiming.SecondsUntilConservativeDataAvailable,
@@ -1896,6 +1922,66 @@ public static partial class TheOddsApiDebugEndpoints
         .WithName("TheOddsApiScheduledRefreshStatusDebug")
         .WithSummary("Read-only scheduled The Odds multi-target refresh worker status. Does not call external APIs.");
 
+        endpoints.MapGet("/api/debug/the-odds/refresh-runs/recent", async (
+            int? take,
+            ApplicationDbContext dbContext,
+            CancellationToken cancellationToken) =>
+        {
+            var effectiveTake = Math.Clamp(take ?? 20, 1, 100);
+            var runs = await dbContext.TheOddsRefreshRuns
+                .AsNoTracking()
+                .Where(row => row.Provider == "The Odds API")
+                .OrderByDescending(row => row.StartedAtUtc)
+                .ThenByDescending(row => row.CompletedAtUtc)
+                .Take(effectiveTake)
+                .ToListAsync(cancellationToken);
+            var orderedAscending = runs
+                .OrderBy(row => row.StartedAtUtc)
+                .ThenBy(row => row.CompletedAtUtc)
+                .ToArray();
+            var rows = runs
+                .Select(run =>
+                {
+                    var overlapDetected = orderedAscending.Any(other => other.Id != run.Id
+                        && other.StartedAtUtc < run.StartedAtUtc
+                        && (other.CompletedAtUtc is null || other.CompletedAtUtc > run.StartedAtUtc));
+                    return new
+                    {
+                        runId = run.Id,
+                        triggerSource = ResolveTheOddsRefreshTriggerSource(run),
+                        startedAtUtc = run.StartedAtUtc,
+                        completedAtUtc = run.CompletedAtUtc,
+                        durationSeconds = SecondsBetween(run.StartedAtUtc, run.CompletedAtUtc),
+                        actualApiCalls = run.ActualApiCalls,
+                        run.Succeeded,
+                        run.Failed,
+                        run.Blocked,
+                        run.DryRun,
+                        run.ForceLive,
+                        overlapDetected,
+                        startedWhileAnotherRunActive = overlapDetected,
+                        run.Sport,
+                        run.BookmakerPreset,
+                        providerCategories = ParseCommaSeparatedSet(run.ProviderCategoriesIncluded)
+                    };
+                })
+                .ToArray();
+
+            return Results.Ok(new
+            {
+                generatedAtUtc = DateTimeOffset.UtcNow,
+                take = effectiveTake,
+                returnedRuns = rows.Length,
+                rowsWithOverlap = rows.Count(row => row.overlapDetected),
+                rowsStartedWhileAnotherRunActive = rows.Count(row => row.startedWhileAnotherRunActive),
+                callsExternalApis = false,
+                readOnly = true,
+                runs = rows
+            });
+        })
+        .WithName("TheOddsApiRecentRefreshRunsDebug")
+        .WithSummary("Read-only recent persisted The Odds refresh runs with overlap diagnostics.");
+
         endpoints.MapGet("/api/debug/the-odds/mlb/scheduled-refresh/status", async (
             IOptions<TheOddsScheduledRefreshOptions> options,
             IOptions<TheOddsRefreshPlannerOptions> plannerOptions,
@@ -1941,6 +2027,7 @@ public static partial class TheOddsApiDebugEndpoints
 
             return Results.Ok(new
             {
+                nowUtc = currentPlan.GeneratedAtUtc,
                 enabled = scheduledOptions.Enabled,
                 intervalMinutes = scheduledOptions.IntervalMinutes,
                 effectiveIntervalMinutes = (int)scheduledInterval.TotalMinutes,
@@ -1963,16 +2050,33 @@ public static partial class TheOddsApiDebugEndpoints
                 workerRunning = snapshot.WorkerRunning,
                 snapshot.LastWakeAtUtc,
                 snapshot.NextWakeEstimateUtc,
+                workerNextWakeUtc = refreshTiming.WorkerNextWakeUtc,
                 snapshot.LastRunStartedAtUtc,
+                refreshTiming.LastRunScheduledDueUtc,
                 snapshot.LastRunCompletedAtUtc,
                 snapshot.LastRunSucceeded,
                 snapshot.LastRunSkipped,
                 snapshot.LastRunBlocked,
                 snapshot.LastRunError,
+                currentRunStartedAtUtc = refreshTiming.CurrentRunStartedAtUtc,
+                currentRunScheduledDueUtc = refreshTiming.CurrentRunScheduledDueUtc,
+                currentRunElapsedSeconds = refreshTiming.CurrentRunElapsedSeconds,
+                currentRunEstimatedRemainingSeconds = refreshTiming.CurrentRunEstimatedRemainingSeconds,
+                activeRunDataAvailableTargetUtc = refreshTiming.ActiveRunDataAvailableTargetUtc,
+                nextCycleRefreshDueUtc = refreshTiming.NextCycleRefreshDueUtc,
+                nextCycleDataAvailableEstimateUtc = refreshTiming.NextCycleDataAvailableEstimateUtc,
+                dataAvailableStatus = refreshTiming.DataAvailableStatus,
+                refreshTiming.LastRunStartedDelaySeconds,
+                refreshTiming.LastRunDurationSeconds,
+                lastRunPhaseTimings = BuildTheOddsRefreshPhaseTimingSummary(latestRefreshRun?.DiagnosticsJson),
+                lastError = refreshTiming.LastError,
                 latestRefreshRunId = latestRefreshRun?.Id,
                 latestRun = ToTheOddsRefreshRunSummary(latestRefreshRun),
                 latestSuccessfulRefresh = ToTheOddsRefreshRunSummary(latestSuccessfulRefresh),
-                latestSuccessfulRefreshCompletedAtUtc,
+                lastSuccessfulRefreshCompletedAtUtc = refreshTiming.LastSuccessfulRefreshCompletedAtUtc ?? latestSuccessfulRefreshCompletedAtUtc,
+                latestSuccessfulRefreshCompletedAtUtc = refreshTiming.LastSuccessfulRefreshCompletedAtUtc ?? latestSuccessfulRefreshCompletedAtUtc,
+                refreshTiming.NextRefreshAtUtc,
+                refreshTiming.SecondsUntilNextRefresh,
                 latestSuccessfulRefreshId = latestSuccessfulRefresh?.Id,
                 latestSuccessfulRefreshRunId = latestSuccessfulRefresh?.Id,
                 actualApiCalls = latestRefreshRun?.ActualApiCalls ?? 0,
@@ -2042,6 +2146,7 @@ public static partial class TheOddsApiDebugEndpoints
                 refreshTiming.NextDataAvailableEstimateUtc,
                 refreshTiming.ConservativeDataAvailableEstimateUtc,
                 refreshTiming.NextRunEstimateUtc,
+                refreshTiming.SecondsUntilNextRefreshDue,
                 refreshTiming.SecondsUntilNextRefreshStart,
                 refreshTiming.SecondsUntilNextDataAvailable,
                 refreshTiming.SecondsUntilConservativeDataAvailable,
@@ -4345,6 +4450,160 @@ public static partial class TheOddsApiDebugEndpoints
             run.ErrorMessage,
             diagnostics = run.DiagnosticsJson
         };
+    }
+
+    private static string ResolveTheOddsRefreshTriggerSource(TheOddsRefreshRun run)
+    {
+        var triggerSource = run.DiagnosticsJson is null
+            ? null
+            : GetJsonString(run.DiagnosticsJson.RootElement, "triggerSource");
+        if (!string.IsNullOrWhiteSpace(triggerSource))
+        {
+            return triggerSource;
+        }
+
+        if (run.DryRun)
+        {
+            return "DryRun";
+        }
+
+        if (run.ForceLive)
+        {
+            return "LiveRefreshUnknownSource";
+        }
+
+        return "Unknown";
+    }
+
+    private static decimal? SecondsBetween(DateTimeOffset? startUtc, DateTimeOffset? endUtc)
+    {
+        if (!startUtc.HasValue || !endUtc.HasValue)
+        {
+            return null;
+        }
+
+        return Math.Round((decimal)(endUtc.Value - startUtc.Value).TotalSeconds, 3);
+    }
+
+    private static object? BuildTheOddsRefreshPhaseTimingSummary(JsonDocument? diagnosticsJson)
+    {
+        if (diagnosticsJson is null)
+        {
+            return null;
+        }
+
+        var root = diagnosticsJson.RootElement;
+        var fetchEventsMs = TryGetJsonInt64(root, "fetchEventsMs");
+        var fetchMarketsWallClockMs = TryGetJsonInt64(root, "fetchMarketsWallClockMs");
+        var fetchMarketsTotalMs = TryGetJsonInt64(root, "fetchMarketsTotalMs");
+        var filterEventsMs = TryGetJsonInt64(root, "filterEventsMs");
+        var normalizedPropsMs = TryGetJsonInt64(root, "normalizeMs");
+        var persistPlatformPropsWallClockMs = TryGetJsonInt64(root, "persistPlatformPropsWallClockMs")
+            ?? TryGetJsonInt64(root, "persistPlatformPropsMs");
+        var modelEvaluationMs = TryGetJsonInt64(root, "generatePredictionsMs");
+        var selectedSideHistoryMs = TryGetNestedJsonInt64(root, "prediction", "TimingDiagnostics", "SelectedSideHistoryMs")
+            ?? TryGetNestedJsonInt64(root, "prediction", "timingDiagnostics", "selectedSideHistoryMs");
+        var lineShoppingMs = TryGetJsonInt64(root, "lineShoppingMs");
+        var snapshotCaptureMs = TryGetJsonInt64(root, "snapshotCaptureMs");
+        var recommendationLedgerCaptureMs = TryGetJsonInt64(root, "recommendationLedgerCaptureMs");
+        var saveChangesMs = TryGetJsonInt64(root, "saveChangesMs");
+        var lifecycleTrackingMs = TryGetJsonInt64(root, "lifecycleTrackingMs");
+        var totalDurationMs = TryGetJsonInt64(root, "totalDurationMs");
+
+        return new
+        {
+            providerApiCallSeconds = ToSeconds(SumNullable(fetchEventsMs, fetchMarketsWallClockMs ?? fetchMarketsTotalMs)),
+            providerParsingSeconds = ToSeconds(SumNullable(filterEventsMs, normalizedPropsMs)),
+            platformPropUpsertSeconds = ToSeconds(persistPlatformPropsWallClockMs),
+            modelEvaluationSeconds = ToSeconds(modelEvaluationMs),
+            selectedSideHistorySeconds = ToSeconds(selectedSideHistoryMs),
+            snapshotCaptureSeconds = ToSeconds(snapshotCaptureMs ?? lineShoppingMs),
+            recommendationLedgerCaptureSeconds = ToSeconds(recommendationLedgerCaptureMs),
+            saveChangesSeconds = ToSeconds(saveChangesMs),
+            lifecycleTrackingSeconds = ToSeconds(lifecycleTrackingMs),
+            totalDurationSeconds = ToSeconds(totalDurationMs),
+            source = "latest persisted TheOddsRefreshRun.DiagnosticsJson",
+            note = "Null phase fields were not captured by the persisted refresh diagnostics for this run.",
+            rawMs = new
+            {
+                fetchEventsMs,
+                fetchMarketsWallClockMs,
+                fetchMarketsTotalMs,
+                filterEventsMs,
+                normalizedPropsMs,
+                persistPlatformPropsWallClockMs,
+                modelEvaluationMs,
+                selectedSideHistoryMs,
+                lineShoppingMs,
+                snapshotCaptureMs,
+                recommendationLedgerCaptureMs,
+                saveChangesMs,
+                lifecycleTrackingMs,
+                totalDurationMs
+            }
+        };
+    }
+
+    private static long? TryGetNestedJsonInt64(JsonElement element, params string[] path)
+    {
+        var current = element;
+        foreach (var propertyName in path)
+        {
+            if (!TryGetJsonProperty(current, propertyName, out current))
+            {
+                return null;
+            }
+        }
+
+        return TryReadJsonInt64(current);
+    }
+
+    private static long? TryGetJsonInt64(JsonElement element, string propertyName)
+    {
+        return TryGetJsonProperty(element, propertyName, out var property)
+            ? TryReadJsonInt64(property)
+            : null;
+    }
+
+    private static bool TryGetJsonProperty(JsonElement element, string propertyName, out JsonElement property)
+    {
+        if (element.ValueKind == JsonValueKind.Object)
+        {
+            foreach (var candidate in element.EnumerateObject())
+            {
+                if (string.Equals(candidate.Name, propertyName, StringComparison.OrdinalIgnoreCase))
+                {
+                    property = candidate.Value;
+                    return true;
+                }
+            }
+        }
+
+        property = default;
+        return false;
+    }
+
+    private static long? TryReadJsonInt64(JsonElement element)
+    {
+        return element.ValueKind switch
+        {
+            JsonValueKind.Number when element.TryGetInt64(out var value) => value,
+            JsonValueKind.Number when element.TryGetDecimal(out var value) => (long)value,
+            _ => null
+        };
+    }
+
+    private static long? SumNullable(params long?[] values)
+    {
+        var present = values.Where(value => value.HasValue).Select(value => value!.Value).ToArray();
+        return present.Length == 0 ? null : present.Sum();
+    }
+
+    private static decimal? ToSeconds(long? milliseconds)
+    {
+        return milliseconds.HasValue
+            ? Math.Round(milliseconds.Value / 1000m, 3)
+            : null;
     }
 
     private static string? ResolveScheduledRefreshExecutionBlockedReason(

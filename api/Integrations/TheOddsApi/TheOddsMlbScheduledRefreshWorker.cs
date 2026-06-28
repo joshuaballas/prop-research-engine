@@ -39,25 +39,24 @@ public sealed class TheOddsMlbScheduledRefreshWorker(
             {
                 var schedulingPlan = await BuildSchedulingPlanAsync(stoppingToken);
                 var schedulingObservedAt = DateTimeOffset.UtcNow;
-                var cadenceWakeAt = ResolvePreCycleWakeAt(schedulingPlan, schedulingObservedAt);
-                if (cadenceWakeAt.HasValue)
+                var schedulingSnapshot = state.GetSnapshot();
+                if (IsActiveRun(schedulingSnapshot))
                 {
-                    state.MarkWaiting(schedulingObservedAt, cadenceWakeAt.Value);
-                    logger.LogInformation(
-                        "The Odds API scheduled refresh waiting for cadence. Next eligible refresh: {NextEligibleRefreshUtc}.",
-                        cadenceWakeAt);
-
-                    await DelayUntilAsync(cadenceWakeAt.Value, stoppingToken);
+                    logger.LogWarning(
+                        "The Odds API scheduled refresh loop observed an active run and will not start another. CurrentRunStartedAtUtc: {CurrentRunStartedAtUtc}.",
+                        schedulingSnapshot.LastRunStartedAtUtc);
+                    await Task.Delay(TimeSpan.FromSeconds(5), stoppingToken);
                     continue;
                 }
 
-                logger.LogInformation("The Odds API scheduled refresh worker running planning cycle.");
-                var plan = await RunGuardedCycleAsync(stoppingToken);
-                var observedAt = DateTimeOffset.UtcNow;
-                var nextWakeAt = ResolveNextWakeAt(plan, observedAt, interval);
-                state.MarkWaiting(observedAt, nextWakeAt);
+                var nextRefreshAt = ResolveNextRefreshAt(schedulingPlan, schedulingSnapshot, schedulingObservedAt, interval);
+                state.MarkWaiting(schedulingObservedAt, nextRefreshAt);
+                logger.LogInformation(
+                    "The Odds API scheduled refresh waiting for next simple cadence run. NextRefreshAtUtc: {NextRefreshAtUtc}.",
+                    nextRefreshAt);
 
-                await DelayUntilAsync(nextWakeAt, stoppingToken);
+                await DelayUntilAsync(nextRefreshAt, stoppingToken);
+                await RunGuardedCycleAsync(stoppingToken);
             }
         }
         catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
@@ -75,23 +74,6 @@ public sealed class TheOddsMlbScheduledRefreshWorker(
         return plan;
     }
 
-    private static DateTimeOffset? ResolvePreCycleWakeAt(TheOddsRefreshPlanResult plan, DateTimeOffset observedAt)
-    {
-        var nextTargetWakeAt = ResolveNextTargetWakeAt(plan, observedAt);
-        if (!plan.Targets.Any(target => target.ShouldRefresh) && nextTargetWakeAt.HasValue)
-        {
-            return nextTargetWakeAt.Value;
-        }
-
-        if (plan.SkipReason == "CadenceNotDue" &&
-            plan.NextEligibleRefreshUtc > observedAt)
-        {
-            return plan.NextEligibleRefreshUtc;
-        }
-
-        return null;
-    }
-
     private static Task DelayUntilAsync(DateTimeOffset wakeAt, CancellationToken cancellationToken)
     {
         var delay = wakeAt - DateTimeOffset.UtcNow;
@@ -100,36 +82,56 @@ public sealed class TheOddsMlbScheduledRefreshWorker(
             : Task.Delay(delay, cancellationToken);
     }
 
-    private static DateTimeOffset ResolveNextWakeAt(
+    internal static DateTimeOffset ResolveNextRefreshAt(
         TheOddsRefreshPlanResult plan,
+        TheOddsScheduledRefreshStateSnapshot snapshot,
         DateTimeOffset observedAt,
         TimeSpan interval)
     {
-        if (plan.SkipReason == "CadenceNotDue" &&
-            plan.NextEligibleRefreshUtc > observedAt)
+        var latestPlanSuccessAt = ResolveLatestSuccessfulRefreshCompletedAt(plan);
+        var anchor = Max(
+            snapshot.LastSuccessfulRefreshCompletedAtUtc,
+            snapshot.LastRunCompletedAtUtc,
+            latestPlanSuccessAt);
+
+        if (!anchor.HasValue)
         {
-            return plan.NextEligibleRefreshUtc;
+            return observedAt;
         }
 
-        var nextTargetWakeAt = ResolveNextTargetWakeAt(plan, observedAt);
-        if (nextTargetWakeAt.HasValue)
-        {
-            return nextTargetWakeAt.Value;
-        }
-
-        return observedAt.Add(interval);
+        return anchor.Value.Add(interval);
     }
 
-    private static DateTimeOffset? ResolveNextTargetWakeAt(TheOddsRefreshPlanResult plan, DateTimeOffset observedAt)
+    internal static DateTimeOffset? ResolveLatestSuccessfulRefreshCompletedAt(TheOddsRefreshPlanResult plan)
     {
         return plan.Targets
-            .Where(target => target.Enabled && !target.ShouldRefresh && target.NextEligibleRefreshUtc > observedAt)
-            .Select(target => (DateTimeOffset?)target.NextEligibleRefreshUtc)
-            .Min();
+            .Where(target => target.Enabled && target.LatestSuccessfulRefreshCompletedAtUtc.HasValue)
+            .Select(target => target.LatestSuccessfulRefreshCompletedAtUtc)
+            .Max() ?? plan.LastSuccessfulRefreshAtUtc;
     }
 
-    private async Task<TheOddsRefreshPlanResult> RunGuardedCycleAsync(CancellationToken cancellationToken)
+    private static DateTimeOffset? Max(params DateTimeOffset?[] values)
     {
+        return values
+            .Where(value => value.HasValue)
+            .Select(value => value!.Value)
+            .DefaultIfEmpty()
+            .Max() is { } max && max != default
+                ? max
+                : null;
+    }
+
+    private async Task<TheOddsRefreshPlanResult?> RunGuardedCycleAsync(CancellationToken cancellationToken)
+    {
+        var snapshot = state.GetSnapshot();
+        if (IsActiveRun(snapshot))
+        {
+            logger.LogWarning(
+                "The Odds API scheduled refresh skipped because another scheduled refresh is already marked running. CurrentRunStartedAtUtc: {CurrentRunStartedAtUtc}.",
+                snapshot.LastRunStartedAtUtc);
+            return null;
+        }
+
         var startedAt = DateTimeOffset.UtcNow;
         state.MarkStarted(startedAt);
 
@@ -186,6 +188,13 @@ public sealed class TheOddsMlbScheduledRefreshWorker(
 
         await RunRefreshCycleAsync(plan, cancellationToken);
         return plan;
+    }
+
+    private static bool IsActiveRun(TheOddsScheduledRefreshStateSnapshot snapshot)
+    {
+        return string.Equals(snapshot.Status, "running", StringComparison.OrdinalIgnoreCase)
+            && snapshot.LastRunStartedAtUtc.HasValue
+            && !snapshot.LastRunCompletedAtUtc.HasValue;
     }
 
     private async Task RunRefreshCycleAsync(TheOddsRefreshPlanResult plan, CancellationToken cancellationToken)
@@ -288,7 +297,8 @@ public sealed class TheOddsMlbScheduledRefreshWorker(
             IncludeCandidates: refreshOptions.IncludeCandidates,
             IncludeLineShopping: refreshOptions.IncludeLineShopping,
             IncludeFullDiagnostics: refreshOptions.IncludeFullDiagnostics,
-            FreshnessMinutes: refreshOptions.FreshnessMinutes);
+            FreshnessMinutes: refreshOptions.FreshnessMinutes,
+            TriggerSource: "ScheduledWorker");
 
         await refreshService.RefreshCurrentAsync(request, httpContext: null, cancellationToken);
         LogTargetCompleted(target);

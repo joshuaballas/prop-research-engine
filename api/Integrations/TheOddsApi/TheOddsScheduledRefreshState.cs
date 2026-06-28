@@ -5,7 +5,7 @@ public interface ITheOddsScheduledRefreshState
     TheOddsScheduledRefreshStateSnapshot GetSnapshot();
     void MarkDisabled();
     void MarkWaiting(DateTimeOffset observedAt, DateTimeOffset nextWakeAt);
-    void MarkStarted(DateTimeOffset startedAt);
+    void MarkStarted(DateTimeOffset startedAt, DateTimeOffset? scheduledDueAt = null);
     void MarkBlocked(DateTimeOffset completedAt, string reason);
     void MarkSkipped(DateTimeOffset completedAt, string reason);
     void MarkPlan(TheOddsRefreshPlanResult plan);
@@ -17,7 +17,9 @@ public sealed class TheOddsScheduledRefreshState : ITheOddsScheduledRefreshState
 {
     private readonly object syncRoot = new();
     private DateTimeOffset? lastRunStartedAtUtc;
+    private DateTimeOffset? lastRunScheduledDueUtc;
     private DateTimeOffset? lastRunCompletedAtUtc;
+    private DateTimeOffset? lastSuccessfulRefreshCompletedAtUtc;
     private bool? lastRunSucceeded;
     private bool lastRunSkipped;
     private bool lastRunBlocked;
@@ -41,7 +43,9 @@ public sealed class TheOddsScheduledRefreshState : ITheOddsScheduledRefreshState
         {
             return new TheOddsScheduledRefreshStateSnapshot(
                 lastRunStartedAtUtc,
+                lastRunScheduledDueUtc,
                 lastRunCompletedAtUtc,
+                lastSuccessfulRefreshCompletedAtUtc,
                 lastRunSucceeded,
                 lastRunSkipped,
                 lastRunBlocked,
@@ -87,7 +91,7 @@ public sealed class TheOddsScheduledRefreshState : ITheOddsScheduledRefreshState
         }
     }
 
-    public void MarkStarted(DateTimeOffset startedAt)
+    public void MarkStarted(DateTimeOffset startedAt, DateTimeOffset? scheduledDueAt = null)
     {
         lock (syncRoot)
         {
@@ -96,6 +100,7 @@ public sealed class TheOddsScheduledRefreshState : ITheOddsScheduledRefreshState
             lastWakeAtUtc = startedAt;
             nextWakeEstimateUtc = null;
             lastRunStartedAtUtc = startedAt;
+            lastRunScheduledDueUtc = scheduledDueAt;
             lastRunCompletedAtUtc = null;
             lastRunSucceeded = null;
             lastRunSkipped = false;
@@ -142,6 +147,15 @@ public sealed class TheOddsScheduledRefreshState : ITheOddsScheduledRefreshState
             lastPlanEstimatedApiCalls = plan.EstimatedApiCalls;
             lastPlanBudgetAllowed = plan.Budget.BudgetAllowed;
             lastPlanProviderAvailable = plan.ProviderAvailable;
+            var latestPlanSuccessAt = plan.Targets
+                .Where(target => target.Enabled && target.LatestSuccessfulRefreshCompletedAtUtc.HasValue)
+                .Select(target => target.LatestSuccessfulRefreshCompletedAtUtc)
+                .Max() ?? plan.LastSuccessfulRefreshAtUtc;
+            if (latestPlanSuccessAt.HasValue &&
+                (!lastSuccessfulRefreshCompletedAtUtc.HasValue || latestPlanSuccessAt.Value > lastSuccessfulRefreshCompletedAtUtc.Value))
+            {
+                lastSuccessfulRefreshCompletedAtUtc = latestPlanSuccessAt.Value;
+            }
         }
     }
 
@@ -151,6 +165,7 @@ public sealed class TheOddsScheduledRefreshState : ITheOddsScheduledRefreshState
         {
             status = "completed";
             lastRunCompletedAtUtc = completedAt;
+            lastSuccessfulRefreshCompletedAtUtc = completedAt;
             lastRunSucceeded = true;
             lastRunSkipped = false;
             lastRunBlocked = false;
@@ -174,7 +189,9 @@ public sealed class TheOddsScheduledRefreshState : ITheOddsScheduledRefreshState
 
 public sealed record TheOddsScheduledRefreshStateSnapshot(
     DateTimeOffset? LastRunStartedAtUtc,
+    DateTimeOffset? LastRunScheduledDueUtc,
     DateTimeOffset? LastRunCompletedAtUtc,
+    DateTimeOffset? LastSuccessfulRefreshCompletedAtUtc,
     bool? LastRunSucceeded,
     bool LastRunSkipped,
     bool LastRunBlocked,

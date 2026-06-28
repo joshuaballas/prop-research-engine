@@ -29,7 +29,8 @@ public sealed record TheOddsMlbRefreshRequest(
     bool? IncludeCandidates,
     bool? IncludeLineShopping,
     bool? IncludeFullDiagnostics,
-    int? FreshnessMinutes);
+    int? FreshnessMinutes,
+    string? TriggerSource = null);
 
 public static partial class TheOddsApiDebugEndpoints
 {
@@ -62,6 +63,8 @@ public static partial class TheOddsApiDebugEndpoints
             var bookmakerPreset = request.BookmakerPreset;
             var forceLive = request.ForceLive;
             var freshnessMinutes = request.FreshnessMinutes;
+            var triggerSource = NullIfWhiteSpace(request.TriggerSource)
+                ?? (httpContext is null ? "Internal" : "ManualDebugEndpoint");
             var totalStopwatch = Stopwatch.StartNew();
             var stepStopwatch = Stopwatch.StartNew();
             var isDryRun = dryRun == true;
@@ -215,6 +218,7 @@ public static partial class TheOddsApiDebugEndpoints
                         resolveSlateDateMs,
                         countExistingSlatePropsMs,
                         existingPersistedTheOddsPropsForSlate = existingSlateProps,
+                        triggerSource,
                         message = "Request was blocked before any The Odds API calls. Re-run with dryRun=true for planning or forceLive=true for an explicit live refresh."
                     }
                 });
@@ -408,6 +412,7 @@ public static partial class TheOddsApiDebugEndpoints
                 };
                 var diagnostics = new
                 {
+                    triggerSource,
                     callsTheOddsApi = true,
                     totalDurationMs = totalStopwatch.ElapsedMilliseconds,
                     resolveSlateDateMs,

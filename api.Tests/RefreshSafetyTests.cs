@@ -434,7 +434,7 @@ public sealed class RefreshSafetyTests
     }
 
     [Fact]
-    public async Task RefreshPlan_UsesWorkerWake_WhenWakeIsLaterThanTheoreticalDue()
+    public async Task RefreshPlan_UsesSimpleCompletionInterval_AndIgnoresWorkerWakeEstimate()
     {
         await using var factory = new SafetyTestApplicationFactory(new Dictionary<string, string?>
         {
@@ -453,23 +453,43 @@ public sealed class RefreshSafetyTests
 
         await EnsureSuccessWithBodyAsync(response);
         var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        var lastSuccessfulRefreshCompletedAtUtc = DateTimeOffset.Parse(
+            json.GetProperty("lastSuccessfulRefreshCompletedAtUtc").GetString()!,
+            CultureInfo.InvariantCulture);
+        var nextRefreshAtUtc = DateTimeOffset.Parse(json.GetProperty("nextRefreshAtUtc").GetString()!, CultureInfo.InvariantCulture);
         var nextRefreshDueUtc = DateTimeOffset.Parse(json.GetProperty("nextRefreshDueUtc").GetString()!, CultureInfo.InvariantCulture);
         var nextRefreshStartEstimateUtc = DateTimeOffset.Parse(json.GetProperty("nextRefreshStartEstimateUtc").GetString()!, CultureInfo.InvariantCulture);
         var nextHeaderSyncTargetUtc = DateTimeOffset.Parse(json.GetProperty("nextHeaderSyncTargetUtc").GetString()!, CultureInfo.InvariantCulture);
         var nextDataAvailableEstimateUtc = DateTimeOffset.Parse(json.GetProperty("nextDataAvailableEstimateUtc").GetString()!, CultureInfo.InvariantCulture);
         var conservativeDataAvailableEstimateUtc = DateTimeOffset.Parse(json.GetProperty("conservativeDataAvailableEstimateUtc").GetString()!, CultureInfo.InvariantCulture);
-        Assert.True(nextRefreshStartEstimateUtc >= workerWakeAt.AddSeconds(-1));
-        Assert.True(nextRefreshStartEstimateUtc > nextRefreshDueUtc);
-        Assert.Equal("WorkerWakeEstimate", json.GetProperty("estimateBasis").GetString());
-        Assert.Equal(60, json.GetProperty("expectedRefreshDurationSeconds").GetInt32());
-        Assert.Equal(30, json.GetProperty("postRefreshReadBufferSeconds").GetInt32());
-        Assert.Equal(nextRefreshDueUtc.AddSeconds(30), nextHeaderSyncTargetUtc);
+        var workerNextWakeUtc = DateTimeOffset.Parse(json.GetProperty("workerNextWakeUtc").GetString()!, CultureInfo.InvariantCulture);
+        Assert.InRange(
+            Math.Abs((nextRefreshAtUtc - lastSuccessfulRefreshCompletedAtUtc.AddMinutes(15)).TotalSeconds),
+            0,
+            1.5);
+        Assert.NotEqual(workerWakeAt.ToUnixTimeSeconds(), nextRefreshAtUtc.ToUnixTimeSeconds());
+        Assert.Equal(nextRefreshAtUtc, nextRefreshDueUtc);
+        Assert.Equal(nextRefreshAtUtc, nextRefreshStartEstimateUtc);
+        Assert.Equal(nextRefreshAtUtc.AddSeconds(30), nextHeaderSyncTargetUtc);
         Assert.Equal(nextHeaderSyncTargetUtc, nextDataAvailableEstimateUtc);
-        Assert.Equal(nextRefreshStartEstimateUtc.AddSeconds(90), conservativeDataAvailableEstimateUtc);
+        Assert.Equal(nextHeaderSyncTargetUtc, conservativeDataAvailableEstimateUtc);
+        Assert.Equal(nextRefreshAtUtc, workerNextWakeUtc);
+        Assert.Equal("SimpleCompletionInterval", json.GetProperty("estimateBasis").GetString());
+        Assert.Equal(45, json.GetProperty("expectedRefreshDurationSeconds").GetInt32());
+        Assert.Equal(30, json.GetProperty("postRefreshReadBufferSeconds").GetInt32());
         Assert.False(json.GetProperty("isRefreshInProgress").GetBoolean());
         Assert.False(json.GetProperty("isOverdue").GetBoolean());
-        Assert.True(json.GetProperty("secondsUntilNextRefreshStart").GetInt32() > 0);
-        Assert.True(json.GetProperty("secondsUntilConservativeDataAvailable").GetInt32() > json.GetProperty("secondsUntilNextRefreshStart").GetInt32());
+        Assert.Equal(
+            json.GetProperty("secondsUntilNextRefresh").GetInt32(),
+            json.GetProperty("secondsUntilNextRefreshStart").GetInt32());
+        Assert.Equal(
+            json.GetProperty("secondsUntilNextDataAvailable").GetInt32(),
+            json.GetProperty("secondsUntilConservativeDataAvailable").GetInt32());
+        Assert.InRange(
+            json.GetProperty("secondsUntilNextDataAvailable").GetInt32()
+                - json.GetProperty("secondsUntilNextRefresh").GetInt32(),
+            29,
+            31);
     }
 
     [Fact]
@@ -491,18 +511,145 @@ public sealed class RefreshSafetyTests
 
         await EnsureSuccessWithBodyAsync(response);
         var json = await response.Content.ReadFromJsonAsync<JsonElement>();
-        var nextRefreshDueUtc = DateTimeOffset.Parse(json.GetProperty("nextRefreshDueUtc").GetString()!, CultureInfo.InvariantCulture);
-        var nextRefreshStartEstimateUtc = DateTimeOffset.Parse(json.GetProperty("nextRefreshStartEstimateUtc").GetString()!, CultureInfo.InvariantCulture);
-        var nextHeaderSyncTargetUtc = DateTimeOffset.Parse(json.GetProperty("nextHeaderSyncTargetUtc").GetString()!, CultureInfo.InvariantCulture);
-        var nextDataAvailableEstimateUtc = DateTimeOffset.Parse(json.GetProperty("nextDataAvailableEstimateUtc").GetString()!, CultureInfo.InvariantCulture);
-        var conservativeDataAvailableEstimateUtc = DateTimeOffset.Parse(json.GetProperty("conservativeDataAvailableEstimateUtc").GetString()!, CultureInfo.InvariantCulture);
         Assert.True(json.GetProperty("isRefreshInProgress").GetBoolean());
         Assert.False(json.GetProperty("isOverdue").GetBoolean());
-        Assert.Equal("ActiveRunStart", json.GetProperty("estimateBasis").GetString());
-        Assert.Equal(startedAt.ToUnixTimeSeconds(), nextRefreshStartEstimateUtc.ToUnixTimeSeconds());
-        Assert.Equal(nextRefreshDueUtc.AddSeconds(30), nextHeaderSyncTargetUtc);
-        Assert.Equal(nextHeaderSyncTargetUtc, nextDataAvailableEstimateUtc);
-        Assert.Equal(nextRefreshStartEstimateUtc.AddSeconds(90), conservativeDataAvailableEstimateUtc);
+        Assert.Equal("SimpleCompletionInterval", json.GetProperty("estimateBasis").GetString());
+        Assert.Equal(JsonValueKind.Null, json.GetProperty("nextRefreshAtUtc").ValueKind);
+        Assert.Equal(JsonValueKind.Null, json.GetProperty("nextRefreshDueUtc").ValueKind);
+        Assert.Equal(JsonValueKind.Null, json.GetProperty("nextHeaderSyncTargetUtc").ValueKind);
+        Assert.Equal(JsonValueKind.Null, json.GetProperty("nextDataAvailableEstimateUtc").ValueKind);
+        Assert.Equal(JsonValueKind.Null, json.GetProperty("conservativeDataAvailableEstimateUtc").ValueKind);
+        Assert.Equal(JsonValueKind.Null, json.GetProperty("workerNextWakeUtc").ValueKind);
+        Assert.Equal(JsonValueKind.Null, json.GetProperty("secondsUntilNextRefresh").ValueKind);
+        Assert.Equal(JsonValueKind.Null, json.GetProperty("secondsUntilNextDataAvailable").ValueKind);
+        Assert.Equal(startedAt.ToUnixTimeSeconds(), DateTimeOffset.Parse(json.GetProperty("currentRunStartedAtUtc").GetString()!, CultureInfo.InvariantCulture).ToUnixTimeSeconds());
+        Assert.Equal(JsonValueKind.Null, json.GetProperty("currentRunScheduledDueUtc").ValueKind);
+        Assert.True(json.GetProperty("currentRunElapsedSeconds").GetDecimal() >= 0m);
+        Assert.Equal("RefreshInProgress", json.GetProperty("dataAvailableStatus").GetString());
+    }
+
+    [Fact]
+    public void ScheduledRefreshWorker_NoCompletionAnchorRunsImmediately()
+    {
+        var observedAt = DateTimeOffset.UtcNow;
+        var plan = CreateScheduledRefreshPlan(
+            generatedAtUtc: observedAt,
+            nextEligibleRefreshUtc: observedAt,
+            shouldRefresh: true,
+            targetShouldRefresh: true,
+            skipReason: null);
+
+        var nextRefreshAt = TheOddsMlbScheduledRefreshWorker.ResolveNextRefreshAt(
+            plan,
+            CreateScheduledRefreshStateSnapshot(),
+            observedAt,
+            TimeSpan.FromMinutes(15));
+
+        Assert.Equal(observedAt, nextRefreshAt);
+    }
+
+    [Fact]
+    public void ScheduledRefreshWorker_WaitsUntilLastSuccessfulCompletionPlusInterval()
+    {
+        var observedAt = DateTimeOffset.UtcNow;
+        var completedAt = observedAt.AddMinutes(-5);
+        var plan = CreateScheduledRefreshPlan(
+            generatedAtUtc: observedAt,
+            nextEligibleRefreshUtc: completedAt.AddMinutes(15),
+            shouldRefresh: false,
+            targetShouldRefresh: false,
+            skipReason: null);
+
+        var nextRefreshAt = TheOddsMlbScheduledRefreshWorker.ResolveNextRefreshAt(
+            plan,
+            CreateScheduledRefreshStateSnapshot(lastSuccessfulRefreshCompletedAtUtc: completedAt),
+            observedAt,
+            TimeSpan.FromMinutes(15));
+
+        Assert.Equal(completedAt.AddMinutes(15), nextRefreshAt);
+    }
+
+    [Fact]
+    public void ScheduledRefreshWorker_LastCompletedAttemptPreventsTightRetryLoop()
+    {
+        var observedAt = DateTimeOffset.UtcNow;
+        var lastSuccessAt = observedAt.AddMinutes(-30);
+        var lastCompletedAttemptAt = observedAt.AddMinutes(-1);
+        var plan = CreateScheduledRefreshPlan(
+            generatedAtUtc: observedAt,
+            nextEligibleRefreshUtc: observedAt,
+            shouldRefresh: true,
+            targetShouldRefresh: true,
+            skipReason: null);
+
+        var nextRefreshAt = TheOddsMlbScheduledRefreshWorker.ResolveNextRefreshAt(
+            plan,
+            CreateScheduledRefreshStateSnapshot(
+                lastRunCompletedAtUtc: lastCompletedAttemptAt,
+                lastSuccessfulRefreshCompletedAtUtc: lastSuccessAt),
+            observedAt,
+            TimeSpan.FromMinutes(15));
+
+        Assert.Equal(lastCompletedAttemptAt.AddMinutes(15), nextRefreshAt);
+    }
+
+    [Fact]
+    public async Task ScheduledRefreshStatus_ExposesSchedulerPrecisionFields()
+    {
+        await using var factory = new SafetyTestApplicationFactory(new Dictionary<string, string?>
+        {
+            ["TheOddsScheduledRefresh:Enabled"] = "true",
+            ["TheOddsScheduledRefresh:AllowScheduledLiveRefresh"] = "true",
+            ["TheOddsScheduledRefresh:PostRefreshReadBufferSeconds"] = "30"
+        });
+        using var client = factory.CreateClient();
+        await factory.EnsureDatabaseAsync();
+        var startedAt = DateTimeOffset.UtcNow.AddSeconds(-21);
+        var completedAt = startedAt.AddSeconds(11);
+        var nextWakeAt = DateTimeOffset.UtcNow.AddMinutes(15);
+        var state = factory.Services.GetRequiredService<ITheOddsScheduledRefreshState>();
+        state.MarkStarted(startedAt);
+        state.MarkCompleted(completedAt);
+        state.MarkWaiting(DateTimeOffset.UtcNow, nextWakeAt);
+
+        var response = await client.GetAsync("/api/debug/the-odds/scheduled-refresh/status");
+
+        await EnsureSuccessWithBodyAsync(response);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.False(json.GetProperty("callsExternalApis").GetBoolean());
+        Assert.True(json.TryGetProperty("nowUtc", out _));
+        var nextRefreshAtUtc = DateTimeOffset.Parse(json.GetProperty("nextRefreshAtUtc").GetString()!, CultureInfo.InvariantCulture);
+        var nextRefreshDueUtc = DateTimeOffset.Parse(json.GetProperty("nextRefreshDueUtc").GetString()!, CultureInfo.InvariantCulture);
+        var nextDataAvailableEstimateUtc = DateTimeOffset.Parse(json.GetProperty("nextDataAvailableEstimateUtc").GetString()!, CultureInfo.InvariantCulture);
+        var workerNextWakeUtc = DateTimeOffset.Parse(json.GetProperty("workerNextWakeUtc").GetString()!, CultureInfo.InvariantCulture);
+        var lastSuccessfulRefreshCompletedAtUtc = DateTimeOffset.Parse(
+            json.GetProperty("lastSuccessfulRefreshCompletedAtUtc").GetString()!,
+            CultureInfo.InvariantCulture);
+        Assert.InRange(
+            Math.Abs((nextRefreshAtUtc - completedAt.AddMinutes(15)).TotalSeconds),
+            0,
+            1.5);
+        Assert.Equal(completedAt.ToUnixTimeSeconds(), lastSuccessfulRefreshCompletedAtUtc.ToUnixTimeSeconds());
+        Assert.Equal(nextRefreshAtUtc, nextRefreshDueUtc);
+        Assert.Equal(nextRefreshAtUtc.AddSeconds(30), nextDataAvailableEstimateUtc);
+        Assert.Equal(nextRefreshAtUtc, workerNextWakeUtc);
+        Assert.NotEqual(nextWakeAt.ToUnixTimeSeconds(), nextRefreshAtUtc.ToUnixTimeSeconds());
+        Assert.Equal(JsonValueKind.Null, json.GetProperty("lastRunScheduledDueUtc").ValueKind);
+        Assert.Equal(startedAt.ToUnixTimeSeconds(), DateTimeOffset.Parse(json.GetProperty("lastRunStartedAtUtc").GetString()!, CultureInfo.InvariantCulture).ToUnixTimeSeconds());
+        Assert.Equal(completedAt.ToUnixTimeSeconds(), DateTimeOffset.Parse(json.GetProperty("lastRunCompletedAtUtc").GetString()!, CultureInfo.InvariantCulture).ToUnixTimeSeconds());
+        Assert.Equal(JsonValueKind.Null, json.GetProperty("lastRunStartedDelaySeconds").ValueKind);
+        Assert.Equal(11m, json.GetProperty("lastRunDurationSeconds").GetDecimal());
+        Assert.False(json.GetProperty("isRefreshInProgress").GetBoolean());
+        Assert.True(json.TryGetProperty("secondsUntilNextRefreshDue", out _));
+        Assert.True(json.TryGetProperty("secondsUntilNextDataAvailable", out _));
+        Assert.True(json.TryGetProperty("currentRunScheduledDueUtc", out _));
+        Assert.True(json.TryGetProperty("currentRunElapsedSeconds", out _));
+        Assert.True(json.TryGetProperty("currentRunEstimatedRemainingSeconds", out _));
+        Assert.True(json.TryGetProperty("dataAvailableStatus", out _));
+        Assert.True(json.TryGetProperty("lastRunPhaseTimings", out _));
+        Assert.Equal(JsonValueKind.Null, json.GetProperty("currentRunStartedAtUtc").ValueKind);
+        Assert.Equal(JsonValueKind.Null, json.GetProperty("lastError").ValueKind);
+        Assert.Equal(0, factory.TheOddsAdapter.CallCount);
     }
 
     [Fact]
@@ -676,14 +823,29 @@ public sealed class RefreshSafetyTests
                 row.GetProperty("latestSuccessfulRefreshCompletedAtUtc").GetString()!,
                 CultureInfo.InvariantCulture))
             .Max();
+        var nextRefreshAtUtc = DateTimeOffset.Parse(
+            json.GetProperty("nextRefreshAtUtc").GetString()!,
+            CultureInfo.InvariantCulture);
         var nextHeaderSyncTargetUtc = DateTimeOffset.Parse(
             json.GetProperty("nextHeaderSyncTargetUtc").GetString()!,
             CultureInfo.InvariantCulture);
         var nextDataAvailableEstimateUtc = DateTimeOffset.Parse(
             json.GetProperty("nextDataAvailableEstimateUtc").GetString()!,
             CultureInfo.InvariantCulture);
-        Assert.Equal(latestEnabledTargetSuccessUtc.AddMinutes(15).AddSeconds(30), nextHeaderSyncTargetUtc);
+        var workerNextWakeUtc = DateTimeOffset.Parse(
+            json.GetProperty("workerNextWakeUtc").GetString()!,
+            CultureInfo.InvariantCulture);
+        var nextRefreshDueUtc = DateTimeOffset.Parse(
+            json.GetProperty("nextRefreshDueUtc").GetString()!,
+            CultureInfo.InvariantCulture);
+        Assert.InRange(
+            Math.Abs((nextRefreshAtUtc - latestEnabledTargetSuccessUtc.AddMinutes(15)).TotalSeconds),
+            0,
+            1.5);
+        Assert.Equal(nextRefreshAtUtc, nextRefreshDueUtc);
+        Assert.Equal(nextRefreshAtUtc.AddSeconds(30), nextHeaderSyncTargetUtc);
         Assert.Equal(nextHeaderSyncTargetUtc, nextDataAvailableEstimateUtc);
+        Assert.Equal(nextRefreshAtUtc, workerNextWakeUtc);
     }
 
     [Fact]
@@ -7401,6 +7563,156 @@ public sealed class RefreshSafetyTests
               "bestEstimatedEv": 0.10
             }
             """)
+        };
+    }
+
+    private static TheOddsScheduledRefreshStateSnapshot CreateScheduledRefreshStateSnapshot(
+        DateTimeOffset? lastRunStartedAtUtc = null,
+        DateTimeOffset? lastRunCompletedAtUtc = null,
+        DateTimeOffset? lastSuccessfulRefreshCompletedAtUtc = null,
+        bool? lastRunSucceeded = null,
+        string status = "waiting")
+    {
+        return new TheOddsScheduledRefreshStateSnapshot(
+            LastRunStartedAtUtc: lastRunStartedAtUtc,
+            LastRunScheduledDueUtc: null,
+            LastRunCompletedAtUtc: lastRunCompletedAtUtc,
+            LastSuccessfulRefreshCompletedAtUtc: lastSuccessfulRefreshCompletedAtUtc,
+            LastRunSucceeded: lastRunSucceeded,
+            LastRunSkipped: false,
+            LastRunBlocked: false,
+            LastRunError: null,
+            Status: status,
+            WorkerRunning: true,
+            LastWakeAtUtc: null,
+            NextWakeEstimateUtc: null,
+            LastPlanGeneratedAtUtc: null,
+            LastPlanShouldRefresh: null,
+            LastPlanSkipReason: null,
+            LastPlanEstimatedApiCalls: null,
+            LastPlanBudgetAllowed: null,
+            LastPlanProviderAvailable: null,
+            LastSkippedAtUtc: null,
+            LastSkipReason: null);
+    }
+
+    private static TheOddsRefreshPlanResult CreateScheduledRefreshPlan(
+        DateTimeOffset generatedAtUtc,
+        DateTimeOffset nextEligibleRefreshUtc,
+        bool shouldRefresh,
+        bool targetShouldRefresh,
+        string? skipReason)
+    {
+        var budget = new TheOddsRefreshBudgetSummary(
+            PlannerEnforcementEnabled: false,
+            ConfiguredDailyCreditBudget: 0,
+            DailyBudgetEnabled: false,
+            ConfiguredMonthlyCreditBudget: 0,
+            LocalBudgetEnforcementEnabled: false,
+            LocalDailyBudgetEnforcementEnabled: false,
+            LocalMonthlyBudgetEnforcementEnabled: false,
+            PerRunEstimateBlockingEnabled: false,
+            ProviderCreditBlockingEnabled: false,
+            ConfiguredReservedCreditBuffer: 0,
+            ConfiguredMaxEstimatedCallsPerRun: null,
+            DailyUsedCredits: 0,
+            MonthlyUsedCredits: 0,
+            PersistedMonthlyUsedCredits: 0,
+            ProviderReportedRequestsUsed: null,
+            ProviderReportedRequestsRemaining: null,
+            ProviderCreditTelemetryObservedAtUtc: null,
+            ProviderCreditTelemetryAgeMinutes: null,
+            IsProviderTelemetryStale: false,
+            ProviderTelemetryUsedForBlocking: false,
+            EstimatedApiCalls: 1,
+            DailyAfterEstimate: 1,
+            MonthlyAfterEstimate: 1,
+            DailyPercentAfterEstimate: 0m,
+            MonthlyPercentAfterEstimate: 0m,
+            DailyWarning: false,
+            MonthlyWarning: false,
+            DailyHardStop: false,
+            MonthlyHardStop: false,
+            ProviderRemainingHardStop: false,
+            PerRunEstimateHardStop: false,
+            IsBlockedByLocalBudget: false,
+            IsBlockedByProviderCredits: false,
+            IsBlockedByPerRunEstimate: false,
+            PlannerWouldBlockIfEnforced: false,
+            PlannerWarnings: [],
+            BudgetBlockReason: null,
+            BudgetExplanation: "Allowed in test.",
+            BudgetAllowed: true);
+
+        return new TheOddsRefreshPlanResult(
+            GeneratedAtUtc: generatedAtUtc,
+            ProviderStatus: "Available",
+            ProviderRejectedKeyDetected: false,
+            ProviderAvailable: true,
+            RequestsUsed: null,
+            RequestsRemaining: null,
+            SlateDate: DateOnly.FromDateTime(generatedAtUtc.UtcDateTime),
+            BookmakerPreset: "test",
+            EstimatedSlateEvents: 1,
+            EstimatedApiCalls: 1,
+            EstimateSource: "Test",
+            CadenceRule: new PlannerCadenceRule("Test", null, null, 15, "Test cadence."),
+            MinutesUntilNextEventStart: null,
+            LastSuccessfulRefreshAtUtc: nextEligibleRefreshUtc.AddMinutes(-15),
+            MinutesSinceLastSuccessfulRefresh: null,
+            LastAttemptAtUtc: null,
+            LastFailedAttemptAtUtc: null,
+            MinutesSinceLastAttempt: null,
+            NextEligibleRefreshUtc: nextEligibleRefreshUtc,
+            Budget: budget,
+            HasUsableMarketData: true,
+            ShouldRefresh: shouldRefresh,
+            SkipReason: skipReason,
+            RecommendedAction: shouldRefresh ? "Refresh is due." : "Cadence not due.")
+        {
+            Targets =
+            [
+                new TheOddsRefreshTargetPlan(
+                    Key: "mlb-dfs",
+                    Enabled: true,
+                    Sport: "MLB",
+                    Competition: "MLB",
+                    ProviderCategory: "DFS",
+                    BookmakerPreset: "test",
+                    ProviderSportKey: "baseball_mlb",
+                    MaxEvents: null,
+                    Regions: null,
+                    Bookmakers: null,
+                    EffectiveBookmakers: [],
+                    RequestedBookmakers: [],
+                    SkippedBookmakers: [],
+                    Markets: null,
+                    SupportsResults: true,
+                    SupportsHistory: true,
+                    ExecutionWired: true,
+                    ProviderSportKeyVerified: true,
+                    EstimatedApiCalls: 1,
+                    LatestRefreshRunId: null,
+                    LatestRunStartedAtUtc: null,
+                    LatestRunCompletedAtUtc: null,
+                    LatestRunSucceeded: null,
+                    LatestRunFailed: null,
+                    LatestRunBlocked: null,
+                    LatestSuccessfulRefreshRunId: null,
+                    LatestSuccessfulRefreshCompletedAtUtc: nextEligibleRefreshUtc.AddMinutes(-15),
+                    LatestAttemptAtUtc: null,
+                    ActualApiCallsFromLatestRun: null,
+                    PlatformPropsCreatedFromLatestRun: null,
+                    PlatformPropsUpdatedFromLatestRun: null,
+                    PlatformPropsUpsertedFromLatestRun: null,
+                    NextEligibleRefreshUtc: nextEligibleRefreshUtc,
+                    ProviderStatus: "Available",
+                    ProviderAvailable: true,
+                    BudgetAllowed: true,
+                    ShouldRefresh: targetShouldRefresh,
+                    SkipReason: targetShouldRefresh ? null : skipReason,
+                    Notes: null)
+            ]
         };
     }
 

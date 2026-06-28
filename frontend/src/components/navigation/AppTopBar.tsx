@@ -14,6 +14,8 @@ export function AppTopBar() {
   const [scheduledStatusQueryTick, setScheduledStatusQueryTick] = useState(0);
   const [glossaryOpen, setGlossaryOpen] = useState(false);
   const lastObservedSuccessfulRefreshRef = useRef<string | null | undefined>(undefined);
+  const lastCountdownTargetMsRef = useRef<number | null>(null);
+  const lastZeroRefetchTargetMsRef = useRef<number | null>(null);
   const freshnessQuery = useMarketFreshnessData([marketStatusQueryTick]);
   const providerStatusQuery = useProviderStatusData([marketStatusQueryTick]);
   const scheduledRefreshQuery = useScheduledRefreshStatusData([scheduledStatusQueryTick]);
@@ -24,9 +26,17 @@ export function AppTopBar() {
     () => getCountdownTargetMs(scheduledRefresh),
     [scheduledRefresh]
   );
+  if (countdownTargetMs !== null) {
+    lastCountdownTargetMsRef.current = countdownTargetMs;
+  }
+  const displayCountdownTargetMs = countdownTargetMs ?? lastCountdownTargetMsRef.current;
+  const isRefreshInProgress = useMemo(
+    () => isScheduledRefreshInProgress(scheduledRefresh),
+    [scheduledRefresh]
+  );
   const shouldPollScheduledStatus = countdownTargetMs !== null && (
     now >= countdownTargetMs ||
-    readBoolean(scheduledRefresh, 'isRefreshInProgress', 'IsRefreshInProgress') === true
+    isRefreshInProgress
   );
   const latestScheduledSuccessfulRefreshCompletedAt = useMemo(
     () => getLatestSuccessfulRefreshCompletedAt(scheduledRefresh, undefined),
@@ -36,6 +46,7 @@ export function AppTopBar() {
     () => buildSyncDisplay({
       now,
       scheduledRefresh,
+      countdownTargetMs: displayCountdownTargetMs,
       freshness,
       hasStatusError: Boolean(freshnessQuery.error || providerStatusQuery.error || scheduledRefreshQuery.error),
       providerRejectedKeyDetected: providerStatus?.providerRejectedKeyDetected,
@@ -46,6 +57,7 @@ export function AppTopBar() {
       now,
       providerStatus?.providerRejectedKeyDetected,
       providerStatusQuery.error,
+      displayCountdownTargetMs,
       scheduledRefresh,
       scheduledRefreshQuery.error
     ]
@@ -56,6 +68,16 @@ export function AppTopBar() {
 
     return () => {
       window.clearInterval(countdownTimer);
+    };
+  }, []);
+
+  useEffect(() => {
+    const statusPollTimer = window.setInterval(() => {
+      setScheduledStatusQueryTick((value) => value + 1);
+    }, 30000);
+
+    return () => {
+      window.clearInterval(statusPollTimer);
     };
   }, []);
 
@@ -71,6 +93,16 @@ export function AppTopBar() {
       window.clearInterval(statusPollTimer);
     };
   }, [shouldPollScheduledStatus]);
+
+  useEffect(() => {
+    if (displayCountdownTargetMs === null || now < displayCountdownTargetMs) return;
+    if (lastZeroRefetchTargetMsRef.current === displayCountdownTargetMs) return;
+
+    lastZeroRefetchTargetMsRef.current = displayCountdownTargetMs;
+    setScheduledStatusQueryTick((value) => value + 1);
+    setMarketStatusQueryTick((value) => value + 1);
+    bumpMarketDataRefreshVersion();
+  }, [displayCountdownTargetMs, now]);
 
   useEffect(() => {
     if (!latestScheduledSuccessfulRefreshCompletedAt) return;
@@ -197,12 +229,14 @@ export function AppTopBar() {
 function buildSyncDisplay({
   now,
   scheduledRefresh,
+  countdownTargetMs,
   freshness,
   hasStatusError,
   providerRejectedKeyDetected,
 }: {
   now: number;
   scheduledRefresh?: ScheduledRefreshStatusDto;
+  countdownTargetMs: number | null;
   freshness?: MarketFreshnessDto;
   hasStatusError: boolean;
   providerRejectedKeyDetected?: boolean;
@@ -267,7 +301,7 @@ function buildSyncDisplay({
     };
   }
 
-  const nextRunMs = getCountdownTargetMs(scheduledRefresh);
+  const nextRunMs = countdownTargetMs;
   if (nextRunMs === null) {
     return {
       primary,
@@ -277,42 +311,19 @@ function buildSyncDisplay({
     };
   }
 
-  const isRefreshInProgress = readBoolean(scheduledRefresh, 'isRefreshInProgress', 'IsRefreshInProgress') === true;
   const isOverdue = readBoolean(scheduledRefresh, 'isOverdue', 'IsOverdue') === true;
   const remainingMs = nextRunMs - now;
-  if (remainingMs <= 0 && isRefreshInProgress) {
-    return {
-      primary,
-      secondary: 'Refreshing...',
-      tone: 'warning' as const,
-      detail: 'The scheduled market refresh is currently running.'
-    };
-  }
-
-  if (remainingMs <= 0 && isOverdue) {
-    return {
-      primary,
-      secondary: 'Sync overdue',
-      tone: 'warning' as const,
-      detail: 'The backend expected data to be available already and has not reported a completed refresh.'
-    };
-  }
-
-  if (remainingMs <= 0) {
-    return {
-      primary,
-      secondary: 'Checking...',
-      tone: 'default' as const,
-      detail: undefined
-    };
-  }
 
   return {
     primary,
     secondary: `Next sync in ${formatSyncCountdown(remainingMs)}`,
-    tone: 'success' as const,
-    detail: undefined
+    tone: isOverdue ? 'warning' as const : 'success' as const,
+    detail: isOverdue ? 'The backend expected data to be available already and has not reported a completed refresh.' : undefined
   };
+}
+
+export function isScheduledRefreshInProgress(scheduledRefresh?: ScheduledRefreshStatusDto) {
+  return readBoolean(scheduledRefresh, 'isRefreshInProgress', 'IsRefreshInProgress') === true;
 }
 
 function getCountdownTargetMs(scheduledRefresh?: ScheduledRefreshStatusDto) {
@@ -330,6 +341,12 @@ function getCountdownTargetMs(scheduledRefresh?: ScheduledRefreshStatusDto) {
     if (!Number.isNaN(nextDataAvailableMs)) return nextDataAvailableMs;
   }
 
+  const nextRefreshAtUtc = scheduledRefresh?.nextRefreshAtUtc ?? scheduledRefresh?.NextRefreshAtUtc;
+  if (nextRefreshAtUtc) {
+    const nextRefreshAtMs = Date.parse(nextRefreshAtUtc);
+    if (!Number.isNaN(nextRefreshAtMs)) return nextRefreshAtMs;
+  }
+
   const nextRunEstimateUtc = scheduledRefresh?.nextRunEstimateUtc ?? scheduledRefresh?.NextRunEstimateUtc;
   if (nextRunEstimateUtc) {
     const nextRunMs = Date.parse(nextRunEstimateUtc);
@@ -341,6 +358,8 @@ function getCountdownTargetMs(scheduledRefresh?: ScheduledRefreshStatusDto) {
 
 function getLatestSuccessfulRefreshCompletedAt(scheduledRefresh?: ScheduledRefreshStatusDto, freshness?: MarketFreshnessDto) {
   return getMostRecentUtc([
+    scheduledRefresh?.lastSuccessfulRefreshCompletedAtUtc,
+    scheduledRefresh?.LastSuccessfulRefreshCompletedAtUtc,
     scheduledRefresh?.latestSuccessfulRefreshCompletedAtUtc,
     scheduledRefresh?.LatestSuccessfulRefreshCompletedAtUtc,
     getRefreshCompletedAt(scheduledRefresh?.latestSuccessfulRefresh ?? scheduledRefresh?.LatestSuccessfulRefresh),
@@ -361,7 +380,7 @@ function formatSyncCountdown(diffMs: number) {
 
 function formatMobileSyncStatus(status: string) {
   if (isDemoDataMode) return 'Demo data';
-  if (status.startsWith('Next sync in ')) return status;
+  if (status.startsWith('Next sync in ') || status.startsWith('Next refresh in ')) return status;
   if (status === 'Checking...') return 'Syncing...';
   if (status === 'Auto-sync off') return 'Auto off';
   if (status === 'No enabled refresh targets') return 'No targets';

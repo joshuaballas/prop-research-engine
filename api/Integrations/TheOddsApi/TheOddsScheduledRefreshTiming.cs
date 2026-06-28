@@ -7,163 +7,151 @@ public static class TheOddsScheduledRefreshTiming
         TheOddsRefreshPlanResult plan,
         TheOddsScheduledRefreshStateSnapshot snapshot)
     {
-        var generatedAtUtc = plan.GeneratedAtUtc;
-        var nextRefreshDueUtc = options.Enabled
-            ? plan.Targets
-                .Where(target => target.Enabled)
-                .Select(target => (DateTimeOffset?)target.NextEligibleRefreshUtc)
-                .Min() ?? plan.NextEligibleRefreshUtc
-            : (DateTimeOffset?)null;
-
+        var nowUtc = plan.GeneratedAtUtc;
+        var interval = options.GetInterval();
         var isRefreshInProgress = string.Equals(snapshot.Status, "running", StringComparison.OrdinalIgnoreCase)
             && snapshot.LastRunStartedAtUtc.HasValue
             && !snapshot.LastRunCompletedAtUtc.HasValue;
-        var nextRefreshStartEstimateUtc = ResolveNextRefreshStartEstimateUtc(
-            options,
-            snapshot,
-            nextRefreshDueUtc,
-            isRefreshInProgress);
-        var expectedRefreshDuration = ResolveExpectedRefreshDuration(options, plan);
+        var latestSuccessfulRefreshCompletedAtUtc = Max(
+            snapshot.LastSuccessfulRefreshCompletedAtUtc,
+            ResolveLatestSuccessfulRefreshCompletedAtUtc(plan));
+        var lastRunDurationSeconds = SecondsBetween(snapshot.LastRunStartedAtUtc, snapshot.LastRunCompletedAtUtc);
+        var currentRunElapsedSeconds = isRefreshInProgress
+            ? SecondsBetween(snapshot.LastRunStartedAtUtc, nowUtc)
+            : null;
+        var anchorUtc = Max(latestSuccessfulRefreshCompletedAtUtc, snapshot.LastRunCompletedAtUtc);
+        var nextRefreshAtUtc = ResolveNextRefreshAtUtc(options.Enabled, anchorUtc, interval, nowUtc, isRefreshInProgress);
         var postRefreshReadBuffer = options.GetPostRefreshReadBuffer();
-        var nextHeaderRefreshDueUtc = ResolveNextHeaderRefreshDueUtc(options, plan, nextRefreshDueUtc);
-        var nextHeaderSyncTargetUtc = nextHeaderRefreshDueUtc?.Add(postRefreshReadBuffer);
-        var nextDataAvailableEstimateUtc = nextHeaderSyncTargetUtc;
-        var conservativeDataAvailableEstimateUtc = nextRefreshStartEstimateUtc?.Add(expectedRefreshDuration).Add(postRefreshReadBuffer);
+        var nextHeaderSyncTargetUtc = nextRefreshAtUtc?.Add(postRefreshReadBuffer);
+        var secondsUntilNextRefresh = SecondsUntil(nowUtc, nextRefreshAtUtc);
+        var secondsUntilNextDataAvailable = SecondsUntil(nowUtc, nextHeaderSyncTargetUtc);
         var isOverdue = options.Enabled
             && !isRefreshInProgress
-            && nextDataAvailableEstimateUtc.HasValue
-            && generatedAtUtc > nextDataAvailableEstimateUtc.Value;
+            && nextHeaderSyncTargetUtc.HasValue
+            && nextHeaderSyncTargetUtc.Value <= nowUtc;
 
         return new TheOddsScheduledRefreshTimingSnapshot(
-            nextRefreshDueUtc,
-            nextRefreshStartEstimateUtc,
-            nextHeaderSyncTargetUtc,
-            nextDataAvailableEstimateUtc,
-            conservativeDataAvailableEstimateUtc,
-            NextRunEstimateUtc: nextRefreshStartEstimateUtc,
+            NextRefreshAtUtc: nextRefreshAtUtc,
+            SecondsUntilNextRefresh: secondsUntilNextRefresh,
+            LastSuccessfulRefreshCompletedAtUtc: latestSuccessfulRefreshCompletedAtUtc,
             IsRefreshInProgress: isRefreshInProgress,
             IsOverdue: isOverdue,
-            SecondsUntilNextRefreshStart: SecondsUntil(generatedAtUtc, nextRefreshStartEstimateUtc),
-            SecondsUntilNextDataAvailable: SecondsUntil(generatedAtUtc, nextDataAvailableEstimateUtc),
-            SecondsUntilConservativeDataAvailable: SecondsUntil(generatedAtUtc, conservativeDataAvailableEstimateUtc),
-            ExpectedRefreshDurationSeconds: (int)Math.Ceiling(expectedRefreshDuration.TotalSeconds),
+            CurrentRunStartedAtUtc: isRefreshInProgress ? snapshot.LastRunStartedAtUtc : null,
+            CurrentRunElapsedSeconds: currentRunElapsedSeconds,
+            LastRunDurationSeconds: lastRunDurationSeconds,
+            LastError: snapshot.LastRunError,
+            IntervalMinutes: options.IntervalMinutes,
+            EffectiveIntervalMinutes: (int)interval.TotalMinutes,
             PostRefreshReadBufferSeconds: (int)postRefreshReadBuffer.TotalSeconds,
-            EstimateBasis: BuildEstimateBasis(snapshot, nextRefreshDueUtc, nextRefreshStartEstimateUtc));
+            ExpectedRefreshDurationSeconds: (int)Math.Ceiling(options.GetExpectedRefreshDuration().TotalSeconds),
+            NextRefreshDueUtc: nextRefreshAtUtc,
+            NextRefreshStartEstimateUtc: nextRefreshAtUtc,
+            NextHeaderSyncTargetUtc: nextHeaderSyncTargetUtc,
+            NextDataAvailableEstimateUtc: nextHeaderSyncTargetUtc,
+            ConservativeDataAvailableEstimateUtc: nextHeaderSyncTargetUtc,
+            NextRunEstimateUtc: nextRefreshAtUtc,
+            WorkerNextWakeUtc: nextRefreshAtUtc,
+            CurrentRunScheduledDueUtc: null,
+            CurrentRunEstimatedRemainingSeconds: null,
+            ActiveRunDataAvailableTargetUtc: null,
+            NextCycleRefreshDueUtc: null,
+            NextCycleDataAvailableEstimateUtc: null,
+            DataAvailableStatus: isRefreshInProgress ? "RefreshInProgress" : "Waiting",
+            LastRunScheduledDueUtc: null,
+            LastRunStartedDelaySeconds: null,
+            SecondsUntilNextRefreshDue: secondsUntilNextRefresh,
+            SecondsUntilNextRefreshStart: secondsUntilNextRefresh,
+            SecondsUntilNextDataAvailable: secondsUntilNextDataAvailable,
+            SecondsUntilConservativeDataAvailable: secondsUntilNextDataAvailable,
+            EstimateBasis: "SimpleCompletionInterval");
     }
 
-    private static DateTimeOffset? ResolveNextRefreshStartEstimateUtc(
-        TheOddsScheduledRefreshOptions options,
-        TheOddsScheduledRefreshStateSnapshot snapshot,
-        DateTimeOffset? nextRefreshDueUtc,
+    private static DateTimeOffset? ResolveNextRefreshAtUtc(
+        bool enabled,
+        DateTimeOffset? anchorUtc,
+        TimeSpan interval,
+        DateTimeOffset nowUtc,
         bool isRefreshInProgress)
     {
-        if (!options.Enabled)
+        if (!enabled || isRefreshInProgress)
         {
             return null;
         }
 
-        if (isRefreshInProgress)
+        if (!anchorUtc.HasValue)
         {
-            return snapshot.LastRunStartedAtUtc;
+            return nowUtc;
         }
 
-        var nextWakeEstimateUtc = snapshot.WorkerRunning ? snapshot.NextWakeEstimateUtc : null;
-        if (nextRefreshDueUtc.HasValue && nextWakeEstimateUtc.HasValue)
-        {
-            return nextWakeEstimateUtc.Value > nextRefreshDueUtc.Value
-                ? nextWakeEstimateUtc.Value
-                : nextRefreshDueUtc.Value;
-        }
-
-        return nextWakeEstimateUtc ?? nextRefreshDueUtc;
+        return anchorUtc.Value.Add(interval);
     }
 
-    private static TimeSpan ResolveExpectedRefreshDuration(
-        TheOddsScheduledRefreshOptions options,
-        TheOddsRefreshPlanResult plan)
+    private static DateTimeOffset? ResolveLatestSuccessfulRefreshCompletedAtUtc(TheOddsRefreshPlanResult plan)
     {
-        var configuredDuration = options.GetExpectedRefreshDuration();
-        var observedMaxDuration = plan.Targets
-            .Where(target => target.Enabled
-                && target.LatestRunSucceeded == true
-                && target.LatestRunStartedAtUtc.HasValue
-                && target.LatestRunCompletedAtUtc.HasValue
-                && target.LatestRunCompletedAtUtc.Value > target.LatestRunStartedAtUtc.Value)
-            .Select(target => target.LatestRunCompletedAtUtc!.Value - target.LatestRunStartedAtUtc!.Value)
-            .DefaultIfEmpty(TimeSpan.Zero)
-            .Max();
-
-        return observedMaxDuration > configuredDuration
-            ? observedMaxDuration
-            : configuredDuration;
-    }
-
-    private static DateTimeOffset? ResolveNextHeaderRefreshDueUtc(
-        TheOddsScheduledRefreshOptions options,
-        TheOddsRefreshPlanResult plan,
-        DateTimeOffset? fallbackNextRefreshDueUtc)
-    {
-        if (!options.Enabled)
-        {
-            return null;
-        }
-
-        var latestSuccessfulRefreshCompletedAtUtc = plan.Targets
+        return plan.Targets
             .Where(target => target.Enabled && target.LatestSuccessfulRefreshCompletedAtUtc.HasValue)
             .Select(target => target.LatestSuccessfulRefreshCompletedAtUtc)
             .Max() ?? plan.LastSuccessfulRefreshAtUtc;
-
-        return latestSuccessfulRefreshCompletedAtUtc.HasValue
-            ? latestSuccessfulRefreshCompletedAtUtc.Value.Add(options.GetInterval())
-            : fallbackNextRefreshDueUtc;
     }
 
     private static int? SecondsUntil(DateTimeOffset generatedAtUtc, DateTimeOffset? targetUtc)
     {
-        if (!targetUtc.HasValue)
+        return targetUtc.HasValue
+            ? (int)Math.Ceiling((targetUtc.Value - generatedAtUtc).TotalSeconds)
+            : null;
+    }
+
+    private static decimal? SecondsBetween(DateTimeOffset? startUtc, DateTimeOffset? endUtc)
+    {
+        if (!startUtc.HasValue || !endUtc.HasValue)
         {
             return null;
         }
 
-        return (int)Math.Ceiling((targetUtc.Value - generatedAtUtc).TotalSeconds);
+        return Math.Round((decimal)(endUtc.Value - startUtc.Value).TotalSeconds, 3);
     }
 
-    private static string BuildEstimateBasis(
-        TheOddsScheduledRefreshStateSnapshot snapshot,
-        DateTimeOffset? nextRefreshDueUtc,
-        DateTimeOffset? nextRefreshStartEstimateUtc)
+    private static DateTimeOffset? Max(params DateTimeOffset?[] values)
     {
-        if (string.Equals(snapshot.Status, "running", StringComparison.OrdinalIgnoreCase)
-            && snapshot.LastRunStartedAtUtc.HasValue
-            && !snapshot.LastRunCompletedAtUtc.HasValue)
-        {
-            return "ActiveRunStart";
-        }
-
-        if (snapshot.WorkerRunning
-            && snapshot.NextWakeEstimateUtc.HasValue
-            && nextRefreshStartEstimateUtc == snapshot.NextWakeEstimateUtc
-            && (!nextRefreshDueUtc.HasValue || snapshot.NextWakeEstimateUtc.Value > nextRefreshDueUtc.Value))
-        {
-            return "WorkerWakeEstimate";
-        }
-
-        return "RefreshDueEstimate";
+        var present = values
+            .Where(value => value.HasValue)
+            .Select(value => value!.Value)
+            .ToArray();
+        return present.Length == 0 ? null : present.Max();
     }
 }
 
 public sealed record TheOddsScheduledRefreshTimingSnapshot(
+    DateTimeOffset? NextRefreshAtUtc,
+    int? SecondsUntilNextRefresh,
+    DateTimeOffset? LastSuccessfulRefreshCompletedAtUtc,
+    bool IsRefreshInProgress,
+    bool IsOverdue,
+    DateTimeOffset? CurrentRunStartedAtUtc,
+    decimal? CurrentRunElapsedSeconds,
+    decimal? LastRunDurationSeconds,
+    string? LastError,
+    int IntervalMinutes,
+    int EffectiveIntervalMinutes,
+    int PostRefreshReadBufferSeconds,
+    int ExpectedRefreshDurationSeconds,
     DateTimeOffset? NextRefreshDueUtc,
     DateTimeOffset? NextRefreshStartEstimateUtc,
     DateTimeOffset? NextHeaderSyncTargetUtc,
     DateTimeOffset? NextDataAvailableEstimateUtc,
     DateTimeOffset? ConservativeDataAvailableEstimateUtc,
     DateTimeOffset? NextRunEstimateUtc,
-    bool IsRefreshInProgress,
-    bool IsOverdue,
+    DateTimeOffset? WorkerNextWakeUtc,
+    DateTimeOffset? CurrentRunScheduledDueUtc,
+    int? CurrentRunEstimatedRemainingSeconds,
+    DateTimeOffset? ActiveRunDataAvailableTargetUtc,
+    DateTimeOffset? NextCycleRefreshDueUtc,
+    DateTimeOffset? NextCycleDataAvailableEstimateUtc,
+    string DataAvailableStatus,
+    DateTimeOffset? LastRunScheduledDueUtc,
+    decimal? LastRunStartedDelaySeconds,
+    int? SecondsUntilNextRefreshDue,
     int? SecondsUntilNextRefreshStart,
     int? SecondsUntilNextDataAvailable,
     int? SecondsUntilConservativeDataAvailable,
-    int ExpectedRefreshDurationSeconds,
-    int PostRefreshReadBufferSeconds,
     string EstimateBasis);
