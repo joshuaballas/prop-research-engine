@@ -12,11 +12,40 @@ using SportsBetting.Api.Predictions;
 
 namespace SportsBetting.Api.Endpoints;
 
+public interface ITheOddsLiveRefreshGate
+{
+    Task<IAsyncDisposable> EnterAsync(CancellationToken cancellationToken);
+}
+
+public sealed class TheOddsLiveRefreshGate : ITheOddsLiveRefreshGate
+{
+    private readonly SemaphoreSlim semaphore = new(1, 1);
+
+    public async Task<IAsyncDisposable> EnterAsync(CancellationToken cancellationToken)
+    {
+        await semaphore.WaitAsync(cancellationToken);
+        return new Releaser(semaphore);
+    }
+
+    private sealed class Releaser(SemaphoreSlim semaphore) : IAsyncDisposable
+    {
+        public ValueTask DisposeAsync()
+        {
+            semaphore.Release();
+            return ValueTask.CompletedTask;
+        }
+    }
+}
+
 public interface ITheOddsMlbRefreshService
 {
     Task<IResult> RefreshCurrentAsync(
         TheOddsMlbRefreshRequest request,
         HttpContext? httpContext,
+        CancellationToken cancellationToken);
+
+    Task<TheOddsScheduledMlbFinalizationResult> FinalizeScheduledCycleAsync(
+        TheOddsScheduledMlbFinalizationRequest request,
         CancellationToken cancellationToken);
 }
 
@@ -30,7 +59,34 @@ public sealed record TheOddsMlbRefreshRequest(
     bool? IncludeLineShopping,
     bool? IncludeFullDiagnostics,
     int? FreshnessMinutes,
-    string? TriggerSource = null);
+    string? TriggerSource = null,
+    Guid? ScheduledCycleId = null,
+    string? TargetKey = null,
+    DateTimeOffset? TargetLaunchStartedAtUtc = null,
+    bool DeferPublicFinalization = false,
+    bool BypassLiveRefreshGate = false);
+
+public sealed record TheOddsScheduledMlbFinalizationRequest(
+    Guid ScheduledCycleId,
+    DateOnly? Date,
+    IReadOnlyCollection<string> ProviderCategories,
+    IReadOnlyCollection<string> BookmakerKeys,
+    IReadOnlyCollection<string> Markets,
+    IReadOnlyCollection<Guid> TargetRefreshRunIds,
+    bool IncludeCandidates,
+    bool IncludeLineShopping,
+    bool IncludeFullDiagnostics,
+    int? FreshnessMinutes);
+
+public sealed record TheOddsScheduledMlbFinalizationResult(
+    bool Succeeded,
+    Guid? RefreshRunId,
+    int PredictionCount,
+    int LineShoppingGroupCount,
+    int ActiveCandidateCount,
+    DateTimeOffset StartedAtUtc,
+    DateTimeOffset CompletedAtUtc,
+    string? Error);
 
 public static partial class TheOddsApiDebugEndpoints
 {
@@ -45,10 +101,9 @@ public static partial class TheOddsApiDebugEndpoints
         IProviderLineLifecycleService providerLineLifecycleService,
         IServiceScopeFactory scopeFactory,
         ApplicationDbContext dbContext,
-        IApplicationErrorLogger errorLogger) : ITheOddsMlbRefreshService
+        IApplicationErrorLogger errorLogger,
+        ITheOddsLiveRefreshGate liveRefreshGate) : ITheOddsMlbRefreshService
     {
-        private static readonly SemaphoreSlim LiveRefreshGate = new(1, 1);
-
         public async Task<IResult> RefreshCurrentAsync(
             TheOddsMlbRefreshRequest request,
             HttpContext? httpContext,
@@ -65,6 +120,9 @@ public static partial class TheOddsApiDebugEndpoints
             var freshnessMinutes = request.FreshnessMinutes;
             var triggerSource = NullIfWhiteSpace(request.TriggerSource)
                 ?? (httpContext is null ? "Internal" : "ManualDebugEndpoint");
+            var scheduledCycleId = request.ScheduledCycleId;
+            var targetKey = NullIfWhiteSpace(request.TargetKey);
+            var deferPublicFinalization = request.DeferPublicFinalization;
             var totalStopwatch = Stopwatch.StartNew();
             var stepStopwatch = Stopwatch.StartNew();
             var isDryRun = dryRun == true;
@@ -75,6 +133,7 @@ public static partial class TheOddsApiDebugEndpoints
             var apiOptions = theOddsApiOptions.Value;
             var maxConcurrentRequests = Math.Clamp(apiOptions.MaxConcurrentRequests, 1, 10);
             var slateDate = date ?? ResolveCurrentMlbSlateDate();
+            var originallyResolvedSlateDate = slateDate;
             var resolveSlateDateMs = stepStopwatch.ElapsedMilliseconds;
             var lifecycleFreshnessMinutes = Math.Clamp(freshnessMinutes ?? DefaultTheOddsLineShoppingFreshnessMinutes, 1, 1440);
             var preset = ResolveTheOddsBookmakerPreset(bookmakerPreset);
@@ -224,7 +283,9 @@ public static partial class TheOddsApiDebugEndpoints
                 });
             }
 
-            await LiveRefreshGate.WaitAsync(cancellationToken);
+            var gateLease = request.BypassLiveRefreshGate
+                ? null
+                : await liveRefreshGate.EnterAsync(cancellationToken);
             try
             {
                 var refreshRun = new TheOddsRefreshRun
@@ -246,6 +307,7 @@ public static partial class TheOddsApiDebugEndpoints
                     MarketsRequested = string.Join(",", requestedMarkets),
                     EstimatedApiCalls = estimatedApiCalls
                 };
+                var targetIngestStartedAtUtc = request.TargetLaunchStartedAtUtc ?? refreshRun.StartedAtUtc;
                 dbContext.TheOddsRefreshRuns.Add(refreshRun);
                 await dbContext.SaveChangesAsync(cancellationToken);
 
@@ -266,12 +328,53 @@ public static partial class TheOddsApiDebugEndpoints
                 var fetchEventsMs = stepStopwatch.ElapsedMilliseconds;
 
                 stepStopwatch.Restart();
-                var slateEvents = eventFetch.Events
+                var eventDiscoveryObservedAtUtc = DateTimeOffset.UtcNow;
+                var discoveredEvents = eventFetch.Events
                     .Where(row => !string.IsNullOrWhiteSpace(row.EventId))
-                    .Where(row => ResolveMlbSlateDate(row.EventStartTime) == slateDate)
                     .OrderBy(row => row.EventStartTime)
                     .ThenBy(row => row.EventId)
                     .ToArray();
+                var originallyResolvedSlateEvents = discoveredEvents
+                    .Where(row => ResolveMlbSlateDate(row.EventStartTime) == slateDate)
+                    .ToArray();
+                var originallyResolvedSlateFutureEvents = originallyResolvedSlateEvents
+                    .Count(row => row.EventStartTime.HasValue && row.EventStartTime.Value > eventDiscoveryObservedAtUtc);
+                DateOnly? nextUpcomingSlateDate = null;
+                var selectedUpcomingSlate = false;
+                var noUpcomingProviderEvents = false;
+                if (!date.HasValue && originallyResolvedSlateFutureEvents == 0)
+                {
+                    var nextUpcomingEvent = discoveredEvents
+                        .Where(row => row.EventStartTime.HasValue && row.EventStartTime.Value > eventDiscoveryObservedAtUtc)
+                        .OrderBy(row => row.EventStartTime)
+                        .FirstOrDefault();
+                    nextUpcomingSlateDate = ResolveMlbSlateDate(nextUpcomingEvent?.EventStartTime);
+                    if (nextUpcomingSlateDate.HasValue && nextUpcomingSlateDate.Value != slateDate)
+                    {
+                        slateDate = nextUpcomingSlateDate.Value;
+                        selectedUpcomingSlate = true;
+                        refreshRun.SlateDate = slateDate;
+                        existingSlateProps = await CountPersistedTheOddsPropsForSlateAsync(dbContext, slateDate, cancellationToken);
+                        estimatedSlateEvents = await CountPersistedTheOddsEventsForSlateAsync(dbContext, slateDate, cancellationToken);
+                        refreshRun.EstimatedApiCalls = 1 + (estimatedSlateEvents * ((shouldFetchSportsbookBookmakers ? 1 : 0) + (includeDfsBookmakers ? 1 : 0)));
+                    }
+                    else if (!nextUpcomingSlateDate.HasValue)
+                    {
+                        noUpcomingProviderEvents = true;
+                    }
+                }
+
+                var slateEvents = noUpcomingProviderEvents
+                    ? []
+                    : discoveredEvents
+                        .Where(row => ResolveMlbSlateDate(row.EventStartTime) == slateDate)
+                        .OrderBy(row => row.EventStartTime)
+                        .ThenBy(row => row.EventId)
+                        .ToArray();
+                var selectedSlateFutureEvents = slateEvents
+                    .Count(row => row.EventStartTime.HasValue && row.EventStartTime.Value > eventDiscoveryObservedAtUtc);
+                var selectedSlateEventStartedEvents = slateEvents
+                    .Count(row => row.EventStartTime.HasValue && row.EventStartTime.Value <= eventDiscoveryObservedAtUtc);
                 var filterEventsMs = stepStopwatch.ElapsedMilliseconds;
 
                 stepStopwatch.Restart();
@@ -310,13 +413,15 @@ public static partial class TheOddsApiDebugEndpoints
 
                 stepStopwatch.Restart();
                 var afterPlatformPropIds = await LoadTheOddsPlatformPropIdsAsync(dbContext, cancellationToken);
-                var platformPropsCreated = afterPlatformPropIds.Except(beforePlatformPropIds).Count();
                 var platformPropsUpserted = allIngestionResults.Sum(row => row.PlatformPropsUpserted);
+                var platformPropsCreated = deferPublicFinalization
+                    ? allIngestionResults.Sum(row => row.Timing.RowsCreated)
+                    : afterPlatformPropIds.Except(beforePlatformPropIds).Count();
                 var platformPropsUpdated = Math.Max(0, platformPropsUpserted - platformPropsCreated);
                 var loadAfterPlatformPropsMs = stepStopwatch.ElapsedMilliseconds;
 
                 stepStopwatch.Restart();
-                var predictionResult = slateEvents.Length == 0
+                var predictionResult = slateEvents.Length == 0 || deferPublicFinalization
                     ? null
                     : await generationService.GenerateTheOddsMlbBaselinePredictionsAsync(
                         new TheOddsMlbPredictionGenerationRequest(null, predictionBookmakers, markets),
@@ -325,6 +430,7 @@ public static partial class TheOddsApiDebugEndpoints
 
                 var generatedAtUtc = DateTimeOffset.UtcNow;
                 var needsLineShopping = predictionResult is not null
+                    && !deferPublicFinalization
                     && (shouldIncludeLineShopping || shouldIncludeCandidates);
                 stepStopwatch.Restart();
                 var lineShopping = !needsLineShopping
@@ -410,9 +516,18 @@ public static partial class TheOddsApiDebugEndpoints
                     activeGroups = activeGroups.Length,
                     staleOrExpiredGroups = lineShopping.Groups.Count(row => !IsActiveTheOddsLineShoppingGroup(row))
                 };
+                var targetIngestCompletedAtUtc = DateTimeOffset.UtcNow;
                 var diagnostics = new
                 {
+                    scheduledCycleId,
+                    targetKey,
                     triggerSource,
+                    targetIngestMode = deferPublicFinalization ? "Parallel" : "FullRefresh",
+                    targetLaunchStartedAtUtc = request.TargetLaunchStartedAtUtc,
+                    targetIngestStartedAtUtc,
+                    targetIngestCompletedAtUtc,
+                    targetIngestDurationSeconds = Math.Round((targetIngestCompletedAtUtc - targetIngestStartedAtUtc).TotalSeconds, 3),
+                    publicFinalizationDeferred = deferPublicFinalization,
                     callsTheOddsApi = true,
                     totalDurationMs = totalStopwatch.ElapsedMilliseconds,
                     resolveSlateDateMs,
@@ -512,6 +627,16 @@ public static partial class TheOddsApiDebugEndpoints
                     dfsRegion,
                     configuredMarkets = markets,
                     eventsFetched = slateEvents.Length,
+                    eventsDiscovered = discoveredEvents.Length,
+                    originallyResolvedSlateDate,
+                    selectedSlateDate = slateDate,
+                    selectedUpcomingSlate,
+                    nextUpcomingSlateDate,
+                    noUpcomingProviderEvents,
+                    originallyResolvedSlateEvents = originallyResolvedSlateEvents.Length,
+                    originallyResolvedSlateFutureEvents,
+                    selectedSlateFutureEvents,
+                    selectedSlateEventStartedEvents,
                     marketsRequested = requestedMarkets,
                     bookmakersRequested = requestedBookmakers,
                     propTypesRequested = requestedPropTypes,
@@ -571,12 +696,14 @@ public static partial class TheOddsApiDebugEndpoints
                     includeCandidates = shouldIncludeCandidates,
                     includeFullDiagnostics = shouldIncludeFullDiagnostics,
                     freshnessMinutes = lifecycleFreshnessMinutes,
-                    warning = activeGroups.Length == 0 && lineShopping.Groups.Count > 0
-                        ? "All line-shopping rows are stale, expired, or game-started for the requested freshness window."
-                        : null
+                    warning = noUpcomingProviderEvents
+                        ? "The Odds returned no future MLB events in the provider event list; started events were not ingested as an actionable public board."
+                        : activeGroups.Length == 0 && lineShopping.Groups.Count > 0
+                            ? "All line-shopping rows are stale, expired, or game-started for the requested freshness window."
+                            : null
                 };
 
-                refreshRun.CompletedAtUtc = DateTimeOffset.UtcNow;
+                refreshRun.CompletedAtUtc = targetIngestCompletedAtUtc;
                 refreshRun.Succeeded = true;
                 refreshRun.Failed = false;
                 refreshRun.Blocked = false;
@@ -590,19 +717,33 @@ public static partial class TheOddsApiDebugEndpoints
                 refreshRun.ActiveWatchlistCount = activeWatchlist.Length;
                 refreshRun.ActiveAvoidCount = activeAvoid.Length;
                 refreshRun.DiagnosticsJson = JsonSerializer.SerializeToDocument(diagnostics);
-                await PersistTheOddsMarketSnapshotsAsync(
-                    refreshRun,
-                    predictionResult?.RunId,
-                    generatedAtUtc,
-                    lineShopping.Groups,
-                    activeCandidates.Take(25).ToArray(),
-                    likelyHitModel,
-                    topPicksModelOptions.Value,
-                    dbContext,
-                    cancellationToken);
-                await dbContext.SaveChangesAsync(cancellationToken);
-                var lifecycleTracking = await providerLineLifecycleService.TrackRefreshAsync(refreshRun.Id, cancellationToken);
-                refreshRun.DiagnosticsJson = BuildRefreshDiagnosticsDocument(diagnostics, lifecycleTracking);
+                object lifecycleTracking;
+                if (deferPublicFinalization)
+                {
+                    lifecycleTracking = new
+                    {
+                        skipped = true,
+                        reason = "Scheduled target public finalization is deferred until all parallel target ingests complete."
+                    };
+                    refreshRun.DiagnosticsJson = JsonSerializer.SerializeToDocument(diagnostics);
+                }
+                else
+                {
+                    await PersistTheOddsMarketSnapshotsAsync(
+                        refreshRun,
+                        predictionResult?.RunId,
+                        generatedAtUtc,
+                        lineShopping.Groups,
+                        activeCandidates.Take(25).ToArray(),
+                        likelyHitModel,
+                        topPicksModelOptions.Value,
+                        dbContext,
+                        cancellationToken);
+                    await dbContext.SaveChangesAsync(cancellationToken);
+                    var tracking = await providerLineLifecycleService.TrackRefreshAsync(refreshRun.Id, cancellationToken);
+                    lifecycleTracking = tracking;
+                    refreshRun.DiagnosticsJson = BuildRefreshDiagnosticsDocument(diagnostics, tracking);
+                }
                 await dbContext.SaveChangesAsync(cancellationToken);
 
                 return Results.Ok(new
@@ -692,7 +833,250 @@ public static partial class TheOddsApiDebugEndpoints
             }
             finally
             {
-                LiveRefreshGate.Release();
+                if (gateLease is not null)
+                {
+                    await gateLease.DisposeAsync();
+                }
+            }
+        }
+
+        public async Task<TheOddsScheduledMlbFinalizationResult> FinalizeScheduledCycleAsync(
+            TheOddsScheduledMlbFinalizationRequest request,
+            CancellationToken cancellationToken)
+        {
+            var startedAtUtc = DateTimeOffset.UtcNow;
+            var totalStopwatch = Stopwatch.StartNew();
+            var slateDate = request.Date ?? ResolveCurrentMlbSlateDate();
+            var generatedAtUtc = DateTimeOffset.UtcNow;
+            var lifecycleFreshnessMinutes = Math.Clamp(request.FreshnessMinutes ?? DefaultTheOddsLineShoppingFreshnessMinutes, 1, 1440);
+            var providerCategoriesIncluded = request.ProviderCategories
+                .Where(value => !string.IsNullOrWhiteSpace(value))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+            var scopedBookmakerKeys = request.BookmakerKeys
+                .Where(value => !string.IsNullOrWhiteSpace(value))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+            var requestedMarkets = request.Markets
+                .Where(value => !string.IsNullOrWhiteSpace(value))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+            var predictionBookmakers = scopedBookmakerKeys.Length == 0 ? null : string.Join(",", scopedBookmakerKeys);
+            var markets = requestedMarkets.Length == 0 ? NullIfWhiteSpace(theOddsApiOptions.Value.Markets) : string.Join(",", requestedMarkets);
+
+            var refreshRun = new TheOddsRefreshRun
+            {
+                Id = Guid.NewGuid(),
+                Provider = "The Odds API",
+                Sport = "MLB",
+                SlateDate = slateDate,
+                StartedAtUtc = startedAtUtc,
+                Succeeded = false,
+                Failed = false,
+                Blocked = false,
+                DryRun = false,
+                ForceLive = false,
+                BookmakerPreset = "scheduledCycleFinalization",
+                ProviderCategoriesIncluded = string.Join(",", providerCategoriesIncluded),
+                SportsbookBookmakersRequested = string.Join(",", scopedBookmakerKeys),
+                DfsBookmakersRequested = string.Join(",", scopedBookmakerKeys),
+                MarketsRequested = string.Join(",", requestedMarkets),
+                EstimatedApiCalls = 0,
+                ActualApiCalls = 0
+            };
+
+            dbContext.TheOddsRefreshRuns.Add(refreshRun);
+            await dbContext.SaveChangesAsync(cancellationToken);
+
+            try
+            {
+                var predictionStopwatch = Stopwatch.StartNew();
+                var predictionResult = await generationService.GenerateTheOddsMlbBaselinePredictionsAsync(
+                    new TheOddsMlbPredictionGenerationRequest(null, predictionBookmakers, markets),
+                    cancellationToken);
+                predictionStopwatch.Stop();
+
+                var lineShoppingStopwatch = Stopwatch.StartNew();
+                var lineShopping = !request.IncludeLineShopping && !request.IncludeCandidates
+                    ? new TheOddsCurrentRecommendationLineShoppingResult([], [], [], Array.Empty<object>())
+                    : await BuildCurrentRecommendationLineShoppingResultAsync(
+                        predictionResult.RunId,
+                        generatedAtUtc,
+                        lifecycleFreshnessMinutes,
+                        dbContext,
+                        probabilityService,
+                        providerCategoriesIncluded,
+                        scopedBookmakerKeys,
+                        cancellationToken);
+                lineShoppingStopwatch.Stop();
+
+                var activeGroups = lineShopping.Groups
+                    .Where(IsActiveTheOddsLineShoppingGroup)
+                    .ToArray();
+                var classifiedGroups = activeGroups
+                    .Select(group => new
+                    {
+                        Group = group,
+                        Strategy = ClassifyTheOddsLineShoppingStrategy(group)
+                    })
+                    .ToArray();
+                var activeCandidates = classifiedGroups
+                    .Where(row => row.Strategy.IsCandidate)
+                    .OrderByDescending(row => row.Group.BestEstimatedEv ?? decimal.MinValue)
+                    .ThenByDescending(row => row.Group.RankingScore)
+                    .Select(row => row.Group)
+                    .ToArray();
+                var activeWatchlist = classifiedGroups
+                    .Where(row => row.Strategy.IsWatchlist)
+                    .Select(row => row.Group)
+                    .ToArray();
+                var activeAvoid = classifiedGroups
+                    .Where(row => row.Strategy.IsAvoid)
+                    .Select(row => row.Group)
+                    .ToArray();
+                var futureActionableGroups = activeGroups
+                    .Where(group => group.EventStartTime.HasValue && group.EventStartTime.Value > generatedAtUtc)
+                    .ToArray();
+                var replacementFutureEventGroupCount = lineShopping.Groups
+                    .Count(group => group.EventStartTime.HasValue && group.EventStartTime.Value > generatedAtUtc);
+                var replacementEventStartedGroupCount = lineShopping.Groups
+                    .Count(group => group.EventStartTime.HasValue && group.EventStartTime.Value <= generatedAtUtc);
+                var replacementStaleOrExpiredGroupCount = lineShopping.Groups.Count(group => !IsActiveTheOddsLineShoppingGroup(group));
+                var replacementHasActionableFutureRows = futureActionableGroups.Length > 0;
+                var priorUsablePublicBoardExists = await HasPriorUsableMlbPublicSnapshotAsync(
+                    dbContext,
+                    providerCategoriesIncluded,
+                    cancellationToken);
+                var shouldPublishPublicSnapshots = replacementHasActionableFutureRows || !priorUsablePublicBoardExists;
+                var publicBoardPublicationSkipped = !shouldPublishPublicSnapshots;
+                var publicBoardPublicationSkipReason = publicBoardPublicationSkipped
+                    ? lineShopping.Groups.Count == 0
+                        ? "ZeroReplacementPreservedPriorUsableBoard"
+                        : "DeadSlateNoActionableFutureLinesPreservedPriorUsableBoard"
+                    : null;
+
+                var persistStopwatch = Stopwatch.StartNew();
+                if (shouldPublishPublicSnapshots)
+                {
+                    await PersistTheOddsMarketSnapshotsAsync(
+                        refreshRun,
+                        predictionResult.RunId,
+                        generatedAtUtc,
+                        lineShopping.Groups,
+                        activeCandidates.Take(25).ToArray(),
+                        likelyHitModel,
+                        topPicksModelOptions.Value,
+                        dbContext,
+                        cancellationToken);
+                    await dbContext.SaveChangesAsync(cancellationToken);
+                }
+                persistStopwatch.Stop();
+
+                var lifecycleStopwatch = Stopwatch.StartNew();
+                object lifecycleTracking = shouldPublishPublicSnapshots
+                    ? await providerLineLifecycleService.TrackRefreshAsync(refreshRun.Id, cancellationToken)
+                    : new
+                    {
+                        skipped = true,
+                        reason = publicBoardPublicationSkipReason
+                    };
+                lifecycleStopwatch.Stop();
+
+                var completedAtUtc = DateTimeOffset.UtcNow;
+                totalStopwatch.Stop();
+                var diagnostics = new
+                {
+                    scheduledCycleId = request.ScheduledCycleId,
+                    triggerSource = "ScheduledWorker",
+                    targetIngestMode = "ParallelFinalization",
+                    finalizationStartedAtUtc = startedAtUtc,
+                    finalizationCompletedAtUtc = completedAtUtc,
+                    finalizationDurationSeconds = Math.Round((completedAtUtc - startedAtUtc).TotalSeconds, 3),
+                    callsTheOddsApi = false,
+                    publicFinalizationDeferred = false,
+                    finalizedTargetRefreshRunIds = request.TargetRefreshRunIds,
+                    providerCategoriesIncluded,
+                    scopedBookmakerKeys,
+                    requestedMarkets,
+                    predictionMs = predictionStopwatch.ElapsedMilliseconds,
+                    lineShoppingMs = lineShoppingStopwatch.ElapsedMilliseconds,
+                    persistSnapshotsMs = persistStopwatch.ElapsedMilliseconds,
+                    lifecycleTrackingMs = lifecycleStopwatch.ElapsedMilliseconds,
+                    totalDurationMs = totalStopwatch.ElapsedMilliseconds,
+                    publicBoardPublicationStatus = shouldPublishPublicSnapshots ? "Published" : "Skipped",
+                    publicBoardPublicationSkipped,
+                    publicBoardPublicationSkipReason,
+                    priorUsablePublicBoardExists,
+                    replacementSnapshotRows = lineShopping.Groups.Count,
+                    replacementActiveGroupCount = activeGroups.Length,
+                    replacementActionableFutureGroupCount = futureActionableGroups.Length,
+                    replacementFutureEventGroupCount,
+                    replacementEventStartedGroupCount,
+                    replacementStaleOrExpiredGroupCount,
+                    replacementHasActionableFutureRows,
+                    predictionRunId = predictionResult.RunId,
+                    predictionCount = predictionResult.PredictionsGenerated,
+                    lineShoppingGroupCount = lineShopping.Groups.Count,
+                    activeCandidateCount = activeCandidates.Length,
+                    activeWatchlistCount = activeWatchlist.Length,
+                    activeAvoidCount = activeAvoid.Length
+                };
+
+                refreshRun.CompletedAtUtc = completedAtUtc;
+                refreshRun.Succeeded = true;
+                refreshRun.Failed = false;
+                refreshRun.Blocked = false;
+                refreshRun.PredictionCount = predictionResult.PredictionsGenerated;
+                refreshRun.LineShoppingGroupCount = lineShopping.Groups.Count;
+                refreshRun.ActiveCandidateCount = activeCandidates.Length;
+                refreshRun.ActiveWatchlistCount = activeWatchlist.Length;
+                refreshRun.ActiveAvoidCount = activeAvoid.Length;
+                refreshRun.DiagnosticsJson = shouldPublishPublicSnapshots && lifecycleTracking is ProviderLineLifecycleTrackingResult tracking
+                    ? BuildRefreshDiagnosticsDocument(diagnostics, tracking)
+                    : JsonSerializer.SerializeToDocument(diagnostics);
+                await dbContext.SaveChangesAsync(cancellationToken);
+
+                return new TheOddsScheduledMlbFinalizationResult(
+                    true,
+                    refreshRun.Id,
+                    predictionResult.PredictionsGenerated,
+                    lineShopping.Groups.Count,
+                    activeCandidates.Length,
+                    startedAtUtc,
+                    completedAtUtc,
+                    Error: null);
+            }
+            catch (Exception exception)
+            {
+                var completedAtUtc = DateTimeOffset.UtcNow;
+                refreshRun.CompletedAtUtc = completedAtUtc;
+                refreshRun.Succeeded = false;
+                refreshRun.Failed = true;
+                refreshRun.Blocked = false;
+                refreshRun.ErrorMessage = exception.Message;
+                refreshRun.DiagnosticsJson = JsonSerializer.SerializeToDocument(new
+                {
+                    scheduledCycleId = request.ScheduledCycleId,
+                    triggerSource = "ScheduledWorker",
+                    targetIngestMode = "ParallelFinalization",
+                    finalizationStartedAtUtc = startedAtUtc,
+                    finalizationCompletedAtUtc = completedAtUtc,
+                    finalizationDurationSeconds = Math.Round((completedAtUtc - startedAtUtc).TotalSeconds, 3),
+                    callsTheOddsApi = false,
+                    exceptionType = exception.GetType().FullName,
+                    exception.Message
+                });
+                await dbContext.SaveChangesAsync(CancellationToken.None);
+
+                return new TheOddsScheduledMlbFinalizationResult(
+                    false,
+                    refreshRun.Id,
+                    PredictionCount: 0,
+                    LineShoppingGroupCount: 0,
+                    ActiveCandidateCount: 0,
+                    startedAtUtc,
+                    completedAtUtc,
+                    exception.Message);
             }
         }
 
@@ -712,6 +1096,30 @@ public static partial class TheOddsApiDebugEndpoints
             node["lifecycleConcurrencyRetryAttempted"] = lifecycleTracking.ConcurrencyRetryAttempted;
             node["lifecycleConcurrencyRetrySucceeded"] = lifecycleTracking.ConcurrencyRetrySucceeded;
             return JsonSerializer.SerializeToDocument(node);
+        }
+
+        private static async Task<bool> HasPriorUsableMlbPublicSnapshotAsync(
+            ApplicationDbContext dbContext,
+            IReadOnlyCollection<string> providerCategories,
+            CancellationToken cancellationToken)
+        {
+            var query = dbContext.MarketLineShoppingSnapshots
+                .AsNoTracking()
+                .Where(row => row.Sport == "MLB"
+                    && row.LifecycleStatus == "Active"
+                    && !row.IsStale
+                    && !row.IsExpired);
+
+            var scopedProviderCategories = providerCategories
+                .Where(value => !string.IsNullOrWhiteSpace(value))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+            if (scopedProviderCategories.Length > 0)
+            {
+                query = query.Where(row => scopedProviderCategories.Contains(row.ProviderCategory));
+            }
+
+            return await query.AnyAsync(cancellationToken);
         }
 
         private static void DetachRefreshFailureSideEffects(ApplicationDbContext dbContext, TheOddsRefreshRun refreshRun)

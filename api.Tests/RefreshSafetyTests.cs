@@ -594,6 +594,375 @@ public sealed class RefreshSafetyTests
     }
 
     [Fact]
+    public void ScheduledRefreshWorker_TargetTimingDiagnosticsDetectParallelOverlap()
+    {
+        var startedAt = DateTimeOffset.UtcNow.AddMinutes(-5);
+        var timings = new[]
+        {
+            new TheOddsMlbScheduledRefreshWorker.ScheduledTargetTiming(startedAt, startedAt.AddSeconds(40)),
+            new TheOddsMlbScheduledRefreshWorker.ScheduledTargetTiming(startedAt.AddSeconds(1), startedAt.AddSeconds(35)),
+            new TheOddsMlbScheduledRefreshWorker.ScheduledTargetTiming(startedAt.AddSeconds(2), startedAt.AddSeconds(20))
+        };
+
+        var spread = TheOddsMlbScheduledRefreshWorker.CalculateTargetStartSpreadSeconds(timings);
+        var overlapDetected = TheOddsMlbScheduledRefreshWorker.DetectTargetOverlap(timings);
+
+        Assert.Equal(2m, spread);
+        Assert.True(overlapDetected);
+    }
+
+    [Fact]
+    public void ScheduledRefreshWorker_TargetTimingDiagnosticsDoNotReportSequentialOverlap()
+    {
+        var startedAt = DateTimeOffset.UtcNow.AddMinutes(-5);
+        var timings = new[]
+        {
+            new TheOddsMlbScheduledRefreshWorker.ScheduledTargetTiming(startedAt, startedAt.AddSeconds(10)),
+            new TheOddsMlbScheduledRefreshWorker.ScheduledTargetTiming(startedAt.AddSeconds(10), startedAt.AddSeconds(20)),
+            new TheOddsMlbScheduledRefreshWorker.ScheduledTargetTiming(startedAt.AddSeconds(20), startedAt.AddSeconds(30))
+        };
+
+        var spread = TheOddsMlbScheduledRefreshWorker.CalculateTargetStartSpreadSeconds(timings);
+        var overlapDetected = TheOddsMlbScheduledRefreshWorker.DetectTargetOverlap(timings);
+
+        Assert.Equal(20m, spread);
+        Assert.False(overlapDetected);
+    }
+
+    [Fact]
+    public async Task RecentRefreshRuns_DoesNotCountSameCycleSiblingOverlapAsForbidden()
+    {
+        await using var factory = new SafetyTestApplicationFactory();
+        using var client = factory.CreateClient();
+        var cycleId = Guid.NewGuid();
+        var startedAt = DateTimeOffset.Parse("2026-06-28T21:00:00Z", CultureInfo.InvariantCulture);
+        using (var scope = factory.Services.CreateScope())
+        {
+            var dbContext = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+            await dbContext.Database.EnsureCreatedAsync();
+            dbContext.TheOddsRefreshRuns.AddRange(
+                CreateTheOddsRun(
+                    Guid.NewGuid(),
+                    "MLB",
+                    startedAt,
+                    startedAt.AddSeconds(45),
+                    "dfsOnly",
+                    "DFS",
+                    new { scheduledCycleId = cycleId, targetKey = "mlb-dfs", targetIngestMode = "Parallel" }),
+                CreateTheOddsRun(
+                    Guid.NewGuid(),
+                    "MLB",
+                    startedAt.AddSeconds(2),
+                    startedAt.AddSeconds(35),
+                    "default",
+                    "Sportsbook",
+                    new { scheduledCycleId = cycleId, targetKey = "mlb-sportsbook", targetIngestMode = "Parallel" }));
+            await dbContext.SaveChangesAsync();
+        }
+
+        var response = await client.GetAsync("/api/debug/the-odds/refresh-runs/recent?take=10");
+
+        await EnsureSuccessWithBodyAsync(response);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal(0, json.GetProperty("rowsWithOverlap").GetInt32());
+        Assert.Equal(0, json.GetProperty("rowsStartedWhileAnotherRunActive").GetInt32());
+        Assert.Equal(1, json.GetProperty("parallelSiblingOverlapCount").GetInt32());
+        Assert.Contains(
+            json.GetProperty("runs").EnumerateArray(),
+            row => row.GetProperty("parallelSiblingOverlapDetected").GetBoolean()
+                && !row.GetProperty("forbiddenOverlapDetected").GetBoolean());
+    }
+
+    [Fact]
+    public async Task RecentRefreshRuns_CountsDifferentCycleOverlapAsForbidden()
+    {
+        await using var factory = new SafetyTestApplicationFactory();
+        using var client = factory.CreateClient();
+        var startedAt = DateTimeOffset.Parse("2026-06-28T21:00:00Z", CultureInfo.InvariantCulture);
+        using (var scope = factory.Services.CreateScope())
+        {
+            var dbContext = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+            await dbContext.Database.EnsureCreatedAsync();
+            dbContext.TheOddsRefreshRuns.AddRange(
+                CreateTheOddsRun(
+                    Guid.NewGuid(),
+                    "MLB",
+                    startedAt,
+                    startedAt.AddSeconds(45),
+                    "dfsOnly",
+                    "DFS",
+                    new { scheduledCycleId = Guid.NewGuid(), targetKey = "mlb-dfs", targetIngestMode = "Parallel" }),
+                CreateTheOddsRun(
+                    Guid.NewGuid(),
+                    "MLB",
+                    startedAt.AddSeconds(2),
+                    startedAt.AddSeconds(35),
+                    "default",
+                    "Sportsbook",
+                    new { scheduledCycleId = Guid.NewGuid(), targetKey = "mlb-sportsbook", targetIngestMode = "Parallel" }));
+            await dbContext.SaveChangesAsync();
+        }
+
+        var response = await client.GetAsync("/api/debug/the-odds/refresh-runs/recent?take=10");
+
+        await EnsureSuccessWithBodyAsync(response);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal(1, json.GetProperty("rowsWithOverlap").GetInt32());
+        Assert.Equal(1, json.GetProperty("rowsStartedWhileAnotherRunActive").GetInt32());
+        Assert.Equal(0, json.GetProperty("parallelSiblingOverlapCount").GetInt32());
+    }
+
+    [Fact]
+    public async Task MarketFreshness_ClassifiesScheduledFinalizationSeparatelyFromProviderIngestion()
+    {
+        await using var factory = new SafetyTestApplicationFactory();
+        using var client = factory.CreateClient();
+        var providerRunId = Guid.NewGuid();
+        var finalizationRunId = Guid.NewGuid();
+        var startedAt = DateTimeOffset.Parse("2026-06-28T21:00:00Z", CultureInfo.InvariantCulture);
+        using (var scope = factory.Services.CreateScope())
+        {
+            var dbContext = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+            await dbContext.Database.EnsureCreatedAsync();
+            var providerRun = CreateTheOddsRun(
+                providerRunId,
+                "MLB",
+                startedAt,
+                startedAt.AddSeconds(20),
+                "default",
+                "Sportsbook",
+                new
+                {
+                    ingestion = new[] { new { success = true } },
+                    lineShoppingSummary = new { activeGroups = 1, staleOrExpiredGroups = 0 }
+                });
+            providerRun.ActualApiCalls = 12;
+            var finalizationRun = CreateTheOddsRun(
+                finalizationRunId,
+                "MLB",
+                startedAt.AddMinutes(1),
+                startedAt.AddMinutes(1).AddSeconds(5),
+                "scheduledCycleFinalization",
+                "DFS,Sportsbook",
+                new
+                {
+                    targetIngestMode = "ParallelFinalization",
+                    publicBoardPublicationSkipped = true,
+                    publicBoardPublicationSkipReason = "DeadSlateNoActionableFutureLinesPreservedPriorUsableBoard"
+                });
+            finalizationRun.ActualApiCalls = 0;
+            dbContext.TheOddsRefreshRuns.AddRange(providerRun, finalizationRun);
+            dbContext.MarketLineShoppingSnapshots.Add(new MarketLineShoppingSnapshot
+            {
+                Id = Guid.NewGuid(),
+                TheOddsRefreshRunId = providerRunId,
+                Sport = "MLB",
+                SlateDate = new DateOnly(2026, 6, 28),
+                GeneratedAtUtc = startedAt.AddSeconds(21),
+                BookmakerPreset = "default",
+                ProviderCategory = "Sportsbook",
+                Player = "Test Player",
+                EventStartTime = startedAt.AddHours(2),
+                LifecycleStatus = "Active",
+                IsStale = false,
+                IsExpired = false,
+                PropType = "Hits",
+                Line = 0.5m,
+                BestSide = "Over",
+                StrategyClassification = "Candidate",
+                StrategyTier = "MlbSportsbookRecommendation",
+                EntryProvider = "Sportsbook",
+                EntryCompatibilityGroup = "Sportsbook",
+                EntryProviderCategory = "Sportsbook",
+                DetailsJson = JsonSerializer.SerializeToDocument(new { player = "Test Player" })
+            });
+            await dbContext.SaveChangesAsync();
+        }
+
+        var response = await client.GetAsync("/api/markets/freshness?sport=MLB&freshnessMinutes=9999");
+
+        await EnsureSuccessWithBodyAsync(response);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal(providerRunId, json.GetProperty("latestSuccessfulRefresh").GetProperty("id").GetGuid());
+        Assert.Equal(providerRunId, json.GetProperty("latestProviderIngestionRun").GetProperty("id").GetGuid());
+        Assert.Equal(finalizationRunId, json.GetProperty("latestFinalizationRun").GetProperty("id").GetGuid());
+        Assert.Equal(providerRunId, json.GetProperty("latestUsablePublicSnapshotRun").GetProperty("id").GetGuid());
+        Assert.Equal(1, json.GetProperty("providerIngestionSuccessCount").GetInt32());
+        Assert.Equal(providerRunId, json.GetProperty("providerStatus").GetProperty("latestRefreshRunId").GetGuid());
+        Assert.Equal(12, json.GetProperty("providerStatus").GetProperty("actualApiCalls").GetInt32());
+    }
+
+    [Fact]
+    public async Task PublicSnapshots_ExcludePreservedRowsAfterEventStart_AndFreshnessReportsNoCurrentBoard()
+    {
+        await using var factory = new SafetyTestApplicationFactory();
+        using var client = factory.CreateClient();
+        var refreshRunId = Guid.NewGuid();
+        var startedAt = DateTimeOffset.UtcNow.AddMinutes(-20);
+        var completedAt = startedAt.AddSeconds(30);
+        var eventStart = DateTimeOffset.UtcNow.AddMinutes(-2);
+        var capturedAt = eventStart.AddMinutes(-14);
+        using (var scope = factory.Services.CreateScope())
+        {
+            var dbContext = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+            await dbContext.Database.EnsureCreatedAsync();
+            var refreshRun = CreateTheOddsRun(
+                refreshRunId,
+                "MLB",
+                startedAt,
+                completedAt,
+                "default",
+                "Sportsbook",
+                new
+                {
+                    ingestion = new[] { new { success = true } },
+                    lineShoppingSummary = new { activeGroups = 1, staleOrExpiredGroups = 0 }
+                });
+            dbContext.TheOddsRefreshRuns.Add(refreshRun);
+            var details = JsonSerializer.SerializeToDocument(new
+            {
+                sport = "MLB",
+                competition = "MLB",
+                eventId = "expired-event-1",
+                eventStartTime = eventStart,
+                eventStartTimeUtc = eventStart,
+                lastObservedAt = capturedAt,
+                player = "Expired Snapshot Player",
+                playerName = "Expired Snapshot Player",
+                normalizedPropType = "Hits",
+                line = 0.5m,
+                providerCategory = "Sportsbook",
+                bestBookmaker = "FanDuel",
+                bookmaker = "FanDuel",
+                bestSide = "Over",
+                selectedSide = "Over",
+                bestAmericanPrice = -110,
+                bestDecimalPrice = 1.91m,
+                bestImpliedProbability = 0.52356m,
+                selectedSideProbability = 0.62m,
+                bestProbability = 0.62m,
+                bestEstimatedEv = 0.1842m,
+                displayExpectedValue = 0.1842m,
+                rankingScore = 0.7m,
+                entryActionableForUser = false,
+                strategyClassification = "Candidate",
+                strategyTier = "MlbSportsbookRecommendation",
+                isCandidate = true,
+                isRecommendation = true,
+                recommendationActionableForUser = true,
+                recommendationType = "Sportsbook",
+                lifecycleStatus = "Active",
+                isFresh = true,
+                isStale = false,
+                isExpired = false,
+                minutesUntilStart = 13.1m,
+                lifecycleReason = "Event starts in 13.1 minutes",
+                lifecycleReasons = new[] { "Event starts in 13.1 minutes" }
+            });
+            var lineSnapshot = new MarketLineShoppingSnapshot
+            {
+                Id = Guid.NewGuid(),
+                TheOddsRefreshRunId = refreshRunId,
+                Sport = "MLB",
+                SlateDate = DateOnly.FromDateTime(DateTime.UtcNow),
+                GeneratedAtUtc = capturedAt,
+                BookmakerPreset = "default",
+                ProviderCategory = "Sportsbook",
+                Provider = "The Odds API",
+                Bookmaker = "FanDuel",
+                Player = "Expired Snapshot Player",
+                EventId = "expired-event-1",
+                EventName = "Away @ Home",
+                EventStartTime = eventStart,
+                LifecycleStatus = "Active",
+                IsStale = false,
+                IsExpired = false,
+                PropType = "Hits",
+                Line = 0.5m,
+                BestSide = "Over",
+                BestBookmaker = "FanDuel",
+                BestAmericanPrice = -110,
+                BestDecimalPrice = 1.91m,
+                BestProbability = 0.62m,
+                BestImpliedProbability = 0.52356m,
+                BestProbabilityEdge = 0.09644m,
+                BestEstimatedEv = 0.1842m,
+                StrategyClassification = "Candidate",
+                StrategyTier = "MlbSportsbookRecommendation",
+                IsCandidate = true,
+                EntryProvider = "FanDuel",
+                EntryCompatibilityGroup = "Sportsbook",
+                EntryProviderCategory = "Sportsbook",
+                EntryActionableForUser = false,
+                DetailsJson = details
+            };
+            dbContext.MarketLineShoppingSnapshots.Add(lineSnapshot);
+            dbContext.MarketTopPickSnapshots.Add(new MarketTopPickSnapshot
+            {
+                Id = Guid.NewGuid(),
+                TheOddsRefreshRunId = refreshRunId,
+                Sport = lineSnapshot.Sport,
+                SlateDate = lineSnapshot.SlateDate,
+                GeneratedAtUtc = lineSnapshot.GeneratedAtUtc,
+                BookmakerPreset = lineSnapshot.BookmakerPreset,
+                ProviderCategory = lineSnapshot.ProviderCategory,
+                Provider = lineSnapshot.Provider,
+                Bookmaker = lineSnapshot.Bookmaker,
+                Player = lineSnapshot.Player,
+                EventId = lineSnapshot.EventId,
+                EventName = lineSnapshot.EventName,
+                EventStartTime = lineSnapshot.EventStartTime,
+                LifecycleStatus = lineSnapshot.LifecycleStatus,
+                IsStale = lineSnapshot.IsStale,
+                IsExpired = lineSnapshot.IsExpired,
+                PropType = lineSnapshot.PropType,
+                Line = lineSnapshot.Line,
+                BestSide = lineSnapshot.BestSide,
+                BestBookmaker = lineSnapshot.BestBookmaker,
+                BestAmericanPrice = lineSnapshot.BestAmericanPrice,
+                BestDecimalPrice = lineSnapshot.BestDecimalPrice,
+                BestProbability = lineSnapshot.BestProbability,
+                BestImpliedProbability = lineSnapshot.BestImpliedProbability,
+                BestProbabilityEdge = lineSnapshot.BestProbabilityEdge,
+                BestEstimatedEv = lineSnapshot.BestEstimatedEv,
+                StrategyClassification = lineSnapshot.StrategyClassification,
+                StrategyTier = lineSnapshot.StrategyTier,
+                IsCandidate = lineSnapshot.IsCandidate,
+                EntryProvider = lineSnapshot.EntryProvider,
+                EntryCompatibilityGroup = lineSnapshot.EntryCompatibilityGroup,
+                EntryProviderCategory = lineSnapshot.EntryProviderCategory,
+                EntryActionableForUser = lineSnapshot.EntryActionableForUser,
+                DetailsJson = details
+            });
+            await dbContext.SaveChangesAsync();
+        }
+
+        var topResponse = await client.GetAsync("/api/markets/top-picks?sport=MLB&providerCategory=Sportsbook&take=25&freshnessMinutes=9999");
+        var lineResponse = await client.GetAsync("/api/markets/line-shopping?sport=MLB&providerCategory=Sportsbook&take=25&freshnessMinutes=9999");
+        var freshnessResponse = await client.GetAsync("/api/markets/freshness?sport=MLB&freshnessMinutes=9999");
+        var auditResponse = await client.GetAsync("/api/debug/the-odds/latest-market-lifecycle-audit?sport=MLB&providerCategory=Sportsbook&freshnessMinutes=9999&take=20");
+
+        await EnsureSuccessWithBodyAsync(topResponse);
+        await EnsureSuccessWithBodyAsync(lineResponse);
+        await EnsureSuccessWithBodyAsync(freshnessResponse);
+        await EnsureSuccessWithBodyAsync(auditResponse);
+        var top = await topResponse.Content.ReadFromJsonAsync<JsonElement>();
+        var line = await lineResponse.Content.ReadFromJsonAsync<JsonElement>();
+        var freshness = await freshnessResponse.Content.ReadFromJsonAsync<JsonElement>();
+        var audit = await auditResponse.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Empty(top.GetProperty("topPicks").EnumerateArray());
+        Assert.Contains("no currently actionable", top.GetProperty("fallbackReason").GetString(), StringComparison.OrdinalIgnoreCase);
+        Assert.Empty(line.GetProperty("comparisonGroups").EnumerateArray());
+        Assert.Contains("no currently actionable", line.GetProperty("fallbackReason").GetString(), StringComparison.OrdinalIgnoreCase);
+        Assert.False(freshness.GetProperty("hasUsableMarketData").GetBoolean());
+        Assert.Equal("NoCurrentlyActionableRows", freshness.GetProperty("currentPublicBoardStatus").GetString());
+        Assert.Equal(0, freshness.GetProperty("currentActionableSnapshotRowCount").GetInt32());
+        Assert.True(freshness.GetProperty("preservedSnapshotExpiredAtReadTime").GetBoolean());
+        Assert.Equal(0, audit.GetProperty("recomputedActiveGroups").GetInt32());
+        Assert.True(audit.GetProperty("countEventStarted").GetInt32() > 0);
+    }
+
+    [Fact]
     public async Task ScheduledRefreshStatus_ExposesSchedulerPrecisionFields()
     {
         await using var factory = new SafetyTestApplicationFactory(new Dictionary<string, string?>
@@ -7503,6 +7872,38 @@ public sealed class RefreshSafetyTests
                 UpdatedAt = DateTimeOffset.UtcNow.AddDays(-(index + 1))
             });
         }
+    }
+
+    private static TheOddsRefreshRun CreateTheOddsRun(
+        Guid id,
+        string sport,
+        DateTimeOffset startedAtUtc,
+        DateTimeOffset completedAtUtc,
+        string bookmakerPreset,
+        string providerCategoriesIncluded,
+        object? diagnostics)
+    {
+        return new TheOddsRefreshRun
+        {
+            Id = id,
+            Provider = "The Odds API",
+            Sport = sport,
+            SlateDate = new DateOnly(2026, 6, 28),
+            StartedAtUtc = startedAtUtc,
+            CompletedAtUtc = completedAtUtc,
+            Succeeded = true,
+            Failed = false,
+            Blocked = false,
+            DryRun = false,
+            ForceLive = true,
+            BookmakerPreset = bookmakerPreset,
+            ProviderCategoriesIncluded = providerCategoriesIncluded,
+            EstimatedApiCalls = 0,
+            ActualApiCalls = 0,
+            DiagnosticsJson = diagnostics is null
+                ? null
+                : JsonSerializer.SerializeToDocument(diagnostics)
+        };
     }
 
     private static MarketLineShoppingSnapshot CreateLineShoppingSnapshot(

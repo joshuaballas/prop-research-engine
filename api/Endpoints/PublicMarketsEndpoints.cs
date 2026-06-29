@@ -606,6 +606,9 @@ public static class PublicMarketsEndpoints
             effectiveSport,
             limitation = BuildMarketReadLimitation(soccerPredictionOptions.Enabled, soccerGradingOptions.Enabled),
             latestSuccessfulRefresh = response.LatestSuccessfulRun,
+            latestProviderIngestionRun = response.LatestProviderIngestionRun,
+            latestFinalizationRun = response.LatestFinalizationRun,
+            latestUsablePublicSnapshotRun = response.LatestUsablePublicSnapshotRun,
             response.MinutesSinceLatestSuccessfulRefresh,
             response.IsFresh,
             response.IsStale,
@@ -615,6 +618,9 @@ public static class PublicMarketsEndpoints
             response.TopPickSnapshotCount,
             response.ActiveGroupCount,
             response.StaleOrExpiredGroupCount,
+            response.CurrentPublicBoardStatus,
+            response.CurrentActionableSnapshotRowCount,
+            response.PreservedSnapshotExpiredAtReadTime,
             response.ProviderIngestionFailureCount,
             response.ProviderIngestionSuccessCount,
             response.ProviderRejectedKeyDetected,
@@ -625,6 +631,8 @@ public static class PublicMarketsEndpoints
                 providerStatus.status,
                 providerStatus.latestRefreshRunId,
                 providerStatus.latestRefreshHadUsableMarketData,
+                providerStatus.actualApiCalls,
+                providerStatus.estimatedApiCalls,
                 providerStatus.requestsUsed,
                 providerStatus.requestsRemaining,
                 providerStatus.providerRejectedKeyDetected,
@@ -1065,12 +1073,15 @@ public static class PublicMarketsEndpoints
     {
         var thresholdMinutes = Math.Clamp(freshnessMinutes ?? 30, 1, 1440);
         var generatedAtUtc = DateTimeOffset.UtcNow;
-        var latestRun = await dbContext.TheOddsRefreshRuns
+        var recentRuns = await dbContext.TheOddsRefreshRuns
             .AsNoTracking()
             .Where(row => row.Provider == "The Odds API" && row.Sport == "MLB")
             .OrderByDescending(row => row.StartedAtUtc)
             .ThenByDescending(row => row.CompletedAtUtc)
-            .FirstOrDefaultAsync(cancellationToken);
+            .Take(100)
+            .ToListAsync(cancellationToken);
+        var latestRun = recentRuns.FirstOrDefault(row => !IsTheOddsScheduledFinalizationRun(row))
+            ?? recentRuns.FirstOrDefault();
 
         if (latestRun is null)
         {
@@ -1115,16 +1126,23 @@ public static class PublicMarketsEndpoints
             .CountAsync(row => row.TheOddsRefreshRunId == latestRun.Id
                 && row.LifecycleStatus == "Active"
                 && !row.IsStale
-                && !row.IsExpired, cancellationToken);
-        var staleOrExpiredGroupCount = await dbContext.MarketLineShoppingSnapshots
+                && !row.IsExpired
+                && row.EventStartTime.HasValue
+                && row.EventStartTime.Value > generatedAtUtc, cancellationToken);
+        var activeTopPickCount = await dbContext.MarketTopPickSnapshots
             .AsNoTracking()
             .CountAsync(row => row.TheOddsRefreshRunId == latestRun.Id
-                && (row.IsStale || row.IsExpired || row.LifecycleStatus != "Active"), cancellationToken);
+                && row.LifecycleStatus == "Active"
+                && !row.IsStale
+                && !row.IsExpired
+                && row.EventStartTime.HasValue
+                && row.EventStartTime.Value > generatedAtUtc, cancellationToken);
+        var staleOrExpiredGroupCount = Math.Max(0, lineShoppingSnapshotCount - activeGroupCount);
 
         var diagnostics = ExtractProviderStatusDiagnostics(latestRun.DiagnosticsJson);
         var latestCompletedOrStarted = latestRun.CompletedAtUtc ?? latestRun.StartedAtUtc;
         var hasRecentRefresh = generatedAtUtc - latestCompletedOrStarted <= TimeSpan.FromMinutes(thresholdMinutes);
-        var latestRefreshHadUsableMarketData = topPickSnapshotCount > 0 || activeGroupCount > 0;
+        var latestRefreshHadUsableMarketData = activeTopPickCount > 0 || activeGroupCount > 0;
         var creditExhaustionLikely = diagnostics.RequestsRemaining.HasValue && diagnostics.RequestsRemaining.Value <= 0;
         var creditLow = diagnostics.RequestsRemaining.HasValue && diagnostics.RequestsRemaining.Value <= 5;
 
@@ -6404,6 +6422,19 @@ public static class PublicMarketsEndpoints
             "Run a dry-run refresh to inspect the planned provider call shape before any live refresh.");
     }
 
+    private static bool IsTheOddsScheduledFinalizationRun(TheOddsRefreshRun run)
+    {
+        if (string.Equals(run.BookmakerPreset, "scheduledCycleFinalization", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        return run.DiagnosticsJson is not null
+            && TryGetPropertyIgnoreCase(run.DiagnosticsJson.RootElement, "targetIngestMode", out var mode)
+            && mode.ValueKind == JsonValueKind.String
+            && string.Equals(mode.GetString(), "ParallelFinalization", StringComparison.OrdinalIgnoreCase);
+    }
+
     private static ProviderStatusDiagnostics ExtractProviderStatusDiagnostics(JsonDocument? diagnosticsJson)
     {
         if (diagnosticsJson is null)
@@ -6556,6 +6587,9 @@ public static class PublicMarketsEndpoints
             response.CallsExternalApis,
             response.ReadOnly,
             latestSuccessfulRefresh = response.LatestSuccessfulRun,
+            latestProviderIngestionRun = response.LatestProviderIngestionRun,
+            latestFinalizationRun = response.LatestFinalizationRun,
+            latestUsablePublicSnapshotRun = response.LatestUsablePublicSnapshotRun,
             response.MinutesSinceLatestSuccessfulRefresh,
             response.IsFresh,
             response.IsStale,

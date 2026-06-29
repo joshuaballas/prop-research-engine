@@ -98,6 +98,7 @@ builder.Services.AddScoped<IApplicationErrorLogger, ApplicationErrorLogger>();
 builder.Services.AddScoped<IProviderLineLifecycleService, ProviderLineLifecycleService>();
 builder.Services.AddScoped<ISoccerPlayerIdentityResolutionService, SoccerPlayerIdentityResolutionService>();
 builder.Services.AddScoped<ISoccerWorldCupPredictionService, SoccerWorldCupPredictionService>();
+builder.Services.AddSingleton<ITheOddsLiveRefreshGate, TheOddsLiveRefreshGate>();
 builder.Services.AddScoped<ITheOddsMlbRefreshService, TheOddsApiDebugEndpoints.TheOddsMlbRefreshService>();
 builder.Services.AddSingleton<IPlayerResolutionStats, PlayerResolutionStats>();
 builder.Services.AddSingleton<IPlayerMergeExecutionState, PlayerMergeExecutionState>();

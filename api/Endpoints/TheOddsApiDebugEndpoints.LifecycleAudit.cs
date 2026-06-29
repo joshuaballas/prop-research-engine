@@ -425,10 +425,20 @@ public static partial class TheOddsApiDebugEndpoints
         var expiresAt = TryGetLifecycleDateTimeOffset(root, "expiresAtUtc")
             ?? TryGetLifecycleDateTimeOffset(root, "expiresAt");
         var lifecycleReasons = TryGetLifecycleStringArray(root, "lifecycleReasons");
-        var effectiveObservedAt = lastObservedAt ?? capturedAtUtc;
-        var recomputedStale = (nowUtc - effectiveObservedAt).TotalMinutes > freshnessMinutes;
-        var recomputedExpired = eventStartUtc.HasValue && eventStartUtc.Value <= nowUtc;
-        var recomputedActive = !recomputedStale && !recomputedExpired && eventStartUtc.HasValue;
+        var readTimeLifecycle = BuildSnapshotReadTimeLifecycle(
+            lifecycleStatus,
+            isStale,
+            isExpired,
+            providerCategory,
+            eventStartUtc,
+            capturedAtUtc,
+            detailsJson,
+            side,
+            bestAmericanPrice,
+            bestDecimalPrice,
+            nowUtc,
+            freshnessMinutes);
+        var recomputedActive = readTimeLifecycle.IsActive;
         var persistedActive = string.Equals(lifecycleStatus, "Active", StringComparison.OrdinalIgnoreCase)
             && !isStale
             && !isExpired;

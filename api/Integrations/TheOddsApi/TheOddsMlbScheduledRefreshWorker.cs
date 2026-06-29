@@ -1,9 +1,11 @@
 using System.Text.Json;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using SportsBetting.Api.Data;
 using SportsBetting.Api.Diagnostics;
 using SportsBetting.Api.Endpoints;
 using SportsBetting.Api.Integrations.Results.Soccer;
+using SportsBetting.Api.Models;
 
 namespace SportsBetting.Api.Integrations.TheOddsApi;
 
@@ -12,6 +14,7 @@ public sealed class TheOddsMlbScheduledRefreshWorker(
     IOptions<TheOddsScheduledRefreshOptions> options,
     IOptions<TheOddsRefreshPlannerOptions> plannerOptions,
     ITheOddsScheduledRefreshState state,
+    ITheOddsLiveRefreshGate liveRefreshGate,
     ILogger<TheOddsMlbScheduledRefreshWorker> logger) : BackgroundService
 {
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -132,9 +135,6 @@ public sealed class TheOddsMlbScheduledRefreshWorker(
             return null;
         }
 
-        var startedAt = DateTimeOffset.UtcNow;
-        state.MarkStarted(startedAt);
-
         await using var scope = scopeFactory.CreateAsyncScope();
         var planner = scope.ServiceProvider.GetRequiredService<ITheOddsRefreshPlannerService>();
         var plan = await planner.BuildPlanAsync(cancellationToken);
@@ -186,6 +186,8 @@ public sealed class TheOddsMlbScheduledRefreshWorker(
             return plan;
         }
 
+        await using var cycleGate = await liveRefreshGate.EnterAsync(cancellationToken);
+        state.MarkStarted(DateTimeOffset.UtcNow, plan.NextEligibleRefreshUtc);
         await RunRefreshCycleAsync(plan, cancellationToken);
         return plan;
     }
@@ -201,8 +203,9 @@ public sealed class TheOddsMlbScheduledRefreshWorker(
     {
         try
         {
-            await using var scope = scopeFactory.CreateAsyncScope();
             var refreshOptions = options.Value;
+            var cycleId = Guid.NewGuid();
+            var cycleStartedAtUtc = DateTimeOffset.UtcNow;
             var eligibleTargets = plan.Targets
                 .Where(target => target.ShouldRefresh)
                 .DistinctBy(target => target.Key, StringComparer.OrdinalIgnoreCase)
@@ -215,50 +218,58 @@ public sealed class TheOddsMlbScheduledRefreshWorker(
                 return;
             }
 
-            foreach (var target in eligibleTargets)
+            var targetTasks = eligibleTargets
+                .Select(target => Task.Run(
+                    () => RunTargetIngestInOwnScopeAsync(target, refreshOptions, cycleId, cancellationToken),
+                    cancellationToken))
+                .ToArray();
+            var targetResults = await Task.WhenAll(targetTasks);
+
+            var finalizationStartedAtUtc = DateTimeOffset.UtcNow;
+            var mlbFinalization = await RunMlbFinalizationOnceAsync(
+                targetResults,
+                refreshOptions,
+                cycleId,
+                cancellationToken);
+            var finalizationCompletedAtUtc = DateTimeOffset.UtcNow;
+            var cycleCompletedAtUtc = finalizationCompletedAtUtc;
+
+            var targetFailures = targetResults.Where(result => !result.Succeeded).ToArray();
+            var finalizationFailed = mlbFinalization is { Succeeded: false };
+            var targetStartSpreadSeconds = CalculateTargetStartSpreadSeconds(targetResults);
+            var targetOverlapDetected = DetectTargetOverlap(targetResults);
+            var cycleDurationSeconds = Math.Round((cycleCompletedAtUtc - cycleStartedAtUtc).TotalSeconds, 3);
+
+            if (targetFailures.Length > 0 || finalizationFailed)
             {
-                try
-                {
-                    if (string.Equals(target.Sport, "MLB", StringComparison.OrdinalIgnoreCase))
-                    {
-                        await RunMlbTargetAsync(scope.ServiceProvider, target, refreshOptions, cancellationToken);
-                        continue;
-                    }
-
-                    if (IsSoccerWorldCupSportsbookTarget(target))
-                    {
-                        await RunSoccerWorldCupSportsbookTargetAsync(scope.ServiceProvider, target, refreshOptions, cancellationToken);
-                        continue;
-                    }
-
-                    logger.LogWarning(
-                        "The Odds API scheduled target {TargetKey} ({Sport}/{Competition}/{ProviderCategory}) is configured but scheduled execution is not wired for this target yet.",
-                        target.Key,
-                        target.Sport,
-                        target.Competition,
-                        target.ProviderCategory);
-                }
-                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-                {
-                    throw;
-                }
-                catch (Exception exception)
-                {
-                    logger.LogError(
-                        exception,
-                        "The Odds API scheduled refresh target failed. TargetKey: {TargetKey}. Sport: {Sport}. Competition: {Competition}. ProviderCategory: {ProviderCategory}. BookmakerPreset: {BookmakerPreset}.",
-                        target.Key,
-                        target.Sport,
-                        target.Competition,
-                        target.ProviderCategory,
-                        target.BookmakerPreset);
-                }
+                var error = BuildCycleFailureMessage(targetFailures, mlbFinalization);
+                state.MarkFailed(cycleCompletedAtUtc, error);
+                logger.LogWarning(
+                    "The Odds API scheduled refresh cycle completed with failures. ScheduledCycleId: {ScheduledCycleId}. EligibleTargets: {EligibleTargets}. TargetSuccessCount: {TargetSuccessCount}. TargetFailureCount: {TargetFailureCount}. FinalizationSucceeded: {FinalizationSucceeded}. CycleDurationSeconds: {CycleDurationSeconds}. TargetStartSpreadSeconds: {TargetStartSpreadSeconds}. TargetOverlapDetected: {TargetOverlapDetected}. Error: {Error}.",
+                    cycleId,
+                    eligibleTargets.Length,
+                    targetResults.Count(result => result.Succeeded),
+                    targetFailures.Length,
+                    mlbFinalization?.Succeeded,
+                    cycleDurationSeconds,
+                    targetStartSpreadSeconds,
+                    targetOverlapDetected,
+                    error);
+                return;
             }
 
-            state.MarkCompleted(DateTimeOffset.UtcNow);
+            state.MarkCompleted(cycleCompletedAtUtc);
             logger.LogInformation(
-                "The Odds API scheduled refresh cycle completed. EligibleTargets: {EligibleTargets}. IncludeCandidates: {IncludeCandidates}. IncludeLineShopping: {IncludeLineShopping}.",
+                "The Odds API scheduled refresh cycle completed. ScheduledCycleId: {ScheduledCycleId}. EligibleTargets: {EligibleTargets}. TargetSuccessCount: {TargetSuccessCount}. TargetFailureCount: {TargetFailureCount}. FinalizationStartedAtUtc: {FinalizationStartedAtUtc}. FinalizationCompletedAtUtc: {FinalizationCompletedAtUtc}. CycleDurationSeconds: {CycleDurationSeconds}. TargetStartSpreadSeconds: {TargetStartSpreadSeconds}. TargetOverlapDetected: {TargetOverlapDetected}. IncludeCandidates: {IncludeCandidates}. IncludeLineShopping: {IncludeLineShopping}.",
+                cycleId,
                 eligibleTargets.Length,
+                targetResults.Count(result => result.Succeeded),
+                targetFailures.Length,
+                finalizationStartedAtUtc,
+                finalizationCompletedAtUtc,
+                cycleDurationSeconds,
+                targetStartSpreadSeconds,
+                targetOverlapDetected,
                 refreshOptions.IncludeCandidates,
                 refreshOptions.IncludeLineShopping);
         }
@@ -281,10 +292,65 @@ public sealed class TheOddsMlbScheduledRefreshWorker(
             && string.Equals(target.ProviderCategory, "Sportsbook", StringComparison.OrdinalIgnoreCase);
     }
 
-    private async Task RunMlbTargetAsync(
+    private async Task<ScheduledTargetExecutionResult> RunTargetIngestInOwnScopeAsync(
+        TheOddsRefreshTargetPlan target,
+        TheOddsScheduledRefreshOptions refreshOptions,
+        Guid scheduledCycleId,
+        CancellationToken cancellationToken)
+    {
+        var startedAtUtc = DateTimeOffset.UtcNow;
+        try
+        {
+            await using var scope = scopeFactory.CreateAsyncScope();
+
+            if (string.Equals(target.Sport, "MLB", StringComparison.OrdinalIgnoreCase))
+            {
+                return await RunMlbTargetAsync(scope.ServiceProvider, target, refreshOptions, scheduledCycleId, startedAtUtc, cancellationToken);
+            }
+
+            if (IsSoccerWorldCupSportsbookTarget(target))
+            {
+                return await RunSoccerWorldCupSportsbookTargetAsync(scope.ServiceProvider, target, refreshOptions, scheduledCycleId, startedAtUtc, cancellationToken);
+            }
+
+            var completedAtUtc = DateTimeOffset.UtcNow;
+            var error = $"Scheduled execution is not wired for target {target.Key}.";
+            logger.LogWarning(
+                "The Odds API scheduled target {TargetKey} ({Sport}/{Competition}/{ProviderCategory}) is configured but scheduled execution is not wired for this target yet.",
+                target.Key,
+                target.Sport,
+                target.Competition,
+                target.ProviderCategory);
+
+            return ScheduledTargetExecutionResult.Failed(target, startedAtUtc, completedAtUtc, error);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception exception)
+        {
+            var completedAtUtc = DateTimeOffset.UtcNow;
+            logger.LogError(
+                exception,
+                "The Odds API scheduled refresh target failed. ScheduledCycleId: {ScheduledCycleId}. TargetKey: {TargetKey}. Sport: {Sport}. Competition: {Competition}. ProviderCategory: {ProviderCategory}. BookmakerPreset: {BookmakerPreset}.",
+                scheduledCycleId,
+                target.Key,
+                target.Sport,
+                target.Competition,
+                target.ProviderCategory,
+                target.BookmakerPreset);
+
+            return ScheduledTargetExecutionResult.Failed(target, startedAtUtc, completedAtUtc, exception.Message);
+        }
+    }
+
+    private async Task<ScheduledTargetExecutionResult> RunMlbTargetAsync(
         IServiceProvider serviceProvider,
         TheOddsRefreshTargetPlan target,
         TheOddsScheduledRefreshOptions refreshOptions,
+        Guid scheduledCycleId,
+        DateTimeOffset startedAtUtc,
         CancellationToken cancellationToken)
     {
         var refreshService = serviceProvider.GetRequiredService<ITheOddsMlbRefreshService>();
@@ -298,16 +364,40 @@ public sealed class TheOddsMlbScheduledRefreshWorker(
             IncludeLineShopping: refreshOptions.IncludeLineShopping,
             IncludeFullDiagnostics: refreshOptions.IncludeFullDiagnostics,
             FreshnessMinutes: refreshOptions.FreshnessMinutes,
-            TriggerSource: "ScheduledWorker");
+            TriggerSource: "ScheduledWorker",
+            ScheduledCycleId: scheduledCycleId,
+            TargetKey: target.Key,
+            TargetLaunchStartedAtUtc: startedAtUtc,
+            DeferPublicFinalization: true,
+            BypassLiveRefreshGate: true);
 
         await refreshService.RefreshCurrentAsync(request, httpContext: null, cancellationToken);
-        LogTargetCompleted(target);
+        var run = await FindTargetRefreshRunAsync(serviceProvider, target, scheduledCycleId, startedAtUtc, cancellationToken);
+        var completedAtUtc = DateTimeOffset.UtcNow;
+        var succeeded = run is not null && run.Succeeded && !run.Failed && !run.Blocked;
+        var error = run is null
+            ? "No persisted target refresh run was found after scheduled MLB target ingest."
+            : run.ErrorMessage;
+        LogTargetCompleted(target, scheduledCycleId, succeeded, startedAtUtc, completedAtUtc, run);
+        return new ScheduledTargetExecutionResult(
+            target,
+            startedAtUtc,
+            completedAtUtc,
+            succeeded,
+            error,
+            run?.Id,
+            run?.ActualApiCalls,
+            run?.PlatformPropsCreated,
+            run?.PlatformPropsUpdated,
+            run?.PlatformPropsUpserted);
     }
 
-    private async Task RunSoccerWorldCupSportsbookTargetAsync(
+    private async Task<ScheduledTargetExecutionResult> RunSoccerWorldCupSportsbookTargetAsync(
         IServiceProvider serviceProvider,
         TheOddsRefreshTargetPlan target,
         TheOddsScheduledRefreshOptions refreshOptions,
+        Guid scheduledCycleId,
+        DateTimeOffset startedAtUtc,
         CancellationToken cancellationToken)
     {
         var theOddsApiOptions = serviceProvider.GetRequiredService<IOptions<TheOddsApiOptions>>();
@@ -341,7 +431,11 @@ public sealed class TheOddsMlbScheduledRefreshWorker(
             Region: target.Regions,
             Regions: target.Regions,
             Bookmakers: ToJsonStringElement(effectiveBookmakers),
-            MaxEvents: target.MaxEvents);
+            MaxEvents: target.MaxEvents,
+            TriggerSource: "ScheduledWorker",
+            ScheduledCycleId: scheduledCycleId,
+            TargetKey: target.Key,
+            TargetLaunchStartedAtUtc: startedAtUtc);
 
         await TheOddsApiDebugEndpoints.BuildSoccerWorldCupRefreshPlanningResponseAsync(
             request,
@@ -355,7 +449,210 @@ public sealed class TheOddsMlbScheduledRefreshWorker(
             httpContext: null,
             cancellationToken);
 
-        LogTargetCompleted(target);
+        var run = await FindTargetRefreshRunAsync(serviceProvider, target, scheduledCycleId, startedAtUtc, cancellationToken);
+        var completedAtUtc = DateTimeOffset.UtcNow;
+        var succeeded = run is not null && run.Succeeded && !run.Failed && !run.Blocked;
+        var error = run is null
+            ? "No persisted target refresh run was found after scheduled Soccer World Cup target ingest."
+            : run.ErrorMessage;
+        LogTargetCompleted(target, scheduledCycleId, succeeded, startedAtUtc, completedAtUtc, run);
+        return new ScheduledTargetExecutionResult(
+            target,
+            startedAtUtc,
+            completedAtUtc,
+            succeeded,
+            error,
+            run?.Id,
+            run?.ActualApiCalls,
+            run?.PlatformPropsCreated,
+            run?.PlatformPropsUpdated,
+            run?.PlatformPropsUpserted);
+    }
+
+    private async Task<TheOddsScheduledMlbFinalizationResult?> RunMlbFinalizationOnceAsync(
+        IReadOnlyCollection<ScheduledTargetExecutionResult> targetResults,
+        TheOddsScheduledRefreshOptions refreshOptions,
+        Guid scheduledCycleId,
+        CancellationToken cancellationToken)
+    {
+        var mlbResults = targetResults
+            .Where(result => string.Equals(result.Target.Sport, "MLB", StringComparison.OrdinalIgnoreCase))
+            .ToArray();
+
+        if (mlbResults.Length == 0)
+        {
+            return null;
+        }
+
+        var failedMlbTargets = mlbResults
+            .Where(result => !result.Succeeded)
+            .ToArray();
+        if (failedMlbTargets.Length > 0)
+        {
+            var startedAtUtc = DateTimeOffset.UtcNow;
+            var completedAtUtc = startedAtUtc;
+            return new TheOddsScheduledMlbFinalizationResult(
+                false,
+                RefreshRunId: null,
+                PredictionCount: 0,
+                LineShoppingGroupCount: 0,
+                ActiveCandidateCount: 0,
+                startedAtUtc,
+                completedAtUtc,
+                $"MLB finalization skipped because {failedMlbTargets.Length} MLB target ingest(s) failed.");
+        }
+
+        await using var scope = scopeFactory.CreateAsyncScope();
+        var refreshService = scope.ServiceProvider.GetRequiredService<ITheOddsMlbRefreshService>();
+        return await refreshService.FinalizeScheduledCycleAsync(
+            new TheOddsScheduledMlbFinalizationRequest(
+                scheduledCycleId,
+                Date: null,
+                ProviderCategories: mlbResults
+                    .Select(result => result.Target.ProviderCategory)
+                    .Where(value => !string.IsNullOrWhiteSpace(value))
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .ToArray(),
+                BookmakerKeys: mlbResults
+                    .SelectMany(result => result.Target.EffectiveBookmakers)
+                    .Where(value => !string.IsNullOrWhiteSpace(value))
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .ToArray(),
+                Markets: mlbResults
+                    .SelectMany(result => SplitCsv(result.Target.Markets))
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .ToArray(),
+                TargetRefreshRunIds: mlbResults
+                    .Select(result => result.RefreshRunId)
+                    .Where(value => value.HasValue)
+                    .Select(value => value!.Value)
+                    .ToArray(),
+                refreshOptions.IncludeCandidates,
+                refreshOptions.IncludeLineShopping,
+                refreshOptions.IncludeFullDiagnostics,
+                refreshOptions.FreshnessMinutes),
+            cancellationToken);
+    }
+
+    private static string[] SplitCsv(string? value)
+    {
+        return string.IsNullOrWhiteSpace(value)
+            ? []
+            : value.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
+    }
+
+    private async Task<TheOddsRefreshRun?> FindTargetRefreshRunAsync(
+        IServiceProvider serviceProvider,
+        TheOddsRefreshTargetPlan target,
+        Guid scheduledCycleId,
+        DateTimeOffset targetStartedAtUtc,
+        CancellationToken cancellationToken)
+    {
+        var dbContext = serviceProvider.GetRequiredService<ApplicationDbContext>();
+        var candidates = await dbContext.TheOddsRefreshRuns
+            .AsNoTracking()
+            .Where(run => run.Provider == "The Odds API"
+                && run.Sport == target.Sport
+                && run.StartedAtUtc >= targetStartedAtUtc.AddMinutes(-1))
+            .OrderByDescending(run => run.StartedAtUtc)
+            .ThenByDescending(run => run.CompletedAtUtc)
+            .Take(25)
+            .ToListAsync(cancellationToken);
+
+        return candidates.FirstOrDefault(run =>
+            string.Equals(ReadDiagnosticsString(run.DiagnosticsJson, "scheduledCycleId"), scheduledCycleId.ToString(), StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(ReadDiagnosticsString(run.DiagnosticsJson, "targetKey"), target.Key, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static string? ReadDiagnosticsString(JsonDocument? diagnosticsJson, string propertyName)
+    {
+        if (diagnosticsJson is null)
+        {
+            return null;
+        }
+
+        return TryGetPropertyIgnoreCase(diagnosticsJson.RootElement, propertyName, out var value) &&
+            value.ValueKind == JsonValueKind.String
+                ? value.GetString()
+                : null;
+    }
+
+    private static bool TryGetPropertyIgnoreCase(JsonElement element, string propertyName, out JsonElement value)
+    {
+        if (element.ValueKind == JsonValueKind.Object)
+        {
+            foreach (var property in element.EnumerateObject())
+            {
+                if (string.Equals(property.Name, propertyName, StringComparison.OrdinalIgnoreCase))
+                {
+                    value = property.Value;
+                    return true;
+                }
+            }
+        }
+
+        value = default;
+        return false;
+    }
+
+    private static decimal CalculateTargetStartSpreadSeconds(IReadOnlyCollection<ScheduledTargetExecutionResult> targetResults)
+    {
+        return CalculateTargetStartSpreadSeconds(targetResults
+            .Select(result => new ScheduledTargetTiming(result.StartedAtUtc, result.CompletedAtUtc))
+            .ToArray());
+    }
+
+    private static bool DetectTargetOverlap(IReadOnlyCollection<ScheduledTargetExecutionResult> targetResults)
+    {
+        return DetectTargetOverlap(targetResults
+            .Select(result => new ScheduledTargetTiming(result.StartedAtUtc, result.CompletedAtUtc))
+            .ToArray());
+    }
+
+    internal static decimal CalculateTargetStartSpreadSeconds(IReadOnlyCollection<ScheduledTargetTiming> targetTimings)
+    {
+        if (targetTimings.Count <= 1)
+        {
+            return 0m;
+        }
+
+        var earliest = targetTimings.Min(result => result.StartedAtUtc);
+        var latest = targetTimings.Max(result => result.StartedAtUtc);
+        return Math.Round((decimal)(latest - earliest).TotalSeconds, 3);
+    }
+
+    internal static bool DetectTargetOverlap(IReadOnlyCollection<ScheduledTargetTiming> targetTimings)
+    {
+        var ordered = targetTimings
+            .OrderBy(result => result.StartedAtUtc)
+            .ToArray();
+        for (var i = 1; i < ordered.Length; i++)
+        {
+            if (ordered[i].StartedAtUtc < ordered[i - 1].CompletedAtUtc)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static string BuildCycleFailureMessage(
+        IReadOnlyCollection<ScheduledTargetExecutionResult> targetFailures,
+        TheOddsScheduledMlbFinalizationResult? mlbFinalization)
+    {
+        var pieces = new List<string>();
+        if (targetFailures.Count > 0)
+        {
+            pieces.Add($"Target failures: {string.Join("; ", targetFailures.Select(result => $"{result.Target.Key}: {result.Error ?? "Unknown failure"}"))}");
+        }
+
+        if (mlbFinalization is { Succeeded: false })
+        {
+            pieces.Add($"MLB finalization: {mlbFinalization.Error ?? "Unknown failure"}");
+        }
+
+        return pieces.Count == 0 ? "Scheduled refresh failed." : string.Join(" | ", pieces);
     }
 
     private static JsonElement? ToJsonStringElement(string? value)
@@ -376,14 +673,60 @@ public sealed class TheOddsMlbScheduledRefreshWorker(
             : string.Join(",", values);
     }
 
-    private void LogTargetCompleted(TheOddsRefreshTargetPlan target)
+    private void LogTargetCompleted(
+        TheOddsRefreshTargetPlan target,
+        Guid scheduledCycleId,
+        bool succeeded,
+        DateTimeOffset startedAtUtc,
+        DateTimeOffset completedAtUtc,
+        TheOddsRefreshRun? run)
     {
         logger.LogInformation(
-            "The Odds API scheduled refresh target completed. TargetKey: {TargetKey}. Sport: {Sport}. Competition: {Competition}. ProviderCategory: {ProviderCategory}. BookmakerPreset: {BookmakerPreset}.",
+            "The Odds API scheduled refresh target completed. ScheduledCycleId: {ScheduledCycleId}. TargetKey: {TargetKey}. Sport: {Sport}. Competition: {Competition}. ProviderCategory: {ProviderCategory}. BookmakerPreset: {BookmakerPreset}. Succeeded: {Succeeded}. RefreshRunId: {RefreshRunId}. ActualApiCalls: {ActualApiCalls}. RowsUpserted: {RowsUpserted}. DurationSeconds: {DurationSeconds}.",
+            scheduledCycleId,
             target.Key,
             target.Sport,
             target.Competition,
             target.ProviderCategory,
-            target.BookmakerPreset);
+            target.BookmakerPreset,
+            succeeded,
+            run?.Id,
+            run?.ActualApiCalls,
+            run?.PlatformPropsUpserted,
+            Math.Round((completedAtUtc - startedAtUtc).TotalSeconds, 3));
     }
+
+    private sealed record ScheduledTargetExecutionResult(
+        TheOddsRefreshTargetPlan Target,
+        DateTimeOffset StartedAtUtc,
+        DateTimeOffset CompletedAtUtc,
+        bool Succeeded,
+        string? Error,
+        Guid? RefreshRunId,
+        int? ActualApiCalls,
+        int? RowsCreated,
+        int? RowsUpdated,
+        int? RowsUpserted)
+    {
+        public static ScheduledTargetExecutionResult Failed(
+            TheOddsRefreshTargetPlan target,
+            DateTimeOffset startedAtUtc,
+            DateTimeOffset completedAtUtc,
+            string error) =>
+            new(
+                target,
+                startedAtUtc,
+                completedAtUtc,
+                Succeeded: false,
+                error,
+                RefreshRunId: null,
+                ActualApiCalls: null,
+                RowsCreated: null,
+                RowsUpdated: null,
+                RowsUpserted: null);
+    }
+
+    internal readonly record struct ScheduledTargetTiming(
+        DateTimeOffset StartedAtUtc,
+        DateTimeOffset CompletedAtUtc);
 }

@@ -1939,16 +1939,39 @@ public static partial class TheOddsApiDebugEndpoints
                 .OrderBy(row => row.StartedAtUtc)
                 .ThenBy(row => row.CompletedAtUtc)
                 .ToArray();
+            var scheduledCycleIdsByRunId = orderedAscending.ToDictionary(
+                run => run.Id,
+                run => GetDiagnosticsString(run.DiagnosticsJson, "scheduledCycleId"));
             var rows = runs
                 .Select(run =>
                 {
-                    var overlapDetected = orderedAscending.Any(other => other.Id != run.Id
+                    var scheduledCycleId = scheduledCycleIdsByRunId.GetValueOrDefault(run.Id);
+                    var overlappingRuns = orderedAscending
+                        .Where(other => other.Id != run.Id
                         && other.StartedAtUtc < run.StartedAtUtc
-                        && (other.CompletedAtUtc is null || other.CompletedAtUtc > run.StartedAtUtc));
+                        && (other.CompletedAtUtc is null || other.CompletedAtUtc > run.StartedAtUtc))
+                        .ToArray();
+                    var parallelSiblingOverlapDetected = overlappingRuns.Any(other =>
+                        !string.IsNullOrWhiteSpace(scheduledCycleId) &&
+                        string.Equals(scheduledCycleId, scheduledCycleIdsByRunId.GetValueOrDefault(other.Id), StringComparison.OrdinalIgnoreCase));
+                    var forbiddenOverlapDetected = overlappingRuns.Any(other =>
+                        string.IsNullOrWhiteSpace(scheduledCycleId) ||
+                        !string.Equals(scheduledCycleId, scheduledCycleIdsByRunId.GetValueOrDefault(other.Id), StringComparison.OrdinalIgnoreCase));
                     return new
                     {
                         runId = run.Id,
                         triggerSource = ResolveTheOddsRefreshTriggerSource(run),
+                        scheduledCycleId,
+                        targetKey = GetDiagnosticsString(run.DiagnosticsJson, "targetKey"),
+                        targetIngestMode = GetDiagnosticsString(run.DiagnosticsJson, "targetIngestMode"),
+                        targetLaunchStartedAtUtc = GetDiagnosticsDateTimeOffset(run.DiagnosticsJson, "targetLaunchStartedAtUtc"),
+                        targetIngestStartedAtUtc = GetDiagnosticsDateTimeOffset(run.DiagnosticsJson, "targetIngestStartedAtUtc"),
+                        targetIngestCompletedAtUtc = GetDiagnosticsDateTimeOffset(run.DiagnosticsJson, "targetIngestCompletedAtUtc"),
+                        targetIngestDurationSeconds = GetDiagnosticsDecimal(run.DiagnosticsJson, "targetIngestDurationSeconds"),
+                        finalizationStartedAtUtc = GetDiagnosticsDateTimeOffset(run.DiagnosticsJson, "finalizationStartedAtUtc"),
+                        finalizationCompletedAtUtc = GetDiagnosticsDateTimeOffset(run.DiagnosticsJson, "finalizationCompletedAtUtc"),
+                        finalizationDurationSeconds = GetDiagnosticsDecimal(run.DiagnosticsJson, "finalizationDurationSeconds"),
+                        publicFinalizationDeferred = GetDiagnosticsBool(run.DiagnosticsJson, "publicFinalizationDeferred"),
                         startedAtUtc = run.StartedAtUtc,
                         completedAtUtc = run.CompletedAtUtc,
                         durationSeconds = SecondsBetween(run.StartedAtUtc, run.CompletedAtUtc),
@@ -1958,8 +1981,10 @@ public static partial class TheOddsApiDebugEndpoints
                         run.Blocked,
                         run.DryRun,
                         run.ForceLive,
-                        overlapDetected,
-                        startedWhileAnotherRunActive = overlapDetected,
+                        overlapDetected = forbiddenOverlapDetected,
+                        forbiddenOverlapDetected,
+                        parallelSiblingOverlapDetected,
+                        startedWhileAnotherRunActive = forbiddenOverlapDetected,
                         run.Sport,
                         run.BookmakerPreset,
                         providerCategories = ParseCommaSeparatedSet(run.ProviderCategoriesIncluded)
@@ -1974,6 +1999,7 @@ public static partial class TheOddsApiDebugEndpoints
                 returnedRuns = rows.Length,
                 rowsWithOverlap = rows.Count(row => row.overlapDetected),
                 rowsStartedWhileAnotherRunActive = rows.Count(row => row.startedWhileAnotherRunActive),
+                parallelSiblingOverlapCount = rows.Count(row => row.parallelSiblingOverlapDetected),
                 callsExternalApis = false,
                 readOnly = true,
                 runs = rows
@@ -4039,6 +4065,7 @@ public static partial class TheOddsApiDebugEndpoints
             ApplicationDbContext dbContext,
             IApplicationErrorLogger errorLogger,
             ITheOddsMlbRefreshService mlbRefreshService,
+            ITheOddsLiveRefreshGate liveRefreshGate,
             ISoccerPlayerIdentityResolutionService soccerIdentityResolutionService,
             IOptions<SoccerIdentityResolutionOptions> soccerIdentityResolutionOptions,
             HttpContext httpContext,
@@ -4093,6 +4120,22 @@ public static partial class TheOddsApiDebugEndpoints
                     supportedCompetitions = new[] { "World Cup" },
                     error = "Phase-one Soccer refresh supports World Cup only."
                 });
+            }
+
+            if (request.ForceLive == true && request.DryRun != true)
+            {
+                await using var liveRefreshLease = await liveRefreshGate.EnterAsync(cancellationToken);
+                return await BuildSoccerWorldCupRefreshPlanningResponseAsync(
+                    request,
+                    theOddsApiOptions.Value,
+                    adapter,
+                    ingestionService,
+                    dbContext,
+                    errorLogger,
+                    soccerIdentityResolutionService,
+                    soccerIdentityResolutionOptions.Value,
+                    httpContext,
+                    cancellationToken);
             }
 
             return await BuildSoccerWorldCupRefreshPlanningResponseAsync(
@@ -4473,6 +4516,61 @@ public static partial class TheOddsApiDebugEndpoints
         }
 
         return "Unknown";
+    }
+
+    private static string? GetDiagnosticsString(JsonDocument? diagnosticsJson, string propertyName)
+    {
+        return diagnosticsJson is not null &&
+            TryGetJsonProperty(diagnosticsJson.RootElement, propertyName, out var property) &&
+            property.ValueKind == JsonValueKind.String
+                ? property.GetString()
+                : null;
+    }
+
+    private static DateTimeOffset? GetDiagnosticsDateTimeOffset(JsonDocument? diagnosticsJson, string propertyName)
+    {
+        if (diagnosticsJson is null ||
+            !TryGetJsonProperty(diagnosticsJson.RootElement, propertyName, out var property) ||
+            property.ValueKind != JsonValueKind.String)
+        {
+            return null;
+        }
+
+        return DateTimeOffset.TryParse(property.GetString(), out var parsed)
+            ? parsed
+            : null;
+    }
+
+    private static decimal? GetDiagnosticsDecimal(JsonDocument? diagnosticsJson, string propertyName)
+    {
+        if (diagnosticsJson is null ||
+            !TryGetJsonProperty(diagnosticsJson.RootElement, propertyName, out var property) ||
+            property.ValueKind != JsonValueKind.Number)
+        {
+            return null;
+        }
+
+        return property.TryGetDecimal(out var decimalValue)
+            ? decimalValue
+            : property.TryGetDouble(out var doubleValue)
+                ? Math.Round((decimal)doubleValue, 3)
+                : null;
+    }
+
+    private static bool? GetDiagnosticsBool(JsonDocument? diagnosticsJson, string propertyName)
+    {
+        if (diagnosticsJson is null ||
+            !TryGetJsonProperty(diagnosticsJson.RootElement, propertyName, out var property))
+        {
+            return null;
+        }
+
+        return property.ValueKind switch
+        {
+            JsonValueKind.True => true,
+            JsonValueKind.False => false,
+            _ => null
+        };
     }
 
     private static decimal? SecondsBetween(DateTimeOffset? startUtc, DateTimeOffset? endUtc)
@@ -13327,6 +13425,10 @@ public static partial class TheOddsApiDebugEndpoints
         var requestedProviderCategory = ResolveSoccerWorldCupProviderCategory(request);
         var region = ResolveSoccerWorldCupRegion(request, options, requestedProviderCategory);
         var bookmakers = NormalizeJsonStringList(request.Bookmakers);
+        var triggerSource = NullIfWhiteSpace(request.TriggerSource)
+            ?? (httpContext is null ? "Internal" : "ManualDebugEndpoint");
+        var scheduledCycleId = request.ScheduledCycleId;
+        var targetKey = NullIfWhiteSpace(request.TargetKey);
         var missingConfig = new List<string>();
         if (string.IsNullOrWhiteSpace(sportKey))
         {
@@ -13559,6 +13661,7 @@ public static partial class TheOddsApiDebugEndpoints
                 MarketsRequested = markets ?? string.Empty,
                 EstimatedApiCalls = 1 + events.Length
             };
+            var targetIngestStartedAtUtc = request.TargetLaunchStartedAtUtc ?? refreshRun.StartedAtUtc;
             dbContext.TheOddsRefreshRuns.Add(refreshRun);
             await dbContext.SaveChangesAsync(cancellationToken);
 
@@ -13587,6 +13690,7 @@ public static partial class TheOddsApiDebugEndpoints
             }
 
             refreshRun.CompletedAtUtc = DateTimeOffset.UtcNow;
+            var targetIngestCompletedAtUtc = refreshRun.CompletedAtUtc.Value;
             refreshRun.Succeeded = ingestionResults.All(row => row.Success);
             refreshRun.Failed = ingestionResults.Any(row => !row.Success);
             refreshRun.ActualApiCalls = 1 + events.Length;
@@ -13604,6 +13708,15 @@ public static partial class TheOddsApiDebugEndpoints
                 requestedBookmakers: bookmakers);
             refreshRun.DiagnosticsJson = JsonSerializer.SerializeToDocument(new
             {
+                scheduledCycleId,
+                targetKey,
+                triggerSource,
+                targetIngestMode = scheduledCycleId.HasValue ? "Parallel" : "FullRefresh",
+                targetLaunchStartedAtUtc = request.TargetLaunchStartedAtUtc,
+                targetIngestStartedAtUtc,
+                targetIngestCompletedAtUtc,
+                targetIngestDurationSeconds = Math.Round((targetIngestCompletedAtUtc - targetIngestStartedAtUtc).TotalSeconds, 3),
+                publicFinalizationDeferred = false,
                 sport = "SOCCER",
                 competition = "World Cup",
                 fromDate,
@@ -13653,6 +13766,15 @@ public static partial class TheOddsApiDebugEndpoints
                     fromDate,
                     toDate,
                     maxEvents,
+                    scheduledCycleId,
+                    targetKey,
+                    triggerSource,
+                    targetIngestMode = scheduledCycleId.HasValue ? "Parallel" : "FullRefresh",
+                    targetLaunchStartedAtUtc = request.TargetLaunchStartedAtUtc,
+                    targetIngestStartedAtUtc,
+                    targetIngestCompletedAtUtc,
+                    targetIngestDurationSeconds = Math.Round((targetIngestCompletedAtUtc - targetIngestStartedAtUtc).TotalSeconds, 3),
+                    publicFinalizationDeferred = false,
                     resultGradingSupported = false,
                     providerCategory,
                     region,
@@ -13753,6 +13875,10 @@ public static partial class TheOddsApiDebugEndpoints
                 refreshRun.ActualApiCalls = Math.Max(1, refreshRun.ActualApiCalls);
                 refreshRun.DiagnosticsJson = JsonSerializer.SerializeToDocument(new
                 {
+                    scheduledCycleId,
+                    targetKey,
+                    triggerSource,
+                    targetIngestMode = scheduledCycleId.HasValue ? "Parallel" : "FullRefresh",
                     sport = "SOCCER",
                     competition = "World Cup",
                     fromDate,
@@ -14887,7 +15013,11 @@ public sealed record TheOddsMarketRefreshRequest(
     string? Region,
     string? Regions,
     JsonElement? Bookmakers,
-    int? MaxEvents);
+    int? MaxEvents,
+    string? TriggerSource = null,
+    Guid? ScheduledCycleId = null,
+    string? TargetKey = null,
+    DateTimeOffset? TargetLaunchStartedAtUtc = null);
 
 public sealed record TheOddsApiMlbIngestEventRequest(
     string EventId,
