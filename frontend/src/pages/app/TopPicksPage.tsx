@@ -65,12 +65,13 @@ export function TopPicksPage() {
   const providerOptions = useMemo(() => buildStringOptions(topPicks.map((market) => market.provider)), [topPicks]);
   const providerCategoryOptions = useMemo(() => buildStringOptions(topPicks.map((market) => market.providerCategory)), [topPicks]);
   const visibleTopPicks = useMemo(() => sortTopPicks(filterTopPicks(topPicks, filters), filters.sort), [filters, topPicks]);
+  const rankedTopPicks = useMemo(() => applyDisplayRanks(visibleTopPicks), [visibleTopPicks]);
   const pageSize = isMobile ? 8 : 20;
-  const pageCount = Math.max(1, Math.ceil(visibleTopPicks.length / pageSize));
+  const pageCount = Math.max(1, Math.ceil(rankedTopPicks.length / pageSize));
   const pagedTopPicks = useMemo(() => {
     const start = (page - 1) * pageSize;
-    return visibleTopPicks.slice(start, start + pageSize);
-  }, [page, pageSize, visibleTopPicks]);
+    return rankedTopPicks.slice(start, start + pageSize);
+  }, [page, pageSize, rankedTopPicks]);
   const featured = pagedTopPicks.slice(0, 3);
 
   useEffect(() => {
@@ -136,7 +137,7 @@ export function TopPicksPage() {
               />
             ))}
           </Stack>
-          <AppTablePagination count={visibleTopPicks.length} page={page} pageSize={pageSize} itemLabel="picks" onChange={setPage} />
+          <AppTablePagination count={rankedTopPicks.length} page={page} pageSize={pageSize} itemLabel="picks" onChange={setPage} />
         </>
       ) : (
         <>
@@ -163,8 +164,8 @@ export function TopPicksPage() {
             <Typography variant="h5" fontWeight={950}>
               All Ranked Picks
             </Typography>
-            <RankedPicksTable markets={pagedTopPicks} rankOffset={(page - 1) * pageSize} builder={builder} />
-            <AppTablePagination count={visibleTopPicks.length} page={page} pageSize={pageSize} itemLabel="picks" onChange={setPage} />
+            <RankedPicksTable markets={pagedTopPicks} builder={builder} />
+            <AppTablePagination count={rankedTopPicks.length} page={page} pageSize={pageSize} itemLabel="picks" onChange={setPage} />
           </Stack>
         </>
       )}
@@ -220,6 +221,14 @@ function sortTopPicks(markets: MarketOpportunity[], sort: string) {
         (b.modelProbability ?? Number.NEGATIVE_INFINITY) - (a.modelProbability ?? Number.NEGATIVE_INFINITY)
       );
   }
+}
+
+function applyDisplayRanks(markets: MarketOpportunity[]) {
+  return markets.map((market, index) => ({
+    ...market,
+    displayRank: index + 1,
+    sourceRank: market.rank
+  }));
 }
 
 function TopPickControls({
@@ -381,7 +390,7 @@ function TopPickControls({
   );
 }
 
-function RankedPicksTable({ markets, rankOffset, builder }: { markets: MarketOpportunity[]; rankOffset: number; builder: ReturnType<typeof useEntryBuilder> }) {
+function RankedPicksTable({ markets, builder }: { markets: MarketOpportunity[]; builder: ReturnType<typeof useEntryBuilder> }) {
   const [detailsMarket, setDetailsMarket] = useState<MarketOpportunity | null>(null);
 
   return (
@@ -406,7 +415,7 @@ function RankedPicksTable({ markets, rankOffset, builder }: { markets: MarketOpp
               return (
               <TableRow key={market.id} hover sx={appTableRowSx}>
                 <TableCell>
-                  <AppTablePrimaryText>#{rankOffset + index + 1}</AppTablePrimaryText>
+                  <AppTablePrimaryText>#{market.displayRank ?? index + 1}</AppTablePrimaryText>
                 </TableCell>
                 <TableCell sx={{ minWidth: 230 }}>
                   <Stack spacing={0.3}>

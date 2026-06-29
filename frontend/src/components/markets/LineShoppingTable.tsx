@@ -5,8 +5,8 @@ import ExpandMoreRoundedIcon from '@mui/icons-material/ExpandMoreRounded';
 import { Accordion, AccordionDetails, AccordionSummary, Box, Button, Collapse, Divider, IconButton, Stack, TableBody, TableCell, TableHead, TableRow, Typography } from '@mui/material';
 import { useState } from 'react';
 import { useEntryBuilder } from '../../hooks/useEntryBuilder';
-import type { MarketOpportunity, PlayerHistoryStatSummary, ProviderLine } from '../../types/markets';
-import { formatDecimal, formatPercent } from '../../utils/formatters';
+import type { MarketOpportunity, ProviderLine } from '../../types/markets';
+import { formatPercent } from '../../utils/formatters';
 import { entryBuilderUnavailableReason, isEntryBuilderAddableMarket } from '../../utils/marketCautions';
 import { marketDisplayLabel } from '../../utils/marketDisplay';
 import { renderOpportunityCautionText } from '../../utils/warnings';
@@ -173,7 +173,8 @@ export function LineShoppingCard({ market }: { market: MarketOpportunity }) {
   const referenceLines = market.providerCategory === 'DFS'
     ? market.providerLines?.filter((line) => line.providerCategory === 'Sportsbook') ?? []
     : [];
-  const canExpand = providerLines.length > 1 || referenceLines.length > 0 || hasAvailableSoccerHistory(market);
+  const canExpand = hasProviderLineComparison(providerLines, referenceLines);
+  const selectedBestLine = findSelectedBestExpandedLine([...providerLines, ...referenceLines], market);
   const builder = useEntryBuilder();
   const selected = builder.isSelected(market.id);
   const incompatible = !selected && !builder.isCompatible(market);
@@ -218,7 +219,6 @@ export function LineShoppingCard({ market }: { market: MarketOpportunity }) {
         </Stack>
       </Stack>
       <OpportunityPickText side={market.side} propType={market.propType} line={market.line} />
-      <LineShoppingPlayerHistoryContext market={market} compact />
       <Stack direction="row" justifyContent="space-between" alignItems="center" gap={1.2} flexWrap="wrap">
         <ProviderLabel provider={market.provider} category={market.providerCategory} compact />
         <Stack direction="row" gap={0.6} flexWrap="wrap" useFlexGap justifyContent="flex-end">
@@ -286,8 +286,8 @@ export function LineShoppingCard({ market }: { market: MarketOpportunity }) {
               <OpportunityMetricItem label="Edge" value={formatPercent(market.probabilityEdge, { signed: true })} metric="edge" />
               <OpportunityMetricItem label="Hit chance" value={formatPercent(market.modelProbability)} metric="hitChance" />
             </OpportunityMetricGrid>
-            <ProviderLineGroup title="Provider lines" lines={providerLines} marketId={market.id} bestProvider={market.provider} />
-            {referenceLines.length ? <ProviderLineGroup title="Reference lines" lines={referenceLines} marketId={market.id} /> : null}
+            <ProviderLineGroup title="Provider lines" lines={providerLines} marketId={market.id} selectedBestLine={selectedBestLine} />
+            {referenceLines.length ? <ProviderLineGroup title="Reference lines" lines={referenceLines} marketId={market.id} selectedBestLine={selectedBestLine} /> : null}
             <AppMobileCardActions sx={{ mt: 2.45, pt: 0.2 }}>
               {actions}
             </AppMobileCardActions>
@@ -371,7 +371,7 @@ function LineShoppingComparisonRow({
   onDetails: () => void;
 }) {
   const market = group.bestMarket;
-  const canExpand = group.providerLines.length > 1 || group.referenceLines.length > 0 || hasAvailableSoccerHistory(market);
+  const canExpand = hasProviderLineComparison(group.providerLines, group.referenceLines);
   const expandedVisible = canExpand && expanded;
 
   return (
@@ -445,8 +445,7 @@ function LineShoppingComparisonRow({
                 }}
               >
                 <Stack spacing={1.2}>
-                  <ComparisonLineGroups providerLines={group.providerLines} referenceLines={group.referenceLines} marketId={group.key} bestProvider={market.provider} />
-                  <LineShoppingPlayerHistoryContext market={market} />
+                  <ComparisonLineGroups providerLines={group.providerLines} referenceLines={group.referenceLines} marketId={group.key} selectedMarket={market} />
                 </Stack>
               </Box>
             </Collapse>
@@ -461,15 +460,16 @@ function ComparisonLineGroups({
   providerLines,
   referenceLines,
   marketId,
-  bestProvider
+  selectedMarket
 }: {
   providerLines: NonNullable<MarketOpportunity['providerLines']>;
   referenceLines: NonNullable<MarketOpportunity['providerLines']>;
   marketId: string;
-  bestProvider: string;
+  selectedMarket: MarketOpportunity;
 }) {
   const showReferenceLines = referenceLines.length > 0;
   const rowCount = Math.max(providerLines.length, showReferenceLines ? referenceLines.length : 0);
+  const selectedBestLine = findSelectedBestExpandedLine([...providerLines, ...referenceLines], selectedMarket);
 
   return (
     <Box
@@ -493,13 +493,13 @@ function ComparisonLineGroups({
       ) : null}
       {Array.from({ length: rowCount }).map((_, index) => (
         <Box key={`${marketId}-comparison-${index}`} sx={{ display: 'contents' }}>
-          <LineComparisonCell line={providerLines[index]} fallbackText={index === 0 ? 'No provider-line details available.' : undefined} isBest={providerLines[index]?.provider === bestProvider} />
-          {showReferenceLines ? <LineComparisonCell line={referenceLines[index]} sx={{ display: { xs: 'none', md: 'grid' } }} /> : null}
+          <LineComparisonCell line={providerLines[index]} fallbackText={index === 0 ? 'No provider-line details available.' : undefined} isBest={providerLines[index] === selectedBestLine} />
+          {showReferenceLines ? <LineComparisonCell line={referenceLines[index]} isBest={referenceLines[index] === selectedBestLine} sx={{ display: { xs: 'none', md: 'grid' } }} /> : null}
         </Box>
       ))}
       {showReferenceLines ? (
         <Box sx={{ display: { xs: 'block', md: 'none' }, mt: 1.2 }}>
-          <ProviderLineGroup title="Reference lines" lines={referenceLines} marketId={marketId} />
+          <ProviderLineGroup title="Reference lines" lines={referenceLines} marketId={marketId} selectedBestLine={selectedBestLine} />
         </Box>
       ) : null}
     </Box>
@@ -560,13 +560,13 @@ function ProviderLineGroup({
   title,
   lines,
   marketId,
-  bestProvider,
+  selectedBestLine,
   emptyText = 'No provider-line details available.'
 }: {
   title: string;
   lines: NonNullable<MarketOpportunity['providerLines']>;
   marketId: string;
-  bestProvider?: string;
+  selectedBestLine?: ProviderLine | null;
   emptyText?: string;
 }) {
   return (
@@ -577,7 +577,7 @@ function ProviderLineGroup({
       {lines.length ? (
         lines.map((line) => (
           <Box
-            key={`${marketId}-${title}-${line.provider}`}
+            key={`${marketId}-${title}-${line.provider}-${line.providerCategory}-${line.note ?? line.line}`}
             display="grid"
             gridTemplateColumns="minmax(0, 1fr) auto"
             alignItems="center"
@@ -586,7 +586,7 @@ function ProviderLineGroup({
           >
             <Stack direction="row" alignItems="center" gap={0.65} minWidth={0}>
               <ProviderLabel provider={line.provider} category={line.providerCategory} compact />
-              {line.provider === bestProvider ? <BestLineLabel /> : null}
+              {line === selectedBestLine ? <BestLineLabel /> : null}
             </Stack>
             <Typography color="text.secondary" variant="body2" fontWeight={850} lineHeight={1.2} sx={{ whiteSpace: 'nowrap' }}>
               {line.note ?? `Line ${line.line}`}
@@ -610,102 +610,36 @@ function BestLineLabel() {
   );
 }
 
-function LineShoppingPlayerHistoryContext({ market, compact = false }: { market: MarketOpportunity; compact?: boolean }) {
-  const stat = resolveHistoryStat(market);
-  const summary = market.playerHistorySummary;
-  if (!summary?.available || !stat) return null;
+function hasProviderLineComparison(providerLines: ProviderLine[], referenceLines: ProviderLine[]) {
+  return providerLines.length > 1 || referenceLines.length > 0;
+}
 
-  const sampleSize = stat.count ?? summary.sampleSize;
-  const latestDate = formatHistoryDate(summary.latestResultDate);
+function findSelectedBestExpandedLine(lines: ProviderLine[], selectedMarket: MarketOpportunity) {
+  return lines.find((line) => isSelectedBestExpandedLine(line, selectedMarket)) ?? null;
+}
 
+function isSelectedBestExpandedLine(line: ProviderLine, selectedMarket: MarketOpportunity) {
   return (
-    <Box
-      sx={{
-        border: '1px solid rgba(148,163,184,.14)',
-        borderRadius: 2,
-        bgcolor: 'rgba(15,23,42,.34)',
-        px: compact ? 1 : 1.15,
-        py: compact ? 0.75 : 0.9
-      }}
-    >
-      <Stack spacing={0.7}>
-        <Stack direction="row" justifyContent="space-between" alignItems="center" gap={1.2}>
-          <Typography variant="caption" color="text.secondary" fontWeight={850}>
-            Player history
-          </Typography>
-          {latestDate ? (
-            <Typography variant="caption" color="text.secondary" fontWeight={750} sx={{ whiteSpace: 'nowrap' }}>
-              {latestDate}
-            </Typography>
-          ) : null}
-        </Stack>
-        <Box
-          sx={{
-            display: 'grid',
-            gridTemplateColumns: compact ? 'repeat(2, minmax(0, 1fr))' : { xs: 'repeat(2, minmax(0, 1fr))', sm: 'repeat(4, minmax(0, auto))' },
-            gap: compact ? 0.8 : 1.1,
-            alignItems: 'start'
-          }}
-        >
-          <HistoryStatValue label="Avg" value={formatHistoryAverage(stat.average)} />
-          <HistoryStatValue label="Last 5" value={formatHistoryAverage(stat.last5Average)} />
-          <HistoryStatValue label="Last 10" value={formatHistoryAverage(stat.last10Average)} />
-          {!compact && latestDate ? <HistoryStatValue label="Latest" value={latestDate} /> : null}
-        </Box>
-        {sampleSize !== undefined ? (
-          <Typography variant="caption" color="text.secondary" fontWeight={650}>
-            Based on {sampleSize} historical games.
-          </Typography>
-        ) : null}
-      </Stack>
-    </Box>
+    normalizeProviderForComparison(line.provider) === normalizeProviderForComparison(selectedMarket.provider) &&
+    line.providerCategory === selectedMarket.providerCategory &&
+    readProviderLineSide(line) === selectedMarket.side &&
+    sameNumericLine(line.line, selectedMarket.line)
   );
 }
 
-function HistoryStatValue({ label, value }: { label: string; value: string }) {
-  return (
-    <Stack spacing={0.1} minWidth={0}>
-      <Typography variant="caption" color="text.secondary" fontWeight={800} lineHeight={1.15}>
-        {label}
-      </Typography>
-      <Typography variant="body2" fontWeight={900} lineHeight={1.2} sx={{ whiteSpace: 'nowrap' }}>
-        {value}
-      </Typography>
-    </Stack>
-  );
-}
-
-function hasAvailableSoccerHistory(market: MarketOpportunity) {
-  return market.sport === 'SOCCER' && market.playerHistorySummary?.available === true && Boolean(resolveHistoryStat(market));
-}
-
-function resolveHistoryStat(market: MarketOpportunity): PlayerHistoryStatSummary | null {
-  if (market.sport !== 'SOCCER' || !market.playerHistorySummary?.available) return null;
-  const statKey = historyStatKeyForProp(market.propType);
-  return statKey ? market.playerHistorySummary.stats?.[statKey] ?? null : null;
-}
-
-function historyStatKeyForProp(propType: string) {
-  const normalized = propType.replace(/[\s_-]+/g, '').toLowerCase();
-  if (normalized === 'goals' || normalized === 'playergoals') return 'Goals';
-  if (normalized === 'assists' || normalized === 'playerassists') return 'Assists';
-  if (normalized === 'shots' || normalized === 'playershots') return 'Shots';
-  if (normalized === 'shotsontarget' || normalized === 'playershotsontarget' || normalized === 'sot' || normalized === 'playersot') return 'ShotsOnTarget';
+function readProviderLineSide(line: ProviderLine) {
+  const note = String(line.note ?? '').trim().toLowerCase();
+  if (note.startsWith('over')) return 'Over';
+  if (note.startsWith('under')) return 'Under';
   return null;
 }
 
-function formatHistoryAverage(value?: number) {
-  return typeof value === 'number' ? formatDecimal(value, 2) : '-';
+function sameNumericLine(left: number, right: number) {
+  return Math.abs(Number(left) - Number(right)) < 0.0001;
 }
 
-function formatHistoryDate(value?: string | null) {
-  if (!value) return null;
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return value;
-  return new Intl.DateTimeFormat('en-US', {
-    month: 'short',
-    day: 'numeric'
-  }).format(date);
+function normalizeProviderForComparison(value: string) {
+  return value.trim().replace(/\s+/g, ' ').toLowerCase();
 }
 
 function DetailLine({ label, value, tone = 'text.primary', metric }: { label: string; value: string; tone?: string; metric?: 'edge' | 'hitChance' | 'warning' }) {

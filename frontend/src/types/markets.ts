@@ -19,6 +19,8 @@ export type ProjectionModifier =
 export interface MarketOpportunity {
   id: string;
   rank?: number;
+  displayRank?: number;
+  sourceRank?: number;
   playerId?: string;
   canonicalPlayerId?: string;
   player: string;

@@ -68,7 +68,7 @@ function TopPickStatus({
     <>
       {includeRank ? (
         <Typography variant="caption" color="primary.main" fontWeight={950}>
-          #{market.rank ?? '-'} {marketDisplayLabel(market)}
+          #{market.displayRank ?? market.rank ?? '-'} {marketDisplayLabel(market)}
         </Typography>
       ) : null}
       {label ? <StatusPill label={label} /> : null}
