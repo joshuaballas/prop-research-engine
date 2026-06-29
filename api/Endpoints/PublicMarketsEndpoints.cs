@@ -459,6 +459,9 @@ public static class PublicMarketsEndpoints
             string? sport,
             DateOnly? date,
             bool? includeDiagnostics,
+            string? modelEra,
+            bool? includeLegacy,
+            IOptions<TopPicksModelOptions> topPicksModelOptions,
             ApplicationDbContext dbContext,
             CancellationToken cancellationToken) =>
         {
@@ -473,6 +476,9 @@ public static class PublicMarketsEndpoints
                 marketSport.EffectiveSport!,
                 date,
                 includeDiagnostics ?? false,
+                modelEra,
+                includeLegacy ?? false,
+                topPicksModelOptions.Value,
                 dbContext,
                 cancellationToken);
 
@@ -2966,10 +2972,16 @@ public static class PublicMarketsEndpoints
         string effectiveSport,
         DateOnly? requestedDate,
         bool includeDiagnostics,
+        string? modelEra,
+        bool includeLegacy,
+        TopPicksModelOptions topPicksModelOptions,
         ApplicationDbContext dbContext,
         CancellationToken cancellationToken)
     {
         var generatedAtUtc = DateTimeOffset.UtcNow;
+        var requestedModelEra = string.IsNullOrWhiteSpace(modelEra) ? null : modelEra.Trim();
+        var effectiveModelEra = requestedModelEra ?? TheOddsApiDebugEndpoints.ResolveCurrentPublicModelEra(topPicksModelOptions);
+        var hasExplicitModelEraFilter = !string.IsNullOrWhiteSpace(requestedModelEra);
         if (IsSoccerSport(effectiveSport))
         {
             return new
@@ -2982,6 +2994,7 @@ public static class PublicMarketsEndpoints
                 requestedSport,
                 sport = effectiveSport,
                 competition = ResolveCompetitionName(effectiveSport),
+                primaryGrain = "Opportunity",
                 resultGradingSupported = false,
                 unavailableReason = SoccerUnavailableMessage,
                 date = requestedDate,
@@ -2996,6 +3009,13 @@ public static class PublicMarketsEndpoints
                     simulatedRoi = null as decimal?,
                     avgEvAtRecommendationTime = null as decimal?
                 },
+                providerLineDiagnostics = BuildProviderLineDiagnostics(
+                    providerLineCount: 0,
+                    dedupedProviderLineCount: 0,
+                    opportunityCount: 0,
+                    gradeableOpportunityCount: 0,
+                    gradedOpportunityCount: 0,
+                    noResultOpportunityCount: 0),
                 rows = Array.Empty<object>(),
                 diagnostics = includeDiagnostics
                     ? new
@@ -3025,6 +3045,7 @@ public static class PublicMarketsEndpoints
                 requestedSport,
                 sport = effectiveSport,
                 date = requestedDate,
+                primaryGrain = "Opportunity",
                 dateSelection = new
                 {
                     requestedDate,
@@ -3045,6 +3066,13 @@ public static class PublicMarketsEndpoints
                     simulatedRoi = null as decimal?,
                     avgEvAtRecommendationTime = null as decimal?
                 },
+                providerLineDiagnostics = BuildProviderLineDiagnostics(
+                    providerLineCount: 0,
+                    dedupedProviderLineCount: 0,
+                    opportunityCount: 0,
+                    gradeableOpportunityCount: 0,
+                    gradedOpportunityCount: 0,
+                    noResultOpportunityCount: 0),
                 rows = Array.Empty<object>(),
                 diagnostics = includeDiagnostics ? new { reasonCounts = new Dictionary<string, int>(), examples = Array.Empty<object>() } : null
             };
@@ -3064,14 +3092,38 @@ public static class PublicMarketsEndpoints
             includeWatchlist: false,
             includeResearch: false,
             includeStale: false);
+        if (hasExplicitModelEraFilter)
+        {
+            ledgerQuery = ledgerQuery.Where(row => row.ModelEra == effectiveModelEra);
+        }
+        else if (!includeLegacy)
+        {
+            ledgerQuery = ledgerQuery.Where(row => row.ModelEra == effectiveModelEra);
+        }
+        var applyGuardedPublicPerformanceRules = ShouldApplyGuardedPublicPerformanceRules(
+            effectiveSport,
+            effectiveModelEra,
+            includeWatchlist: false,
+            includeResearch: false,
+            includeStale: false,
+            includeLegacy);
+        if (applyGuardedPublicPerformanceRules)
+        {
+            ledgerQuery = ApplyGuardedPublicPerformanceEligibility(ledgerQuery, includeStale: false);
+        }
 
-        var selectedRows = (await ledgerQuery
+        var selectedRowsRawBeforeGradeability = await ledgerQuery
                 .OrderByDescending(row => row.RankingScore)
                 .ThenByDescending(row => row.EstimatedEv)
                 .Take(5000)
-                .ToArrayAsync(cancellationToken))
+                .ToArrayAsync(cancellationToken);
+        var selectedRowsBeforeGradeability = DeduplicatePublicPerformanceLedgerRows(selectedRowsRawBeforeGradeability);
+        var selectedRows = selectedRowsBeforeGradeability
             .Where(HasPerformanceGradeability)
             .ToArray();
+        var opportunityDiagnostics = BuildPublicPerformanceOpportunityDiagnostics(
+            selectedRowsRawBeforeGradeability,
+            selectedRowsBeforeGradeability);
         var gradedRows = await GradeLedgerRowsAsync(selectedRows, dbContext, cancellationToken);
         var determinedRows = gradedRows
             .Where(row => IsGradedOutcome(row.Outcome))
@@ -3081,6 +3133,13 @@ public static class PublicMarketsEndpoints
         var noResultRows = gradedRows
             .Where(row => IsNoResultFailure(row.MatchFailureReason))
             .ToArray();
+        var providerLineDiagnostics = BuildProviderLineDiagnostics(
+            selectedRowsRawBeforeGradeability.Length,
+            selectedRowsBeforeGradeability.Length,
+            selectedRowsBeforeGradeability.Length,
+            selectedRows.Length,
+            determinedRows.Length,
+            noResultRows.Length);
         var wins = determinedRows.Count(row => row.Outcome == "Win");
         var losses = determinedRows.Count(row => row.Outcome == "Loss");
         var pushes = determinedRows.Count(row => row.Outcome == "Push");
@@ -3095,6 +3154,14 @@ public static class PublicMarketsEndpoints
             readOnly = true,
             requestedSport,
             sport = effectiveSport,
+            primaryGrain = "Opportunity",
+            providerLineDiagnostics,
+            opportunityCount = selectedRowsBeforeGradeability.Length,
+            providerLineCount = selectedRowsRawBeforeGradeability.Length,
+            dedupedProviderLineCount = selectedRowsBeforeGradeability.Length,
+            modelEra = effectiveModelEra,
+            requestedModelEra,
+            includeLegacy,
             date = selectedDate.Value,
             dateSelection = new
             {
@@ -3108,6 +3175,10 @@ public static class PublicMarketsEndpoints
             summary = new
             {
                 gradedPicks = determinedRows.Length,
+                gradedOpportunities = determinedRows.Length,
+                opportunityCount = selectedRowsBeforeGradeability.Length,
+                providerLineCount = selectedRowsRawBeforeGradeability.Length,
+                dedupedProviderLineCount = selectedRowsBeforeGradeability.Length,
                 won = wins,
                 lost = losses,
                 pushed = pushes,
@@ -3148,13 +3219,21 @@ public static class PublicMarketsEndpoints
                         hitChance = row.Snapshot.HitChance,
                         trust = row.Snapshot.TrustLevel,
                         sampleSize = row.Snapshot.HistoricalSampleSize,
-                        matchMethod = row.MatchMethod
+                        matchMethod = row.MatchMethod,
+                        providerLineCount = opportunityDiagnostics.GetValueOrDefault(row.Snapshot.Id)?.ProviderLineCount ?? 1,
+                        providerLineProviders = opportunityDiagnostics.GetValueOrDefault(row.Snapshot.Id)?.Providers ?? [],
+                        providerLineBookmakers = opportunityDiagnostics.GetValueOrDefault(row.Snapshot.Id)?.Bookmakers ?? []
                     };
                 })
                 .ToArray(),
             diagnostics = includeDiagnostics
                 ? new
                 {
+                    primaryGrain = "Opportunity",
+                    providerLineDiagnostics,
+                    modelEra = effectiveModelEra,
+                    requestedModelEra,
+                    includeLegacy,
                     noResultCounts = noResultRows
                         .GroupBy(row => row.MatchFailureReason ?? "Unknown")
                         .ToDictionary(group => group.Key, group => group.Count()),
@@ -3286,6 +3365,7 @@ public static class PublicMarketsEndpoints
             includeWatchlist,
             includeResearch,
             includeStale);
+        var ledgerPreDateRangeQuery = ledgerQuery;
 
         if (fromDate.HasValue)
         {
@@ -3300,6 +3380,7 @@ public static class PublicMarketsEndpoints
         if (minSampleSize.HasValue)
         {
             ledgerQuery = ledgerQuery.Where(row => row.HistoricalSampleSize >= minSampleSize.Value);
+            ledgerPreDateRangeQuery = ledgerPreDateRangeQuery.Where(row => row.HistoricalSampleSize >= minSampleSize.Value);
         }
 
         var ledgerPreEraQuery = ledgerQuery;
@@ -3310,10 +3391,12 @@ public static class PublicMarketsEndpoints
         if (hasExplicitModelEraFilter)
         {
             ledgerQuery = ledgerQuery.Where(row => row.ModelEra == effectiveModelEra);
+            ledgerPreDateRangeQuery = ledgerPreDateRangeQuery.Where(row => row.ModelEra == effectiveModelEra);
         }
         else if (!includeLegacy)
         {
             ledgerQuery = ledgerQuery.Where(row => row.ModelEra == effectiveModelEra);
+            ledgerPreDateRangeQuery = ledgerPreDateRangeQuery.Where(row => row.ModelEra == effectiveModelEra);
         }
 
         var applyGuardedPublicPerformanceRules = ShouldApplyGuardedPublicPerformanceRules(
@@ -3326,6 +3409,7 @@ public static class PublicMarketsEndpoints
         if (applyGuardedPublicPerformanceRules)
         {
             ledgerQuery = ApplyGuardedPublicPerformanceEligibility(ledgerQuery, includeStale);
+            ledgerPreDateRangeQuery = ApplyGuardedPublicPerformanceEligibility(ledgerPreDateRangeQuery, includeStale);
         }
 
         var ledgerRowsBeforeEraQuarantine = modelEraBreakdownRows.Sum(row => row.RowCount);
@@ -3458,6 +3542,9 @@ public static class PublicMarketsEndpoints
         var summarySelectedRowsBeforeGradeability = normalizedGradingMode == "latestGraded" && latestGradedDate.HasValue
             ? selectedRowsBeforeGradeability.Where(row => row.ExpectedResultDate == latestGradedDate.Value).ToArray()
             : selectedRowsBeforeGradeability;
+        var summaryRawRowsBeforeGradeability = normalizedGradingMode == "latestGraded" && latestGradedDate.HasValue
+            ? selectedRowsRawBeforeGradeability.Where(row => row.ExpectedResultDate == latestGradedDate.Value).ToArray()
+            : selectedRowsRawBeforeGradeability;
         var totalGraded = summaryRows.Count(row => IsGradedOutcome(row.Outcome));
         var wonRows = summaryRows.Count(row => row.Outcome == "Win");
         var lostRows = summaryRows.Count(row => row.Outcome == "Loss");
@@ -3468,6 +3555,114 @@ public static class PublicMarketsEndpoints
             row.Outcome is null &&
             !IsNoResultFailure(row.MatchFailureReason) &&
             !IsPendingFailure(row.MatchFailureReason));
+        var summaryProviderLineDiagnostics = BuildProviderLineDiagnostics(
+            summaryRawRowsBeforeGradeability.Length,
+            summarySelectedRowsBeforeGradeability.Length,
+            summarySelectedRowsBeforeGradeability.Length,
+            summarySelectedRows.Length,
+            totalGraded,
+            noResultRows);
+        var latestGradedRowsForDiagnostics = latestGradedDate.HasValue
+            ? gradedRows.Where(row => row.Snapshot.ExpectedResultDate == latestGradedDate.Value).ToArray()
+            : [];
+        var latestGradedDeterminedRowsForDiagnostics = latestGradedRowsForDiagnostics
+            .Where(row => IsGradedOutcome(row.Outcome))
+            .ToArray();
+        var latestGradedRawRowsBeforeGradeability = latestGradedDate.HasValue
+            ? selectedRowsRawBeforeGradeability.Where(row => row.ExpectedResultDate == latestGradedDate.Value).ToArray()
+            : [];
+        var latestGradedRowsBeforeGradeability = latestGradedDate.HasValue
+            ? selectedRowsBeforeGradeability.Where(row => row.ExpectedResultDate == latestGradedDate.Value).ToArray()
+            : [];
+        var latestGradedGradeableRows = latestGradedDate.HasValue
+            ? selectedRows.Where(row => row.ExpectedResultDate == latestGradedDate.Value).ToArray()
+            : [];
+        var latestGradedNoResultRows = latestGradedRowsForDiagnostics.Count(row => IsNoResultFailure(row.MatchFailureReason));
+        var latestGradedProviderLineDiagnostics = BuildProviderLineDiagnostics(
+            latestGradedRawRowsBeforeGradeability.Length,
+            latestGradedRowsBeforeGradeability.Length,
+            latestGradedRowsBeforeGradeability.Length,
+            latestGradedGradeableRows.Length,
+            latestGradedDeterminedRowsForDiagnostics.Length,
+            latestGradedNoResultRows);
+        var selectedLatestGradedSlateDiagnostics = latestGradedDate.HasValue
+            ? new LatestGradedSlateDiagnostics(
+                latestGradedDate.Value,
+                latestGradedRawRowsBeforeGradeability.Length,
+                latestGradedRowsBeforeGradeability.Length,
+                latestGradedGradeableRows.Length,
+                latestGradedDeterminedRowsForDiagnostics.Length,
+                latestGradedNoResultRows,
+                latestGradedDeterminedRowsForDiagnostics.Count(row => row.Outcome == "Win"),
+                latestGradedDeterminedRowsForDiagnostics.Count(row => row.Outcome == "Loss"),
+                latestGradedDeterminedRowsForDiagnostics.Count(row => row.Outcome == "Push"))
+            : null;
+        var latestGradedSlateDiagnostics = (fromDate.HasValue || toDate.HasValue)
+            ? await ResolveLatestGradedSlateAcrossDateRangeAsync(
+                ledgerPreDateRangeQuery,
+                applyGuardedPublicPerformanceRules,
+                completeCoverageDateSet,
+                dbContext,
+                cancellationToken) ?? selectedLatestGradedSlateDiagnostics
+            : selectedLatestGradedSlateDiagnostics;
+        var latestGradedDateForDiagnostics = latestGradedSlateDiagnostics?.Date ?? latestGradedDate;
+        var latestGradedProviderLineDiagnosticsForResponse = latestGradedSlateDiagnostics is null
+            ? latestGradedProviderLineDiagnostics
+            : BuildProviderLineDiagnostics(
+                latestGradedSlateDiagnostics.ProviderLineCount,
+                latestGradedSlateDiagnostics.DedupedProviderLineCount,
+                latestGradedSlateDiagnostics.DedupedProviderLineCount,
+                latestGradedSlateDiagnostics.GradeableOpportunityCount,
+                latestGradedSlateDiagnostics.GradedOpportunityCount,
+                latestGradedSlateDiagnostics.NoResultOpportunityCount);
+        var overallDateRange = BuildPerformanceDateRange(summarySelectedRowsBeforeGradeability.Select(row => row.ExpectedResultDate));
+        var latestGradedDateIncludedInOverall = latestGradedDateForDiagnostics.HasValue &&
+            summaryRows.Any(row => row.Snapshot.ExpectedResultDate == latestGradedDateForDiagnostics.Value && IsGradedOutcome(row.Outcome));
+        var latestGradedDateExcludedReason = latestGradedDateForDiagnostics.HasValue
+            ? latestGradedDateIncludedInOverall
+                ? null
+                : BuildLatestGradedExclusionReason(latestGradedDateForDiagnostics.Value, fromDate, toDate, summarySelectedRowsBeforeGradeability)
+            : "No latest graded slate was found for the selected filters.";
+        var yesterdayWins = latestGradedSlateDiagnostics?.Wins ?? 0;
+        var yesterdayLosses = latestGradedSlateDiagnostics?.Losses ?? 0;
+        var yesterdayPushes = latestGradedSlateDiagnostics?.Pushes ?? 0;
+        var yesterdayDiagnostics = new
+        {
+            date = latestGradedDateForDiagnostics,
+            wlp = $"{yesterdayWins}-{yesterdayLosses}-{yesterdayPushes}",
+            won = yesterdayWins,
+            lost = yesterdayLosses,
+            pushed = yesterdayPushes,
+            gradedOpportunities = latestGradedSlateDiagnostics?.GradedOpportunityCount ?? 0,
+            providerLineDiagnostics = latestGradedProviderLineDiagnosticsForResponse
+        };
+        var overallDiagnostics = new
+        {
+            wlp = $"{wonRows}-{lostRows}-{pushedRows}",
+            won = wonRows,
+            lost = lostRows,
+            pushed = pushedRows,
+            gradedOpportunities = totalGraded,
+            includesLatestGradedSlate = latestGradedDateIncludedInOverall,
+            dateRange = overallDateRange,
+            excludedLatestGradedSlateReason = latestGradedDateExcludedReason,
+            providerLineDiagnostics = summaryProviderLineDiagnostics
+        };
+        var performanceGrainDiagnostics = new
+        {
+            primaryGrain = "Opportunity",
+            latestGradedDate = latestGradedDateForDiagnostics,
+            yesterdayDate = latestGradedDateForDiagnostics,
+            yesterdayGradedOpportunities = latestGradedSlateDiagnostics?.GradedOpportunityCount ?? 0,
+            overallGradedOpportunities = totalGraded,
+            overallIncludesLatestGradedSlate = latestGradedDateIncludedInOverall,
+            overallDateRange,
+            overallExcludedLatestGradedSlateReason = latestGradedDateExcludedReason,
+            modelEra = effectiveModelEra,
+            includeLegacy,
+            excludedOpportunityCount = Math.Max(0, summarySelectedRowsBeforeGradeability.Length - totalGraded),
+            providerLineDiagnostics = summaryProviderLineDiagnostics
+        };
         var modelEraQuarantineWarning = !includeLegacy && excludedLegacyRows > 0 && totalGraded == 0
             ? "No current-era graded picks are available for the selected date/range. Legacy picks are quarantined by default."
             : null;
@@ -3575,10 +3770,18 @@ public static class PublicMarketsEndpoints
             effectiveSport,
             gradingMode = normalizedGradingMode,
             performanceSource = "recommendationLedger",
+            primaryGrain = "Opportunity",
+            providerLineDiagnostics = summaryProviderLineDiagnostics,
+            performanceGrainDiagnostics,
+            yesterday = yesterdayDiagnostics,
+            overall = overallDiagnostics,
+            opportunityCount = summarySelectedRowsBeforeGradeability.Length,
+            providerLineCount = summaryRawRowsBeforeGradeability.Length,
+            dedupedProviderLineCount = summarySelectedRowsBeforeGradeability.Length,
             modelEra = effectiveModelEra,
             requestedModelEra,
             includeLegacy,
-            limitation = "Performance summary uses recommendation_snapshots as the captured-pick ledger and matches rows to prop_results by expected result date, canonical player id, and normalized prop/stat type. Provider, side, and line are not used to find the result row; side and line are used only after a result is found.",
+            limitation = "Performance summary uses recommendation_snapshots as the captured-pick ledger and reports opportunity-level public-pick performance by default. Sportsbook bookmaker fanout is de-duplicated for headline W-L-P, hit rate, ROI, and groups; DFS keeps provider/entry-group separation. Rows are matched to prop_results by expected result date, canonical player id, and normalized prop/stat type. Provider, side, and line are not used to find the result row; side and line are used only after a result is found.",
             filters = new
             {
                 providerCategory,
@@ -3607,6 +3810,10 @@ public static class PublicMarketsEndpoints
             summary = new
             {
                 gradedPicks = totalGraded,
+                gradedOpportunities = totalGraded,
+                opportunityCount = summarySelectedRowsBeforeGradeability.Length,
+                providerLineCount = summaryRawRowsBeforeGradeability.Length,
+                dedupedProviderLineCount = summarySelectedRowsBeforeGradeability.Length,
                 won = wonRows,
                 lost = lostRows,
                 pushed = pushedRows,
@@ -3617,6 +3824,21 @@ public static class PublicMarketsEndpoints
             },
             dataAvailability = new
             {
+                primaryGrain = "Opportunity",
+                providerLineDiagnostics = summaryProviderLineDiagnostics,
+                performanceGrainDiagnostics,
+                yesterdayDate = latestGradedDateForDiagnostics,
+                yesterdayGradedOpportunities = latestGradedSlateDiagnostics?.GradedOpportunityCount ?? 0,
+                overallGradedOpportunities = totalGraded,
+                overallIncludesLatestGradedSlate = latestGradedDateIncludedInOverall,
+                overallDateRange,
+                overallExcludedLatestGradedSlateReason = latestGradedDateExcludedReason,
+                opportunityCount = summarySelectedRowsBeforeGradeability.Length,
+                providerLineCount = summaryRawRowsBeforeGradeability.Length,
+                dedupedProviderLineCount = summarySelectedRowsBeforeGradeability.Length,
+                gradeableOpportunityCount = summarySelectedRows.Length,
+                gradedOpportunityCount = totalGraded,
+                noResultOpportunityCount = noResultRows,
                 ledgerRowsLoaded = summarySelectedRows.Length,
                 gradedLedgerRows = totalGraded,
                 pendingLedgerRows = pendingRows,
@@ -3743,7 +3965,7 @@ public static class PublicMarketsEndpoints
                 resultCoverageCompleteForSelectedDate,
                 resultCoverageWarning = coverageSelection.Warning,
                 latestLedgerDate,
-                latestGradedDate,
+                latestGradedDate = latestGradedDateForDiagnostics,
                 currentSlateDate = normalizedGradingMode == "currentSlate" ? latestLedgerDate : null,
                 currentSlateTotalPicks = normalizedGradingMode == "currentSlate" ? summarySelectedRows.Length : (int?)null,
                 currentSlateGradedPicks = normalizedGradingMode == "currentSlate" ? totalGraded : (int?)null,
@@ -3792,6 +4014,11 @@ public static class PublicMarketsEndpoints
             },
             diagnostics = new
             {
+                primaryGrain = "Opportunity",
+                providerLineDiagnostics = summaryProviderLineDiagnostics,
+                performanceGrainDiagnostics,
+                yesterday = yesterdayDiagnostics,
+                overall = overallDiagnostics,
                 modelEra = effectiveModelEra,
                 requestedModelEra,
                 includeLegacy,
@@ -4273,12 +4500,196 @@ public static class PublicMarketsEndpoints
     {
         return rows
             .GroupBy(BuildPublicPerformanceLedgerKey, StringComparer.OrdinalIgnoreCase)
-            .Select(group => group
-                .OrderBy(row => row.FirstSeenAtUtc)
-                .ThenBy(row => row.CapturedAtUtc)
-                .ThenBy(row => row.Id)
-                .First())
+            .Select(SelectPublicPerformanceRepresentative)
             .ToArray();
+    }
+
+    private static RecommendationSnapshot SelectPublicPerformanceRepresentative(IEnumerable<RecommendationSnapshot> group)
+    {
+        return group
+            .OrderByDescending(row => row.EstimatedEv ?? decimal.MinValue)
+            .ThenByDescending(row => row.RankingScore)
+            .ThenBy(row => row.FirstSeenAtUtc)
+            .ThenBy(row => row.CapturedAtUtc)
+            .ThenBy(row => row.Id)
+            .First();
+    }
+
+    private static IReadOnlyDictionary<Guid, PublicPerformanceOpportunityDiagnostics> BuildPublicPerformanceOpportunityDiagnostics(
+        IReadOnlyCollection<RecommendationSnapshot> rawRows,
+        IReadOnlyCollection<RecommendationSnapshot> representativeRows)
+    {
+        if (rawRows.Count == 0 || representativeRows.Count == 0)
+        {
+            return new Dictionary<Guid, PublicPerformanceOpportunityDiagnostics>();
+        }
+
+        var representativesByKey = representativeRows
+            .GroupBy(BuildPublicPerformanceLedgerKey, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(group => group.Key, group => group.First(), StringComparer.OrdinalIgnoreCase);
+        var diagnostics = new Dictionary<Guid, PublicPerformanceOpportunityDiagnostics>();
+        foreach (var group in rawRows.GroupBy(BuildPublicPerformanceLedgerKey, StringComparer.OrdinalIgnoreCase))
+        {
+            if (!representativesByKey.TryGetValue(group.Key, out var representative))
+            {
+                continue;
+            }
+
+            var rows = group.ToArray();
+            diagnostics[representative.Id] = new PublicPerformanceOpportunityDiagnostics(
+                rows.Length,
+                rows
+                    .Select(row => FirstNonBlank(row.EntryProvider, row.Provider, row.Bookmaker))
+                    .Where(value => !string.IsNullOrWhiteSpace(value))
+                    .Select(value => value!)
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .OrderBy(value => value, StringComparer.OrdinalIgnoreCase)
+                    .ToArray(),
+                rows
+                    .Select(row => row.Bookmaker)
+                    .Where(value => !string.IsNullOrWhiteSpace(value))
+                    .Select(value => value!)
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .OrderBy(value => value, StringComparer.OrdinalIgnoreCase)
+                    .ToArray());
+        }
+
+        return diagnostics;
+    }
+
+    private static object BuildProviderLineDiagnostics(
+        int providerLineCount,
+        int dedupedProviderLineCount,
+        int opportunityCount,
+        int gradeableOpportunityCount,
+        int gradedOpportunityCount,
+        int noResultOpportunityCount)
+    {
+        return new
+        {
+            primaryGrain = "Opportunity",
+            providerLineGrain = "ProviderLine",
+            providerLineCount,
+            dedupedProviderLineCount,
+            opportunityCount,
+            gradeableOpportunityCount,
+            gradedOpportunityCount,
+            noResultOpportunityCount,
+            duplicateProviderLineCount = Math.Max(0, providerLineCount - dedupedProviderLineCount),
+            sportsbookOpportunityKeyExcludesBookmaker = true,
+            dfsOpportunityKeyIncludesEntryProvider = true
+        };
+    }
+
+    private static async Task<LatestGradedSlateDiagnostics?> ResolveLatestGradedSlateAcrossDateRangeAsync(
+        IQueryable<RecommendationSnapshot> ledgerQuery,
+        bool dedupeProviderFanout,
+        ISet<DateOnly>? completeCoverageDateSet,
+        ApplicationDbContext dbContext,
+        CancellationToken cancellationToken)
+    {
+        var candidateDates = await ledgerQuery
+            .Select(row => row.ExpectedResultDate)
+            .Distinct()
+            .OrderByDescending(date => date)
+            .Take(30)
+            .ToArrayAsync(cancellationToken);
+
+        foreach (var candidateDate in candidateDates)
+        {
+            if (completeCoverageDateSet is not null && !completeCoverageDateSet.Contains(candidateDate))
+            {
+                continue;
+            }
+
+            var rawRows = await ledgerQuery
+                .Where(row => row.ExpectedResultDate == candidateDate)
+                .OrderByDescending(row => row.RankingScore)
+                .ThenByDescending(row => row.EstimatedEv)
+                .Take(5000)
+                .ToArrayAsync(cancellationToken);
+            var opportunityRows = dedupeProviderFanout
+                ? DeduplicatePublicPerformanceLedgerRows(rawRows)
+                : rawRows;
+            var gradeableRows = opportunityRows
+                .Where(HasPerformanceGradeability)
+                .ToArray();
+
+            if (gradeableRows.Length == 0)
+            {
+                continue;
+            }
+
+            var gradedRows = await GradeLedgerRowsAsync(gradeableRows, dbContext, cancellationToken);
+            var determinedRows = gradedRows
+                .Where(row => IsGradedOutcome(row.Outcome))
+                .ToArray();
+            if (determinedRows.Length > 0)
+            {
+                return new LatestGradedSlateDiagnostics(
+                    candidateDate,
+                    rawRows.Length,
+                    opportunityRows.Length,
+                    gradeableRows.Length,
+                    determinedRows.Length,
+                    gradedRows.Count(row => IsNoResultFailure(row.MatchFailureReason)),
+                    determinedRows.Count(row => row.Outcome == "Win"),
+                    determinedRows.Count(row => row.Outcome == "Loss"),
+                    determinedRows.Count(row => row.Outcome == "Push"));
+            }
+        }
+
+        return null;
+    }
+
+    private sealed record LatestGradedSlateDiagnostics(
+        DateOnly Date,
+        int ProviderLineCount,
+        int DedupedProviderLineCount,
+        int GradeableOpportunityCount,
+        int GradedOpportunityCount,
+        int NoResultOpportunityCount,
+        int Wins,
+        int Losses,
+        int Pushes);
+
+    private static object? BuildPerformanceDateRange(IEnumerable<DateOnly> dates)
+    {
+        var values = dates
+            .Select(date => (DateOnly?)date)
+            .Where(date => date.HasValue)
+            .ToArray();
+        return values.Length == 0
+            ? null
+            : new
+            {
+                fromDate = values.Min(),
+                toDate = values.Max()
+            };
+    }
+
+    private static string BuildLatestGradedExclusionReason(
+        DateOnly latestGradedDate,
+        DateOnly? fromDate,
+        DateOnly? toDate,
+        IReadOnlyCollection<RecommendationSnapshot> selectedRowsBeforeGradeability)
+    {
+        if (fromDate.HasValue && latestGradedDate < fromDate.Value)
+        {
+            return $"The latest graded slate ({latestGradedDate:yyyy-MM-dd}) is before the requested fromDate.";
+        }
+
+        if (toDate.HasValue && latestGradedDate > toDate.Value)
+        {
+            return $"The latest graded slate ({latestGradedDate:yyyy-MM-dd}) is after the requested toDate.";
+        }
+
+        if (selectedRowsBeforeGradeability.All(row => row.ExpectedResultDate != latestGradedDate))
+        {
+            return "The latest graded slate was removed by the selected performance filters before grading.";
+        }
+
+        return "The latest graded slate has no determined graded opportunities in this response.";
     }
 
     private sealed record CurrentDynamicPublicTopPickLedgerCoverage(
@@ -4335,6 +4746,7 @@ public static class PublicMarketsEndpoints
         return string.Join("|", new[]
         {
             row.Sport.Trim().ToUpperInvariant(),
+            RecommendationLedgerWriter.NormalizeKey(string.Equals(row.Sport, "MLB", StringComparison.OrdinalIgnoreCase) ? "MLB" : string.Empty),
             row.ExpectedResultDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
             row.EventId?.Trim().ToLowerInvariant() ?? string.Empty,
             row.CanonicalPlayerId?.ToString("D") ?? RecommendationLedgerWriter.NormalizeKey(row.PlayerName),
@@ -4342,7 +4754,7 @@ public static class PublicMarketsEndpoints
             RecommendationLedgerWriter.NormalizeKey(row.Side),
             row.Line.ToString("0.####", CultureInfo.InvariantCulture),
             RecommendationLedgerWriter.NormalizeKey(row.ProviderCategory),
-            RecommendationLedgerWriter.NormalizeKey(row.Bookmaker ?? row.Provider ?? row.EntryProvider),
+            BuildPublicPerformanceProviderIdentity(row),
             RecommendationLedgerWriter.NormalizeKey(row.ModelEra)
         });
     }
@@ -4352,6 +4764,7 @@ public static class PublicMarketsEndpoints
         return string.Join("|", new[]
         {
             row.Sport.Trim().ToUpperInvariant(),
+            RecommendationLedgerWriter.NormalizeKey(string.Equals(row.Sport, "MLB", StringComparison.OrdinalIgnoreCase) ? "MLB" : string.Empty),
             row.ExpectedResultDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
             row.EventId?.Trim().ToLowerInvariant() ?? string.Empty,
             row.CanonicalPlayerId?.ToString("D") ?? RecommendationLedgerWriter.NormalizeKey(row.PlayerName),
@@ -4359,7 +4772,7 @@ public static class PublicMarketsEndpoints
             RecommendationLedgerWriter.NormalizeKey(row.Side),
             row.Line.ToString("0.####", CultureInfo.InvariantCulture),
             RecommendationLedgerWriter.NormalizeKey(row.ProviderCategory),
-            RecommendationLedgerWriter.NormalizeKey(row.Bookmaker ?? row.Provider ?? row.EntryProvider)
+            BuildPublicPerformanceProviderIdentity(row)
         });
     }
 
@@ -4377,11 +4790,12 @@ public static class PublicMarketsEndpoints
         var propTypeIdentity = GetTopPickString(publicTopPick, "propTypeId")
             ?? RecommendationLedgerWriter.NormalizeKey(GetTopPickString(publicTopPick, "normalizedPropType", "propType"));
         var side = GetTopPickString(publicTopPick, "bestSide", "selectedSide", "side");
-        var bookmaker = GetTopPickString(publicTopPick, "bookmaker", "bestBookmaker", "provider");
+        var sport = (GetTopPickString(publicTopPick, "sport") ?? "MLB").Trim().ToUpperInvariant();
 
         return string.Join("|", new[]
         {
-            (GetTopPickString(publicTopPick, "sport") ?? "MLB").Trim().ToUpperInvariant(),
+            sport,
+            RecommendationLedgerWriter.NormalizeKey(sport == "MLB" ? "MLB" : GetTopPickString(publicTopPick, "competition")),
             expectedDate.Value.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
             GetTopPickString(publicTopPick, "eventId")?.Trim().ToLowerInvariant() ?? string.Empty,
             playerIdentity,
@@ -4389,8 +4803,50 @@ public static class PublicMarketsEndpoints
             RecommendationLedgerWriter.NormalizeKey(side),
             (GetTopPickDecimal(publicTopPick, "line") ?? 0m).ToString("0.####", CultureInfo.InvariantCulture),
             RecommendationLedgerWriter.NormalizeKey(GetTopPickString(publicTopPick, "providerCategory")),
-            RecommendationLedgerWriter.NormalizeKey(bookmaker)
+            BuildPublicPerformanceProviderIdentity(publicTopPick)
         });
+    }
+
+    private static string BuildPublicPerformanceProviderIdentity(RecommendationSnapshot row)
+    {
+        if (string.Equals(row.ProviderCategory, "Sportsbook", StringComparison.OrdinalIgnoreCase))
+        {
+            return "SPORTSBOOK";
+        }
+
+        return RecommendationLedgerWriter.NormalizeKey(FirstNonBlank(
+            row.EntryCompatibilityGroup,
+            row.EntryProvider,
+            row.Provider,
+            row.Bookmaker));
+    }
+
+    private static string BuildPublicPerformanceProviderIdentity(JsonObject publicTopPick)
+    {
+        var providerCategory = GetTopPickString(publicTopPick, "providerCategory");
+        if (string.Equals(providerCategory, "Sportsbook", StringComparison.OrdinalIgnoreCase))
+        {
+            return "SPORTSBOOK";
+        }
+
+        return RecommendationLedgerWriter.NormalizeKey(FirstNonBlank(
+            GetTopPickString(publicTopPick, "entryCompatibilityGroup"),
+            GetTopPickString(publicTopPick, "entryProvider"),
+            GetTopPickString(publicTopPick, "provider"),
+            GetTopPickString(publicTopPick, "bookmaker", "bestBookmaker")));
+    }
+
+    private static string? FirstNonBlank(params string?[] values)
+    {
+        foreach (var value in values)
+        {
+            if (!string.IsNullOrWhiteSpace(value))
+            {
+                return value;
+            }
+        }
+
+        return null;
     }
 
     private static string? GetGuardedPublicPerformanceExclusionReason(RecommendationSnapshot row, bool includeStale)
@@ -6770,6 +7226,11 @@ public static class PublicMarketsEndpoints
         decimal? Profit,
         string? MatchFailureReason,
         string? MatchMethod);
+
+    private sealed record PublicPerformanceOpportunityDiagnostics(
+        int ProviderLineCount,
+        string[] Providers,
+        string[] Bookmakers);
 
     private sealed record ModelEraBreakdownRow(
         string ModelEra,

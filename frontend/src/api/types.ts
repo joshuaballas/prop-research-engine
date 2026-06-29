@@ -525,7 +525,30 @@ export interface BookmakerPriceDto {
 export interface MarketPerformanceSummaryDto {
   generatedAtUtc: string;
   gradingMode?: 'allHistory' | 'latestGraded' | 'latestCompleted' | 'currentSlate' | 'rollingWindow' | string;
+  primaryGrain?: string;
+  opportunityCount?: number;
+  providerLineCount?: number;
+  dedupedProviderLineCount?: number;
+  providerLineDiagnostics?: ProviderLineDiagnosticsDto;
+  performanceGrainDiagnostics?: PerformanceGrainDiagnosticsDto;
+  yesterday?: PerformancePeriodDiagnosticsDto;
+  overall?: PerformancePeriodDiagnosticsDto;
   dataAvailability?: {
+    primaryGrain?: string;
+    opportunityCount?: number;
+    providerLineCount?: number;
+    dedupedProviderLineCount?: number;
+    gradeableOpportunityCount?: number;
+    gradedOpportunityCount?: number;
+    noResultOpportunityCount?: number;
+    providerLineDiagnostics?: ProviderLineDiagnosticsDto;
+    performanceGrainDiagnostics?: PerformanceGrainDiagnosticsDto;
+    yesterdayDate?: string | null;
+    yesterdayGradedOpportunities?: number;
+    overallGradedOpportunities?: number;
+    overallIncludesLatestGradedSlate?: boolean;
+    overallDateRange?: PerformanceDateRangeDto | null;
+    overallExcludedLatestGradedSlateReason?: string | null;
     snapshotRowsLoaded?: number;
     picksAfterFilters?: number;
     totalPicksAfterFilters?: number;
@@ -582,6 +605,14 @@ export interface MarketPerformanceSummaryDto {
     byStrategyTier?: PerformanceGroupDto[];
     byProviderAndPropType?: PerformanceGroupDto[];
   };
+  diagnostics?: {
+    primaryGrain?: string;
+    providerLineDiagnostics?: ProviderLineDiagnosticsDto;
+    performanceGrainDiagnostics?: PerformanceGrainDiagnosticsDto;
+    yesterday?: PerformancePeriodDiagnosticsDto;
+    overall?: PerformancePeriodDiagnosticsDto;
+    [key: string]: unknown;
+  } | null;
 }
 
 export interface MarketPerformanceResultsDto {
@@ -590,9 +621,18 @@ export interface MarketPerformanceResultsDto {
   readOnly?: boolean;
   requestedSport?: string | null;
   sport?: string;
+  primaryGrain?: string;
+  opportunityCount?: number;
+  providerLineCount?: number;
+  dedupedProviderLineCount?: number;
+  providerLineDiagnostics?: ProviderLineDiagnosticsDto;
   date?: string;
   summary?: {
     gradedPicks?: number;
+    gradedOpportunities?: number;
+    opportunityCount?: number;
+    providerLineCount?: number;
+    dedupedProviderLineCount?: number;
     won?: number;
     lost?: number;
     pushed?: number;
@@ -603,10 +643,59 @@ export interface MarketPerformanceResultsDto {
   };
   rows?: PerformanceResultRowDto[];
   diagnostics?: {
+    primaryGrain?: string;
+    providerLineDiagnostics?: ProviderLineDiagnosticsDto;
     noResultCounts?: Record<string, number>;
     noResultExamples?: unknown[];
     matchMethodCounts?: Record<string, number>;
   } | null;
+}
+
+export interface ProviderLineDiagnosticsDto {
+  primaryGrain?: string;
+  providerLineGrain?: string;
+  providerLineCount?: number;
+  dedupedProviderLineCount?: number;
+  opportunityCount?: number;
+  gradeableOpportunityCount?: number;
+  gradedOpportunityCount?: number;
+  noResultOpportunityCount?: number;
+  duplicateProviderLineCount?: number;
+  sportsbookOpportunityKeyExcludesBookmaker?: boolean;
+  dfsOpportunityKeyIncludesEntryProvider?: boolean;
+}
+
+export interface PerformanceDateRangeDto {
+  fromDate?: string | null;
+  toDate?: string | null;
+}
+
+export interface PerformancePeriodDiagnosticsDto {
+  date?: string | null;
+  wlp?: string;
+  won?: number;
+  lost?: number;
+  pushed?: number;
+  gradedOpportunities?: number;
+  includesLatestGradedSlate?: boolean;
+  dateRange?: PerformanceDateRangeDto | null;
+  excludedLatestGradedSlateReason?: string | null;
+  providerLineDiagnostics?: ProviderLineDiagnosticsDto;
+}
+
+export interface PerformanceGrainDiagnosticsDto {
+  primaryGrain?: string;
+  latestGradedDate?: string | null;
+  yesterdayDate?: string | null;
+  yesterdayGradedOpportunities?: number;
+  overallGradedOpportunities?: number;
+  overallIncludesLatestGradedSlate?: boolean;
+  overallDateRange?: PerformanceDateRangeDto | null;
+  overallExcludedLatestGradedSlateReason?: string | null;
+  modelEra?: string | null;
+  includeLegacy?: boolean;
+  excludedOpportunityCount?: number;
+  providerLineDiagnostics?: ProviderLineDiagnosticsDto;
 }
 
 export interface PerformanceResultRowDto {
@@ -631,6 +720,9 @@ export interface PerformanceResultRowDto {
   trust?: string | null;
   sampleSize?: number | null;
   matchMethod?: string | null;
+  providerLineCount?: number;
+  providerLineProviders?: string[];
+  providerLineBookmakers?: string[];
 }
 
 export interface PerformanceGroupDto {

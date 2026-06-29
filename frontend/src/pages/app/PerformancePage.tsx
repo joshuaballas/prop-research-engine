@@ -230,7 +230,7 @@ function YesterdayResultsSection({
       <YesterdaySummaryCards summary={summary} isMobile={isMobile} />
       {noResultExcluded > 0 ? (
         <Typography variant="body2" color="text.secondary">
-          {noResultExcluded} provider {noResultExcluded === 1 ? 'line had' : 'lines had'} no player result and {noResultExcluded === 1 ? 'was' : 'were'} excluded from hit rate and simulated ROI.
+          {noResultExcluded} graded {noResultExcluded === 1 ? 'pick had' : 'picks had'} no player result and {noResultExcluded === 1 ? 'was' : 'were'} excluded from hit rate and simulated ROI.
         </Typography>
       ) : null}
       {isMobile ? <YesterdayResultsMobileCards groups={visibleGroups} /> : <YesterdayResultsTable groups={visibleGroups} />}
@@ -244,7 +244,7 @@ function YesterdaySummaryCards({ summary, isMobile }: { summary?: NonNullable<Re
     { label: isMobile ? 'W-L-P' : 'Yesterday W-L-P', value: `${summary?.won ?? 0}-${summary?.lost ?? 0}-${summary?.pushed ?? 0}`, helper: isMobile ? formatShortRecord(summary?.won ?? 0, summary?.lost ?? 0, summary?.pushed ?? 0) : formatRecord(summary?.won ?? 0, summary?.lost ?? 0, summary?.pushed ?? 0) },
     { label: isMobile ? 'Hit Rate' : 'Yesterday Hit Rate', value: summary?.hitRate == null ? '-' : formatPercent(summary.hitRate), helper: 'Pushes excluded' },
     { label: isMobile ? 'Simulated ROI' : 'Yesterday Simulated ROI', value: summary?.simulatedRoi == null ? '-' : formatPercent(summary.simulatedRoi, { signed: true }), helper: 'Flat 1-unit tracking', tone: (summary?.simulatedRoi ?? 0) >= 0 ? 'good' : 'bad' },
-    { label: 'Graded Results', value: `${summary?.gradedPicks ?? 0}`, helper: 'Provider lines graded' },
+    { label: 'Graded Picks', value: `${summary?.gradedPicks ?? 0}`, helper: 'Opportunity-level' },
     { label: 'Excluded', value: `${summary?.noResultExcluded ?? 0}`, helper: 'No player result found' }
   ].filter((card) => !isMobile || card.label !== 'Excluded');
 
@@ -311,7 +311,7 @@ function YesterdayResultsTable({ groups }: { groups: YesterdayResultGroup[] }) {
                 <TableCell><AppTableMetricValue>{group.side}</AppTableMetricValue></TableCell>
                 <TableCell align="center"><AppTableMetricValue>{formatNumber(group.actualValue)}</AppTableMetricValue></TableCell>
                 <TableCell align="center"><AppTableMetricValue>{formatTargetLineCount(group.distinctLineCount)}</AppTableMetricValue></TableCell>
-                <TableCell><AppTableMetricValue>{formatProviderCount(group.rows.length)}</AppTableMetricValue></TableCell>
+                <TableCell><AppTableMetricValue>{formatProviderCount(getProviderDisplayCount(group.rows))}</AppTableMetricValue></TableCell>
                 <TableCell align="right">
                   {group.bestEv == null ? (
                     <AppTableMetricValue>-</AppTableMetricValue>
@@ -495,7 +495,7 @@ function YesterdayResultsMobileCards({ groups }: { groups: YesterdayResultGroup[
               <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr)) auto', columnGap: 1.4, rowGap: 0.72, alignItems: 'center' }}>
                 <MobileInlineMetric label="Final Stat" value={formatNumber(group.actualValue)} />
                 <MobileInlineMetric label="Lines" value={formatTargetLineCount(group.distinctLineCount)} />
-                <MobileInlineMetric label="Providers" value={formatProviderCount(group.rows.length)} />
+                <MobileInlineMetric label="Providers" value={formatProviderCount(getProviderDisplayCount(group.rows))} />
                 <MobileInlineMetric label="Best Edge" value={group.bestEv == null ? '-' : formatPercent(group.bestEv, { signed: true })} tone={(group.bestEv ?? 0) >= 0 ? 'good' : 'bad'} />
                 <Box
                   className="mobile-result-chevron"
@@ -615,6 +615,10 @@ function groupYesterdayResults(rows: PerformanceResultRowDto[]) {
       normalizeGroupPart(row.playerName),
       normalizeGroupPart(row.propType),
       normalizeGroupPart(row.side),
+      formatNumber(row.line),
+      normalizeGroupPart(row.eventStartTimeUtc),
+      normalizeGroupPart(row.providerCategory),
+      normalizeGroupPart(getOpportunityProviderKey(row)),
       row.actualValue == null ? 'null' : formatNumber(row.actualValue),
     ].join('|');
 
@@ -683,6 +687,18 @@ function normalizeGroupPart(value?: string | null) {
 
 function getDistinctLineCount(rows: PerformanceResultRowDto[]) {
   return new Set(rows.map((row) => formatNumber(row.line))).size;
+}
+
+function getOpportunityProviderKey(row: PerformanceResultRowDto) {
+  if (row.providerCategory?.toLowerCase() === 'sportsbook' || row.isSportsbook) {
+    return 'sportsbook';
+  }
+
+  return row.provider || row.bookmaker || 'provider';
+}
+
+function getProviderDisplayCount(rows: PerformanceResultRowDto[]) {
+  return Math.max(1, ...rows.map((row) => row.providerLineCount ?? 1));
 }
 
 function getGroupResult(rows: PerformanceResultRowDto[]) {
