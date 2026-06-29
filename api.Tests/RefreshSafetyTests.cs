@@ -3057,7 +3057,10 @@ public sealed class RefreshSafetyTests
         Assert.Equal("API-Sports", json.GetProperty("provider").GetString());
         Assert.False(json.GetProperty("configured").GetBoolean());
         Assert.Contains(json.GetProperty("missingConfig").EnumerateArray(), row => row.GetString() == "ApiSports:ApiKey");
-        Assert.Contains(json.GetProperty("missingConfig").EnumerateArray(), row => row.GetString() == "ApiSports:Football:WorldCupLeagueId");
+        Assert.DoesNotContain(json.GetProperty("missingConfig").EnumerateArray(), row => row.GetString() == "ApiSports:Football:WorldCupLeagueId");
+        Assert.DoesNotContain(json.GetProperty("missingConfig").EnumerateArray(), row => row.GetString() == "ApiSports:Football:Season");
+        Assert.Equal(1, json.GetProperty("config").GetProperty("football").GetProperty("worldCup").GetProperty("leagueId").GetInt32());
+        Assert.Equal(2026, json.GetProperty("config").GetProperty("football").GetProperty("worldCup").GetProperty("season").GetInt32());
     }
 
     [Theory]
@@ -3093,7 +3096,8 @@ public sealed class RefreshSafetyTests
         Assert.True(json.GetProperty("blocked").GetBoolean());
         Assert.Equal("MissingApiSportsConfig", json.GetProperty("blockReason").GetString());
         Assert.Contains(json.GetProperty("missingConfig").EnumerateArray(), row => row.GetString() == "ApiSports:ApiKey");
-        Assert.Contains(json.GetProperty("missingConfig").EnumerateArray(), row => row.GetString() == "ApiSports:Football:WorldCupLeagueId");
+        Assert.DoesNotContain(json.GetProperty("missingConfig").EnumerateArray(), row => row.GetString() == "ApiSports:Football:WorldCupLeagueId");
+        Assert.DoesNotContain(json.GetProperty("missingConfig").EnumerateArray(), row => row.GetString() == "ApiSports:Football:Season");
     }
 
     [Fact]
@@ -7330,18 +7334,13 @@ public sealed class RefreshSafetyTests
 
     private static Dictionary<string, string?> ApiSportsLiveConfig(bool includeWorldCupDefaults = true)
     {
+        _ = includeWorldCupDefaults;
         var config = new Dictionary<string, string?>
         {
             ["ApiSports:Enabled"] = "true",
             ["ApiSports:ApiKey"] = "TEST_API_SPORTS_KEY",
             ["ApiSports:Football:BaseUrl"] = "https://v3.football.api-sports.io"
         };
-
-        if (includeWorldCupDefaults)
-        {
-            config["ApiSports:Football:WorldCupLeagueId"] = "1";
-            config["ApiSports:Football:Season"] = "2026";
-        }
 
         return config;
     }
@@ -8773,9 +8772,7 @@ public sealed class SafetyTestApplicationFactory : WebApplicationFactory<Program
                 ["MlbResultImportWorker:Enabled"] = "false",
                 ["ApiSports:Enabled"] = "false",
                 ["ApiSports:ApiKey"] = "API_SPORTS_KEY",
-                ["ApiSports:Football:BaseUrl"] = "https://v3.football.api-sports.io",
-                ["ApiSports:Football:WorldCupLeagueId"] = "",
-                ["ApiSports:Football:Season"] = ""
+                ["ApiSports:Football:BaseUrl"] = "https://v3.football.api-sports.io"
             };
 
             foreach (var (key, value) in configOverrides)

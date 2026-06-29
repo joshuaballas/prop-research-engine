@@ -24,6 +24,108 @@ Invoke-RestMethod -Uri "http://localhost:5299/health/ready"
 Invoke-RestMethod -Uri "http://localhost:5299/api/debug/system/health"
 ```
 
+## DB-Backed App Configuration
+
+`AppConfigs` is the first DB-backed configuration layer for non-secret scalar operational/runtime knobs. It is not a secret store. Connection strings, The Odds/API-Sports keys, auth/debug admin API keys, payment credentials, webhook signing secrets, encryption keys, passwords, tokens, and other credentials stay in user-secrets, environment variables, deployment-time app settings, or future Azure Key Vault-linked variable groups. Do not store plaintext secrets in `AppConfigs`.
+
+Structured business/config data does not belong in `AppConfigs`. Supported competitions, provider targets, bookmakers, markets, mappings, and other rows with identity/enabled flags are classified as `MoveToDomainTable` until a dedicated table/editor exists. The audit reports these at the parent path by default instead of exploding arrays into indexed leaf keys. JSON blob settings are not promoted as normal AppConfig rows.
+
+The app still loads `appsettings.json`, environment-specific appsettings, ignored local appsettings, command-line args, and environment variables as bootstrap/fallback config. After EF migrations run, the startup seeder inserts missing scalar `MoveToAppConfigs` rows as `Environment=Global` and preserves DB-edited values. Environment-specific rows are overrides only. Effective reads prefer current-environment override, then `Global`, then appsettings fallback, then code default. Invalid DB values are diagnosed and fall back safely.
+
+Operator-facing metadata lives in the catalog/debug output for this pass: display name, short display name, category, section, help text, input type, unit, min/max, advanced/hidden flags, impact level, and sort order. Advanced/internal settings such as the legacy The Odds ingestion worker, direct Underdog ingestion, and compatibility Soccer fixture caps are hidden from a future normal admin UI by default.
+
+`GET /api/debug/app-configs` is the effective scalar-settings endpoint. By default it returns only visible, non-sensitive `MoveToAppConfigs` rows. Use `/api/debug/app-configs/audit` for `KeepInSecretProvider`, `KeepInBootstrapConfig`, `MoveToDomainTable`, `NeedsDecision`, and `RemoveRedundant` rows. Effective rows expose:
+
+- `configuredValue`: AppConfigs row value when a DB row is selected, otherwise null.
+- `effectiveValue`: value used after environment/global/appsettings/code-default resolution; null for sensitive rows.
+- `defaultValue`: catalog/code default.
+- `displayValue`: operator-safe display value, masked when needed.
+- `isValueMasked`: true when the raw value is intentionally withheld.
+
+Audit counts are parent/default counts. `includeChildren=true` returns detailed child rows such as model leaf settings with `isChildAuditItem=true`; child and total counts are reported separately so compact status and audit counts do not disagree.
+
+Legacy Soccer World Cup scalar overrides are retired. World Cup uses the fixed league `1`, season `2026` descriptor; recurring competitions resolve provider seasons from cached API-Sports `/leagues` metadata. The Soccer result worker competition allow-list remains an internal worker option, not a DB-editable scalar AppConfig.
+
+Console-safe inspection:
+
+```powershell
+$base = "http://localhost:5299"
+New-Item -ItemType Directory -Force .\tmp-analysis | Out-Null
+
+$audit = Invoke-RestMethod "$base/api/debug/app-configs/audit"
+$audit | ConvertTo-Json -Depth 100 | Set-Content .\tmp-analysis\app-configs-audit-full.json
+$audit.countsByClassification.GetEnumerator() |
+  Sort-Object Name |
+  Select-Object Name,Value |
+  Format-Table -AutoSize
+
+$audit.settings |
+  Where-Object { $_.classification -in @("RemoveRedundant","NeedsDecision","KeepInSecretProvider") } |
+  Select-Object key,classification,reason |
+  Format-Table -AutoSize
+
+$effective = Invoke-RestMethod "$base/api/debug/app-configs"
+$effective | ConvertTo-Json -Depth 100 | Set-Content .\tmp-analysis\app-configs-effective-full.json
+$effective.values |
+  Select-Object key,displayName,section,effectiveValue,defaultValue,source,isAdvanced,isHidden |
+  Select-Object -First 40 |
+  Format-Table -AutoSize
+
+$status = Invoke-RestMethod "$base/api/debug/app-configs/status"
+$status | ConvertTo-Json -Depth 100 | Set-Content .\tmp-analysis\app-configs-status-full.json
+[pscustomobject]@{
+  TotalKnownConfigKeys = $status.totalKnownConfigKeys
+  ScalarAppConfigsCount = $status.scalarAppConfigsCount
+  AppConfigsBackedCount = $status.appConfigsBackedCount
+  GlobalRowCount = $status.globalRowCount
+  EnvironmentOverrideRowCount = $status.environmentOverrideRowCount
+  InvalidCount = $status.invalidCount
+  ValidationIssueCount = $status.validationIssueCount
+  AdvancedCount = $status.advancedCount
+  HiddenCount = $status.hiddenCount
+} | Format-List
+
+"Classification counts:"
+$status.countsByClassification | Format-Table -AutoSize
+
+"MoveToDomainTable:"
+$audit.settings |
+  Where-Object { $_.classification -eq "MoveToDomainTable" } |
+  Select-Object key,displayName,reason |
+  Format-Table -AutoSize
+
+"RemoveRedundant:"
+$audit.settings |
+  Where-Object { $_.classification -eq "RemoveRedundant" } |
+  Select-Object key,reason |
+  Format-Table -AutoSize
+
+"NeedsDecision:"
+$audit.settings |
+  Where-Object { $_.classification -eq "NeedsDecision" } |
+  Select-Object key,reason |
+  Format-Table -AutoSize
+
+"Metadata spot check:"
+$effective.values |
+  Where-Object { $_.classification -eq "MoveToAppConfigs" } |
+  Select-Object key,displayName,section,inputType,unit,isAdvanced,isHidden,impactLevel |
+  Select-Object -First 20 |
+  Format-Table -AutoSize
+
+"Advanced/hidden settings:"
+$allEffective = Invoke-RestMethod "$base/api/debug/app-configs?includeHidden=true&includeAdvanced=true"
+$allEffective | ConvertTo-Json -Depth 100 | Set-Content .\tmp-analysis\app-configs-effective-all-full.json
+$allEffective.values |
+  Where-Object { $_.isAdvanced -or $_.isHidden } |
+  Select-Object key,displayName,section,isAdvanced,isHidden,impactLevel |
+  Format-Table -AutoSize
+
+$status.validationIssues | Select-Object key,source,message | Format-Table -AutoSize
+```
+
+Manual DB edits should be narrow: update only non-sensitive scalar rows where `is_runtime_editable=true`, keep the `value_type` unchanged, set `updated_at_utc`, and leave `is_enabled=true` unless intentionally disabling an override. Put common defaults in `Environment=Global`. Add an environment-specific row only when it intentionally differs from `Global`. If a value fails validation, the app keeps running on fallback config and reports the issue through `/api/debug/app-configs/status`.
+
 ## The Odds API Manual Event Ingest
 
 Use the dashboard section "The Odds API Manual Ingestion" or call endpoints manually.

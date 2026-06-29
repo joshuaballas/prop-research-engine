@@ -31,6 +31,7 @@ public sealed class ApplicationDbContext(DbContextOptions<ApplicationDbContext> 
     public DbSet<SoccerResultImportState> SoccerResultImportStates => Set<SoccerResultImportState>();
     public DbSet<SoccerResultImportFixtureState> SoccerResultImportFixtureStates => Set<SoccerResultImportFixtureState>();
     public DbSet<ApiSportsSoccerSeasonMetadata> ApiSportsSoccerSeasonMetadata => Set<ApiSportsSoccerSeasonMetadata>();
+    public DbSet<AppConfig> AppConfigs => Set<AppConfig>();
     public DbSet<PredictionRun> PredictionRuns => Set<PredictionRun>();
     public DbSet<Prediction> Predictions => Set<Prediction>();
     public DbSet<PredictionRunSkipCount> PredictionRunSkipCounts => Set<PredictionRunSkipCount>();
@@ -70,6 +71,7 @@ public sealed class ApplicationDbContext(DbContextOptions<ApplicationDbContext> 
         ConfigureCorrelationTables(modelBuilder);
         ConfigureOptimizationTables(modelBuilder);
         ConfigureApplicationErrorTables(modelBuilder);
+        ConfigureAppConfigTables(modelBuilder);
 
         if (isSqlite)
         {
@@ -534,6 +536,28 @@ public sealed class ApplicationDbContext(DbContextOptions<ApplicationDbContext> 
             entity.HasIndex(x => new { x.LeagueId, x.Season }).IsUnique();
             entity.HasIndex(x => new { x.LeagueId, x.StartDate, x.EndDate });
             entity.HasIndex(x => x.LastRefreshedAtUtc);
+        });
+    }
+
+    private static void ConfigureAppConfigTables(ModelBuilder modelBuilder)
+    {
+        modelBuilder.Entity<AppConfig>(entity =>
+        {
+            entity.ToTable("AppConfigs");
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.Key).HasMaxLength(200).IsRequired();
+            entity.Property(x => x.Value).IsRequired();
+            entity.Property(x => x.ValueType).HasMaxLength(50).IsRequired();
+            entity.Property(x => x.Category).HasMaxLength(100).IsRequired();
+            entity.Property(x => x.Description).HasMaxLength(1000);
+            entity.Property(x => x.DefaultValue);
+            entity.Property(x => x.ValidationJson);
+            entity.Property(x => x.Environment).HasMaxLength(100).IsRequired();
+            entity.Property(x => x.UpdatedBy).HasMaxLength(200);
+            entity.Property(x => x.RowVersion).HasMaxLength(64).IsConcurrencyToken();
+            entity.HasIndex(x => new { x.Key, x.Environment }).IsUnique();
+            entity.HasIndex(x => x.Category);
+            entity.HasIndex(x => x.IsEnabled);
         });
     }
 

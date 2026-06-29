@@ -29,10 +29,8 @@ No secrets are committed. Local config should use:
 - `ApiSports:TimeoutSeconds`
 - `ApiSports:MaxRetries`
 - `ApiSports:Football:BaseUrl`
-- `ApiSports:Football:WorldCupLeagueId`
-- `ApiSports:Football:Season`
 
-One API-Sports key may cover multiple sports/products depending on subscription. This spike uses the Football product endpoint for World Cup.
+One API-Sports key may cover multiple sports/products depending on subscription. This spike uses the Football product endpoint for World Cup. World Cup uses the fixed descriptor league `1`, season `2026`; the old scalar World Cup override keys are retired.
 
 If config is missing, debug endpoints return `MissingApiSportsConfig` with the missing fields.
 
@@ -88,10 +86,10 @@ Fixture diagnostics support flexible API-Sports query shapes so access can be te
 
 - `fixtureId=<id>` queries `/fixtures?id=<id>` and does not require date, league, or season.
 - `date=YYYY-MM-DD` includes a date filter.
-- `league=<id>` and `season=<year>` override configured World Cup defaults.
-- `useConfiguredLeague=false` omits `ApiSports:Football:WorldCupLeagueId`.
-- `useConfiguredSeason=false` omits `ApiSports:Football:Season`.
-- Defaults preserve current World Cup behavior: configured league and season are used unless explicitly disabled.
+- `league=<id>` and `season=<year>` override the fixed World Cup defaults.
+- `useConfiguredLeague=false` omits the fixed World Cup league default.
+- `useConfiguredSeason=false` omits the fixed World Cup season default.
+- Defaults preserve current World Cup behavior: league `1` and season `2026` are used unless explicitly disabled.
 
 Fixture responses include `sanitizedUrl`, `callsExternalApis`, the request parameters actually used, raw API-Sports errors, result count, and a compact fixture list.
 

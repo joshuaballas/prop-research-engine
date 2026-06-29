@@ -37,12 +37,16 @@ Invoke-RestMethod -Uri "http://localhost:5299/health/ready"
 | GET | `/api/debug/errors/recent` | Recent persisted application errors. Supports `take`, `source`, `component`, `severity`. | No | No | No |
 | GET | `/api/debug/errors/summary` | Error counts and recent error timestamp. | No | No | No |
 | GET | `/api/debug/errors/{id}` | Full persisted error detail by id. | No | No | No |
+| GET | `/api/debug/app-configs/status` | Read-only DB-backed `AppConfigs` cache/status summary. Shows cache timestamp, load status, global/default row count, environment override row count, advanced/hidden counts, source counts, default audit classification counts, and validation issue counts. Sensitive values are never returned. | No | No | No |
+| GET | `/api/debug/app-configs` | Read-only effective scalar AppConfigs values. By default returns visible, non-sensitive `MoveToAppConfigs` rows only. Supports `includeAuditCandidates`, `includeHidden`, `includeAdvanced`, `includeSecrets`, `classification`, and `category`; `includeSecrets=true` returns masked/null metadata only, never raw secrets. Value fields are `configuredValue`, `effectiveValue`, `defaultValue`, `displayValue`, and `isValueMasked`. Includes operator metadata such as display name, short display name, section, help text, input type, unit, min/max, advanced/hidden flags, and impact level. Effective source is environment override, global/default, appsettings fallback, code default, missing, or invalid fallback. | No | No | No |
+| GET | `/api/debug/app-configs/audit` | Read-only appsettings/AppConfigs migration audit. Classifies settings as `KeepInBootstrapConfig`, `KeepInSecretProvider`, `MoveToAppConfigs`, `MoveToDomainTable`, `RemoveRedundant`, or `NeedsDecision`; masks secret-like values and reports proposed AppConfigs keys for migrated scalar settings. Default classification counts exclude child audit rows. Use `includeChildren=true` to include model/structured child rows with `isChildAuditItem=true`; `countsByClassification` remains parent/default counts, with child and total counts also reported. Structured arrays are reported at the parent path instead of exploded into leaf rows. | No | No | No |
 
 Example:
 
 ```powershell
 Invoke-RestMethod -Uri "http://localhost:5299/api/debug/system/health"
 Invoke-RestMethod -Uri "http://localhost:5299/api/debug/errors/recent?take=5"
+Invoke-RestMethod -Uri "http://localhost:5299/api/debug/app-configs/status"
 ```
 
 ## Underdog

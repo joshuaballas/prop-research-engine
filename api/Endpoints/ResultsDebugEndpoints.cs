@@ -4677,10 +4677,10 @@ public static class ResultsDebugEndpoints
                     range.FromDate,
                     range.ToDate
                 },
-                ["configured"] = new
+                ["worldCupDescriptor"] = new
                 {
-                    leagueId = options.Value.Football.WorldCupLeagueId,
-                    season = options.Value.Football.Season
+                    leagueId = ApiSportsWorldCupLeagueId,
+                    season = ApiSportsWorldCupSeason
                 },
                 ["discoveryAvailable"] = forceLive == true,
                 ["apiCallsUsed"] = forceLive == true ? CountDateRangeDays(range.FromDate, range.ToDate) : 0,
@@ -7125,16 +7125,6 @@ public static class ResultsDebugEndpoints
             missingConfig.Add("ApiSports:Football:BaseUrl");
         }
 
-        if (!options.Football.WorldCupLeagueId.HasValue)
-        {
-            missingConfig.Add("ApiSports:Football:WorldCupLeagueId");
-        }
-
-        if (!options.Football.Season.HasValue)
-        {
-            missingConfig.Add("ApiSports:Football:Season");
-        }
-
         return new ApiSportsConfigDiagnostics(
             missingConfig.Count == 0,
             missingConfig.ToArray(),
@@ -7148,8 +7138,11 @@ public static class ResultsDebugEndpoints
                 football = new
                 {
                     options.Football.BaseUrl,
-                    options.Football.WorldCupLeagueId,
-                    options.Football.Season
+                    worldCup = new
+                    {
+                        leagueId = ApiSportsWorldCupLeagueId,
+                        season = ApiSportsWorldCupSeason
+                    }
                 }
             });
     }
@@ -7162,15 +7155,10 @@ public static class ResultsDebugEndpoints
         bool requireConfiguredLeague = true,
         bool requireConfiguredSeason = true)
     {
+        _ = requireConfiguredLeague;
+        _ = requireConfiguredSeason;
         var config = BuildApiSportsConfigDiagnostics(options);
-        var missingConfig = config.missingConfig
-            .Where(key => key switch
-            {
-                "ApiSports:Football:WorldCupLeagueId" => requireConfiguredLeague,
-                "ApiSports:Football:Season" => requireConfiguredSeason,
-                _ => true
-            })
-            .ToArray();
+        var missingConfig = config.missingConfig;
         var configured = missingConfig.Length == 0;
         if (forceLive != true)
         {
@@ -7231,13 +7219,13 @@ public static class ResultsDebugEndpoints
         var effectiveLeague = league;
         if (!effectiveLeague.HasValue && useConfiguredLeague != false)
         {
-            effectiveLeague = options.Football.WorldCupLeagueId;
+            effectiveLeague = ApiSportsWorldCupLeagueId;
         }
 
         var effectiveSeason = season;
         if (!effectiveSeason.HasValue && useConfiguredSeason != false)
         {
-            effectiveSeason = options.Football.Season;
+            effectiveSeason = ApiSportsWorldCupSeason;
         }
 
         return new ApiSportsFootballFixturesRequest(date, null, effectiveLeague, effectiveSeason);

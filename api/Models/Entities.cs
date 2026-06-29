@@ -423,6 +423,27 @@ public sealed class ApiSportsSoccerSeasonMetadata
     public DateTimeOffset UpdatedAt { get; set; } = DateTimeOffset.UtcNow;
 }
 
+public sealed class AppConfig
+{
+    public Guid Id { get; set; }
+    public string Key { get; set; } = string.Empty;
+    public string Value { get; set; } = string.Empty;
+    public string ValueType { get; set; } = "String";
+    public string Category { get; set; } = string.Empty;
+    public string? Description { get; set; }
+    public string? DefaultValue { get; set; }
+    public bool IsSensitive { get; set; }
+    public bool IsRuntimeEditable { get; set; } = true;
+    public bool RequiresRestart { get; set; }
+    public string? ValidationJson { get; set; }
+    public string Environment { get; set; } = "All";
+    public bool IsEnabled { get; set; } = true;
+    public DateTimeOffset CreatedAtUtc { get; set; } = DateTimeOffset.UtcNow;
+    public DateTimeOffset UpdatedAtUtc { get; set; } = DateTimeOffset.UtcNow;
+    public string? UpdatedBy { get; set; }
+    public string RowVersion { get; set; } = Guid.NewGuid().ToString("N");
+}
+
 public sealed class PredictionRun
 {
     public Guid Id { get; set; }

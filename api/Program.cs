@@ -1,4 +1,6 @@
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
+using SportsBetting.Api.Configuration;
 using SportsBetting.Api.Data;
 using SportsBetting.Api.Diagnostics;
 using SportsBetting.Api.Endpoints;
@@ -53,6 +55,22 @@ builder.Services.Configure<SoccerTopPicksOptions>(builder.Configuration.GetSecti
 builder.Services.Configure<TopPicksModelOptions>(builder.Configuration.GetSection(TopPicksModelOptions.SectionName));
 builder.Services.Configure<PredictionGenerationOptions>(builder.Configuration.GetSection(PredictionGenerationOptions.LegacySectionName));
 builder.Services.Configure<PredictionGenerationOptions>(builder.Configuration.GetSection(PredictionGenerationOptions.SectionName));
+builder.Services.AddSingleton<AppConfigService>();
+builder.Services.AddSingleton<IAppConfigService>(services => services.GetRequiredService<AppConfigService>());
+builder.Services.AddSingleton<IAppConfigAuditService>(services => services.GetRequiredService<AppConfigService>());
+builder.Services.AddSingleton<IConfigureOptions<ApiSportsOptions>, AppConfigOptionsOverrides>();
+builder.Services.AddSingleton<IConfigureOptions<TheOddsApiOptions>, AppConfigOptionsOverrides>();
+builder.Services.AddSingleton<IConfigureOptions<TheOddsIngestionWorkerOptions>, AppConfigOptionsOverrides>();
+builder.Services.AddSingleton<IConfigureOptions<TheOddsScheduledRefreshOptions>, AppConfigOptionsOverrides>();
+builder.Services.AddSingleton<IConfigureOptions<TheOddsRefreshPlannerOptions>, AppConfigOptionsOverrides>();
+builder.Services.AddSingleton<IConfigureOptions<ProviderLineLifecycleOptions>, AppConfigOptionsOverrides>();
+builder.Services.AddSingleton<IConfigureOptions<MlbResultImportWorkerOptions>, AppConfigOptionsOverrides>();
+builder.Services.AddSingleton<IConfigureOptions<SoccerResultImportWorkerOptions>, AppConfigOptionsOverrides>();
+builder.Services.AddSingleton<IConfigureOptions<SoccerIdentityResolutionOptions>, AppConfigOptionsOverrides>();
+builder.Services.AddSingleton<IConfigureOptions<SoccerPredictionsOptions>, AppConfigOptionsOverrides>();
+builder.Services.AddSingleton<IConfigureOptions<SoccerGradingOptions>, AppConfigOptionsOverrides>();
+builder.Services.AddSingleton<IConfigureOptions<SoccerTopPicksOptions>, AppConfigOptionsOverrides>();
+builder.Services.AddSingleton<IConfigureOptions<UnderdogIngestionOptions>, AppConfigOptionsOverrides>();
 builder.Services.AddHttpClient<IUnderdogAdapter, UnderdogAdapter>(client =>
 {
     client.Timeout = TimeSpan.FromSeconds(60);
@@ -132,6 +150,7 @@ var app = builder.Build();
 if (!app.Environment.IsEnvironment("Testing"))
 {
     await ApplyDatabaseMigrationsAsync(app);
+    await SeedAppConfigsAsync(app);
 }
 
 if (app.Environment.IsDevelopment())
@@ -176,6 +195,7 @@ app.MapFeatureDebugEndpoints();
 app.MapPlayerMappingDebugEndpoints();
 app.MapMarketClassificationDebugEndpoints();
 app.MapApplicationErrorDebugEndpoints();
+app.MapAppConfigDebugEndpoints();
 app.MapSystemHealthDebugEndpoints();
 app.MapDfsDebugEndpoints();
 app.MapTheOddsApiDebugEndpoints();
@@ -229,6 +249,27 @@ static async Task ApplyDatabaseMigrationsAsync(WebApplication app)
     await dbContext.Database.MigrateAsync();
 
     logger.LogInformation("Database migrations applied successfully.");
+}
+
+static async Task SeedAppConfigsAsync(WebApplication app)
+{
+    await using var scope = app.Services.CreateAsyncScope();
+    var logger = scope.ServiceProvider
+        .GetRequiredService<ILoggerFactory>()
+        .CreateLogger("AppConfigSeeder");
+
+    try
+    {
+        var result = await AppConfigSeeder.SeedAsync(scope.ServiceProvider);
+        logger.LogInformation(
+            "AppConfigs seed completed. Inserted: {Inserted}; metadata updated: {MetadataUpdated}.",
+            result.Inserted,
+            result.MetadataUpdated);
+    }
+    catch (Exception exception)
+    {
+        logger.LogWarning(exception, "AppConfigs seed failed; appsettings/default fallbacks remain active.");
+    }
 }
 
 public partial class Program

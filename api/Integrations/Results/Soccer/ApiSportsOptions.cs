@@ -14,8 +14,6 @@ public sealed class ApiSportsOptions
 public sealed class ApiSportsFootballOptions
 {
     public string BaseUrl { get; set; } = "https://v3.football.api-sports.io";
-    public int? WorldCupLeagueId { get; set; }
-    public int? Season { get; set; }
     public int SeasonMetadataCacheHours { get; set; } = 24;
     public List<ApiSportsFootballHistoricalCompetitionOptions> HistoricalCompetitions { get; set; } =
     [

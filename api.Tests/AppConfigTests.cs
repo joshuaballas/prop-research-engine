@@ -1,0 +1,433 @@
+using System.Net.Http.Json;
+using System.Text.Json;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Options;
+using SportsBetting.Api.Configuration;
+using SportsBetting.Api.Data;
+using SportsBetting.Api.Integrations.Results.Soccer;
+using SportsBetting.Api.Integrations.TheOddsApi;
+using SportsBetting.Api.Models;
+
+namespace SportsBetting.Api.Tests;
+
+public sealed class AppConfigTests
+{
+    [Fact]
+    public async Task AppConfigs_TableEntityExists()
+    {
+        await using var factory = new SafetyTestApplicationFactory();
+        await factory.EnsureDatabaseAsync();
+
+        using var scope = factory.Services.CreateScope();
+        var dbContext = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+
+        Assert.NotNull(dbContext.Model.FindEntityType(typeof(AppConfig)));
+        Assert.Empty(await dbContext.AppConfigs.ToArrayAsync());
+    }
+
+    [Fact]
+    public async Task AppConfigService_ReadsTypedValues()
+    {
+        await using var factory = new SafetyTestApplicationFactory();
+        await factory.EnsureDatabaseAsync();
+        await AddAppConfigAsync(factory, "Soccer.Results.ApiSports.Worker.Enabled", "true", AppConfigValueTypes.Boolean);
+        await AddAppConfigAsync(factory, "Soccer.Results.ApiSports.Worker.MaxFixturesTotalPerRun", "17", AppConfigValueTypes.Integer);
+        await AddAppConfigAsync(factory, "Soccer.TopPicks.MinimumHitProbability", "0.61", AppConfigValueTypes.Decimal);
+
+        using var scope = factory.Services.CreateScope();
+        var appConfigService = scope.ServiceProvider.GetRequiredService<IAppConfigService>();
+        var snapshot = await appConfigService.ReloadAsync();
+
+        Assert.True(snapshot.GetValue("Soccer.Results.ApiSports.Worker.Enabled", false));
+        Assert.Equal(17, snapshot.GetValue("Soccer.Results.ApiSports.Worker.MaxFixturesTotalPerRun", 0));
+        Assert.Equal(0.61m, snapshot.GetValue("Soccer.TopPicks.MinimumHitProbability", 0m));
+        Assert.True(AppConfigValueParser.TryParse("EPL,MLS", typeof(string[]), out var parsedStringList, out _));
+        Assert.Equal(["EPL", "MLS"], Assert.IsType<string[]>(parsedStringList));
+        Assert.True(AppConfigValueParser.TryParse("00:15:00", typeof(TimeSpan), out var parsedTimeSpan, out _));
+        Assert.Equal(TimeSpan.FromMinutes(15), Assert.IsType<TimeSpan>(parsedTimeSpan));
+    }
+
+    [Fact]
+    public async Task MissingAppConfig_FallsBackToAppsettings()
+    {
+        await using var factory = new SafetyTestApplicationFactory(new Dictionary<string, string?>
+        {
+            ["SoccerResultImportWorker:RecentWindowDays"] = "6"
+        });
+        await factory.EnsureDatabaseAsync();
+
+        using var scope = factory.Services.CreateScope();
+        var options = scope.ServiceProvider.GetRequiredService<IOptions<SoccerResultImportWorkerOptions>>().Value;
+
+        Assert.Equal(6, options.RecentWindowDays);
+    }
+
+    [Fact]
+    public async Task InvalidAppConfig_DiagnosesErrorAndFallsBack()
+    {
+        await using var factory = new SafetyTestApplicationFactory(new Dictionary<string, string?>
+        {
+            ["SoccerResultImportWorker:RecentWindowDays"] = "6"
+        });
+        await factory.EnsureDatabaseAsync();
+        await AddAppConfigAsync(factory, "Soccer.Results.ApiSports.Worker.RecentWindowDays", "not-an-int", AppConfigValueTypes.Integer);
+
+        using var scope = factory.Services.CreateScope();
+        var service = scope.ServiceProvider.GetRequiredService<IAppConfigService>();
+        var snapshot = await service.ReloadAsync();
+        var options = scope.ServiceProvider.GetRequiredService<IOptions<SoccerResultImportWorkerOptions>>().Value;
+
+        Assert.Contains(snapshot.ValidationIssues, issue => issue.Key == "Soccer.Results.ApiSports.Worker.RecentWindowDays");
+        Assert.Equal(6, options.RecentWindowDays);
+    }
+
+    [Fact]
+    public async Task AppConfigSeeder_IsIdempotentAndDoesNotOverwriteCustomizedValues()
+    {
+        await using var factory = new SafetyTestApplicationFactory(new Dictionary<string, string?>
+        {
+            ["TheOddsScheduledRefresh:IntervalMinutes"] = "15"
+        });
+        await factory.EnsureDatabaseAsync();
+
+        var first = await AppConfigSeeder.SeedAsync(factory.Services);
+        Assert.True(first.Inserted > 0);
+
+        using (var scope = factory.Services.CreateScope())
+        {
+            var dbContext = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+            var row = await dbContext.AppConfigs.SingleAsync(config => config.Key == "TheOdds.ScheduledRefresh.IntervalMinutes");
+            Assert.Equal(AppConfigCatalog.EnvironmentGlobal, row.Environment);
+            row.Value = "99";
+            row.UpdatedBy = "test";
+            row.UpdatedAtUtc = DateTimeOffset.UtcNow;
+            await dbContext.SaveChangesAsync();
+        }
+
+        var second = await AppConfigSeeder.SeedAsync(factory.Services);
+        Assert.Equal(0, second.Inserted);
+
+        using (var scope = factory.Services.CreateScope())
+        {
+            var dbContext = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+            var row = await dbContext.AppConfigs.SingleAsync(config => config.Key == "TheOdds.ScheduledRefresh.IntervalMinutes");
+            var domainKeys = AppConfigCatalog.Definitions
+                .Where(definition => definition.Classification == AppConfigClassifications.MoveToDomainTable)
+                .Select(definition => definition.Key)
+                .ToArray();
+            Assert.Equal("99", row.Value);
+            Assert.Empty(await dbContext.AppConfigs.Where(config => config.Key.Contains("ApiKey") || config.Key.Contains("ConnectionStrings")).ToArrayAsync());
+            Assert.Empty(await dbContext.AppConfigs.Where(config => config.Key == "Soccer.Results.ApiSports.Worker.CompetitionKeys").ToArrayAsync());
+            Assert.Empty(await dbContext.AppConfigs.Where(config => config.Key == "TheOdds.Api.Markets").ToArrayAsync());
+            Assert.Empty(await dbContext.AppConfigs.Where(config => domainKeys.Contains(config.Key)).ToArrayAsync());
+        }
+    }
+
+    [Fact]
+    public async Task AppConfigOptionOverride_UsesAppConfigsValue()
+    {
+        await using var factory = new SafetyTestApplicationFactory(new Dictionary<string, string?>
+        {
+            ["TheOddsScheduledRefresh:Enabled"] = "false",
+            ["TheOddsScheduledRefresh:IntervalMinutes"] = "15"
+        });
+        await factory.EnsureDatabaseAsync();
+        await AddAppConfigAsync(factory, "TheOdds.ScheduledRefresh.Enabled", "true", AppConfigValueTypes.Boolean);
+        await AddAppConfigAsync(factory, "TheOdds.ScheduledRefresh.IntervalMinutes", "21", AppConfigValueTypes.Integer);
+
+        using var scope = factory.Services.CreateScope();
+        var options = scope.ServiceProvider.GetRequiredService<IOptions<TheOddsScheduledRefreshOptions>>().Value;
+
+        Assert.True(options.Enabled);
+        Assert.Equal(21, options.IntervalMinutes);
+    }
+
+    [Fact]
+    public async Task AppConfigOptionOverride_PrefersEnvironmentOverrideThenGlobalThenFallback()
+    {
+        await using var factory = new SafetyTestApplicationFactory(new Dictionary<string, string?>
+        {
+            ["TheOddsScheduledRefresh:IntervalMinutes"] = "15"
+        });
+        await factory.EnsureDatabaseAsync();
+        await AddAppConfigAsync(factory, "TheOdds.ScheduledRefresh.IntervalMinutes", "31", AppConfigValueTypes.Integer, AppConfigCatalog.EnvironmentGlobal);
+        await AddAppConfigAsync(factory, "TheOdds.ScheduledRefresh.IntervalMinutes", "47", AppConfigValueTypes.Integer, "Testing");
+
+        using var scope = factory.Services.CreateScope();
+        var options = scope.ServiceProvider.GetRequiredService<IOptions<TheOddsScheduledRefreshOptions>>().Value;
+        var snapshot = await scope.ServiceProvider.GetRequiredService<IAppConfigService>().ReloadAsync();
+
+        Assert.Equal(47, options.IntervalMinutes);
+        Assert.Equal(1, snapshot.GlobalRowCount);
+        Assert.Equal(1, snapshot.EnvironmentOverrideRowCount);
+        Assert.Contains(snapshot.Values, row =>
+            row.Key == "TheOdds.ScheduledRefresh.IntervalMinutes"
+            && row.Source == "AppConfigs environment override"
+            && row.SourceEnvironment == "Testing");
+    }
+
+    [Fact]
+    public async Task AppConfigAudit_ClassifiesSecretsAndMasksValues()
+    {
+        await using var factory = new SafetyTestApplicationFactory();
+        using var client = factory.CreateClient();
+        await factory.EnsureDatabaseAsync();
+
+        var response = await client.GetAsync("/api/debug/app-configs/audit");
+        response.EnsureSuccessStatusCode();
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+
+        Assert.True(json.GetProperty("readOnly").GetBoolean());
+        Assert.False(json.GetProperty("callsExternalApis").GetBoolean());
+        var settings = json.GetProperty("settings").EnumerateArray().ToArray();
+        var theOddsKey = settings.Single(row => row.GetProperty("key").GetString() == "TheOddsApi:ApiKey");
+        Assert.Equal(AppConfigClassifications.KeepInSecretProvider, theOddsKey.GetProperty("classification").GetString());
+        Assert.True(theOddsKey.GetProperty("secretOrEncryptionRequired").GetBoolean());
+        Assert.NotEqual("THE_ODDS_API_KEY", theOddsKey.GetProperty("appsettingsValue").GetString());
+    }
+
+    [Fact]
+    public async Task AppConfigAudit_ClassifiesStructuredCollectionsAsDomainTables()
+    {
+        await using var factory = new SafetyTestApplicationFactory();
+        using var client = factory.CreateClient();
+
+        var response = await client.GetAsync("/api/debug/app-configs/audit");
+        response.EnsureSuccessStatusCode();
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+
+        var settings = json.GetProperty("settings").EnumerateArray().ToArray();
+        var historicalCompetitions = settings.Single(row => row.GetProperty("key").GetString() == "ApiSports:Football:HistoricalCompetitions");
+        var scheduledTargets = settings.Single(row => row.GetProperty("key").GetString() == "TheOddsScheduledRefresh:Targets");
+
+        Assert.Equal(AppConfigClassifications.MoveToDomainTable, historicalCompetitions.GetProperty("classification").GetString());
+        Assert.Equal(AppConfigClassifications.MoveToDomainTable, scheduledTargets.GetProperty("classification").GetString());
+        Assert.DoesNotContain(settings, row => row.GetProperty("key").GetString()?.StartsWith("ApiSports:Football:HistoricalCompetitions:0:", StringComparison.OrdinalIgnoreCase) == true);
+    }
+
+    [Fact]
+    public void AppConfigCatalog_MetadataMarksQuestionableSettings()
+    {
+        var appConfigDefinitions = AppConfigCatalog.Definitions
+            .Where(definition => definition.Classification == AppConfigClassifications.MoveToAppConfigs)
+            .ToArray();
+
+        Assert.All(appConfigDefinitions, definition =>
+        {
+            Assert.False(string.IsNullOrWhiteSpace(definition.DisplayName));
+            Assert.False(string.IsNullOrWhiteSpace(definition.HelpText));
+            if (definition.ValueType is AppConfigValueTypes.Integer or AppConfigValueTypes.Decimal)
+            {
+                Assert.False(string.IsNullOrWhiteSpace(definition.Unit));
+                Assert.NotNull(definition.MinValue);
+            }
+        });
+
+        Assert.Contains(AppConfigCatalog.Definitions, definition =>
+            definition.Key == "Soccer.Results.ApiSports.Worker.MaxFixturesPerRun"
+            && definition.IsAdvanced
+            && definition.IsHidden);
+        Assert.Contains(AppConfigCatalog.Definitions, definition =>
+            definition.Key.StartsWith("TheOdds.IngestionWorker.", StringComparison.Ordinal)
+            && definition.IsAdvanced
+            && definition.IsHidden);
+        Assert.Contains(AppConfigCatalog.Definitions, definition =>
+            definition.Key.StartsWith("Underdog.Ingestion.", StringComparison.Ordinal)
+            && definition.IsAdvanced
+            && definition.IsHidden);
+    }
+
+    [Fact]
+    public async Task AppConfigsDefaultEndpoint_ReturnsOnlyVisibleScalarEffectiveValues()
+    {
+        await using var factory = new SafetyTestApplicationFactory();
+        using var client = factory.CreateClient();
+        await factory.EnsureDatabaseAsync();
+        await AddAppConfigAsync(factory, "Soccer.Results.ApiSports.Worker.Enabled", "true", AppConfigValueTypes.Boolean);
+
+        var response = await client.GetAsync("/api/debug/app-configs");
+        response.EnsureSuccessStatusCode();
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+
+        Assert.True(json.GetProperty("readOnly").GetBoolean());
+        var values = json.GetProperty("values").EnumerateArray().ToArray();
+        Assert.All(values, row =>
+        {
+            Assert.Equal(AppConfigClassifications.MoveToAppConfigs, row.GetProperty("classification").GetString());
+            Assert.False(row.GetProperty("isSensitive").GetBoolean());
+            Assert.False(row.GetProperty("isAdvanced").GetBoolean());
+            Assert.False(row.GetProperty("isHidden").GetBoolean());
+            Assert.True(row.TryGetProperty("configuredValue", out _));
+            Assert.True(row.TryGetProperty("effectiveValue", out _));
+            Assert.True(row.TryGetProperty("defaultValue", out _));
+            Assert.True(row.TryGetProperty("displayValue", out _));
+            Assert.True(row.TryGetProperty("isValueMasked", out _));
+            Assert.False(string.IsNullOrWhiteSpace(row.GetProperty("displayName").GetString()));
+            Assert.False(string.IsNullOrWhiteSpace(row.GetProperty("shortDisplayName").GetString()));
+        });
+        Assert.Contains(values, row =>
+            row.GetProperty("key").GetString() == "Soccer.Results.ApiSports.Worker.Enabled"
+            && row.GetProperty("configuredValue").GetString() == "true"
+            && row.GetProperty("effectiveValue").GetString() == "true"
+            && row.GetProperty("displayValue").GetString() == "true");
+        Assert.Contains(values, row =>
+            row.GetProperty("key").GetString() == "Soccer.Results.ApiSports.Worker.Enabled"
+            && row.TryGetProperty("displayName", out var displayName)
+            && !string.IsNullOrWhiteSpace(displayName.GetString())
+            && row.TryGetProperty("helpText", out var helpText)
+            && !string.IsNullOrWhiteSpace(helpText.GetString()));
+        Assert.DoesNotContain(values, row =>
+            row.GetProperty("key").GetString() is "TheOdds.ApiKey" or "ApiSports.ApiKey");
+        Assert.DoesNotContain(values, row => row.GetProperty("classification").GetString() == AppConfigClassifications.KeepInSecretProvider);
+        Assert.DoesNotContain(values, row => row.GetProperty("classification").GetString() == AppConfigClassifications.KeepInBootstrapConfig);
+        Assert.DoesNotContain(values, row => row.GetProperty("classification").GetString() == AppConfigClassifications.MoveToDomainTable);
+        Assert.DoesNotContain(values, row => row.GetProperty("classification").GetString() == AppConfigClassifications.NeedsDecision);
+        Assert.DoesNotContain(values, row => row.GetProperty("classification").GetString() == AppConfigClassifications.RemoveRedundant);
+        Assert.DoesNotContain(values, row => row.GetProperty("key").GetString() == "Soccer.Results.ApiSports.Worker.CompetitionKeys");
+        Assert.DoesNotContain(values, row => row.GetProperty("key").GetString() == "ApiSports.Football.WorldCupLeagueId");
+        Assert.DoesNotContain(values, row => row.GetProperty("key").GetString() == "ApiSports.Football.Season");
+        Assert.DoesNotContain(values, row => row.GetProperty("key").GetString() == "TheOdds.RefreshPlanner.FarOutMinMinutes");
+    }
+
+    [Fact]
+    public async Task AppConfigStatus_NormalizesValidationIssueCount()
+    {
+        await using var factory = new SafetyTestApplicationFactory();
+        using var client = factory.CreateClient();
+        await factory.EnsureDatabaseAsync();
+        await AppConfigSeeder.SeedAsync(factory.Services);
+
+        var response = await client.GetAsync("/api/debug/app-configs/status");
+        response.EnsureSuccessStatusCode();
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+
+        Assert.Equal(0, json.GetProperty("validationIssueCount").GetInt32());
+        Assert.True(json.TryGetProperty("globalRowCount", out _));
+        Assert.True(json.TryGetProperty("environmentOverrideRowCount", out _));
+        Assert.True(json.TryGetProperty("moveToDomainTableCount", out _));
+        Assert.True(json.TryGetProperty("advancedCount", out _));
+        Assert.True(json.TryGetProperty("hiddenCount", out _));
+    }
+
+    [Fact]
+    public async Task AppConfigsAudit_ExcludesLegacySoccerConfigAndMatchesStatusCounts()
+    {
+        await using var factory = new SafetyTestApplicationFactory();
+        using var client = factory.CreateClient();
+
+        var statusResponse = await client.GetAsync("/api/debug/app-configs/status");
+        statusResponse.EnsureSuccessStatusCode();
+        var statusJson = await statusResponse.Content.ReadFromJsonAsync<JsonElement>();
+        var auditResponse = await client.GetAsync("/api/debug/app-configs/audit");
+        auditResponse.EnsureSuccessStatusCode();
+        var auditJson = await auditResponse.Content.ReadFromJsonAsync<JsonElement>();
+
+        var auditSettings = auditJson.GetProperty("settings").EnumerateArray().ToArray();
+        Assert.DoesNotContain(auditSettings, row => row.GetProperty("key").GetString() == "ApiSports:Football:WorldCupLeagueId");
+        Assert.DoesNotContain(auditSettings, row => row.GetProperty("key").GetString() == "ApiSports:Football:Season");
+        Assert.DoesNotContain(auditSettings, row => row.GetProperty("appConfigKey").GetString() == "Soccer.Results.ApiSports.Worker.CompetitionKeys");
+        Assert.DoesNotContain(auditSettings, row => row.GetProperty("isChildAuditItem").GetBoolean());
+
+        var statusCounts = statusJson.GetProperty("countsByClassification")
+            .EnumerateArray()
+            .ToDictionary(row => row.GetProperty("classification").GetString()!, row => row.GetProperty("count").GetInt32(), StringComparer.OrdinalIgnoreCase);
+        var auditCounts = auditJson.GetProperty("countsByClassification")
+            .EnumerateObject()
+            .ToDictionary(row => row.Name, row => row.Value.GetInt32(), StringComparer.OrdinalIgnoreCase);
+
+        foreach (var (classification, count) in statusCounts)
+        {
+            Assert.True(auditCounts.TryGetValue(classification, out var auditCount), $"Missing audit count for {classification}.");
+            Assert.Equal(count, auditCount);
+        }
+
+        var childResponse = await client.GetAsync("/api/debug/app-configs/audit?includeChildren=true");
+        childResponse.EnsureSuccessStatusCode();
+        var childJson = await childResponse.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Contains(childJson.GetProperty("settings").EnumerateArray(), row => row.GetProperty("isChildAuditItem").GetBoolean());
+        Assert.NotEmpty(childJson.GetProperty("childCountsByClassification").EnumerateObject().ToArray());
+    }
+
+    [Fact]
+    public async Task AppConfigsIncludeAuditCandidates_MasksSecretsAndKeepsRedundantOutOfDefault()
+    {
+        await using var factory = new SafetyTestApplicationFactory();
+        using var client = factory.CreateClient();
+
+        var defaultResponse = await client.GetAsync("/api/debug/app-configs");
+        defaultResponse.EnsureSuccessStatusCode();
+        var defaultJson = await defaultResponse.Content.ReadFromJsonAsync<JsonElement>();
+        var defaultValues = defaultJson.GetProperty("values").EnumerateArray().ToArray();
+        Assert.DoesNotContain(defaultValues, row => row.GetProperty("key").GetString() == "TheOdds.RefreshPlanner.FarOutMinMinutes");
+
+        var auditResponse = await client.GetAsync("/api/debug/app-configs?includeAuditCandidates=true&includeHidden=true&includeAdvanced=true&includeSecrets=true");
+        auditResponse.EnsureSuccessStatusCode();
+        var auditJson = await auditResponse.Content.ReadFromJsonAsync<JsonElement>();
+        var values = auditJson.GetProperty("values").EnumerateArray().ToArray();
+        var secret = values.Single(row => row.GetProperty("key").GetString() == "TheOdds.ApiKey");
+        Assert.True(secret.GetProperty("isValueMasked").GetBoolean());
+        Assert.Equal(JsonValueKind.Null, secret.GetProperty("effectiveValue").ValueKind);
+        Assert.NotEqual("THE_ODDS_API_KEY", secret.GetProperty("displayValue").GetString());
+        Assert.Contains(values, row =>
+            row.GetProperty("key").GetString() == "TheOdds.RefreshPlanner.FarOutMinMinutes"
+            && row.GetProperty("classification").GetString() == AppConfigClassifications.RemoveRedundant);
+    }
+
+    [Fact]
+    public void AppConfigCatalog_HasPolishedMetadata()
+    {
+        Assert.All(AppConfigCatalog.Definitions, definition =>
+        {
+            Assert.DoesNotContain("  ", definition.Category);
+            Assert.DoesNotContain("  ", definition.Section);
+            Assert.DoesNotContain("  ", definition.DisplayName);
+            Assert.False(string.IsNullOrWhiteSpace(definition.DisplayName));
+            Assert.False(string.IsNullOrWhiteSpace(definition.ShortDisplayName));
+            if (definition.Classification == AppConfigClassifications.MoveToAppConfigs
+                && definition.ValueType == AppConfigValueTypes.Boolean
+                && !definition.IsHidden)
+            {
+                Assert.NotEqual("Enabled", definition.DisplayName);
+                Assert.True(
+                    ContainsAny(definition.HelpText, ["enable", "allow", "require", "block", "stop", "whether", "control", "record", "import"]),
+                    $"Boolean help text should explain the toggle: {definition.Key}");
+            }
+        });
+    }
+
+    private static bool ContainsAny(string value, IEnumerable<string> needles)
+        => needles.Any(needle => value.Contains(needle, StringComparison.OrdinalIgnoreCase));
+
+    private static async Task AddAppConfigAsync(
+        SafetyTestApplicationFactory factory,
+        string key,
+        string value,
+        string valueType,
+        string environment = "Testing")
+    {
+        using var scope = factory.Services.CreateScope();
+        var dbContext = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+        var definition = AppConfigCatalog.FindByAppConfigKey(key);
+        dbContext.AppConfigs.Add(new AppConfig
+        {
+            Id = Guid.NewGuid(),
+            Key = key,
+            Value = value,
+            ValueType = valueType,
+            Category = definition?.Category ?? "Test",
+            Description = definition?.Description,
+            DefaultValue = definition?.DefaultValue,
+            IsSensitive = definition?.IsSensitive ?? false,
+            IsRuntimeEditable = definition?.IsRuntimeEditable ?? true,
+            RequiresRestart = definition?.RequiresRestart ?? false,
+            ValidationJson = definition?.ValidationJson,
+            Environment = environment,
+            IsEnabled = true,
+            CreatedAtUtc = DateTimeOffset.UtcNow,
+            UpdatedAtUtc = DateTimeOffset.UtcNow,
+            UpdatedBy = "test"
+        });
+        await dbContext.SaveChangesAsync();
+    }
+}
