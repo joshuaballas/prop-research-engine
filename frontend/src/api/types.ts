@@ -56,6 +56,10 @@ export interface ProviderStatusDto {
 }
 
 export interface ScheduledRefreshStatusDto {
+  generatedAtUtc?: string;
+  GeneratedAtUtc?: string;
+  nowUtc?: string;
+  NowUtc?: string;
   enabled?: boolean;
   Enabled?: boolean;
   intervalMinutes?: number;

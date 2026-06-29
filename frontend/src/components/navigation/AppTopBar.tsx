@@ -14,7 +14,6 @@ export function AppTopBar() {
   const [scheduledStatusQueryTick, setScheduledStatusQueryTick] = useState(0);
   const [glossaryOpen, setGlossaryOpen] = useState(false);
   const lastObservedSuccessfulRefreshRef = useRef<string | null | undefined>(undefined);
-  const lastCountdownTargetMsRef = useRef<number | null>(null);
   const lastZeroRefetchTargetMsRef = useRef<number | null>(null);
   const freshnessQuery = useMarketFreshnessData([marketStatusQueryTick]);
   const providerStatusQuery = useProviderStatusData([marketStatusQueryTick]);
@@ -26,27 +25,27 @@ export function AppTopBar() {
     () => getCountdownTargetMs(scheduledRefresh),
     [scheduledRefresh]
   );
-  if (countdownTargetMs !== null) {
-    lastCountdownTargetMsRef.current = countdownTargetMs;
-  }
-  const displayCountdownTargetMs = countdownTargetMs ?? lastCountdownTargetMsRef.current;
+  const serverClientOffsetMs = useMemo(
+    () => getServerClientOffsetMs(scheduledRefresh),
+    [scheduledRefresh]
+  );
+  const estimatedServerNowMs = now + serverClientOffsetMs;
   const isRefreshInProgress = useMemo(
     () => isScheduledRefreshInProgress(scheduledRefresh),
     [scheduledRefresh]
   );
-  const shouldPollScheduledStatus = countdownTargetMs !== null && (
-    now >= countdownTargetMs ||
-    isRefreshInProgress
-  );
+  const shouldPollScheduledStatus =
+    isRefreshInProgress ||
+    (countdownTargetMs !== null && estimatedServerNowMs >= countdownTargetMs);
   const latestScheduledSuccessfulRefreshCompletedAt = useMemo(
     () => getLatestSuccessfulRefreshCompletedAt(scheduledRefresh, undefined),
     [scheduledRefresh]
   );
   const syncDisplay = useMemo(
     () => buildSyncDisplay({
-      now,
+      now: estimatedServerNowMs,
       scheduledRefresh,
-      countdownTargetMs: displayCountdownTargetMs,
+      countdownTargetMs,
       freshness,
       hasStatusError: Boolean(freshnessQuery.error || providerStatusQuery.error || scheduledRefreshQuery.error),
       providerRejectedKeyDetected: providerStatus?.providerRejectedKeyDetected,
@@ -54,10 +53,10 @@ export function AppTopBar() {
     [
       freshness,
       freshnessQuery.error,
-      now,
+      estimatedServerNowMs,
       providerStatus?.providerRejectedKeyDetected,
       providerStatusQuery.error,
-      displayCountdownTargetMs,
+      countdownTargetMs,
       scheduledRefresh,
       scheduledRefreshQuery.error
     ]
@@ -95,14 +94,42 @@ export function AppTopBar() {
   }, [shouldPollScheduledStatus]);
 
   useEffect(() => {
-    if (displayCountdownTargetMs === null || now < displayCountdownTargetMs) return;
-    if (lastZeroRefetchTargetMsRef.current === displayCountdownTargetMs) return;
+    if (countdownTargetMs === null) return;
 
-    lastZeroRefetchTargetMsRef.current = displayCountdownTargetMs;
+    if (estimatedServerNowMs < countdownTargetMs) {
+      lastZeroRefetchTargetMsRef.current = null;
+      return;
+    }
+
+    if (lastZeroRefetchTargetMsRef.current === countdownTargetMs) return;
+
+    lastZeroRefetchTargetMsRef.current = countdownTargetMs;
     setScheduledStatusQueryTick((value) => value + 1);
-    setMarketStatusQueryTick((value) => value + 1);
-    bumpMarketDataRefreshVersion();
-  }, [displayCountdownTargetMs, now]);
+  }, [countdownTargetMs, estimatedServerNowMs]);
+
+  useEffect(() => {
+    const refetchScheduledStatus = () => {
+      lastZeroRefetchTargetMsRef.current = null;
+      setNow(Date.now());
+      setScheduledStatusQueryTick((value) => value + 1);
+    };
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        refetchScheduledStatus();
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    window.addEventListener('focus', refetchScheduledStatus);
+    window.addEventListener('pageshow', refetchScheduledStatus);
+
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      window.removeEventListener('focus', refetchScheduledStatus);
+      window.removeEventListener('pageshow', refetchScheduledStatus);
+    };
+  }, []);
 
   useEffect(() => {
     if (!latestScheduledSuccessfulRefreshCompletedAt) return;
@@ -347,13 +374,17 @@ function getCountdownTargetMs(scheduledRefresh?: ScheduledRefreshStatusDto) {
     if (!Number.isNaN(nextRefreshAtMs)) return nextRefreshAtMs;
   }
 
-  const nextRunEstimateUtc = scheduledRefresh?.nextRunEstimateUtc ?? scheduledRefresh?.NextRunEstimateUtc;
-  if (nextRunEstimateUtc) {
-    const nextRunMs = Date.parse(nextRunEstimateUtc);
-    if (!Number.isNaN(nextRunMs)) return nextRunMs;
-  }
-
   return null;
+}
+
+function getServerClientOffsetMs(scheduledRefresh?: ScheduledRefreshStatusDto) {
+  const serverTimestampUtc =
+    readString(scheduledRefresh, 'generatedAtUtc', 'GeneratedAtUtc', 'nowUtc', 'NowUtc') ??
+    readString(scheduledRefresh?.currentPlan ?? scheduledRefresh?.CurrentPlan, 'generatedAtUtc', 'GeneratedAtUtc');
+  if (!serverTimestampUtc) return 0;
+
+  const serverTimestampMs = Date.parse(serverTimestampUtc);
+  return Number.isNaN(serverTimestampMs) ? 0 : serverTimestampMs - Date.now();
 }
 
 function getLatestSuccessfulRefreshCompletedAt(scheduledRefresh?: ScheduledRefreshStatusDto, freshness?: MarketFreshnessDto) {
