@@ -50,6 +50,17 @@ public sealed class ApiSportsFootballClient(
         return GetAsync("/fixtures/players", [new("fixture", fixtureId)], cancellationToken);
     }
 
+    public Task<ApiSportsFootballDiagnosticResponse> GetLeaguesAsync(ApiSportsFootballLeaguesRequest request, CancellationToken cancellationToken)
+    {
+        var query = new List<KeyValuePair<string, string?>>();
+        if (request.League.HasValue)
+        {
+            query.Add(new("id", request.League.Value.ToString()));
+        }
+
+        return GetAsync("/leagues", query, cancellationToken);
+    }
+
     private async Task<ApiSportsFootballDiagnosticResponse> GetAsync(
         string path,
         IReadOnlyCollection<KeyValuePair<string, string?>> query,

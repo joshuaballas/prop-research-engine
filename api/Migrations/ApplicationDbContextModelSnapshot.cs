@@ -25,6 +25,80 @@ namespace SportsBetting.Api.Migrations
             NpgsqlModelBuilderExtensions.HasPostgresExtension(modelBuilder, "uuid-ossp");
             NpgsqlModelBuilderExtensions.UseIdentityByDefaultColumns(modelBuilder);
 
+            modelBuilder.Entity("SportsBetting.Api.Models.ApiSportsSoccerSeasonMetadata", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<string>("Country")
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)")
+                        .HasColumnName("country");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<DateOnly?>("EndDate")
+                        .HasColumnType("date")
+                        .HasColumnName("end_date");
+
+                    b.Property<bool>("IsCurrent")
+                        .HasColumnType("boolean")
+                        .HasColumnName("is_current");
+
+                    b.Property<DateTimeOffset>("LastRefreshedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("last_refreshed_at_utc");
+
+                    b.Property<int>("LeagueId")
+                        .HasColumnType("integer")
+                        .HasColumnName("league_id");
+
+                    b.Property<string>("LeagueName")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("league_name");
+
+                    b.Property<string>("RawSeasonJson")
+                        .HasColumnType("text")
+                        .HasColumnName("raw_season_json");
+
+                    b.Property<int>("Season")
+                        .HasColumnType("integer")
+                        .HasColumnName("season");
+
+                    b.Property<DateOnly?>("StartDate")
+                        .HasColumnType("date")
+                        .HasColumnName("start_date");
+
+                    b.Property<string>("Type")
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)")
+                        .HasColumnName("type");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at");
+
+                    b.HasKey("Id")
+                        .HasName("pk_api_sports_soccer_season_metadata");
+
+                    b.HasIndex("LastRefreshedAtUtc")
+                        .HasDatabaseName("ix_api_sports_soccer_season_metadata_last_refreshed_at_utc");
+
+                    b.HasIndex("LeagueId", "Season")
+                        .IsUnique()
+                        .HasDatabaseName("ix_api_sports_soccer_season_metadata_league_id_season");
+
+                    b.HasIndex("LeagueId", "StartDate", "EndDate")
+                        .HasDatabaseName("ix_api_sports_soccer_season_metadata_league_id_start_date_end_");
+
+                    b.ToTable("api_sports_soccer_season_metadata", (string)null);
+                });
+
             modelBuilder.Entity("SportsBetting.Api.Models.ApplicationError", b =>
                 {
                     b.Property<Guid>("Id")

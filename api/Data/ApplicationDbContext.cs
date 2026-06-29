@@ -30,6 +30,7 @@ public sealed class ApplicationDbContext(DbContextOptions<ApplicationDbContext> 
     public DbSet<MlbResultImportDateState> MlbResultImportDateStates => Set<MlbResultImportDateState>();
     public DbSet<SoccerResultImportState> SoccerResultImportStates => Set<SoccerResultImportState>();
     public DbSet<SoccerResultImportFixtureState> SoccerResultImportFixtureStates => Set<SoccerResultImportFixtureState>();
+    public DbSet<ApiSportsSoccerSeasonMetadata> ApiSportsSoccerSeasonMetadata => Set<ApiSportsSoccerSeasonMetadata>();
     public DbSet<PredictionRun> PredictionRuns => Set<PredictionRun>();
     public DbSet<Prediction> Predictions => Set<Prediction>();
     public DbSet<PredictionRunSkipCount> PredictionRunSkipCounts => Set<PredictionRunSkipCount>();
@@ -520,6 +521,19 @@ public sealed class ApplicationDbContext(DbContextOptions<ApplicationDbContext> 
             entity.HasIndex(x => new { x.Source, x.Competition, x.FixtureId }).IsUnique();
             entity.HasIndex(x => new { x.Competition, x.EventDate });
             entity.HasIndex(x => new { x.ImportStatus, x.EventDate });
+        });
+
+        modelBuilder.Entity<ApiSportsSoccerSeasonMetadata>(entity =>
+        {
+            entity.ToTable("api_sports_soccer_season_metadata");
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.LeagueName).HasMaxLength(200);
+            entity.Property(x => x.Country).HasMaxLength(100);
+            entity.Property(x => x.Type).HasMaxLength(100);
+            entity.Property(x => x.RawSeasonJson);
+            entity.HasIndex(x => new { x.LeagueId, x.Season }).IsUnique();
+            entity.HasIndex(x => new { x.LeagueId, x.StartDate, x.EndDate });
+            entity.HasIndex(x => x.LastRefreshedAtUtc);
         });
     }
 

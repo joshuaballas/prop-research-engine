@@ -1521,19 +1521,21 @@ public static class ResultsDebugEndpoints
             var sport = await dbContext.Sports
                 .AsNoTracking()
                 .SingleOrDefaultAsync(row => row.Code == "SOCCER", cancellationToken);
-            var leagueCodes = competitions
-                .Select(row => BuildApiSportsHistoricalLeagueCode(row))
+            var leagueCodePrefixes = competitions
+                .Select(row => BuildApiSportsHistoricalLeagueCodePrefix(row.Key))
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .ToArray();
-            var leagues = sport is null || leagueCodes.Length == 0
+            var apiSportsLeagues = sport is null || leagueCodePrefixes.Length == 0
                 ? []
                 : await dbContext.Leagues
                     .AsNoTracking()
-                    .Where(row => row.SportId == sport.Id && leagueCodes.Contains(row.Code))
+                    .Where(row => row.SportId == sport.Id && row.Code.StartsWith("API_SPORTS_"))
                     .Select(row => new { row.Id, row.Code, row.Name })
                     .ToListAsync(cancellationToken);
-            var leagueIdByCode = leagues.ToDictionary(row => row.Code, row => row.Id, StringComparer.OrdinalIgnoreCase);
-            var leagueIds = leagueIdByCode.Values.ToArray();
+            var leagues = apiSportsLeagues
+                .Where(row => leagueCodePrefixes.Any(prefix => row.Code.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)))
+                .ToArray();
+            var leagueIds = leagues.Select(row => row.Id).Distinct().ToArray();
 
             var rows = sport is null || leagueIds.Length == 0
                 ? []
@@ -1560,11 +1562,27 @@ public static class ResultsDebugEndpoints
             var coverageByCompetition = competitions
                 .Select(competition =>
                 {
-                    var leagueCode = BuildApiSportsHistoricalLeagueCode(competition);
-                    var leagueId = leagueIdByCode.TryGetValue(leagueCode, out var id) ? id : (Guid?)null;
-                    var competitionRows = leagueId.HasValue
-                        ? rows.Where(row => row.LeagueId == leagueId.Value).ToArray()
-                        : [];
+                    var leagueCodePrefix = BuildApiSportsHistoricalLeagueCodePrefix(competition.Key);
+                    var competitionLeagues = leagues
+                        .Where(row => row.Code.StartsWith(leagueCodePrefix, StringComparison.OrdinalIgnoreCase))
+                        .OrderBy(row => row.Code, StringComparer.OrdinalIgnoreCase)
+                        .ToArray();
+                    var competitionLeagueIds = competitionLeagues
+                        .Select(row => row.Id)
+                        .ToHashSet();
+                    var competitionRows = competitionLeagueIds.Count == 0
+                        ? []
+                        : rows.Where(row => competitionLeagueIds.Contains(row.LeagueId)).ToArray();
+                    var localLeagueCodes = competitionLeagues
+                        .Select(row => row.Code)
+                        .ToArray();
+                    var importedSeasons = localLeagueCodes
+                        .Select(code => TryExtractApiSportsHistoricalSeason(code, leagueCodePrefix))
+                        .Where(season => season.HasValue)
+                        .Select(season => season!.Value)
+                        .Distinct()
+                        .Order()
+                        .ToArray();
                     var importedStatKeys = competitionRows
                         .Select(row => row.StatKey)
                         .Distinct(StringComparer.OrdinalIgnoreCase)
@@ -1579,9 +1597,11 @@ public static class ResultsDebugEndpoints
                         competition.Enabled,
                         competition.Country,
                         competition.Type,
-                        localLeagueCode = leagueCode,
-                        localLeagueId = leagueId,
-                        localLeagueExists = leagueId.HasValue,
+                        localLeagueCode = localLeagueCodes.FirstOrDefault() ?? leagueCodePrefix,
+                        localLeagueCodes,
+                        localLeagueIds = competitionLeagues.Select(row => row.Id).ToArray(),
+                        localLeagueExists = competitionLeagues.Length > 0,
+                        importedSeasons,
                         importedResultRows = competitionRows.Length,
                         importedFixtureCount = competitionRows
                             .Select(row => row.FixtureId)
@@ -1660,11 +1680,14 @@ public static class ResultsDebugEndpoints
             ApiSportsHistoricalBackfillCompletedRequest request,
             IOptions<ApiSportsOptions> options,
             IApiSportsFootballClient client,
+            IApiSportsSoccerSeasonResolver seasonResolver,
             ApplicationDbContext dbContext,
             CancellationToken cancellationToken) =>
         {
             var dryRun = request.DryRun != false;
-            var range = NormalizeApiSportsHistoricalCoverageDateRange(request.FromDate, request.ToDate);
+            var range = request.AsOfDate.HasValue && !request.FromDate.HasValue && !request.ToDate.HasValue
+                ? new ApiSportsWorldCupDateRange(request.AsOfDate.Value, request.AsOfDate.Value)
+                : NormalizeApiSportsHistoricalCoverageDateRange(request.FromDate, request.ToDate);
             var maxRangeDays = Math.Clamp(request.MaxDays ?? 7, 1, 31);
             var competitionKey = request.CompetitionKey?.Trim();
             if (string.IsNullOrWhiteSpace(competitionKey))
@@ -1735,12 +1758,82 @@ public static class ResultsDebugEndpoints
                 return block;
             }
 
-            var discovered = await DiscoverApiSportsFixturesAsync(
-                client,
+            var stableCompetition = new ApiSportsSoccerCompetitionDescriptor(
+                competition.Key,
+                competition.DisplayName,
+                competition.DisplayName,
+                competition.LeagueId,
+                competition.Season ?? 0,
+                competition.Enabled,
+                competition.Country,
+                competition.Type,
+                competition.ActiveFromDate,
+                competition.ActiveToDate,
+                competition.BackfillFromDate,
+                competition.BackfillToDate,
+                BuildApiSportsHistoricalLeagueCode(competition),
+                "HistoricalResultImport",
+                false);
+            var resolution = await seasonResolver.ResolveDateRangeAsync(
+                stableCompetition,
                 range.FromDate,
                 range.ToDate,
-                competition.LeagueId,
-                competition.Season,
+                allowLiveMetadataRefresh: request.ForceLive == true,
+                nowUtc: DateTimeOffset.UtcNow,
+                cancellationToken);
+            if (resolution.SeasonWindows.Count == 0)
+            {
+                return Results.Ok(new
+                {
+                    generatedAtUtc = DateTimeOffset.UtcNow,
+                    callsExternalApis = request.ForceLive == true && resolution.MetadataApiCallsUsed > 0,
+                    externalApiCalled = request.ForceLive == true && resolution.MetadataApiCallsUsed > 0,
+                    readOnly = true,
+                    writesRows = false,
+                    provider = "API-Sports",
+                    product = "API-Sports Football",
+                    scope = new
+                    {
+                        sport = "SOCCER",
+                        purpose = "HistoricalPlayerStatsBackfillPreview",
+                        competition.Key,
+                        competition.DisplayName,
+                        competition.LeagueId,
+                        season = competition.Season,
+                        competition.Country,
+                        competition.Type,
+                        range.FromDate,
+                        range.ToDate
+                    },
+                    request = requestDiagnostics,
+                    skipped = true,
+                    skipReason = resolution.SkippedReason,
+                    seasonResolution = BuildApiSportsSeasonResolutionMetadata(resolution),
+                    discoveredFixtureCount = 0,
+                    completedFixtureCount = 0,
+                    skippedFixtureCount = 0,
+                    previewedFixtureCount = 0,
+                    failedFixtureCount = 0,
+                    previewResultRows = 0,
+                    resultRowsWritten = 0,
+                    resultRowsInserted = 0,
+                    resultRowsUpdated = 0,
+                    resultRowsUnchanged = 0,
+                    distinctPlayers = 0,
+                    apiCallsUsed = 0,
+                    seasonMetadataApiCallsUsed = resolution.MetadataApiCallsUsed,
+                    recommendedNextAction = "Requested range does not overlap a resolved API-Sports provider season. Use the generic backfill-plan endpoint with forceLive=true to inspect season metadata."
+                });
+            }
+
+            var selectedWindow = resolution.SeasonWindows.First();
+            var resolvedCompetition = selectedWindow.Competition;
+            var discovered = await DiscoverApiSportsFixturesAsync(
+                client,
+                selectedWindow.FromDate,
+                selectedWindow.ToDate,
+                resolvedCompetition.LeagueId,
+                resolvedCompetition.Season,
                 cancellationToken);
             var completed = discovered.Where(row => IsApiSportsFixtureCompleted(row.StatusShort, row.StatusLong)).ToArray();
             var skipped = discovered
@@ -1770,10 +1863,10 @@ public static class ResultsDebugEndpoints
                         ? new ApiSportsSoccerImportWriteSummary(0, 0, 0)
                         : await UpsertApiSportsSoccerResultsAsync(
                             dbContext,
-                            ToHistoricalApiSportsFixtureSummary(fixture, competition),
+                            ToHistoricalApiSportsFixtureSummary(fixture, resolvedCompetition),
                             preview.Rows,
-                            BuildApiSportsHistoricalLeagueCode(competition),
-                            "HistoricalResultImport",
+                            resolvedCompetition.LeagueCode,
+                            resolvedCompetition.ImportSource,
                             cancellationToken);
                     totalPreviewRows += preview.Rows.Count;
                     totalWritten += writeSummary.Inserted + writeSummary.Updated;
@@ -1825,8 +1918,8 @@ public static class ResultsDebugEndpoints
             }
 
             var coverageByDate = BuildApiSportsHistoricalPreviewCoverageByDate(
-                range.FromDate,
-                range.ToDate,
+                selectedWindow.FromDate,
+                selectedWindow.ToDate,
                 discovered,
                 skipped,
                 imports,
@@ -1845,14 +1938,16 @@ public static class ResultsDebugEndpoints
                 {
                     sport = "SOCCER",
                     purpose = "HistoricalPlayerStatsBackfillPreview",
-                    competition.Key,
-                    competition.DisplayName,
-                    competition.LeagueId,
-                    competition.Season,
-                    competition.Country,
-                    competition.Type,
+                    resolvedCompetition.Key,
+                    resolvedCompetition.DisplayName,
+                    resolvedCompetition.LeagueId,
+                    resolvedCompetition.Season,
+                    resolvedCompetition.Country,
+                    resolvedCompetition.Type,
                     range.FromDate,
-                    range.ToDate
+                    range.ToDate,
+                    effectiveFromDate = selectedWindow.FromDate,
+                    effectiveToDate = selectedWindow.ToDate
                 },
                 request = requestDiagnostics,
                 guardrails = new
@@ -1876,7 +1971,10 @@ public static class ResultsDebugEndpoints
                 resultRowsUpdated = totalUpdated,
                 resultRowsUnchanged = totalUnchanged,
                 distinctPlayers = totalDistinctPlayers.Count,
-                apiCallsUsed = CountDateRangeDays(range.FromDate, range.ToDate) + completed.Length,
+                apiCallsUsed = CountDateRangeDays(selectedWindow.FromDate, selectedWindow.ToDate) + completed.Length,
+                seasonMetadataApiCallsUsed = resolution.MetadataApiCallsUsed,
+                resolvedSeasonWindow = BuildApiSportsResolvedSeasonWindow(selectedWindow),
+                seasonResolution = BuildApiSportsSeasonResolutionMetadata(resolution),
                 coverageByDate,
                 completedFixtures = completed,
                 skippedFixtures = skipped,
@@ -3539,16 +3637,981 @@ public static class ResultsDebugEndpoints
         .WithName("ApiSportsSoccerDuplicatePlayerBridgeApplyDebug")
         .WithSummary("Dry-run-first grouped Soccer duplicate platform-player bridge apply.");
 
+        endpoints.MapGet("/api/debug/soccer/results/api-sports/import-status", async (
+            string? competitionKey,
+            DateOnly? fromDate,
+            DateOnly? toDate,
+            DateOnly? asOfDate,
+            bool? forceLive,
+            bool? summaryOnly,
+            bool? includeCoverageByDate,
+            bool? includeFixtures,
+            bool? includeRowsByFixture,
+            IOptions<ApiSportsOptions> options,
+            IApiSportsFootballClient client,
+            IApiSportsSoccerSeasonResolver seasonResolver,
+            ApplicationDbContext dbContext,
+            CancellationToken cancellationToken) =>
+        {
+            var range = asOfDate.HasValue && !fromDate.HasValue && !toDate.HasValue
+                ? new ApiSportsWorldCupDateRange(asOfDate.Value, asOfDate.Value)
+                : NormalizeApiSportsHistoricalCoverageDateRange(fromDate, toDate);
+            var explicitCompetitionRequested = !string.IsNullOrWhiteSpace(competitionKey);
+            var includeCoverage = ShouldIncludeApiSportsDetail(summaryOnly, includeCoverageByDate);
+            var includeFixtureDetails = ShouldIncludeApiSportsDetail(summaryOnly, includeFixtures);
+            var includeRows = ShouldIncludeApiSportsDetail(summaryOnly, includeRowsByFixture);
+            var competitions = ResolveApiSportsSoccerCompetitionSelection(
+                options.Value,
+                string.IsNullOrWhiteSpace(competitionKey) ? [] : [competitionKey],
+                includeAllSupportedCompetitions: string.IsNullOrWhiteSpace(competitionKey),
+                requireExplicitSelection: false);
+            if (competitions.Count == 0)
+            {
+                return Results.NotFound(new
+                {
+                    generatedAtUtc = DateTimeOffset.UtcNow,
+                    callsExternalApis = false,
+                    readOnly = true,
+                    writesRows = false,
+                    error = "No enabled API-Sports Soccer competition matched the request.",
+                    competitionKey,
+                    availableCompetitionKeys = GetSupportedApiSportsSoccerCompetitions(options.Value, enabledOnly: true)
+                        .Select(row => row.Key)
+                        .Order(StringComparer.OrdinalIgnoreCase)
+                        .ToArray()
+                });
+            }
+
+            if (forceLive == true)
+            {
+                var block = BuildApiSportsBlockedResponse(
+                    "soccer-api-sports-import-status",
+                    forceLive,
+                    options.Value,
+                    new { competitionKey, range.FromDate, range.ToDate, forceLive = true },
+                    requireConfiguredLeague: false,
+                    requireConfiguredSeason: false);
+                if (block is not null)
+                {
+                    return block;
+                }
+            }
+
+            var competitionStatuses = new List<object>();
+            var totalImportedFixtures = 0;
+            var totalImportedRows = 0;
+            var totalMissingCompleted = 0;
+            var totalDiscovered = 0;
+            var totalCompleted = 0;
+            var totalApiCalls = 0;
+            var totalSeasonMetadataApiCalls = 0;
+
+            foreach (var competition in competitions)
+            {
+                var resolution = await seasonResolver.ResolveDateRangeAsync(
+                    competition,
+                    range.FromDate,
+                    range.ToDate,
+                    allowLiveMetadataRefresh: forceLive == true,
+                    nowUtc: DateTimeOffset.UtcNow,
+                    cancellationToken);
+                totalSeasonMetadataApiCalls += resolution.MetadataApiCallsUsed;
+                if (resolution.SeasonWindows.Count == 0)
+                {
+                    competitionStatuses.Add(BuildApiSportsSeasonResolutionSkippedResult(competition, resolution, range.FromDate, range.ToDate));
+                    continue;
+                }
+
+                foreach (var window in resolution.SeasonWindows)
+                {
+                    var resolvedCompetition = window.Competition;
+                    var persisted = await LoadApiSportsSoccerPersistedImportStatusAsync(dbContext, resolvedCompetition, window.FromDate, window.ToDate, cancellationToken);
+                    IReadOnlyList<ApiSportsFixtureDiscoveryRow> discovered = [];
+                    if (forceLive == true)
+                    {
+                        discovered = await DiscoverApiSportsFixturesAsync(
+                            client,
+                            window.FromDate,
+                            window.ToDate,
+                            resolvedCompetition.LeagueId,
+                            resolvedCompetition.Season,
+                            cancellationToken);
+                    }
+
+                    var completed = discovered.Where(row => IsApiSportsFixtureCompleted(row.StatusShort, row.StatusLong)).ToArray();
+                    var importedFixtureIds = persisted.RowCountsByFixture.Select(row => row.FixtureId).ToHashSet(StringComparer.OrdinalIgnoreCase);
+                    var missingCompleted = completed
+                        .Where(row => !importedFixtureIds.Contains(row.FixtureId))
+                        .Select(row => new
+                        {
+                            row.FixtureId,
+                            row.EventDate,
+                            row.KickoffUtc,
+                            row.HomeTeamName,
+                            row.AwayTeamName,
+                            row.StatusShort,
+                            row.StatusLong
+                        })
+                        .ToArray();
+                    var apiCallsUsed = forceLive == true ? CountDateRangeDays(window.FromDate, window.ToDate) : 0;
+                    var coverageByDate = BuildApiSportsWorldCupStatusCoverageByDate(
+                        window.FromDate,
+                        window.ToDate,
+                        persisted.RowCountsByFixture,
+                        discovered,
+                        forceLive == true,
+                        forceLive == true ? apiCallsUsed : null);
+
+                    totalImportedFixtures += persisted.RowCountsByFixture.Count;
+                    totalImportedRows += persisted.TotalRows;
+                    totalMissingCompleted += missingCompleted.Length;
+                    totalDiscovered += forceLive == true ? discovered.Count : 0;
+                    totalCompleted += forceLive == true ? completed.Length : 0;
+                    totalApiCalls += apiCallsUsed;
+
+                    var competitionStatus = new Dictionary<string, object?>
+                    {
+                        ["key"] = resolvedCompetition.Key,
+                        ["competition"] = resolvedCompetition.Competition,
+                        ["displayName"] = resolvedCompetition.DisplayName,
+                        ["leagueId"] = resolvedCompetition.LeagueId,
+                        ["season"] = resolvedCompetition.Season,
+                        ["enabled"] = resolvedCompetition.Enabled,
+                        ["country"] = resolvedCompetition.Country,
+                        ["type"] = resolvedCompetition.Type,
+                        ["leagueCode"] = resolvedCompetition.LeagueCode,
+                        ["configuredWindow"] = BuildApiSportsCompetitionWindow(resolvedCompetition),
+                        ["requestedWindow"] = new { range.FromDate, range.ToDate },
+                        ["effectiveWindow"] = new { window.FromDate, window.ToDate },
+                        ["resolvedSeasonWindow"] = BuildApiSportsResolvedSeasonWindow(window),
+                        ["seasonResolution"] = BuildApiSportsSeasonResolutionMetadata(resolution),
+                        ["discoveryAvailable"] = forceLive == true,
+                        ["skippedReason"] = null,
+                        ["discoveredFixtureCount"] = forceLive == true ? discovered.Count : (int?)null,
+                        ["completedFixtureCount"] = forceLive == true ? completed.Length : (int?)null,
+                        ["importedFixtureCount"] = persisted.RowCountsByFixture.Count,
+                        ["importedResultRows"] = persisted.TotalRows,
+                        ["missingCompletedFixtureCount"] = forceLive == true ? missingCompleted.Length : (int?)null,
+                        ["apiCallsUsed"] = apiCallsUsed,
+                        ["fixtureDiscoveryApiCallsUsed"] = apiCallsUsed,
+                        ["seasonMetadataApiCallsUsed"] = resolution.MetadataApiCallsUsed,
+                        ["latestImportedFixtureId"] = persisted.LatestImportedFixtureId,
+                        ["latestImportedEventDate"] = persisted.LatestImportedDate,
+                        ["latestImportedAtUtc"] = persisted.LatestImportedAtUtc
+                    };
+                    if (includeCoverage)
+                    {
+                        competitionStatus["coverageByDate"] = coverageByDate;
+                    }
+
+                    if (includeRows)
+                    {
+                        competitionStatus["rowsByFixture"] = persisted.RowCountsByFixture;
+                        competitionStatus["importedFixtures"] = persisted.RowCountsByFixture;
+                    }
+
+                    if (includeFixtureDetails)
+                    {
+                        competitionStatus["missingCompletedFixtures"] = missingCompleted;
+                        competitionStatus["completedFixturesDiscovered"] = completed;
+                    }
+
+                    competitionStatuses.Add(competitionStatus);
+                }
+            }
+
+            return Results.Ok(new
+            {
+                generatedAtUtc = DateTimeOffset.UtcNow,
+                callsExternalApis = forceLive == true,
+                readOnly = true,
+                writesRows = false,
+                provider = "API-Sports",
+                product = "API-Sports Football",
+                scope = new
+                {
+                    sport = "SOCCER",
+                    competitionKey,
+                    asOfDate,
+                    range.FromDate,
+                    range.ToDate
+                },
+                discoveryAvailable = forceLive == true,
+                apiCallsUsed = totalApiCalls,
+                seasonMetadataApiCallsUsed = totalSeasonMetadataApiCalls,
+                competitionCount = competitions.Count,
+                discoveredFixtureCount = forceLive == true ? totalDiscovered : (int?)null,
+                completedFixtureCount = forceLive == true ? totalCompleted : (int?)null,
+                importedFixtureCount = totalImportedFixtures,
+                importedResultRows = totalImportedRows,
+                missingCompletedFixtureCount = forceLive == true ? totalMissingCompleted : (int?)null,
+                warnings = forceLive == true
+                    ? Array.Empty<string>()
+                    : ["forceLive=false; status is based on persisted local prop_results only and does not discover API-Sports fixtures."],
+                competitions = competitionStatuses
+            });
+        })
+        .WithName("ApiSportsSoccerImportStatusDebug")
+        .WithSummary("Read-only API-Sports Soccer import coverage diagnostics across supported competitions.");
+
+        endpoints.MapGet("/api/debug/soccer/results/api-sports/scheduled-import-status", async (
+            string? competitionKey,
+            DateOnly? fromDate,
+            DateOnly? toDate,
+            DateOnly? asOfDate,
+            bool? summaryOnly,
+            bool? includeFixtures,
+            IOptions<ApiSportsOptions> options,
+            IOptions<SoccerResultImportWorkerOptions> workerOptionsAccessor,
+            IApiSportsSoccerSeasonResolver seasonResolver,
+            ApplicationDbContext dbContext,
+            CancellationToken cancellationToken) =>
+        {
+            var generatedAtUtc = DateTimeOffset.UtcNow;
+            var workerOptions = workerOptionsAccessor.Value;
+            var range = asOfDate.HasValue && !fromDate.HasValue && !toDate.HasValue
+                ? new ApiSportsWorldCupDateRange(asOfDate.Value, asOfDate.Value)
+                : NormalizeApiSportsHistoricalCoverageDateRange(fromDate, toDate);
+            var includeFixtureDetails = ShouldIncludeApiSportsDetail(summaryOnly, includeFixtures);
+            var competitions = ResolveApiSportsSoccerCompetitionSelection(
+                options.Value,
+                string.IsNullOrWhiteSpace(competitionKey) ? [] : [competitionKey],
+                includeAllSupportedCompetitions: string.IsNullOrWhiteSpace(competitionKey),
+                requireExplicitSelection: false);
+            var apiSportsConfigError = SoccerResultImportWorker.ValidateApiSportsConfig(options.Value);
+            var maxPerCompetition = Math.Max(1, workerOptions.MaxFixturesPerCompetitionPerRun ?? workerOptions.MaxFixturesPerRun);
+            var maxTotal = workerOptions.MaxFixturesTotalPerRun.GetValueOrDefault() > 0 ? workerOptions.MaxFixturesTotalPerRun : null;
+            var competitionStatuses = new List<object>();
+            var aggregateImportedFixtures = 0;
+            var aggregateImportedRows = 0;
+            var aggregatePendingCompleted = 0;
+            var aggregateDeferred = 0;
+            var aggregateFailed = 0;
+            var aggregateLatestApiCalls = 0;
+            var aggregateSeasonMetadataApiCalls = 0;
+
+            foreach (var competition in competitions)
+            {
+                var resolution = await seasonResolver.ResolveDateRangeAsync(
+                    competition,
+                    range.FromDate,
+                    range.ToDate,
+                    allowLiveMetadataRefresh: false,
+                    nowUtc: generatedAtUtc,
+                    cancellationToken);
+                aggregateSeasonMetadataApiCalls += resolution.MetadataApiCallsUsed;
+                var firstResolvedWindow = resolution.SeasonWindows.FirstOrDefault();
+                var statusCompetition = firstResolvedWindow?.Competition ?? competition;
+                var statusFromDate = firstResolvedWindow?.FromDate ?? range.FromDate;
+                var statusToDate = firstResolvedWindow?.ToDate ?? range.ToDate;
+                var persisted = await LoadApiSportsSoccerPersistedImportStatusAsync(dbContext, statusCompetition, statusFromDate, statusToDate, cancellationToken);
+                var importState = await dbContext.SoccerResultImportStates
+                    .AsNoTracking()
+                    .SingleOrDefaultAsync(row => row.Source == SoccerResultImportWorker.Source
+                        && row.Competition == statusCompetition.Competition, cancellationToken);
+                var fixtureStates = await dbContext.SoccerResultImportFixtureStates
+                    .AsNoTracking()
+                    .Where(row => row.Source == SoccerResultImportWorker.Source
+                        && row.Competition == statusCompetition.Competition
+                        && (!row.EventDate.HasValue || (row.EventDate >= statusFromDate && row.EventDate <= statusToDate)))
+                    .OrderByDescending(row => row.EventDate)
+                    .ThenByDescending(row => row.KickoffUtc)
+                    .Take(100)
+                    .ToArrayAsync(cancellationToken);
+                var scheduledStatus = ResolveSoccerResultWorkerStatus(workerOptions, apiSportsConfigError, importState);
+                var pendingCompletedFixtures = fixtureStates
+                    .Where(row => IsApiSportsFixtureCompleted(row.StatusShort, row.StatusLong)
+                        && !string.Equals(row.ImportStatus, "Imported", StringComparison.OrdinalIgnoreCase))
+                    .ToArray();
+                var deferredDueToMaxFixturesPerRun = pendingCompletedFixtures
+                    .Where(row => string.Equals(row.SkipReason, "MaxFixturesPerRunLimit", StringComparison.OrdinalIgnoreCase))
+                    .ToArray();
+                var failedCompletedFixtures = pendingCompletedFixtures
+                    .Where(row => string.Equals(row.ImportStatus, "Failed", StringComparison.OrdinalIgnoreCase))
+                    .ToArray();
+                var oldestPendingCompletedFixture = pendingCompletedFixtures
+                    .OrderBy(row => row.EventDate)
+                    .ThenBy(row => row.KickoffUtc)
+                    .ThenBy(row => row.FixtureId)
+                    .FirstOrDefault();
+
+                aggregateImportedFixtures += persisted.RowCountsByFixture.Count;
+                aggregateImportedRows += persisted.TotalRows;
+                aggregatePendingCompleted += pendingCompletedFixtures.Length;
+                aggregateDeferred += deferredDueToMaxFixturesPerRun.Length;
+                aggregateFailed += failedCompletedFixtures.Length;
+                aggregateLatestApiCalls += importState?.LastApiCallsUsed ?? 0;
+
+                var skippedReason = resolution.SkippedReason
+                    ?? (importState?.LastErrorMessage?.Contains("OutsideConfiguredSeasonWindow", StringComparison.OrdinalIgnoreCase) == true
+                        ? "OutsideProviderSeasonWindow"
+                        : null);
+                var competitionStatus = new Dictionary<string, object?>
+                {
+                    ["key"] = statusCompetition.Key,
+                    ["competition"] = statusCompetition.Competition,
+                    ["displayName"] = statusCompetition.DisplayName,
+                    ["leagueId"] = statusCompetition.LeagueId,
+                    ["season"] = statusCompetition.Season,
+                    ["enabled"] = statusCompetition.Enabled,
+                    ["country"] = statusCompetition.Country,
+                    ["type"] = statusCompetition.Type,
+                    ["leagueCode"] = statusCompetition.LeagueCode,
+                    ["configuredWindow"] = BuildApiSportsCompetitionWindow(statusCompetition),
+                    ["requestedWindow"] = new { range.FromDate, range.ToDate },
+                    ["effectiveWindow"] = firstResolvedWindow is null ? null : new { firstResolvedWindow.FromDate, firstResolvedWindow.ToDate },
+                    ["resolvedSeasonWindow"] = firstResolvedWindow is null ? null : BuildApiSportsResolvedSeasonWindow(firstResolvedWindow),
+                    ["seasonResolution"] = BuildApiSportsSeasonResolutionMetadata(resolution),
+                    ["status"] = scheduledStatus,
+                    ["skippedReason"] = skippedReason,
+                    ["lastRunStartedAtUtc"] = importState?.LastStartedAt,
+                    ["lastRunCompletedAtUtc"] = importState?.LastCompletedAt,
+                    ["lastRunSucceeded"] = importState is not null && IsSuccessfulSoccerResultWorkerStatus(importState.LastStatus),
+                    ["lastSuccessfulRunAtUtc"] = importState?.LastSuccessfulRunAt,
+                    ["latestCompletedFixtureDetected"] = importState is null || importState.LatestCompletedFixtureDetectedId is null
+                        ? null
+                        : new
+                        {
+                            fixtureId = importState.LatestCompletedFixtureDetectedId,
+                            eventDate = importState.LatestCompletedFixtureDetectedDate
+                        },
+                    ["latestCompletedFixtureImported"] = importState is null || importState.LatestCompletedFixtureImportedId is null
+                        ? null
+                        : new
+                        {
+                            fixtureId = importState.LatestCompletedFixtureImportedId,
+                            eventDate = importState.LatestCompletedFixtureImportedDate
+                        },
+                    ["latestImportedEventDate"] = importState?.LatestCompletedFixtureImportedDate ?? persisted.LatestImportedDate,
+                    ["importedFixtureCount"] = persisted.RowCountsByFixture.Count,
+                    ["importedPlayerStatRowCount"] = persisted.TotalRows,
+                    ["selectedCompletedFixturesThisRun"] = importState is null ? 0 : importState.LastImportedFixtureCount + importState.LastFailedFixtureCount,
+                    ["importedThisRunCount"] = importState?.LastImportedFixtureCount ?? 0,
+                    ["failedThisRunCount"] = importState?.LastFailedFixtureCount ?? 0,
+                    ["resultRowsWrittenThisRun"] = importState?.LastResultRowsWritten ?? 0,
+                    ["deferredDueToMaxFixturesPerRun"] = deferredDueToMaxFixturesPerRun.Length,
+                    ["pendingCompletedFixtureCount"] = pendingCompletedFixtures.Length,
+                    ["oldestPendingCompletedFixture"] = oldestPendingCompletedFixture is null
+                        ? null
+                        : new
+                        {
+                            oldestPendingCompletedFixture.FixtureId,
+                            oldestPendingCompletedFixture.EventDate,
+                            oldestPendingCompletedFixture.KickoffUtc,
+                            oldestPendingCompletedFixture.HomeTeamName,
+                            oldestPendingCompletedFixture.AwayTeamName,
+                            oldestPendingCompletedFixture.ImportStatus,
+                            oldestPendingCompletedFixture.SkipReason,
+                            oldestPendingCompletedFixture.Attempts,
+                            oldestPendingCompletedFixture.ResultRowsWritten,
+                            oldestPendingCompletedFixture.LastErrorMessage
+                        },
+                    ["failedCompletedFixtureCount"] = failedCompletedFixtures.Length,
+                    ["latestErrorSummary"] = FirstNonBlank(importState?.LastErrorMessage, apiSportsConfigError),
+                    ["providerApiCallsUsedLatestRun"] = importState?.LastApiCallsUsed ?? 0
+                };
+                if (includeFixtureDetails)
+                {
+                    competitionStatus["pendingCompletedFixtures"] = pendingCompletedFixtures
+                        .OrderBy(row => row.EventDate)
+                        .ThenBy(row => row.KickoffUtc)
+                        .ThenBy(row => row.FixtureId)
+                        .Take(25)
+                        .ToArray();
+                }
+
+                competitionStatuses.Add(competitionStatus);
+            }
+
+            return Results.Ok(new
+            {
+                generatedAtUtc,
+                callsExternalApis = false,
+                readOnly = true,
+                writesRows = false,
+                workerEnabled = workerOptions.Enabled,
+                scheduledImportEnabled = workerOptions.Enabled && apiSportsConfigError is null,
+                workerOptions.IntervalMinutes,
+                workerOptions.RecentWindowDays,
+                asOfDate,
+                maxFixturesPerCompetitionPerRun = maxPerCompetition,
+                maxFixturesTotalPerRun = maxTotal,
+                workerOptions.ImportCompletedFixturesOnly,
+                workerOptions.Competition,
+                workerOptions.CompetitionKeys,
+                workerOptions.Provider,
+                configError = apiSportsConfigError,
+                aggregateTotals = new
+                {
+                    enabledCompetitionCount = competitions.Count(row => row.Enabled),
+                    importedFixtureCount = aggregateImportedFixtures,
+                    importedPlayerStatRowCount = aggregateImportedRows,
+                    pendingCompletedFixtureCount = aggregatePendingCompleted,
+                    deferredDueToMaxFixturesPerRun = aggregateDeferred,
+                    failedCompletedFixtureCount = aggregateFailed,
+                    providerApiCallsUsedLatestRun = aggregateLatestApiCalls,
+                    seasonMetadataApiCallsUsed = aggregateSeasonMetadataApiCalls
+                },
+                competitions = competitionStatuses,
+                workflowSeparation = "The Odds scheduled refresh updates market/provider-context rows only. API-Sports result/stat import is a separate SoccerResultImportWorker workflow.",
+                manualDebugEndpoints = new[]
+                {
+                    "GET /api/debug/soccer/results/api-sports/import-status",
+                    "POST /api/debug/soccer/results/api-sports/backfill-completed",
+                    "GET /api/debug/soccer/results/api-sports/world-cup/import-status",
+                    "POST /api/debug/soccer/results/api-sports/world-cup/backfill-completed"
+                }
+            });
+        })
+        .WithName("ApiSportsSoccerScheduledImportStatusDebug")
+        .WithSummary("Read-only API-Sports Soccer scheduled result import worker status across supported competitions.");
+
+        endpoints.MapGet("/api/debug/soccer/results/api-sports/backfill-plan", async (
+            string? competitionKey,
+            DateOnly? fromDate,
+            DateOnly? toDate,
+            DateOnly? asOfDate,
+            bool? includeAllSupportedCompetitions,
+            bool? forceLive,
+            IOptions<ApiSportsOptions> options,
+            IApiSportsSoccerSeasonResolver seasonResolver,
+            ApplicationDbContext dbContext,
+            CancellationToken cancellationToken) =>
+        {
+            var range = asOfDate.HasValue && !fromDate.HasValue && !toDate.HasValue
+                ? new ApiSportsWorldCupDateRange(asOfDate.Value, asOfDate.Value)
+                : NormalizeApiSportsHistoricalCoverageDateRange(fromDate, toDate);
+            var competitions = ResolveApiSportsSoccerCompetitionSelection(
+                options.Value,
+                string.IsNullOrWhiteSpace(competitionKey) ? [] : [competitionKey],
+                includeAllSupportedCompetitions: includeAllSupportedCompetitions != false,
+                requireExplicitSelection: false);
+            var competitionPlans = new List<object>();
+            var totalSeasonMetadataApiCalls = 0;
+            foreach (var competition in competitions)
+            {
+                var resolution = await seasonResolver.ResolveDateRangeAsync(
+                    competition,
+                    range.FromDate,
+                    range.ToDate,
+                    allowLiveMetadataRefresh: forceLive == true,
+                    nowUtc: DateTimeOffset.UtcNow,
+                    cancellationToken);
+                totalSeasonMetadataApiCalls += resolution.MetadataApiCallsUsed;
+                if (resolution.SeasonWindows.Count == 0)
+                {
+                    competitionPlans.Add(BuildApiSportsSeasonResolutionSkippedResult(competition, resolution, range.FromDate, range.ToDate));
+                    continue;
+                }
+
+                foreach (var window in resolution.SeasonWindows)
+                {
+                    var resolvedCompetition = window.Competition;
+                    var persisted = await LoadApiSportsSoccerPersistedImportStatusAsync(
+                        dbContext,
+                        resolvedCompetition,
+                        window.FromDate,
+                        window.ToDate,
+                        cancellationToken);
+                    var suggestedFromDate = persisted.LatestImportedDate.HasValue
+                        ? persisted.LatestImportedDate.Value.AddDays(1)
+                        : window.FromDate;
+                    var suggestedToDate = window.ToDate;
+                    if (suggestedFromDate > suggestedToDate)
+                    {
+                        suggestedFromDate = suggestedToDate;
+                    }
+
+                    competitionPlans.Add(new
+                    {
+                        resolvedCompetition.Key,
+                        resolvedCompetition.Competition,
+                        resolvedCompetition.DisplayName,
+                        resolvedCompetition.LeagueId,
+                        resolvedCompetition.Season,
+                        resolvedCompetition.Enabled,
+                        resolvedCompetition.Country,
+                        resolvedCompetition.Type,
+                        resolvedCompetition.LeagueCode,
+                        configuredWindow = BuildApiSportsCompetitionWindow(resolvedCompetition),
+                        requestedWindow = new { range.FromDate, range.ToDate },
+                        effectiveWindow = new { window.FromDate, window.ToDate },
+                        resolvedSeasonWindow = BuildApiSportsResolvedSeasonWindow(window),
+                        seasonResolution = BuildApiSportsSeasonResolutionMetadata(resolution),
+                        overlapsProviderSeasonWindow = true,
+                        skippedReason = (string?)null,
+                        persistedImportedFixtureCount = persisted.RowCountsByFixture.Count,
+                        persistedImportedResultRows = persisted.TotalRows,
+                        latestImportedFixtureId = persisted.LatestImportedFixtureId,
+                        latestImportedEventDate = persisted.LatestImportedDate,
+                        persisted.LatestImportedAtUtc,
+                        suggestedFromDate,
+                        suggestedToDate,
+                        forceLiveDiscoveryNeeded = true,
+                        estimatedDiscoveryApiCalls = CountDateRangeDays(window.FromDate, window.ToDate),
+                        seasonMetadataApiCallsUsed = resolution.MetadataApiCallsUsed,
+                        risk = "Run forceLive dry-run in chunks before dryRun=false."
+                    });
+                }
+            }
+
+            return Results.Ok(new
+            {
+                generatedAtUtc = DateTimeOffset.UtcNow,
+                callsExternalApis = forceLive == true && totalSeasonMetadataApiCalls > 0,
+                readOnly = true,
+                writesRows = false,
+                provider = "API-Sports",
+                product = "API-Sports Football",
+                scope = new
+                {
+                    sport = "SOCCER",
+                    competitionKey,
+                    asOfDate,
+                    range.FromDate,
+                    range.ToDate
+                },
+                competitionCount = competitions.Count,
+                seasonMetadataApiCallsUsed = totalSeasonMetadataApiCalls,
+                competitions = competitionPlans
+            });
+        })
+        .WithName("ApiSportsSoccerBackfillPlanDebug")
+        .WithSummary("Read-only API-Sports Soccer result/stat backfill plan across supported competitions.");
+
+        endpoints.MapPost("/api/debug/soccer/results/api-sports/discover-fixtures", async (
+            ApiSportsSoccerDiscoverFixturesRequest request,
+            IOptions<ApiSportsOptions> options,
+            IApiSportsFootballClient client,
+            IApiSportsSoccerSeasonResolver seasonResolver,
+            ApplicationDbContext dbContext,
+            CancellationToken cancellationToken) =>
+        {
+            var range = NormalizeApiSportsHistoricalCoverageDateRange(request.FromDate, request.ToDate);
+            var selectedCompetitions = ResolveApiSportsSoccerCompetitionSelection(
+                options.Value,
+                request.CompetitionKeys,
+                request.IncludeAllSupportedCompetitions == true,
+                requireExplicitSelection: true);
+            if (selectedCompetitions.Count == 0)
+            {
+                return Results.BadRequest(new
+                {
+                    generatedAtUtc = DateTimeOffset.UtcNow,
+                    callsExternalApis = false,
+                    readOnly = true,
+                    writesRows = false,
+                    error = "Provide competitionKeys or includeAllSupportedCompetitions=true.",
+                    requestedCompetitionKeys = request.CompetitionKeys ?? [],
+                    availableCompetitionKeys = GetSupportedApiSportsSoccerCompetitions(options.Value, enabledOnly: true)
+                        .Select(row => row.Key)
+                        .Order(StringComparer.OrdinalIgnoreCase)
+                        .ToArray()
+                });
+            }
+
+            var requestDiagnostics = new
+            {
+                range.FromDate,
+                range.ToDate,
+                asOfDate = request.AsOfDate,
+                forceLive = request.ForceLive == true,
+                includeAllSupportedCompetitions = request.IncludeAllSupportedCompetitions == true,
+                competitionKeys = request.CompetitionKeys ?? [],
+                summaryOnly = request.SummaryOnly != false
+            };
+            var block = BuildApiSportsBlockedResponse(
+                "soccer-api-sports-discover-fixtures",
+                request.ForceLive,
+                options.Value,
+                requestDiagnostics,
+                requireConfiguredLeague: false,
+                requireConfiguredSeason: false);
+            if (block is not null)
+            {
+                return block;
+            }
+
+            var explicitSelection = request.CompetitionKeys?.Any(key => !string.IsNullOrWhiteSpace(key)) == true
+                && request.IncludeAllSupportedCompetitions != true;
+            var includeFixtureDetails = ShouldIncludeApiSportsDetail(request.SummaryOnly, request.IncludeFixtures);
+            var competitionResults = new List<object>();
+            var totalDiscovered = 0;
+            var totalCompleted = 0;
+            var totalAlreadyImported = 0;
+            var totalMissingCompleted = 0;
+            var totalApiCalls = 0;
+            var totalSeasonMetadataApiCalls = 0;
+
+            foreach (var competition in selectedCompetitions)
+            {
+                var resolution = await seasonResolver.ResolveDateRangeAsync(
+                    competition,
+                    range.FromDate,
+                    range.ToDate,
+                    allowLiveMetadataRefresh: request.ForceLive == true,
+                    nowUtc: DateTimeOffset.UtcNow,
+                    cancellationToken);
+                totalSeasonMetadataApiCalls += resolution.MetadataApiCallsUsed;
+                if (resolution.SeasonWindows.Count == 0)
+                {
+                    competitionResults.Add(BuildApiSportsSeasonResolutionSkippedResult(competition, resolution, range.FromDate, range.ToDate));
+                    continue;
+                }
+
+                foreach (var window in resolution.SeasonWindows)
+                {
+                    var resolvedCompetition = window.Competition;
+                    var discovered = await DiscoverApiSportsFixturesAsync(
+                        client,
+                        window.FromDate,
+                        window.ToDate,
+                        resolvedCompetition.LeagueId,
+                        resolvedCompetition.Season,
+                        cancellationToken);
+                    var completed = discovered.Where(row => IsApiSportsFixtureCompleted(row.StatusShort, row.StatusLong)).ToArray();
+                    var completedFixtureIds = completed.Select(row => row.FixtureId).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+                    var alreadyImported = await LoadSuccessfullyImportedApiSportsFixtureIdsAsync(
+                        dbContext,
+                        resolvedCompetition.Competition,
+                        resolvedCompetition.LeagueCode,
+                        window.FromDate,
+                        window.ToDate,
+                        completedFixtureIds,
+                        cancellationToken);
+                    var missingCompleted = completed
+                        .Where(row => !alreadyImported.Contains(row.FixtureId))
+                        .OrderBy(row => row.EventDate)
+                        .ThenBy(row => row.KickoffUtc)
+                        .ThenBy(row => row.FixtureId, StringComparer.OrdinalIgnoreCase)
+                        .ToArray();
+                    var apiCallsUsed = CountDateRangeDays(window.FromDate, window.ToDate);
+                    totalDiscovered += discovered.Count;
+                    totalCompleted += completed.Length;
+                    totalAlreadyImported += alreadyImported.Count;
+                    totalMissingCompleted += missingCompleted.Length;
+                    totalApiCalls += apiCallsUsed;
+
+                    var competitionResult = new Dictionary<string, object?>
+                    {
+                        ["key"] = resolvedCompetition.Key,
+                        ["competition"] = resolvedCompetition.Competition,
+                        ["displayName"] = resolvedCompetition.DisplayName,
+                        ["leagueId"] = resolvedCompetition.LeagueId,
+                        ["season"] = resolvedCompetition.Season,
+                        ["configuredWindow"] = BuildApiSportsCompetitionWindow(resolvedCompetition),
+                        ["requestedWindow"] = new { range.FromDate, range.ToDate },
+                        ["effectiveWindow"] = new { window.FromDate, window.ToDate },
+                        ["resolvedSeasonWindow"] = BuildApiSportsResolvedSeasonWindow(window),
+                        ["seasonResolution"] = BuildApiSportsSeasonResolutionMetadata(resolution),
+                        ["discoveredFixtureCount"] = discovered.Count,
+                        ["completedFixtureCount"] = completed.Length,
+                        ["alreadyImportedFixtureCount"] = alreadyImported.Count,
+                        ["missingCompletedFixtureCount"] = missingCompleted.Length,
+                        ["selectedCompletedFixtureCount"] = missingCompleted.Length,
+                        ["apiCallsUsed"] = apiCallsUsed,
+                        ["fixtureDiscoveryApiCallsUsed"] = apiCallsUsed,
+                        ["seasonMetadataApiCallsUsed"] = resolution.MetadataApiCallsUsed
+                    };
+                    if (includeFixtureDetails)
+                    {
+                        competitionResult["completedFixtures"] = completed;
+                        competitionResult["missingCompletedFixtures"] = missingCompleted;
+                    }
+
+                    competitionResults.Add(competitionResult);
+                }
+            }
+
+            return Results.Ok(new
+            {
+                generatedAtUtc = DateTimeOffset.UtcNow,
+                callsExternalApis = true,
+                readOnly = true,
+                writesRows = false,
+                provider = "API-Sports",
+                product = "API-Sports Football",
+                scope = new
+                {
+                    sport = "SOCCER",
+                    range.FromDate,
+                    range.ToDate
+                },
+                request = requestDiagnostics,
+                competitionCount = selectedCompetitions.Count,
+                discoveredFixtureCount = totalDiscovered,
+                completedFixtureCount = totalCompleted,
+                alreadyImportedFixtureCount = totalAlreadyImported,
+                missingCompletedFixtureCount = totalMissingCompleted,
+                selectedCompletedFixtureCount = totalMissingCompleted,
+                apiCallsUsed = totalApiCalls,
+                seasonMetadataApiCallsUsed = totalSeasonMetadataApiCalls,
+                competitions = competitionResults
+            });
+        })
+        .WithName("ApiSportsSoccerDiscoverFixturesDebug")
+        .WithSummary("Force-live gated read-only API-Sports Soccer fixture discovery across supported competitions.");
+
+        endpoints.MapPost("/api/debug/soccer/results/api-sports/backfill-completed", async (
+            ApiSportsSoccerBackfillCompletedRequest request,
+            IOptions<ApiSportsOptions> options,
+            IApiSportsFootballClient client,
+            IApiSportsSoccerSeasonResolver seasonResolver,
+            ApplicationDbContext dbContext,
+            CancellationToken cancellationToken) =>
+        {
+            var dryRun = request.DryRun != false;
+            var range = request.AsOfDate.HasValue && !request.FromDate.HasValue && !request.ToDate.HasValue
+                ? new ApiSportsWorldCupDateRange(request.AsOfDate.Value, request.AsOfDate.Value)
+                : NormalizeApiSportsHistoricalCoverageDateRange(request.FromDate, request.ToDate);
+            var explicitCompetitionSelection = request.CompetitionKeys?.Any(key => !string.IsNullOrWhiteSpace(key)) == true
+                && request.IncludeAllSupportedCompetitions != true;
+            var includeCoverage = ShouldIncludeApiSportsDetail(request.SummaryOnly, request.IncludeCoverageByDate);
+            var includeFixtureDetails = ShouldIncludeApiSportsDetail(request.SummaryOnly, request.IncludeFixtures);
+            var includeUnsupportedSkipped = ShouldIncludeApiSportsDetail(request.SummaryOnly, request.IncludeUnsupportedSkipped);
+            var includeMappingDiagnostics = ShouldIncludeApiSportsDetail(request.SummaryOnly, request.IncludeMappingDiagnostics);
+            var maxRangeDays = Math.Clamp(request.MaxDays ?? 31, 1, 366);
+            var rangeDays = CountDateRangeDays(range.FromDate, range.ToDate);
+            if (rangeDays > maxRangeDays)
+            {
+                return Results.Conflict(new
+                {
+                    generatedAtUtc = DateTimeOffset.UtcNow,
+                    callsExternalApis = false,
+                    readOnly = true,
+                    writesRows = false,
+                    blocked = true,
+                    blockReason = "DateRangeTooLarge",
+                    maxRangeDays,
+                    requestedRangeDays = rangeDays,
+                    message = $"Soccer API-Sports backfill is limited to {maxRangeDays} day(s) per request."
+                });
+            }
+
+            var selectedCompetitions = ResolveApiSportsSoccerCompetitionSelection(
+                options.Value,
+                request.CompetitionKeys,
+                request.IncludeAllSupportedCompetitions == true,
+                requireExplicitSelection: true);
+            if (selectedCompetitions.Count == 0)
+            {
+                return Results.BadRequest(new
+                {
+                    generatedAtUtc = DateTimeOffset.UtcNow,
+                    callsExternalApis = false,
+                    readOnly = true,
+                    writesRows = false,
+                    error = "Provide competitionKeys or includeAllSupportedCompetitions=true.",
+                    requestedCompetitionKeys = request.CompetitionKeys ?? [],
+                    availableCompetitionKeys = GetSupportedApiSportsSoccerCompetitions(options.Value, enabledOnly: true)
+                        .Select(row => row.Key)
+                        .Order(StringComparer.OrdinalIgnoreCase)
+                        .ToArray()
+                });
+            }
+
+            var requestDiagnostics = new
+            {
+                range.FromDate,
+                range.ToDate,
+                asOfDate = request.AsOfDate,
+                dryRun,
+                forceLive = request.ForceLive == true,
+                includeAllSupportedCompetitions = request.IncludeAllSupportedCompetitions == true,
+                competitionKeys = request.CompetitionKeys ?? [],
+                summaryOnly = request.SummaryOnly != false,
+                maxRangeDays,
+                maxFixturesPerCompetition = request.MaxFixturesPerCompetition,
+                maxFixturesTotal = request.MaxFixturesTotal
+            };
+            var block = BuildApiSportsBlockedResponse(
+                "soccer-api-sports-backfill-completed",
+                request.ForceLive,
+                options.Value,
+                requestDiagnostics,
+                requireConfiguredLeague: false,
+                requireConfiguredSeason: false);
+            if (block is not null)
+            {
+                return block;
+            }
+
+            var maxPerCompetition = Math.Max(1, request.MaxFixturesPerCompetition ?? 100);
+            var remainingTotal = request.MaxFixturesTotal.GetValueOrDefault() > 0
+                ? request.MaxFixturesTotal!.Value
+                : int.MaxValue;
+            var competitionResults = new List<object>();
+            var rawResults = new List<ApiSportsWorldCupBackfillCompletedResult>();
+            var totalSeasonMetadataApiCalls = 0;
+
+            foreach (var competition in selectedCompetitions)
+            {
+                var resolution = await seasonResolver.ResolveDateRangeAsync(
+                    competition,
+                    range.FromDate,
+                    range.ToDate,
+                    allowLiveMetadataRefresh: request.ForceLive == true,
+                    nowUtc: DateTimeOffset.UtcNow,
+                    cancellationToken);
+                totalSeasonMetadataApiCalls += resolution.MetadataApiCallsUsed;
+                if (resolution.SeasonWindows.Count == 0)
+                {
+                    competitionResults.Add(BuildApiSportsSeasonResolutionSkippedResult(competition, resolution, range.FromDate, range.ToDate));
+                    continue;
+                }
+
+                foreach (var window in resolution.SeasonWindows)
+                {
+                    var resolvedCompetition = window.Competition;
+                    var maxForCompetition = Math.Min(maxPerCompetition, remainingTotal);
+                    if (maxForCompetition <= 0)
+                    {
+                        competitionResults.Add(new
+                        {
+                            resolvedCompetition.Key,
+                            resolvedCompetition.Competition,
+                            resolvedCompetition.DisplayName,
+                            resolvedCompetition.LeagueId,
+                            resolvedCompetition.Season,
+                            skipped = true,
+                            skipReason = "MaxFixturesTotalLimit"
+                        });
+                        continue;
+                    }
+
+                    var result = await RunApiSportsSoccerBackfillCompletedAsync(
+                        client,
+                        dbContext,
+                        resolvedCompetition,
+                        window.FromDate,
+                        window.ToDate,
+                        dryRun,
+                        maxForCompetition,
+                        cancellationToken);
+                    rawResults.Add(result);
+                    remainingTotal -= result.SelectedCompletedFixtureCount;
+                    if (!dryRun)
+                    {
+                        await SoccerResultImportWorker.PersistFixtureOutcomesAsync(
+                            dbContext,
+                            resolvedCompetition.Competition,
+                            result.ScheduledOutcomes,
+                            cancellationToken);
+                    }
+
+                    var imports = BuildApiSportsBackfillImportSummaries(
+                        result.Imports,
+                        includeUnsupportedSkipped,
+                        includeMappingDiagnostics);
+                    var competitionResult = new Dictionary<string, object?>
+                    {
+                        ["key"] = resolvedCompetition.Key,
+                        ["competition"] = resolvedCompetition.Competition,
+                        ["displayName"] = resolvedCompetition.DisplayName,
+                        ["leagueId"] = resolvedCompetition.LeagueId,
+                        ["season"] = resolvedCompetition.Season,
+                        ["enabled"] = resolvedCompetition.Enabled,
+                        ["country"] = resolvedCompetition.Country,
+                        ["type"] = resolvedCompetition.Type,
+                        ["leagueCode"] = resolvedCompetition.LeagueCode,
+                        ["importSource"] = resolvedCompetition.ImportSource,
+                        ["configuredWindow"] = BuildApiSportsCompetitionWindow(resolvedCompetition),
+                        ["requestedWindow"] = new { range.FromDate, range.ToDate },
+                        ["effectiveWindow"] = new { window.FromDate, window.ToDate },
+                        ["resolvedSeasonWindow"] = BuildApiSportsResolvedSeasonWindow(window),
+                        ["seasonResolution"] = BuildApiSportsSeasonResolutionMetadata(resolution),
+                        ["discoveredFixtureCount"] = result.DiscoveredFixtureCount,
+                        ["completedFixtureCount"] = result.CompletedFixtureCount,
+                        ["skippedFixtureCount"] = result.SkippedFixtureCount,
+                        ["deferredFixtureCount"] = result.DeferredFixtureCount,
+                        ["alreadyImportedFixtureCount"] = result.AlreadyImportedFixtureCount,
+                        ["selectedCompletedFixtureCount"] = result.SelectedCompletedFixtureCount,
+                        ["previewedFixtureCount"] = result.Imports.Count,
+                        ["importedFixtureCount"] = dryRun ? 0 : result.ImportedFixtureCount,
+                        ["failedFixtureCount"] = result.FailedFixtureCount,
+                        ["resultRowsPreviewed"] = result.ResultRowsPreviewed,
+                        ["resultRowsWritten"] = dryRun ? 0 : result.ResultRowsWritten,
+                        ["resultRowsInserted"] = dryRun ? 0 : result.ResultRowsInserted,
+                        ["resultRowsUpdated"] = dryRun ? 0 : result.ResultRowsUpdated,
+                        ["apiCallsUsed"] = result.ApiCallsUsed,
+                        ["fixtureAndStatsApiCallsUsed"] = result.ApiCallsUsed,
+                        ["seasonMetadataApiCallsUsed"] = resolution.MetadataApiCallsUsed
+                    };
+                    if (includeCoverage)
+                    {
+                        competitionResult["coverageByDate"] = result.CoverageByDate;
+                    }
+
+                    if (includeFixtureDetails)
+                    {
+                        competitionResult["completedFixtures"] = result.CompletedFixtures;
+                        competitionResult["skippedFixtures"] = result.SkippedFixtures;
+                        competitionResult["deferredFixtures"] = result.DeferredFixtures;
+                        competitionResult["alreadyImportedFixtures"] = result.AlreadyImportedFixtures;
+                        competitionResult["imports"] = imports;
+                        competitionResult["failures"] = result.Failures;
+                    }
+
+                    competitionResults.Add(competitionResult);
+                }
+            }
+
+            return Results.Ok(new
+            {
+                generatedAtUtc = DateTimeOffset.UtcNow,
+                callsExternalApis = true,
+                externalApiCalled = true,
+                readOnly = dryRun,
+                writesRows = !dryRun,
+                provider = "API-Sports",
+                product = "API-Sports Football",
+                scope = new
+                {
+                    sport = "SOCCER",
+                    range.FromDate,
+                    range.ToDate
+                },
+                request = requestDiagnostics,
+                dryRunDefault = true,
+                competitionCount = selectedCompetitions.Count,
+                discoveredFixtureCount = rawResults.Sum(row => row.DiscoveredFixtureCount),
+                completedFixtureCount = rawResults.Sum(row => row.CompletedFixtureCount),
+                skippedFixtureCount = rawResults.Sum(row => row.SkippedFixtureCount),
+                deferredFixtureCount = rawResults.Sum(row => row.DeferredFixtureCount),
+                alreadyImportedFixtureCount = rawResults.Sum(row => row.AlreadyImportedFixtureCount),
+                selectedCompletedFixtureCount = rawResults.Sum(row => row.SelectedCompletedFixtureCount),
+                previewedFixtureCount = rawResults.Sum(row => row.Imports.Count),
+                importedFixtureCount = dryRun ? 0 : rawResults.Sum(row => row.ImportedFixtureCount),
+                failedFixtureCount = rawResults.Sum(row => row.FailedFixtureCount),
+                resultRowsPreviewed = rawResults.Sum(row => row.ResultRowsPreviewed),
+                resultRowsWritten = dryRun ? 0 : rawResults.Sum(row => row.ResultRowsWritten),
+                resultRowsInserted = dryRun ? 0 : rawResults.Sum(row => row.ResultRowsInserted),
+                resultRowsUpdated = dryRun ? 0 : rawResults.Sum(row => row.ResultRowsUpdated),
+                apiCallsUsed = rawResults.Sum(row => row.ApiCallsUsed),
+                seasonMetadataApiCallsUsed = totalSeasonMetadataApiCalls,
+                competitions = competitionResults
+            });
+        })
+        .WithName("ApiSportsSoccerBackfillCompletedDebug")
+        .WithSummary("Force-live gated dry-run-first API-Sports Soccer completed fixture backfill across supported competitions.");
+
         endpoints.MapGet("/api/debug/soccer/results/api-sports/world-cup/import-status", async (
             DateOnly? fromDate,
             DateOnly? toDate,
             bool? forceLive,
+            bool? summaryOnly,
+            bool? includeCoverageByDate,
+            bool? includeFixtures,
+            bool? includeRowsByFixture,
             IOptions<ApiSportsOptions> options,
             IApiSportsFootballClient client,
             ApplicationDbContext dbContext,
             CancellationToken cancellationToken) =>
         {
             var range = NormalizeApiSportsWorldCupDateRange(fromDate, toDate);
+            var includeCoverage = ShouldIncludeApiSportsDetail(summaryOnly, includeCoverageByDate);
+            var includeFixtureDetails = ShouldIncludeApiSportsDetail(summaryOnly, includeFixtures);
+            var includeRows = ShouldIncludeApiSportsDetail(summaryOnly, includeRowsByFixture);
             var persisted = await LoadApiSportsWorldCupPersistedImportStatusAsync(dbContext, range.FromDate, range.ToDate, cancellationToken);
             IReadOnlyList<ApiSportsFixtureDiscoveryRow> discovered = [];
             var warnings = new List<string>();
@@ -3597,14 +4660,15 @@ public static class ResultsDebugEndpoints
                 forceLive == true,
                 forceLive == true ? CountDateRangeDays(range.FromDate, range.ToDate) : null);
 
-            return Results.Ok(new
+            var response = new Dictionary<string, object?>
             {
-                generatedAtUtc = DateTimeOffset.UtcNow,
-                callsExternalApis = forceLive == true,
-                readOnly = true,
-                provider = "API-Sports",
-                product = "API-Sports Football",
-                scope = new
+                ["generatedAtUtc"] = DateTimeOffset.UtcNow,
+                ["callsExternalApis"] = forceLive == true,
+                ["readOnly"] = true,
+                ["writesRows"] = false,
+                ["provider"] = "API-Sports",
+                ["product"] = "API-Sports Football",
+                ["scope"] = new
                 {
                     sport = "SOCCER",
                     competition = "World Cup",
@@ -3613,28 +4677,41 @@ public static class ResultsDebugEndpoints
                     range.FromDate,
                     range.ToDate
                 },
-                configured = new
+                ["configured"] = new
                 {
                     leagueId = options.Value.Football.WorldCupLeagueId,
                     season = options.Value.Football.Season
                 },
-                discoveryAvailable = forceLive == true,
-                apiCallsUsed = forceLive == true ? CountDateRangeDays(range.FromDate, range.ToDate) : 0,
-                discoveredFixtureCount = forceLive == true ? discovered.Count : (int?)null,
-                completedFixtureCount = forceLive == true ? completed.Length : (int?)null,
-                importedFixtureCount = persisted.RowCountsByFixture.Count,
-                missingCompletedFixtureCount = forceLive == true ? missingCompleted.Length : (int?)null,
-                completedFixturesDiscovered = completed,
-                coverageByDate,
-                rowsByFixture = persisted.RowCountsByFixture,
-                importedFixtures = persisted.RowCountsByFixture,
-                missingCompletedFixtures = missingCompleted,
-                persisted.TotalRows,
-                persisted.LatestImportedFixtureId,
-                latestImportedEventDate = persisted.LatestImportedDate,
-                persisted.LatestImportedAtUtc,
-                warnings
-            });
+                ["discoveryAvailable"] = forceLive == true,
+                ["apiCallsUsed"] = forceLive == true ? CountDateRangeDays(range.FromDate, range.ToDate) : 0,
+                ["discoveredFixtureCount"] = forceLive == true ? discovered.Count : (int?)null,
+                ["completedFixtureCount"] = forceLive == true ? completed.Length : (int?)null,
+                ["importedFixtureCount"] = persisted.RowCountsByFixture.Count,
+                ["missingCompletedFixtureCount"] = forceLive == true ? missingCompleted.Length : (int?)null,
+                ["totalRows"] = persisted.TotalRows,
+                ["latestImportedFixtureId"] = persisted.LatestImportedFixtureId,
+                ["latestImportedEventDate"] = persisted.LatestImportedDate,
+                ["latestImportedAtUtc"] = persisted.LatestImportedAtUtc,
+                ["warnings"] = warnings
+            };
+            if (includeFixtureDetails)
+            {
+                response["completedFixturesDiscovered"] = completed;
+                response["missingCompletedFixtures"] = missingCompleted;
+            }
+
+            if (includeCoverage)
+            {
+                response["coverageByDate"] = coverageByDate;
+            }
+
+            if (includeRows)
+            {
+                response["rowsByFixture"] = persisted.RowCountsByFixture;
+                response["importedFixtures"] = persisted.RowCountsByFixture;
+            }
+
+            return Results.Ok(response);
         })
         .WithName("ApiSportsSoccerWorldCupImportStatusDebug")
         .WithSummary("Read-only World Cup 2026 API-Sports Soccer import coverage diagnostics.");
@@ -3642,6 +4719,9 @@ public static class ResultsDebugEndpoints
         endpoints.MapGet("/api/debug/soccer/results/api-sports/world-cup/scheduled-import-status", async (
             DateOnly? fromDate,
             DateOnly? toDate,
+            bool? summaryOnly,
+            bool? includeFixtures,
+            bool? includeRowsByFixture,
             IOptions<ApiSportsOptions> options,
             IOptions<SoccerResultImportWorkerOptions> workerOptionsAccessor,
             ApplicationDbContext dbContext,
@@ -3649,6 +4729,8 @@ public static class ResultsDebugEndpoints
         {
             var generatedAtUtc = DateTimeOffset.UtcNow;
             var workerOptions = workerOptionsAccessor.Value;
+            var includeFixtureDetails = ShouldIncludeApiSportsDetail(summaryOnly, includeFixtures);
+            var includeRows = ShouldIncludeApiSportsDetail(summaryOnly, includeRowsByFixture);
             var range = NormalizeApiSportsWorldCupDateRange(fromDate, toDate);
             var persisted = await LoadApiSportsWorldCupPersistedImportStatusAsync(dbContext, range.FromDate, range.ToDate, cancellationToken);
             var latestMarketRefresh = await LoadLatestTheOddsSoccerWorldCupRefreshRunAsync(dbContext, range, cancellationToken);
@@ -3832,7 +4914,7 @@ public static class ResultsDebugEndpoints
                             oldestPendingCompletedFixture.ResultRowsWritten,
                             oldestPendingCompletedFixture.LastErrorMessage
                         },
-                    pendingCompletedFixtures = pendingCompletedFixtureSamples,
+                    pendingCompletedFixtures = includeFixtureDetails ? pendingCompletedFixtureSamples : pendingCompletedFixtureSamples.Take(0).ToArray(),
                     providerApiCallsUsed = importState?.LastApiCallsUsed ?? 0,
                     latestErrorSummary = FirstNonBlank(importState?.LastErrorMessage, apiSportsConfigError),
                     reason = BuildSoccerResultWorkerStatusReason(scheduledStatus, apiSportsConfigError),
@@ -3849,7 +4931,7 @@ public static class ResultsDebugEndpoints
                     persisted.LatestImportedFixtureId,
                     latestImportedEventDate = persisted.LatestImportedDate,
                     persisted.LatestImportedAtUtc,
-                    rowsByFixture = persisted.RowCountsByFixture.Take(50).ToArray()
+                    rowsByFixture = includeRows ? persisted.RowCountsByFixture.Take(50).ToArray() : persisted.RowCountsByFixture.Take(0).ToArray()
                 },
                 providerContextCoverage = new
                 {
@@ -5656,12 +6738,17 @@ public static class ResultsDebugEndpoints
         {
             var range = NormalizeApiSportsWorldCupDateRange(request.FromDate, request.ToDate);
             var dryRun = request.DryRun != false;
+            var includeCoverage = ShouldIncludeApiSportsDetail(request.SummaryOnly, request.IncludeCoverageByDate);
+            var includeFixtureDetails = ShouldIncludeApiSportsDetail(request.SummaryOnly, request.IncludeFixtures);
+            var includeUnsupportedSkipped = ShouldIncludeApiSportsDetail(request.SummaryOnly, request.IncludeUnsupportedSkipped);
+            var includeMappingDiagnostics = ShouldIncludeApiSportsDetail(request.SummaryOnly, request.IncludeMappingDiagnostics);
             var requestDiagnostics = new
             {
                 range.FromDate,
                 range.ToDate,
                 dryRun,
                 forceLive = request.ForceLive == true,
+                summaryOnly = request.SummaryOnly != false,
                 leagueId = ApiSportsWorldCupLeagueId,
                 season = ApiSportsWorldCupSeason
             };
@@ -5686,15 +6773,16 @@ public static class ResultsDebugEndpoints
                 maxCompletedFixtures: null,
                 cancellationToken);
 
-            return Results.Ok(new
+            var response = new Dictionary<string, object?>
             {
-                generatedAtUtc = importResult.GeneratedAtUtc,
-                callsExternalApis = true,
-                externalApiCalled = true,
-                readOnly = dryRun,
-                provider = "API-Sports",
-                product = "API-Sports Football",
-                scope = new
+                ["generatedAtUtc"] = importResult.GeneratedAtUtc,
+                ["callsExternalApis"] = true,
+                ["externalApiCalled"] = true,
+                ["readOnly"] = dryRun,
+                ["writesRows"] = !dryRun,
+                ["provider"] = "API-Sports",
+                ["product"] = "API-Sports Football",
+                ["scope"] = new
                 {
                     sport = "SOCCER",
                     competition = "World Cup",
@@ -5703,28 +6791,41 @@ public static class ResultsDebugEndpoints
                     range.FromDate,
                     range.ToDate
                 },
-                request = requestDiagnostics,
-                importResult.DiscoveredFixtureCount,
-                importResult.CompletedFixtureCount,
-                importResult.SkippedFixtureCount,
-                importResult.DeferredFixtureCount,
-                importResult.AlreadyImportedFixtureCount,
-                importResult.SelectedCompletedFixtureCount,
-                importResult.ImportedFixtureCount,
-                importResult.FailedFixtureCount,
-                importResult.ResultRowsPreviewed,
-                importResult.ResultRowsWritten,
-                importResult.ResultRowsInserted,
-                importResult.ResultRowsUpdated,
-                importResult.ApiCallsUsed,
-                coverageByDate = importResult.CoverageByDate,
-                completedFixtures = importResult.CompletedFixtures,
-                skippedFixtures = importResult.SkippedFixtures,
-                deferredFixtures = importResult.DeferredFixtures,
-                alreadyImportedFixtures = importResult.AlreadyImportedFixtures,
-                imports = importResult.Imports,
-                failures = importResult.Failures
-            });
+                ["request"] = requestDiagnostics,
+                ["discoveredFixtureCount"] = importResult.DiscoveredFixtureCount,
+                ["completedFixtureCount"] = importResult.CompletedFixtureCount,
+                ["skippedFixtureCount"] = importResult.SkippedFixtureCount,
+                ["deferredFixtureCount"] = importResult.DeferredFixtureCount,
+                ["alreadyImportedFixtureCount"] = importResult.AlreadyImportedFixtureCount,
+                ["selectedCompletedFixtureCount"] = importResult.SelectedCompletedFixtureCount,
+                ["previewedFixtureCount"] = importResult.Imports.Count,
+                ["importedFixtureCount"] = dryRun ? 0 : importResult.ImportedFixtureCount,
+                ["failedFixtureCount"] = importResult.FailedFixtureCount,
+                ["resultRowsPreviewed"] = importResult.ResultRowsPreviewed,
+                ["resultRowsWritten"] = dryRun ? 0 : importResult.ResultRowsWritten,
+                ["resultRowsInserted"] = dryRun ? 0 : importResult.ResultRowsInserted,
+                ["resultRowsUpdated"] = dryRun ? 0 : importResult.ResultRowsUpdated,
+                ["apiCallsUsed"] = importResult.ApiCallsUsed
+            };
+            if (includeCoverage)
+            {
+                response["coverageByDate"] = importResult.CoverageByDate;
+            }
+
+            if (includeFixtureDetails)
+            {
+                response["completedFixtures"] = importResult.CompletedFixtures;
+                response["skippedFixtures"] = importResult.SkippedFixtures;
+                response["deferredFixtures"] = importResult.DeferredFixtures;
+                response["alreadyImportedFixtures"] = importResult.AlreadyImportedFixtures;
+                response["imports"] = BuildApiSportsBackfillImportSummaries(
+                    importResult.Imports,
+                    includeUnsupportedSkipped,
+                    includeMappingDiagnostics);
+                response["failures"] = importResult.Failures;
+            }
+
+            return Results.Ok(response);
         })
         .WithName("ApiSportsSoccerWorldCupBackfillCompletedDebug")
         .WithSummary("Force-live gated debug backfill of completed World Cup 2026 API-Sports fixtures.");
@@ -6280,7 +7381,34 @@ public static class ResultsDebugEndpoints
         int? maxCompletedFixtures,
         CancellationToken cancellationToken)
     {
-        var discovered = await DiscoverApiSportsWorldCupFixturesAsync(client, fromDate, toDate, cancellationToken);
+        return await RunApiSportsSoccerBackfillCompletedAsync(
+            client,
+            dbContext,
+            GetApiSportsWorldCupCompetitionDescriptor(),
+            fromDate,
+            toDate,
+            dryRun,
+            maxCompletedFixtures,
+            cancellationToken);
+    }
+
+    internal static async Task<ApiSportsWorldCupBackfillCompletedResult> RunApiSportsSoccerBackfillCompletedAsync(
+        IApiSportsFootballClient client,
+        ApplicationDbContext dbContext,
+        ApiSportsSoccerCompetitionDescriptor competition,
+        DateOnly fromDate,
+        DateOnly toDate,
+        bool dryRun,
+        int? maxCompletedFixtures,
+        CancellationToken cancellationToken)
+    {
+        var discovered = await DiscoverApiSportsFixturesAsync(
+            client,
+            fromDate,
+            toDate,
+            competition.LeagueId,
+            competition.Season,
+            cancellationToken);
         var completed = discovered.Where(row => IsApiSportsFixtureCompleted(row.StatusShort, row.StatusLong)).ToArray();
         var completedFixtureIds = completed
             .Select(row => row.FixtureId)
@@ -6289,6 +7417,8 @@ public static class ResultsDebugEndpoints
             .ToArray();
         var successfullyImportedFixtureIds = await LoadSuccessfullyImportedApiSportsFixtureIdsAsync(
             dbContext,
+            competition.Competition,
+            competition.LeagueCode,
             fromDate,
             toDate,
             completedFixtureIds,
@@ -6369,7 +7499,8 @@ public static class ResultsDebugEndpoints
                 var import = await ImportApiSportsSoccerFixtureAsync(
                     client,
                     dbContext,
-                    fixture.FixtureId,
+                    competition,
+                    fixture,
                     dryRun,
                     cancellationToken);
                 totalPreviewed += import.ResultRowsPreviewed;
@@ -6460,6 +7591,7 @@ public static class ResultsDebugEndpoints
             discovered,
             skipped,
             deferredCompleted,
+            alreadyImported,
             results,
             failures);
 
@@ -6489,6 +7621,57 @@ public static class ResultsDebugEndpoints
                 .OrderBy(row => row.EventDate)
                 .ThenBy(row => row.FixtureId, StringComparer.OrdinalIgnoreCase)
                 .ToArray());
+    }
+
+    private static async Task<ApiSportsSoccerFixtureImportResult> ImportApiSportsSoccerFixtureAsync(
+        IApiSportsFootballClient client,
+        ApplicationDbContext dbContext,
+        ApiSportsSoccerCompetitionDescriptor competition,
+        ApiSportsFixtureDiscoveryRow fixture,
+        bool dryRun,
+        CancellationToken cancellationToken)
+    {
+        var eventDate = fixture.EventDate ?? DateOnly.FromDateTime(fixture.KickoffUtc?.UtcDateTime ?? DateTime.UtcNow);
+        var fixtureSummary = new ApiSportsFixtureSummary(
+            fixture.FixtureId,
+            fixture.KickoffUtc,
+            eventDate,
+            competition.LeagueId,
+            competition.DisplayName,
+            competition.Season,
+            null,
+            fixture.HomeTeamName,
+            null,
+            fixture.AwayTeamName);
+        var statsResponse = await client.GetFixturePlayerStatsAsync(fixture.FixtureId, cancellationToken);
+        var playerStats = ExtractApiSportsPlayerStats(statsResponse.Payload.RootElement);
+        var mappings = competition.IsWorldCup
+            ? await LoadApiSportsSoccerResultMappingsAsync(dbContext, cancellationToken)
+            : BuildApiSportsHistoricalResultMappingSet();
+        var preview = BuildApiSportsSoccerResultPreview(fixture.FixtureId, eventDate, playerStats, mappings);
+        var writeSummary = dryRun
+            ? new ApiSportsSoccerImportWriteSummary(0, 0, 0)
+            : await UpsertApiSportsSoccerResultsAsync(
+                dbContext,
+                fixtureSummary,
+                preview.Rows,
+                competition.LeagueCode,
+                competition.ImportSource,
+                cancellationToken);
+        var ruleConfidenceCounts = preview.Rows
+            .GroupBy(row => row.RuleConfidence)
+            .OrderBy(group => group.Key)
+            .ToDictionary(group => group.Key, group => group.Count(), StringComparer.OrdinalIgnoreCase);
+
+        return new ApiSportsSoccerFixtureImportResult(
+            fixtureSummary,
+            statsResponse,
+            statsResponse,
+            playerStats,
+            preview,
+            writeSummary,
+            BuildApiSportsSoccerMappingDiagnostics(preview),
+            ruleConfidenceCounts);
     }
 
     private static async Task<ApiSportsSoccerFixtureImportResult> ImportApiSportsSoccerFixtureAsync(
@@ -6538,6 +7721,8 @@ public static class ResultsDebugEndpoints
 
     private static async Task<HashSet<string>> LoadSuccessfullyImportedApiSportsFixtureIdsAsync(
         ApplicationDbContext dbContext,
+        string competition,
+        string leagueCode,
         DateOnly fromDate,
         DateOnly toDate,
         IReadOnlyCollection<string> candidateFixtureIds,
@@ -6554,6 +7739,8 @@ public static class ResultsDebugEndpoints
             .Where(result => result.ExternalSource == ApiSportsFootballResultSource
                 && result.EventDate >= fromDate
                 && result.EventDate <= toDate
+                && result.League != null
+                && result.League.Code == leagueCode
                 && result.ExternalSourceIdentifier.StartsWith($"{ApiSportsFootballResultSource}:"))
             .Select(result => result.ExternalSourceIdentifier)
             .ToArrayAsync(cancellationToken);
@@ -6570,7 +7757,7 @@ public static class ResultsDebugEndpoints
         var successfulFixtureStates = await dbContext.SoccerResultImportFixtureStates
             .AsNoTracking()
             .Where(state => state.Source == SoccerResultImportWorker.Source
-                && state.Competition == SoccerResultImportWorker.Competition
+                && state.Competition == competition
                 && state.EventDate >= fromDate
                 && state.EventDate <= toDate
                 && state.ImportStatus == "Imported"
@@ -6732,9 +7919,8 @@ public static class ResultsDebugEndpoints
         return (options.Football.HistoricalCompetitions ?? [])
             .Where(row => !string.IsNullOrWhiteSpace(row.Key)
                 && !string.IsNullOrWhiteSpace(row.DisplayName)
-                && row.LeagueId > 0
-                && row.Season > 0)
-            .GroupBy(row => new { Key = row.Key.Trim().ToUpperInvariant(), row.LeagueId, row.Season })
+                && row.LeagueId > 0)
+            .GroupBy(row => new { Key = row.Key.Trim().ToUpperInvariant(), row.LeagueId })
             .Select(group => group.Last())
             .Where(row => !enabledOnly || row.Enabled)
             .Select(row => new ApiSportsFootballHistoricalCompetitionOptions
@@ -6745,22 +7931,322 @@ public static class ResultsDebugEndpoints
                 Season = row.Season,
                 Enabled = row.Enabled,
                 Country = string.IsNullOrWhiteSpace(row.Country) ? null : row.Country.Trim(),
-                Type = string.IsNullOrWhiteSpace(row.Type) ? null : row.Type.Trim()
+                Type = string.IsNullOrWhiteSpace(row.Type) ? null : row.Type.Trim(),
+                ActiveFromDate = row.ActiveFromDate ?? row.BackfillFromDate,
+                ActiveToDate = row.ActiveToDate ?? row.BackfillToDate,
+                BackfillFromDate = row.BackfillFromDate ?? row.ActiveFromDate,
+                BackfillToDate = row.BackfillToDate ?? row.ActiveToDate
             })
             .OrderBy(row => row.DisplayName)
-            .ThenBy(row => row.Season)
+            .ThenBy(row => row.Season ?? 0)
+            .ToArray();
+    }
+
+    internal static ApiSportsSoccerCompetitionDescriptor GetApiSportsWorldCupCompetitionDescriptor()
+    {
+        return new ApiSportsSoccerCompetitionDescriptor(
+            "world-cup-2026",
+            "World Cup",
+            "World Cup",
+            ApiSportsWorldCupLeagueId,
+            ApiSportsWorldCupSeason,
+            true,
+            "International",
+            "Cup",
+            ApiSportsWorldCup2026StartDate,
+            new DateOnly(2026, 7, 19),
+            ApiSportsWorldCup2026StartDate,
+            new DateOnly(2026, 7, 19),
+            "WORLD_CUP",
+            "WorldCupResultImport",
+            true);
+    }
+
+    internal static IReadOnlyList<ApiSportsSoccerCompetitionDescriptor> GetSupportedApiSportsSoccerCompetitions(
+        ApiSportsOptions options,
+        bool enabledOnly)
+    {
+        var worldCup = GetApiSportsWorldCupCompetitionDescriptor();
+        var historical = GetConfiguredApiSportsHistoricalCompetitions(options, enabledOnly)
+            .Where(competition => competition.LeagueId != worldCup.LeagueId || (competition.Season ?? 0) != worldCup.Season)
+            .Select(competition => new ApiSportsSoccerCompetitionDescriptor(
+                competition.Key,
+                competition.DisplayName,
+                competition.DisplayName,
+                competition.LeagueId,
+                competition.Season ?? 0,
+                competition.Enabled,
+                competition.Country,
+                competition.Type,
+                competition.ActiveFromDate,
+                competition.ActiveToDate,
+                competition.BackfillFromDate,
+                competition.BackfillToDate,
+                BuildApiSportsHistoricalLeagueCode(competition.Key, competition.Season ?? 0),
+                "HistoricalResultImport",
+                false))
+            .ToArray();
+
+        return new[] { worldCup }
+            .Concat(historical)
+            .Where(competition => !enabledOnly || competition.Enabled)
+            .GroupBy(competition => competition.Key, StringComparer.OrdinalIgnoreCase)
+            .Select(group => group.First())
+            .ToArray();
+    }
+
+    private static IReadOnlyList<ApiSportsSoccerCompetitionDescriptor> ResolveApiSportsSoccerCompetitionSelection(
+        ApiSportsOptions options,
+        IReadOnlyList<string>? competitionKeys,
+        bool includeAllSupportedCompetitions,
+        bool requireExplicitSelection)
+    {
+        var supported = GetSupportedApiSportsSoccerCompetitions(options, enabledOnly: true);
+        var requestedKeys = (competitionKeys ?? [])
+            .Where(key => !string.IsNullOrWhiteSpace(key))
+            .Select(key => key.Trim())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+        if (includeAllSupportedCompetitions)
+        {
+            return supported;
+        }
+
+        if (requestedKeys.Length == 0)
+        {
+            return requireExplicitSelection ? [] : supported;
+        }
+
+        return supported
+            .Where(competition => requestedKeys.Any(key =>
+                string.Equals(competition.Key, key, StringComparison.OrdinalIgnoreCase)
+                || string.Equals(competition.Competition, key, StringComparison.OrdinalIgnoreCase)
+                || string.Equals(competition.DisplayName, key, StringComparison.OrdinalIgnoreCase)))
+            .ToArray();
+    }
+
+    internal static bool ApiSportsCompetitionActiveWindowOverlaps(
+        ApiSportsSoccerCompetitionDescriptor competition,
+        DateOnly fromDate,
+        DateOnly toDate)
+    {
+        return DateRangeOverlaps(
+            fromDate,
+            toDate,
+            competition.ActiveFromDate,
+            competition.ActiveToDate);
+    }
+
+    private static bool ApiSportsCompetitionBackfillWindowOverlaps(
+        ApiSportsSoccerCompetitionDescriptor competition,
+        DateOnly fromDate,
+        DateOnly toDate)
+    {
+        return DateRangeOverlaps(
+            fromDate,
+            toDate,
+            competition.BackfillFromDate,
+            competition.BackfillToDate);
+    }
+
+    private static ApiSportsWorldCupDateRange ClampToApiSportsCompetitionBackfillWindow(
+        ApiSportsSoccerCompetitionDescriptor competition,
+        DateOnly fromDate,
+        DateOnly toDate)
+    {
+        var effectiveFrom = competition.BackfillFromDate.HasValue && fromDate < competition.BackfillFromDate.Value
+            ? competition.BackfillFromDate.Value
+            : fromDate;
+        var effectiveTo = competition.BackfillToDate.HasValue && toDate > competition.BackfillToDate.Value
+            ? competition.BackfillToDate.Value
+            : toDate;
+        return effectiveFrom > effectiveTo
+            ? new ApiSportsWorldCupDateRange(fromDate, toDate)
+            : new ApiSportsWorldCupDateRange(effectiveFrom, effectiveTo);
+    }
+
+    private static bool DateRangeOverlaps(
+        DateOnly fromDate,
+        DateOnly toDate,
+        DateOnly? windowFromDate,
+        DateOnly? windowToDate)
+    {
+        var start = windowFromDate ?? DateOnly.MinValue;
+        var end = windowToDate ?? DateOnly.MaxValue;
+        return fromDate <= end && toDate >= start;
+    }
+
+    private static object BuildApiSportsCompetitionWindow(ApiSportsSoccerCompetitionDescriptor competition)
+    {
+        return new
+        {
+            activeFromDate = competition.ActiveFromDate,
+            activeToDate = competition.ActiveToDate,
+            backfillFromDate = competition.BackfillFromDate,
+            backfillToDate = competition.BackfillToDate
+        };
+    }
+
+    private static object BuildApiSportsResolvedSeasonWindow(ApiSportsSoccerResolvedSeasonWindow window)
+    {
+        return new
+        {
+            window.FromDate,
+            window.ToDate,
+            providerSeasonStartDate = window.ProviderSeasonStartDate,
+            providerSeasonEndDate = window.ProviderSeasonEndDate,
+            window.ResolutionSource
+        };
+    }
+
+    private static object BuildApiSportsSeasonResolutionMetadata(ApiSportsSoccerSeasonResolutionResult resolution)
+    {
+        return new
+        {
+            resolution.MetadataSource,
+            resolution.MetadataRefreshAttempted,
+            resolution.MetadataRefreshed,
+            resolution.MetadataApiCallsUsed,
+            resolution.MetadataError,
+            resolution.SkippedReason,
+            resolution.SkippedMessage
+        };
+    }
+
+    private static Dictionary<string, object?> BuildApiSportsSeasonResolutionSkippedResult(
+        ApiSportsSoccerCompetitionDescriptor competition,
+        ApiSportsSoccerSeasonResolutionResult resolution,
+        DateOnly requestedFromDate,
+        DateOnly requestedToDate)
+    {
+        return new Dictionary<string, object?>
+        {
+            ["key"] = competition.Key,
+            ["competition"] = competition.Competition,
+            ["displayName"] = competition.DisplayName,
+            ["leagueId"] = competition.LeagueId,
+            ["season"] = competition.Season,
+            ["enabled"] = competition.Enabled,
+            ["country"] = competition.Country,
+            ["type"] = competition.Type,
+            ["leagueCode"] = competition.LeagueCode,
+            ["configuredWindow"] = BuildApiSportsCompetitionWindow(competition),
+            ["requestedWindow"] = new { fromDate = requestedFromDate, toDate = requestedToDate },
+            ["seasonResolution"] = BuildApiSportsSeasonResolutionMetadata(resolution),
+            ["skipped"] = true,
+            ["skippedReason"] = resolution.SkippedReason ?? "SeasonResolutionUnavailable",
+            ["skipReason"] = resolution.SkippedReason ?? "SeasonResolutionUnavailable",
+            ["discoveredFixtureCount"] = 0,
+            ["completedFixtureCount"] = 0,
+            ["alreadyImportedFixtureCount"] = 0,
+            ["missingCompletedFixtureCount"] = 0,
+            ["selectedCompletedFixtureCount"] = 0,
+            ["previewedFixtureCount"] = 0,
+            ["importedFixtureCount"] = 0,
+            ["failedFixtureCount"] = 0,
+            ["resultRowsPreviewed"] = 0,
+            ["resultRowsWritten"] = 0,
+            ["resultRowsInserted"] = 0,
+            ["resultRowsUpdated"] = 0,
+            ["apiCallsUsed"] = 0,
+            ["fixtureDiscoveryApiCallsUsed"] = 0,
+            ["seasonMetadataApiCallsUsed"] = resolution.MetadataApiCallsUsed
+        };
+    }
+
+    private static bool ShouldIncludeApiSportsDetail(bool? summaryOnly, bool? includeFlag)
+    {
+        return includeFlag == true || summaryOnly == false;
+    }
+
+    private static IReadOnlyList<object> BuildApiSportsBackfillImportSummaries(
+        IReadOnlyList<ApiSportsWorldCupFixtureImportOutcome> imports,
+        bool includeUnsupportedSkipped,
+        bool includeMappingDiagnostics)
+    {
+        return imports
+            .Select(import =>
+            {
+                var row = new Dictionary<string, object?>
+                {
+                    ["fixtureId"] = import.FixtureId,
+                    ["eventDate"] = import.EventDate,
+                    ["kickoffUtc"] = import.KickoffUtc,
+                    ["homeTeamName"] = import.HomeTeamName,
+                    ["awayTeamName"] = import.AwayTeamName,
+                    ["statusShort"] = import.StatusShort,
+                    ["statusLong"] = import.StatusLong,
+                    ["resultRowsPreviewed"] = import.ResultRowsPreviewed,
+                    ["resultRowsWritten"] = import.ResultRowsWritten,
+                    ["resultRowsInserted"] = import.ResultRowsInserted,
+                    ["resultRowsUpdated"] = import.ResultRowsUpdated,
+                    ["ruleConfidenceCounts"] = import.RuleConfidenceCounts
+                };
+
+                if (includeUnsupportedSkipped)
+                {
+                    row["unsupportedSkipped"] = import.UnsupportedSkipped;
+                }
+
+                if (includeMappingDiagnostics)
+                {
+                    row["mappingDiagnostics"] = import.MappingDiagnostics;
+                }
+
+                return (object)row;
+            })
             .ToArray();
     }
 
     private static string BuildApiSportsHistoricalLeagueCode(ApiSportsFootballHistoricalCompetitionOptions competition)
+        => BuildApiSportsHistoricalLeagueCode(competition.Key, competition.Season ?? 0);
+
+    private static string BuildApiSportsHistoricalLeagueCode(ApiSportsSoccerCompetitionDescriptor competition)
+        => BuildApiSportsHistoricalLeagueCode(competition.Key, competition.Season);
+
+    private static string BuildApiSportsHistoricalLeagueCode(string key, int season)
     {
-        var key = Regex.Replace(competition.Key.Trim().ToUpperInvariant(), @"[^A-Z0-9]+", "_").Trim('_');
-        return $"API_SPORTS_{key}_{competition.Season}";
+        return $"{BuildApiSportsHistoricalLeagueCodePrefix(key)}{season}";
+    }
+
+    private static string BuildApiSportsHistoricalLeagueCodePrefix(string key)
+    {
+        key = Regex.Replace(key.Trim().ToUpperInvariant(), @"[^A-Z0-9]+", "_").Trim('_');
+        return $"API_SPORTS_{key}_";
+    }
+
+    private static int? TryExtractApiSportsHistoricalSeason(string leagueCode, string leagueCodePrefix)
+    {
+        if (!leagueCode.StartsWith(leagueCodePrefix, StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+
+        var seasonText = leagueCode[leagueCodePrefix.Length..];
+        return int.TryParse(seasonText, NumberStyles.Integer, CultureInfo.InvariantCulture, out var season)
+            ? season
+            : null;
     }
 
     private static ApiSportsFixtureSummary ToHistoricalApiSportsFixtureSummary(
         ApiSportsFixtureDiscoveryRow fixture,
         ApiSportsFootballHistoricalCompetitionOptions competition)
+        => new(
+            fixture.FixtureId,
+            fixture.KickoffUtc,
+            fixture.EventDate,
+            competition.LeagueId,
+            competition.DisplayName,
+            competition.Season ?? 0,
+            null,
+            fixture.HomeTeamName,
+            null,
+            fixture.AwayTeamName);
+
+    private static ApiSportsFixtureSummary ToHistoricalApiSportsFixtureSummary(
+        ApiSportsFixtureDiscoveryRow fixture,
+        ApiSportsSoccerCompetitionDescriptor competition)
     {
         return new ApiSportsFixtureSummary(
             fixture.FixtureId,
@@ -8579,11 +10065,28 @@ public static class ResultsDebugEndpoints
         DateOnly toDate,
         CancellationToken cancellationToken)
     {
+        return await LoadApiSportsSoccerPersistedImportStatusAsync(
+            dbContext,
+            GetApiSportsWorldCupCompetitionDescriptor(),
+            fromDate,
+            toDate,
+            cancellationToken);
+    }
+
+    private static async Task<ApiSportsWorldCupPersistedImportStatus> LoadApiSportsSoccerPersistedImportStatusAsync(
+        ApplicationDbContext dbContext,
+        ApiSportsSoccerCompetitionDescriptor competition,
+        DateOnly fromDate,
+        DateOnly toDate,
+        CancellationToken cancellationToken)
+    {
         var rows = await dbContext.PropResults
             .AsNoTracking()
             .Where(result => result.ExternalSource == ApiSportsFootballResultSource
                 && result.EventDate >= fromDate
                 && result.EventDate <= toDate
+                && result.League != null
+                && result.League.Code == competition.LeagueCode
                 && result.ExternalSourceIdentifier.StartsWith($"{ApiSportsFootballResultSource}:"))
             .Select(result => new
             {
@@ -8667,6 +10170,7 @@ public static class ResultsDebugEndpoints
         IReadOnlyList<ApiSportsFixtureDiscoveryRow> discovered,
         IReadOnlyList<ApiSportsWorldCupSkippedFixture> skipped,
         IReadOnlyList<ApiSportsFixtureDiscoveryRow> deferredCompleted,
+        IReadOnlyList<ApiSportsFixtureDiscoveryRow> alreadyImported,
         IReadOnlyList<ApiSportsWorldCupFixtureImportOutcome> imports,
         IReadOnlyList<ApiSportsWorldCupFixtureImportFailure> failures)
     {
@@ -8679,6 +10183,7 @@ public static class ResultsDebugEndpoints
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
         var successfulImportFixtureIds = imports
             .Select(row => row.FixtureId)
+            .Concat(alreadyImported.Select(row => row.FixtureId))
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
         var failedFixtureIds = failures
             .Select(row => row.FixtureId)
@@ -8698,6 +10203,7 @@ public static class ResultsDebugEndpoints
                     .Where(row => skippedFixtureIds.Contains(row.FixtureId))
                     .ToArray();
                 var importsForDate = imports.Where(row => row.EventDate == date).ToArray();
+                var alreadyImportedForDate = alreadyImported.Where(row => row.EventDate == date).ToArray();
                 var failuresForDate = failures.Where(row => row.EventDate == date).ToArray();
                 var deferredForDate = discoveredForDate
                     .Where(row => deferredFixtureIds.Contains(row.FixtureId))
@@ -8711,7 +10217,7 @@ public static class ResultsDebugEndpoints
                     date,
                     discoveredForDate.Length,
                     completedForDate.Length,
-                    importsForDate.Length,
+                    importsForDate.Length + alreadyImportedForDate.Length,
                     importsForDate.Sum(row => row.ResultRowsWritten),
                     importsForDate.Sum(row => row.ResultRowsPreviewed),
                     skippedForDate.Length + deferredForDate.Length,
@@ -9499,7 +11005,7 @@ public static class ResultsDebugEndpoints
             "running" => "Running",
             "failed" or "partial_failure" => "Failed",
             "not_configured" => "NotConfigured",
-            "succeeded" or "completed_with_pending_fixtures" => "Idle",
+            "succeeded" or "completed_with_pending_fixtures" or "skipped" => "Idle",
             _ => "Idle"
         };
     }
@@ -9507,18 +11013,19 @@ public static class ResultsDebugEndpoints
     private static bool IsSuccessfulSoccerResultWorkerStatus(string? status)
     {
         return string.Equals(status, "succeeded", StringComparison.OrdinalIgnoreCase)
-            || string.Equals(status, "completed_with_pending_fixtures", StringComparison.OrdinalIgnoreCase);
+            || string.Equals(status, "completed_with_pending_fixtures", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(status, "skipped", StringComparison.OrdinalIgnoreCase);
     }
 
     private static string BuildSoccerResultWorkerStatusReason(string status, string? apiSportsConfigError)
     {
         return status switch
         {
-            "Disabled" => "Soccer World Cup API-Sports result/stat import worker is registered but disabled by configuration.",
-            "NotConfigured" => $"Soccer World Cup API-Sports result/stat import worker is registered but cannot run because {apiSportsConfigError}",
-            "Running" => "Soccer World Cup API-Sports result/stat import worker is currently running.",
-            "Failed" => "Soccer World Cup API-Sports result/stat import worker recorded a failed or partially failed run. Inspect latestErrorSummary and fixture states.",
-            _ => "Soccer World Cup API-Sports result/stat import worker is registered and waiting for the next scheduled cycle."
+            "Disabled" => "Soccer API-Sports result/stat import worker is registered but disabled by configuration.",
+            "NotConfigured" => $"Soccer API-Sports result/stat import worker is registered but cannot run because {apiSportsConfigError}",
+            "Running" => "Soccer API-Sports result/stat import worker is currently running.",
+            "Failed" => "Soccer API-Sports result/stat import worker recorded a failed or partially failed run. Inspect latestErrorSummary and fixture states.",
+            _ => "Soccer API-Sports result/stat import worker is registered and waiting for the next scheduled cycle."
         };
     }
 
@@ -14760,12 +16267,50 @@ public static class ResultsDebugEndpoints
         DateOnly? FromDate,
         DateOnly? ToDate,
         bool? DryRun,
-        bool? ForceLive);
+        bool? ForceLive,
+        bool? SummaryOnly,
+        bool? IncludeCoverageByDate,
+        bool? IncludeFixtures,
+        bool? IncludeRowsByFixture,
+        bool? IncludeUnsupportedSkipped,
+        bool? IncludeMappingDiagnostics,
+        bool? IncludePlayerDiagnostics);
+
+    private sealed record ApiSportsSoccerBackfillCompletedRequest(
+        DateOnly? FromDate,
+        DateOnly? ToDate,
+        DateOnly? AsOfDate,
+        string[]? CompetitionKeys,
+        bool? IncludeAllSupportedCompetitions,
+        bool? DryRun,
+        bool? ForceLive,
+        int? MaxFixturesPerCompetition,
+        int? MaxFixturesTotal,
+        int? MaxDays,
+        bool? SummaryOnly,
+        bool? IncludeCoverageByDate,
+        bool? IncludeFixtures,
+        bool? IncludeRowsByFixture,
+        bool? IncludeUnsupportedSkipped,
+        bool? IncludeMappingDiagnostics,
+        bool? IncludePlayerDiagnostics);
+
+    private sealed record ApiSportsSoccerDiscoverFixturesRequest(
+        DateOnly? FromDate,
+        DateOnly? ToDate,
+        DateOnly? AsOfDate,
+        string[]? CompetitionKeys,
+        bool? IncludeAllSupportedCompetitions,
+        bool? DryRun,
+        bool? ForceLive,
+        bool? SummaryOnly,
+        bool? IncludeFixtures);
 
     private sealed record ApiSportsHistoricalBackfillCompletedRequest(
         string? CompetitionKey,
         DateOnly? FromDate,
         DateOnly? ToDate,
+        DateOnly? AsOfDate,
         bool? DryRun,
         bool? ForceLive,
         int? MaxDays);

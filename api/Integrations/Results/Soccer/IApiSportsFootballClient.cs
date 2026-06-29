@@ -6,6 +6,7 @@ public interface IApiSportsFootballClient
 {
     Task<ApiSportsFootballDiagnosticResponse> GetFixturesAsync(ApiSportsFootballFixturesRequest request, CancellationToken cancellationToken);
     Task<ApiSportsFootballDiagnosticResponse> GetFixturePlayerStatsAsync(string fixtureId, CancellationToken cancellationToken);
+    Task<ApiSportsFootballDiagnosticResponse> GetLeaguesAsync(ApiSportsFootballLeaguesRequest request, CancellationToken cancellationToken);
 }
 
 public sealed record ApiSportsFootballFixturesRequest(
@@ -13,6 +14,9 @@ public sealed record ApiSportsFootballFixturesRequest(
     string? FixtureId,
     int? League,
     int? Season);
+
+public sealed record ApiSportsFootballLeaguesRequest(
+    int? League);
 
 public sealed record ApiSportsFootballDiagnosticResponse(
     JsonDocument Payload,

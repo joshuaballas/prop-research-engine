@@ -3460,7 +3460,9 @@ public sealed class RefreshSafetyTests
             fromDate = "2026-06-11",
             toDate = "2026-06-13",
             dryRun = true,
-            forceLive = true
+            forceLive = true,
+            includeFixtures = true,
+            includeCoverageByDate = true
         });
 
         await EnsureSuccessWithBodyAsync(response);
@@ -3534,7 +3536,8 @@ public sealed class RefreshSafetyTests
             fromDate = "2026-06-11",
             toDate = "2026-06-14",
             dryRun = false,
-            forceLive = true
+            forceLive = true,
+            includeFixtures = true
         });
 
         await EnsureSuccessWithBodyAsync(response);
@@ -3574,18 +3577,11 @@ public sealed class RefreshSafetyTests
         Assert.Equal(JsonValueKind.Null, json.GetProperty("missingCompletedFixtureCount").ValueKind);
         Assert.Equal(1, json.GetProperty("importedFixtureCount").GetInt32());
         Assert.True(json.GetProperty("totalRows").GetInt32() > 0);
-        Assert.NotEmpty(json.GetProperty("rowsByFixture").EnumerateArray());
+        Assert.False(json.TryGetProperty("rowsByFixture", out _));
         Assert.Equal("1489393", json.GetProperty("latestImportedFixtureId").GetString());
         Assert.Equal("2026-06-11", json.GetProperty("latestImportedEventDate").GetString());
         Assert.Equal(JsonValueKind.String, json.GetProperty("latestImportedAtUtc").ValueKind);
-        var coverage = Assert.Single(json.GetProperty("coverageByDate").EnumerateArray());
-        Assert.Equal("2026-06-11", coverage.GetProperty("date").GetString());
-        Assert.Equal(JsonValueKind.Null, coverage.GetProperty("fixtureCount").ValueKind);
-        Assert.Equal(JsonValueKind.Null, coverage.GetProperty("completedFixtureCount").ValueKind);
-        Assert.Equal(1, coverage.GetProperty("importedFixtureCount").GetInt32());
-        Assert.True(coverage.GetProperty("importedResultRows").GetInt32() > 0);
-        Assert.Equal(JsonValueKind.Null, coverage.GetProperty("missingCompletedFixtureCount").ValueKind);
-        Assert.Equal(JsonValueKind.Null, coverage.GetProperty("apiCallsUsed").ValueKind);
+        Assert.False(json.TryGetProperty("coverageByDate", out _));
     }
 
     [Fact]
@@ -3656,8 +3652,10 @@ public sealed class RefreshSafetyTests
     {
         var config = ApiSportsLiveConfig();
         config["SoccerResultImportWorker:Enabled"] = "true";
+        config["SoccerResultImportWorker:Competition"] = "World Cup";
         config["SoccerResultImportWorker:RecentWindowDays"] = "30";
         config["SoccerResultImportWorker:MaxFixturesPerRun"] = "1";
+        config["SoccerResultImportWorker:MaxFixturesPerCompetitionPerRun"] = "1";
         await using var factory = new SafetyTestApplicationFactory(config);
         await factory.EnsureDatabaseAsync();
 
@@ -3705,8 +3703,10 @@ public sealed class RefreshSafetyTests
     {
         var config = ApiSportsLiveConfig();
         config["SoccerResultImportWorker:Enabled"] = "true";
+        config["SoccerResultImportWorker:Competition"] = "World Cup";
         config["SoccerResultImportWorker:RecentWindowDays"] = "30";
         config["SoccerResultImportWorker:MaxFixturesPerRun"] = "1";
+        config["SoccerResultImportWorker:MaxFixturesPerCompetitionPerRun"] = "1";
         await using var factory = new SafetyTestApplicationFactory(config);
         await factory.EnsureDatabaseAsync();
 
@@ -3738,8 +3738,10 @@ public sealed class RefreshSafetyTests
     {
         var config = ApiSportsLiveConfig();
         config["SoccerResultImportWorker:Enabled"] = "true";
+        config["SoccerResultImportWorker:Competition"] = "World Cup";
         config["SoccerResultImportWorker:RecentWindowDays"] = "30";
         config["SoccerResultImportWorker:MaxFixturesPerRun"] = "1";
+        config["SoccerResultImportWorker:MaxFixturesPerCompetitionPerRun"] = "1";
         await using var factory = new SafetyTestApplicationFactory(config);
         using var client = factory.CreateClient();
         await factory.EnsureDatabaseAsync();
@@ -3773,8 +3775,10 @@ public sealed class RefreshSafetyTests
     {
         var config = ApiSportsLiveConfig();
         config["SoccerResultImportWorker:Enabled"] = "true";
+        config["SoccerResultImportWorker:Competition"] = "World Cup";
         config["SoccerResultImportWorker:RecentWindowDays"] = "30";
         config["SoccerResultImportWorker:MaxFixturesPerRun"] = "1";
+        config["SoccerResultImportWorker:MaxFixturesPerCompetitionPerRun"] = "1";
         await using var factory = new SafetyTestApplicationFactory(config);
         using var client = factory.CreateClient();
         await factory.EnsureDatabaseAsync();
@@ -3824,6 +3828,435 @@ public sealed class RefreshSafetyTests
     }
 
     [Fact]
+    public async Task SoccerResultImportWorker_ImportsMultipleEnabledCompetitionsInOneCycle()
+    {
+        var config = ApiSportsLiveConfig();
+        config["SoccerResultImportWorker:Enabled"] = "true";
+        config["SoccerResultImportWorker:Competition"] = "AllSupported";
+        config["SoccerResultImportWorker:CompetitionKeys:0"] = "world-cup-2026";
+        config["SoccerResultImportWorker:CompetitionKeys:1"] = "MLS";
+        config["SoccerResultImportWorker:RecentWindowDays"] = "30";
+        config["SoccerResultImportWorker:MaxFixturesPerRun"] = "1";
+        config["SoccerResultImportWorker:MaxFixturesPerCompetitionPerRun"] = "1";
+        config["SoccerResultImportWorker:MaxFixturesTotalPerRun"] = "2";
+        await using var factory = new SafetyTestApplicationFactory(config);
+        await factory.EnsureDatabaseAsync();
+
+        var worker = ActivatorUtilities.CreateInstance<SoccerResultImportWorker>(factory.Services);
+
+        await worker.RunImportCycleAsync(CancellationToken.None);
+
+        using var scope = factory.Services.CreateScope();
+        var dbContext = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+        var states = await dbContext.SoccerResultImportStates
+            .OrderBy(row => row.Competition)
+            .ToArrayAsync();
+        var worldCupState = Assert.Single(states, row => row.Competition == "World Cup");
+        var mlsState = Assert.Single(states, row => row.Competition == "MLS");
+        Assert.Equal("completed_with_pending_fixtures", worldCupState.LastStatus);
+        Assert.Equal("completed_with_pending_fixtures", mlsState.LastStatus);
+        Assert.Equal(1, worldCupState.LastImportedFixtureCount);
+        Assert.Equal(1, mlsState.LastImportedFixtureCount);
+        Assert.Equal(0, worldCupState.LastFailedFixtureCount);
+        Assert.Equal(0, mlsState.LastFailedFixtureCount);
+        Assert.True(worldCupState.LastResultRowsWritten > 0);
+        Assert.True(mlsState.LastResultRowsWritten > 0);
+
+        var worldCupImported = await dbContext.SoccerResultImportFixtureStates.SingleAsync(row =>
+            row.Competition == "World Cup" && row.FixtureId == "1489393");
+        var mlsImported = await dbContext.SoccerResultImportFixtureStates.SingleAsync(row =>
+            row.Competition == "MLS" && row.FixtureId == "2530611");
+        Assert.Equal("Imported", worldCupImported.ImportStatus);
+        Assert.Equal("Imported", mlsImported.ImportStatus);
+        Assert.Equal(2, factory.ApiSportsFootballClient.FixturePlayerStatsCallCount);
+    }
+
+    [Fact]
+    public async Task ApiSportsSoccerBackfill_BlocksWithoutForceLive()
+    {
+        await using var factory = new SafetyTestApplicationFactory(ApiSportsLiveConfig());
+        using var client = factory.CreateClient();
+
+        var response = await client.PostAsJsonAsync("/api/debug/soccer/results/api-sports/backfill-completed", new
+        {
+            competitionKeys = new[] { "EPL" },
+            fromDate = "2026-06-11",
+            toDate = "2026-06-11",
+            dryRun = true,
+            forceLive = false
+        });
+
+        await AssertStatusWithBodyAsync(response, HttpStatusCode.Conflict);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.False(json.GetProperty("callsExternalApis").GetBoolean());
+        Assert.Equal(0, factory.ApiSportsFootballClient.FixturesCallCount);
+        Assert.Equal(0, factory.ApiSportsFootballClient.FixturePlayerStatsCallCount);
+    }
+
+    [Fact]
+    public async Task ApiSportsSoccerDiscoverFixtures_UsesRequestedCompetitionLeagueSeasonAndWindow()
+    {
+        await using var factory = new SafetyTestApplicationFactory(ApiSportsLiveConfig());
+        using var client = factory.CreateClient();
+        await factory.EnsureDatabaseAsync();
+
+        var response = await client.PostAsJsonAsync("/api/debug/soccer/results/api-sports/discover-fixtures", new
+        {
+            competitionKeys = new[] { "EPL" },
+            fromDate = "2025-08-15",
+            toDate = "2025-08-15",
+            forceLive = true,
+            summaryOnly = true
+        });
+
+        await EnsureSuccessWithBodyAsync(response);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.True(json.GetProperty("readOnly").GetBoolean());
+        Assert.False(json.GetProperty("writesRows").GetBoolean());
+        Assert.Equal(1, json.GetProperty("discoveredFixtureCount").GetInt32());
+        Assert.Equal(1, json.GetProperty("completedFixtureCount").GetInt32());
+        Assert.Equal(1, json.GetProperty("selectedCompletedFixtureCount").GetInt32());
+        Assert.Equal(1, factory.ApiSportsFootballClient.FixturesCallCount);
+        Assert.Equal(0, factory.ApiSportsFootballClient.FixturePlayerStatsCallCount);
+        var request = Assert.Single(factory.ApiSportsFootballClient.FixtureRequests);
+        Assert.Equal(39, request.League);
+        Assert.Equal(2025, request.Season);
+        Assert.Equal(new DateOnly(2025, 8, 15), request.Date);
+        Assert.Equal(1, factory.ApiSportsFootballClient.LeaguesCallCount);
+    }
+
+    [Fact]
+    public async Task ApiSportsSoccerDiscoverFixtures_AutoRollsEplToNextProviderSeason()
+    {
+        await using var factory = new SafetyTestApplicationFactory(ApiSportsLiveConfig());
+        using var client = factory.CreateClient();
+        await factory.EnsureDatabaseAsync();
+
+        var response = await client.PostAsJsonAsync("/api/debug/soccer/results/api-sports/discover-fixtures", new
+        {
+            competitionKeys = new[] { "EPL" },
+            fromDate = "2026-08-15",
+            toDate = "2026-08-15",
+            forceLive = true,
+            summaryOnly = true
+        });
+
+        await EnsureSuccessWithBodyAsync(response);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal(1, json.GetProperty("discoveredFixtureCount").GetInt32());
+        var competition = Assert.Single(json.GetProperty("competitions").EnumerateArray());
+        Assert.Equal(2026, competition.GetProperty("season").GetInt32());
+        Assert.Equal(39, Assert.Single(factory.ApiSportsFootballClient.FixtureRequests).League);
+        Assert.Equal(2026, Assert.Single(factory.ApiSportsFootballClient.FixtureRequests).Season);
+    }
+
+    [Fact]
+    public async Task ApiSportsSoccerDiscoverFixtures_AutoRollsMlsByCalendarSeason()
+    {
+        await using var factory = new SafetyTestApplicationFactory(ApiSportsLiveConfig());
+        using var client = factory.CreateClient();
+        await factory.EnsureDatabaseAsync();
+
+        var response = await client.PostAsJsonAsync("/api/debug/soccer/results/api-sports/discover-fixtures", new
+        {
+            competitionKeys = new[] { "MLS" },
+            fromDate = "2027-02-15",
+            toDate = "2027-02-15",
+            forceLive = true,
+            summaryOnly = true
+        });
+
+        await EnsureSuccessWithBodyAsync(response);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        var competition = Assert.Single(json.GetProperty("competitions").EnumerateArray());
+        Assert.Equal(2027, competition.GetProperty("season").GetInt32());
+        Assert.Equal(253, Assert.Single(factory.ApiSportsFootballClient.FixtureRequests).League);
+        Assert.Equal(2027, Assert.Single(factory.ApiSportsFootballClient.FixtureRequests).Season);
+    }
+
+    [Fact]
+    public async Task ApiSportsSoccerDiscoverFixtures_UsesCachedSeasonMetadataOnSecondCall()
+    {
+        await using var factory = new SafetyTestApplicationFactory(ApiSportsLiveConfig());
+        using var client = factory.CreateClient();
+        await factory.EnsureDatabaseAsync();
+
+        for (var index = 0; index < 2; index++)
+        {
+            var response = await client.PostAsJsonAsync("/api/debug/soccer/results/api-sports/discover-fixtures", new
+            {
+                competitionKeys = new[] { "EPL" },
+                fromDate = "2025-08-15",
+                toDate = "2025-08-15",
+                forceLive = true,
+                summaryOnly = true
+            });
+            await EnsureSuccessWithBodyAsync(response);
+        }
+
+        Assert.Equal(1, factory.ApiSportsFootballClient.LeaguesCallCount);
+        Assert.Equal(2, factory.ApiSportsFootballClient.FixturesCallCount);
+    }
+
+    [Fact]
+    public async Task ApiSportsSoccerDiscoverFixtures_SkipsOutsideProviderSeasonWithoutFixtureCalls()
+    {
+        await using var factory = new SafetyTestApplicationFactory(ApiSportsLiveConfig());
+        using var client = factory.CreateClient();
+        await factory.EnsureDatabaseAsync();
+
+        var response = await client.PostAsJsonAsync("/api/debug/soccer/results/api-sports/discover-fixtures", new
+        {
+            competitionKeys = new[] { "EPL" },
+            fromDate = "2026-06-15",
+            toDate = "2026-06-15",
+            forceLive = true,
+            summaryOnly = true
+        });
+
+        await EnsureSuccessWithBodyAsync(response);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        var competition = Assert.Single(json.GetProperty("competitions").EnumerateArray());
+        Assert.Equal("OutsideProviderSeasonWindow", competition.GetProperty("skipReason").GetString());
+        Assert.Equal(0, competition.GetProperty("fixtureDiscoveryApiCallsUsed").GetInt32());
+        Assert.Equal(1, competition.GetProperty("seasonMetadataApiCallsUsed").GetInt32());
+        Assert.Equal(0, factory.ApiSportsFootballClient.FixturesCallCount);
+    }
+
+    [Fact]
+    public async Task ApiSportsSoccerDiscoverFixtures_ReportsSeasonMetadataUnavailableWithoutFixtureCalls()
+    {
+        await using var factory = new SafetyTestApplicationFactory(ApiSportsLiveConfig());
+        factory.ApiSportsFootballClient.SuppressedLeagueMetadataIds.Add(39);
+        using var client = factory.CreateClient();
+        await factory.EnsureDatabaseAsync();
+
+        var response = await client.PostAsJsonAsync("/api/debug/soccer/results/api-sports/discover-fixtures", new
+        {
+            competitionKeys = new[] { "EPL" },
+            fromDate = "2025-08-15",
+            toDate = "2025-08-15",
+            forceLive = true,
+            summaryOnly = true
+        });
+
+        await EnsureSuccessWithBodyAsync(response);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        var competition = Assert.Single(json.GetProperty("competitions").EnumerateArray());
+        Assert.Equal("SeasonMetadataUnavailable", competition.GetProperty("skipReason").GetString());
+        Assert.Equal(1, competition.GetProperty("seasonMetadataApiCallsUsed").GetInt32());
+        Assert.Equal(0, competition.GetProperty("fixtureDiscoveryApiCallsUsed").GetInt32());
+        Assert.Equal(0, factory.ApiSportsFootballClient.FixturesCallCount);
+    }
+
+    [Fact]
+    public async Task ApiSportsWorldCupBackfill_RemainsFixedSeasonAndDoesNotCallSeasonMetadata()
+    {
+        await using var factory = new SafetyTestApplicationFactory(ApiSportsLiveConfig());
+        using var client = factory.CreateClient();
+        await factory.EnsureDatabaseAsync();
+
+        var response = await client.PostAsJsonAsync("/api/debug/soccer/results/api-sports/backfill-completed", new
+        {
+            competitionKeys = new[] { "world-cup-2026" },
+            fromDate = "2026-06-11",
+            toDate = "2026-06-11",
+            forceLive = true,
+            summaryOnly = true
+        });
+
+        await EnsureSuccessWithBodyAsync(response);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        var competition = Assert.Single(json.GetProperty("competitions").EnumerateArray());
+        Assert.Equal(2026, competition.GetProperty("season").GetInt32());
+        Assert.Equal(0, factory.ApiSportsFootballClient.LeaguesCallCount);
+        Assert.Equal(1, factory.ApiSportsFootballClient.FixturesCallCount);
+    }
+
+    [Fact]
+    public async Task ApiSportsSoccerBackfill_AllSupportedSkipsOutOfSeasonCompetitionsWithoutCalls()
+    {
+        await using var factory = new SafetyTestApplicationFactory(ApiSportsLiveConfig());
+        using var client = factory.CreateClient();
+        await factory.EnsureDatabaseAsync();
+
+        var response = await client.PostAsJsonAsync("/api/debug/soccer/results/api-sports/backfill-completed", new
+        {
+            includeAllSupportedCompetitions = true,
+            fromDate = "2026-06-11",
+            toDate = "2026-06-11",
+            forceLive = true,
+            summaryOnly = true
+        });
+
+        await EnsureSuccessWithBodyAsync(response);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        var competitions = json.GetProperty("competitions").EnumerateArray().ToArray();
+        var epl = competitions.Single(row => row.GetProperty("key").GetString() == "EPL");
+        var mls = competitions.Single(row => row.GetProperty("key").GetString() == "MLS");
+        Assert.Equal("OutsideProviderSeasonWindow", epl.GetProperty("skipReason").GetString());
+        Assert.Equal(0, epl.GetProperty("apiCallsUsed").GetInt32());
+        Assert.Equal(1, mls.GetProperty("discoveredFixtureCount").GetInt32());
+        Assert.DoesNotContain(factory.ApiSportsFootballClient.FixtureRequests, request => request.League == 39);
+        Assert.Contains(factory.ApiSportsFootballClient.FixtureRequests, request => request.League == 253 && request.Season == 2026);
+    }
+
+    [Fact]
+    public async Task ApiSportsSoccerBackfill_DefaultsToDryRunAndDoesNotWrite()
+    {
+        await using var factory = new SafetyTestApplicationFactory(ApiSportsLiveConfig());
+        using var client = factory.CreateClient();
+        await factory.EnsureDatabaseAsync();
+        var before = await CountApiSportsSoccerResultsAsync(factory);
+
+        var response = await client.PostAsJsonAsync("/api/debug/soccer/results/api-sports/backfill-completed", new
+        {
+            competitionKeys = new[] { "EPL" },
+            fromDate = "2025-08-15",
+            toDate = "2025-08-15",
+            forceLive = true
+        });
+
+        await EnsureSuccessWithBodyAsync(response);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.True(json.GetProperty("readOnly").GetBoolean());
+        Assert.False(json.GetProperty("writesRows").GetBoolean());
+        Assert.True(json.GetProperty("callsExternalApis").GetBoolean());
+        Assert.Equal(1, json.GetProperty("completedFixtureCount").GetInt32());
+        Assert.Equal(1, json.GetProperty("previewedFixtureCount").GetInt32());
+        Assert.Equal(0, json.GetProperty("importedFixtureCount").GetInt32());
+        Assert.True(json.GetProperty("resultRowsPreviewed").GetInt32() > 0);
+        Assert.Equal(0, json.GetProperty("resultRowsWritten").GetInt32());
+        Assert.False(json.TryGetProperty("imports", out _));
+        var competition = Assert.Single(json.GetProperty("competitions").EnumerateArray());
+        Assert.False(competition.TryGetProperty("imports", out _));
+        Assert.False(competition.TryGetProperty("coverageByDate", out _));
+        Assert.Equal(before, await CountApiSportsSoccerResultsAsync(factory));
+    }
+
+    [Fact]
+    public async Task ApiSportsSoccerBackfill_DetailFlagsIncludeFixtureDiagnostics()
+    {
+        await using var factory = new SafetyTestApplicationFactory(ApiSportsLiveConfig());
+        using var client = factory.CreateClient();
+        await factory.EnsureDatabaseAsync();
+
+        var response = await client.PostAsJsonAsync("/api/debug/soccer/results/api-sports/backfill-completed", new
+        {
+            competitionKeys = new[] { "EPL" },
+            fromDate = "2025-08-15",
+            toDate = "2025-08-15",
+            forceLive = true,
+            summaryOnly = false,
+            includeFixtures = true,
+            includeCoverageByDate = true,
+            includeUnsupportedSkipped = true,
+            includeMappingDiagnostics = true
+        });
+
+        await EnsureSuccessWithBodyAsync(response);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        var competition = Assert.Single(json.GetProperty("competitions").EnumerateArray());
+        Assert.True(competition.TryGetProperty("imports", out var imports));
+        Assert.True(competition.TryGetProperty("coverageByDate", out _));
+        var import = Assert.Single(imports.EnumerateArray());
+        Assert.True(import.TryGetProperty("unsupportedSkipped", out _));
+        Assert.True(import.TryGetProperty("mappingDiagnostics", out _));
+    }
+
+    [Fact]
+    public async Task SoccerResultImportWorker_SkipsOutOfSeasonCompetitionWithoutApiCalls()
+    {
+        var config = ApiSportsLiveConfig();
+        config["SoccerResultImportWorker:Enabled"] = "true";
+        config["SoccerResultImportWorker:CompetitionKeys:0"] = "EPL";
+        config["SoccerResultImportWorker:RecentWindowDays"] = "30";
+        await using var factory = new SafetyTestApplicationFactory(config);
+        await factory.EnsureDatabaseAsync();
+
+        var worker = ActivatorUtilities.CreateInstance<SoccerResultImportWorker>(factory.Services);
+
+        await worker.RunImportCycleAsync(CancellationToken.None);
+
+        using var scope = factory.Services.CreateScope();
+        var dbContext = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+        var state = await dbContext.SoccerResultImportStates.SingleAsync();
+        Assert.Equal("EPL", state.Competition);
+        Assert.Equal("skipped", state.LastStatus);
+        Assert.Contains("OutsideProviderSeasonWindow", state.LastErrorMessage, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(0, state.LastApiCallsUsed);
+        Assert.Equal(0, factory.ApiSportsFootballClient.FixturesCallCount);
+        Assert.Equal(0, factory.ApiSportsFootballClient.FixturePlayerStatsCallCount);
+    }
+
+    [Fact]
+    public async Task ApiSportsSoccerBackfill_LiveWritesIdempotentlyAcrossCompetitions()
+    {
+        await using var factory = new SafetyTestApplicationFactory(ApiSportsLiveConfig());
+        using var client = factory.CreateClient();
+        await factory.EnsureDatabaseAsync();
+
+        var request = new
+        {
+            competitionKeys = new[] { "world-cup-2026", "MLS" },
+            fromDate = "2026-06-11",
+            toDate = "2026-06-11",
+            dryRun = false,
+            forceLive = true,
+            maxFixturesPerCompetition = 1,
+            maxFixturesTotal = 2
+        };
+
+        var firstResponse = await client.PostAsJsonAsync("/api/debug/soccer/results/api-sports/backfill-completed", request);
+        await EnsureSuccessWithBodyAsync(firstResponse);
+        var first = await firstResponse.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.False(first.GetProperty("readOnly").GetBoolean());
+        Assert.True(first.GetProperty("writesRows").GetBoolean());
+        Assert.Equal(2, first.GetProperty("selectedCompletedFixtureCount").GetInt32());
+        Assert.Equal(2, first.GetProperty("importedFixtureCount").GetInt32());
+        Assert.True(first.GetProperty("resultRowsInserted").GetInt32() > 0);
+
+        var secondResponse = await client.PostAsJsonAsync("/api/debug/soccer/results/api-sports/backfill-completed", request);
+        await EnsureSuccessWithBodyAsync(secondResponse);
+        var second = await secondResponse.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal(2, second.GetProperty("alreadyImportedFixtureCount").GetInt32());
+        Assert.Equal(0, second.GetProperty("selectedCompletedFixtureCount").GetInt32());
+        Assert.Equal(0, second.GetProperty("resultRowsInserted").GetInt32());
+        Assert.Equal(0, second.GetProperty("resultRowsUpdated").GetInt32());
+
+        using var scope = factory.Services.CreateScope();
+        var dbContext = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+        Assert.Equal(2, await dbContext.SoccerResultImportFixtureStates.CountAsync(row => row.ImportStatus == "Imported"));
+    }
+
+    [Fact]
+    public async Task ApiSportsSoccerScheduledImportStatus_IsReadOnlyAcrossCompetitions()
+    {
+        var config = ApiSportsLiveConfig();
+        config["SoccerResultImportWorker:Enabled"] = "true";
+        await using var factory = new SafetyTestApplicationFactory(config);
+        using var client = factory.CreateClient();
+        await factory.EnsureDatabaseAsync();
+        var fixtureCallsBefore = factory.ApiSportsFootballClient.FixturesCallCount;
+        var statsCallsBefore = factory.ApiSportsFootballClient.FixturePlayerStatsCallCount;
+
+        var response = await client.GetAsync("/api/debug/soccer/results/api-sports/scheduled-import-status?fromDate=2026-06-11&toDate=2026-06-11");
+
+        await EnsureSuccessWithBodyAsync(response);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.False(json.GetProperty("callsExternalApis").GetBoolean());
+        Assert.True(json.GetProperty("readOnly").GetBoolean());
+        Assert.False(json.GetProperty("writesRows").GetBoolean());
+        Assert.True(json.GetProperty("workerEnabled").GetBoolean());
+        Assert.True(json.GetProperty("scheduledImportEnabled").GetBoolean());
+        Assert.Equal(8, json.GetProperty("aggregateTotals").GetProperty("enabledCompetitionCount").GetInt32());
+        Assert.Contains(json.GetProperty("competitions").EnumerateArray(), row => row.GetProperty("key").GetString() == "world-cup-2026");
+        Assert.Contains(json.GetProperty("competitions").EnumerateArray(), row => row.GetProperty("key").GetString() == "EPL");
+        Assert.Equal(fixtureCallsBefore, factory.ApiSportsFootballClient.FixturesCallCount);
+        Assert.Equal(statsCallsBefore, factory.ApiSportsFootballClient.FixturePlayerStatsCallCount);
+    }
+
+    [Fact]
     public async Task ApiSportsWorldCupImportStatus_WithForceLiveReportsDiscoveryCounts()
     {
         await using var factory = new SafetyTestApplicationFactory(ApiSportsLiveConfig());
@@ -3838,7 +4271,7 @@ public sealed class RefreshSafetyTests
         });
         await EnsureSuccessWithBodyAsync(importResponse);
 
-        var response = await client.GetAsync("/api/debug/soccer/results/api-sports/world-cup/import-status?fromDate=2026-06-11&toDate=2026-06-14&forceLive=true");
+        var response = await client.GetAsync("/api/debug/soccer/results/api-sports/world-cup/import-status?fromDate=2026-06-11&toDate=2026-06-14&forceLive=true&includeFixtures=true&includeCoverageByDate=true");
 
         await EnsureSuccessWithBodyAsync(response);
         var json = await response.Content.ReadFromJsonAsync<JsonElement>();
@@ -3889,9 +4322,11 @@ public sealed class RefreshSafetyTests
         var epl = json.GetProperty("competitions").EnumerateArray().Single(row => row.GetProperty("key").GetString() == "EPL");
         Assert.Equal("EPL", epl.GetProperty("displayName").GetString());
         Assert.Equal(39, epl.GetProperty("leagueId").GetInt32());
-        Assert.Equal(2025, epl.GetProperty("season").GetInt32());
+        Assert.Equal(JsonValueKind.Null, epl.GetProperty("season").ValueKind);
         Assert.True(epl.GetProperty("enabled").GetBoolean());
         Assert.True(epl.GetProperty("localLeagueExists").GetBoolean());
+        Assert.Contains(epl.GetProperty("localLeagueCodes").EnumerateArray(), row => row.GetString() == "API_SPORTS_EPL_2025");
+        Assert.Contains(epl.GetProperty("importedSeasons").EnumerateArray(), row => row.GetInt32() == 2025);
         Assert.Equal(2, epl.GetProperty("importedResultRows").GetInt32());
         Assert.Equal(1, epl.GetProperty("importedFixtureCount").GetInt32());
         Assert.Equal(1, epl.GetProperty("distinctPlayers").GetInt32());
@@ -3962,8 +4397,8 @@ public sealed class RefreshSafetyTests
         var response = await client.PostAsJsonAsync("/api/debug/soccer/results/api-sports/historical/backfill-completed", new
         {
             competitionKey = "EPL",
-            fromDate = "2026-06-11",
-            toDate = "2026-06-13",
+            fromDate = "2025-08-15",
+            toDate = "2025-08-17",
             dryRun = true,
             forceLive = true
         });
@@ -4015,8 +4450,8 @@ public sealed class RefreshSafetyTests
         var request = new
         {
             competitionKey = "EPL",
-            fromDate = "2026-06-11",
-            toDate = "2026-06-11",
+            fromDate = "2025-08-15",
+            toDate = "2025-08-15",
             dryRun = false,
             forceLive = true
         };
@@ -11194,12 +11629,17 @@ public sealed class StubApiSportsFootballClient : IApiSportsFootballClient
 {
     public int FixturesCallCount { get; private set; }
     public int FixturePlayerStatsCallCount { get; private set; }
+    public int LeaguesCallCount { get; private set; }
+    public List<ApiSportsFootballFixturesRequest> FixtureRequests { get; } = [];
+    public List<ApiSportsFootballLeaguesRequest> LeagueRequests { get; } = [];
+    public HashSet<int> SuppressedLeagueMetadataIds { get; } = [];
 
     public Task<ApiSportsFootballDiagnosticResponse> GetFixturesAsync(
         ApiSportsFootballFixturesRequest request,
         CancellationToken cancellationToken)
     {
         FixturesCallCount++;
+        FixtureRequests.Add(request);
         var sanitizedUrl = BuildFixturesUrl(request);
         var fixtures = BuildFixtureResponseItems(request);
         var payload = JsonDocument.Parse(
@@ -11215,6 +11655,35 @@ public sealed class StubApiSportsFootballClient : IApiSportsFootballClient
             """);
 
         return Task.FromResult(new ApiSportsFootballDiagnosticResponse(payload, fixtures.Count, 1, 1, sanitizedUrl));
+    }
+
+    public Task<ApiSportsFootballDiagnosticResponse> GetLeaguesAsync(
+        ApiSportsFootballLeaguesRequest request,
+        CancellationToken cancellationToken)
+    {
+        LeaguesCallCount++;
+        LeagueRequests.Add(request);
+        var seasons = request.League.HasValue && SuppressedLeagueMetadataIds.Contains(request.League.Value)
+            ? []
+            : BuildLeagueSeasonResponseItems(request.League);
+        var payload = JsonDocument.Parse(
+            $$"""
+            {
+              "get": "leagues",
+              "parameters": {},
+              "errors": [],
+              "results": {{seasons.Count}},
+              "paging": { "current": 1, "total": 1 },
+              "response": [{{string.Join(",", seasons)}}]
+            }
+            """);
+
+        return Task.FromResult(new ApiSportsFootballDiagnosticResponse(
+            payload,
+            seasons.Count,
+            1,
+            1,
+            $"https://v3.football.api-sports.io/leagues?id={request.League}"));
     }
 
     public Task<ApiSportsFootballDiagnosticResponse> GetFixturePlayerStatsAsync(
@@ -11309,6 +11778,11 @@ public sealed class StubApiSportsFootballClient : IApiSportsFootballClient
             };
         }
 
+        if (request.League.HasValue && request.League.Value != 1)
+        {
+            return BuildHistoricalFixtureResponseItems(request);
+        }
+
         return request.Date?.ToString("yyyy-MM-dd") switch
         {
             "2026-06-11" => [BuildFixtureJson("1489393", "2026-06-11T19:00:00+00:00", "FT", "Match Finished")],
@@ -11319,12 +11793,107 @@ public sealed class StubApiSportsFootballClient : IApiSportsFootballClient
         };
     }
 
-    private static string BuildFixtureJson(string fixtureId, string kickoffUtc, string statusShort, string statusLong)
+    private static List<string> BuildHistoricalFixtureResponseItems(ApiSportsFootballFixturesRequest request)
+    {
+        var league = request.League!.Value;
+        var season = request.Season ?? 2025;
+        var leagueName = league switch
+        {
+            39 => "EPL",
+            140 => "La Liga",
+            78 => "Bundesliga",
+            135 => "Serie A",
+            61 => "Ligue 1",
+            253 => "MLS",
+            2 => "Champions League",
+            _ => $"League {league}"
+        };
+        var prefix = league.ToString(CultureInfo.InvariantCulture);
+        return request.Date?.ToString("yyyy-MM-dd") switch
+        {
+            "2025-08-15" => [BuildFixtureJson($"{prefix}0815", "2025-08-15T19:00:00+00:00", "FT", "Match Finished", league, leagueName, season)],
+            "2025-08-16" => [BuildFixtureJson($"{prefix}0816", "2025-08-16T19:00:00+00:00", "NS", "Not Started", league, leagueName, season)],
+            "2025-08-17" => [BuildFixtureJson($"{prefix}0817", "2025-08-17T19:00:00+00:00", "1H", "First Half", league, leagueName, season)],
+            "2025-08-18" => [BuildFixtureJson($"{prefix}0818", "2025-08-18T19:00:00+00:00", "FT", "Match Finished", league, leagueName, season)],
+            "2026-08-15" => [BuildFixtureJson($"{prefix}2615", "2026-08-15T19:00:00+00:00", "FT", "Match Finished", league, leagueName, season)],
+            "2027-02-15" => [BuildFixtureJson($"{prefix}2715", "2027-02-15T19:00:00+00:00", "FT", "Match Finished", league, leagueName, season)],
+            "2026-06-11" => [BuildFixtureJson($"{prefix}0611", "2026-06-11T19:00:00+00:00", "FT", "Match Finished", league, leagueName, season)],
+            "2026-06-12" => [BuildFixtureJson($"{prefix}0612", "2026-06-12T19:00:00+00:00", "NS", "Not Started", league, leagueName, season)],
+            "2026-06-13" => [BuildFixtureJson($"{prefix}0613", "2026-06-13T19:00:00+00:00", "1H", "First Half", league, leagueName, season)],
+            "2026-06-14" => [BuildFixtureJson($"{prefix}0614", "2026-06-14T19:00:00+00:00", "FT", "Match Finished", league, leagueName, season)],
+            _ => []
+        };
+    }
+
+    private static List<string> BuildLeagueSeasonResponseItems(int? leagueId)
+    {
+        if (!leagueId.HasValue)
+        {
+            return [];
+        }
+
+        var name = leagueId.Value switch
+        {
+            39 => "EPL",
+            140 => "La Liga",
+            78 => "Bundesliga",
+            135 => "Serie A",
+            61 => "Ligue 1",
+            253 => "MLS",
+            2 => "Champions League",
+            _ => $"League {leagueId.Value}"
+        };
+        var country = leagueId.Value switch
+        {
+            39 => "England",
+            140 => "Spain",
+            78 => "Germany",
+            135 => "Italy",
+            61 => "France",
+            253 => "USA",
+            2 => "Europe",
+            _ => "Unknown"
+        };
+        var seasons = leagueId.Value == 253
+            ? $$"""
+              { "year": 2026, "start": "2026-02-01", "end": "2026-12-31", "current": true },
+              { "year": 2027, "start": "2027-02-01", "end": "2027-12-31", "current": false }
+              """
+            : leagueId.Value == 2
+                ? $$"""
+                  { "year": 2025, "start": "2025-07-01", "end": "2026-05-31", "current": false },
+                  { "year": 2026, "start": "2026-07-01", "end": "2027-05-31", "current": true }
+                  """
+                : $$"""
+                  { "year": 2025, "start": "2025-08-01", "end": "2026-05-31", "current": false },
+                  { "year": 2026, "start": "2026-08-01", "end": "2027-05-31", "current": true }
+                  """;
+
+        return
+        [
+            $$"""
+            {
+              "league": { "id": {{leagueId.Value}}, "name": "{{name}}", "type": "League" },
+              "country": { "name": "{{country}}" },
+              "seasons": [{{seasons}}]
+            }
+            """
+        ];
+    }
+
+    private static string BuildFixtureJson(
+        string fixtureId,
+        string kickoffUtc,
+        string statusShort,
+        string statusLong,
+        int leagueId = 1,
+        string leagueName = "World Cup",
+        int season = 2026)
     {
         return $$"""
         {
           "fixture": { "id": {{fixtureId}}, "date": "{{kickoffUtc}}", "status": { "short": "{{statusShort}}", "long": "{{statusLong}}" } },
-          "league": { "id": 1, "name": "World Cup", "season": 2026, "round": "Group Stage" },
+          "league": { "id": {{leagueId}}, "name": "{{leagueName}}", "season": {{season}}, "round": "Group Stage" },
           "teams": {
             "home": { "id": 10, "name": "Home FC" },
             "away": { "id": 20, "name": "Away FC" }

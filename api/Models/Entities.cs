@@ -406,6 +406,23 @@ public sealed class SoccerResultImportFixtureState
     public DateTimeOffset UpdatedAt { get; set; } = DateTimeOffset.UtcNow;
 }
 
+public sealed class ApiSportsSoccerSeasonMetadata
+{
+    public Guid Id { get; set; }
+    public int LeagueId { get; set; }
+    public string? LeagueName { get; set; }
+    public string? Country { get; set; }
+    public string? Type { get; set; }
+    public int Season { get; set; }
+    public DateOnly? StartDate { get; set; }
+    public DateOnly? EndDate { get; set; }
+    public bool IsCurrent { get; set; }
+    public DateTimeOffset LastRefreshedAtUtc { get; set; }
+    public string? RawSeasonJson { get; set; }
+    public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
+    public DateTimeOffset UpdatedAt { get; set; } = DateTimeOffset.UtcNow;
+}
+
 public sealed class PredictionRun
 {
     public Guid Id { get; set; }
