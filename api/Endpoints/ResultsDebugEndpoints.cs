@@ -3673,8 +3673,24 @@ public static class ResultsDebugEndpoints
             var pendingCompletedFixtures = fixtureStates
                 .Where(row => IsApiSportsFixtureCompleted(row.StatusShort, row.StatusLong)
                     && !string.Equals(row.ImportStatus, "Imported", StringComparison.OrdinalIgnoreCase))
+                .ToArray();
+            var deferredDueToMaxFixturesPerRun = pendingCompletedFixtures
+                .Where(row => string.Equals(row.SkipReason, "MaxFixturesPerRunLimit", StringComparison.OrdinalIgnoreCase))
+                .ToArray();
+            var failedCompletedFixtures = pendingCompletedFixtures
+                .Where(row => string.Equals(row.ImportStatus, "Failed", StringComparison.OrdinalIgnoreCase))
+                .ToArray();
+            var pendingCompletedFixtureSamples = pendingCompletedFixtures
+                .OrderBy(row => row.EventDate)
+                .ThenBy(row => row.KickoffUtc)
+                .ThenBy(row => row.FixtureId)
                 .Take(25)
                 .ToArray();
+            var oldestPendingCompletedFixture = pendingCompletedFixtures
+                .OrderBy(row => row.EventDate)
+                .ThenBy(row => row.KickoffUtc)
+                .ThenBy(row => row.FixtureId)
+                .FirstOrDefault();
             var visibleRows = await LoadVisibleSoccerWorldCupPlatformRowsAsync(
                 dbContext,
                 "World Cup",
@@ -3794,7 +3810,29 @@ public static class ResultsDebugEndpoints
                     importedPlayerStatRowCount = persisted.TotalRows,
                     failedFixtureCount = importState?.LastFailedFixtureCount ?? fixtureStates.Count(row => string.Equals(row.ImportStatus, "Failed", StringComparison.OrdinalIgnoreCase)),
                     skippedPendingFixtureCount = importState?.LastSkippedPendingFixtureCount ?? fixtureStates.Count(row => string.Equals(row.ImportStatus, "Pending", StringComparison.OrdinalIgnoreCase)),
-                    pendingCompletedFixtures,
+                    selectedCompletedFixturesThisRun = importState is null ? 0 : importState.LastImportedFixtureCount + importState.LastFailedFixtureCount,
+                    importedThisRunCount = importState?.LastImportedFixtureCount ?? 0,
+                    failedThisRunCount = importState?.LastFailedFixtureCount ?? 0,
+                    resultRowsWrittenThisRun = importState?.LastResultRowsWritten ?? 0,
+                    deferredDueToMaxFixturesPerRun = deferredDueToMaxFixturesPerRun.Length,
+                    pendingCompletedFixtureCount = pendingCompletedFixtures.Length,
+                    failedCompletedFixtureCount = failedCompletedFixtures.Length,
+                    oldestPendingCompletedFixture = oldestPendingCompletedFixture is null
+                        ? null
+                        : new
+                        {
+                            oldestPendingCompletedFixture.FixtureId,
+                            oldestPendingCompletedFixture.EventDate,
+                            oldestPendingCompletedFixture.KickoffUtc,
+                            oldestPendingCompletedFixture.HomeTeamName,
+                            oldestPendingCompletedFixture.AwayTeamName,
+                            oldestPendingCompletedFixture.ImportStatus,
+                            oldestPendingCompletedFixture.SkipReason,
+                            oldestPendingCompletedFixture.Attempts,
+                            oldestPendingCompletedFixture.ResultRowsWritten,
+                            oldestPendingCompletedFixture.LastErrorMessage
+                        },
+                    pendingCompletedFixtures = pendingCompletedFixtureSamples,
                     providerApiCallsUsed = importState?.LastApiCallsUsed ?? 0,
                     latestErrorSummary = FirstNonBlank(importState?.LastErrorMessage, apiSportsConfigError),
                     reason = BuildSoccerResultWorkerStatusReason(scheduledStatus, apiSportsConfigError),
@@ -5669,6 +5707,9 @@ public static class ResultsDebugEndpoints
                 importResult.DiscoveredFixtureCount,
                 importResult.CompletedFixtureCount,
                 importResult.SkippedFixtureCount,
+                importResult.DeferredFixtureCount,
+                importResult.AlreadyImportedFixtureCount,
+                importResult.SelectedCompletedFixtureCount,
                 importResult.ImportedFixtureCount,
                 importResult.FailedFixtureCount,
                 importResult.ResultRowsPreviewed,
@@ -5679,6 +5720,8 @@ public static class ResultsDebugEndpoints
                 coverageByDate = importResult.CoverageByDate,
                 completedFixtures = importResult.CompletedFixtures,
                 skippedFixtures = importResult.SkippedFixtures,
+                deferredFixtures = importResult.DeferredFixtures,
+                alreadyImportedFixtures = importResult.AlreadyImportedFixtures,
                 imports = importResult.Imports,
                 failures = importResult.Failures
             });
@@ -6239,9 +6282,35 @@ public static class ResultsDebugEndpoints
     {
         var discovered = await DiscoverApiSportsWorldCupFixturesAsync(client, fromDate, toDate, cancellationToken);
         var completed = discovered.Where(row => IsApiSportsFixtureCompleted(row.StatusShort, row.StatusLong)).ToArray();
+        var completedFixtureIds = completed
+            .Select(row => row.FixtureId)
+            .Where(id => !string.IsNullOrWhiteSpace(id))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        var successfullyImportedFixtureIds = await LoadSuccessfullyImportedApiSportsFixtureIdsAsync(
+            dbContext,
+            fromDate,
+            toDate,
+            completedFixtureIds,
+            cancellationToken);
+        var completedBacklog = completed
+            .Where(row => !successfullyImportedFixtureIds.Contains(row.FixtureId))
+            .OrderBy(row => row.EventDate)
+            .ThenBy(row => row.KickoffUtc)
+            .ThenBy(row => row.FixtureId, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
         var completedToImport = maxCompletedFixtures.HasValue
-            ? completed.Take(Math.Max(0, maxCompletedFixtures.Value)).ToArray()
-            : completed;
+            ? completedBacklog.Take(Math.Max(0, maxCompletedFixtures.Value)).ToArray()
+            : completedBacklog;
+        var deferredCompleted = maxCompletedFixtures.HasValue
+            ? completedBacklog.Skip(Math.Max(0, maxCompletedFixtures.Value)).ToArray()
+            : [];
+        var alreadyImported = completed
+            .Where(row => successfullyImportedFixtureIds.Contains(row.FixtureId))
+            .OrderBy(row => row.EventDate)
+            .ThenBy(row => row.KickoffUtc)
+            .ThenBy(row => row.FixtureId, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
         var skipped = discovered
             .Where(row => !IsApiSportsFixtureCompleted(row.StatusShort, row.StatusLong))
             .Select(row => new ApiSportsWorldCupSkippedFixture(row.FixtureId, row.EventDate, row.StatusShort, row.StatusLong, GetApiSportsFixtureSkipReason(row)))
@@ -6273,7 +6342,7 @@ public static class ResultsDebugEndpoints
                 null));
         }
 
-        foreach (var fixture in completed.Except(completedToImport).ToArray())
+        foreach (var fixture in deferredCompleted)
         {
             scheduledOutcomes.Add(new ApiSportsWorldCupScheduledFixtureOutcome(
                 fixture.FixtureId,
@@ -6283,7 +6352,7 @@ public static class ResultsDebugEndpoints
                 fixture.AwayTeamName,
                 fixture.StatusShort,
                 fixture.StatusLong,
-                "Skipped",
+                "Pending",
                 "MaxFixturesPerRunLimit",
                 0,
                 0,
@@ -6307,6 +6376,26 @@ public static class ResultsDebugEndpoints
                 totalWritten += import.ResultRowsWritten;
                 totalInserted += import.ResultRowsInserted;
                 totalUpdated += import.ResultRowsUpdated;
+                if (import.ResultRowsPreviewed == 0)
+                {
+                    scheduledOutcomes.Add(new ApiSportsWorldCupScheduledFixtureOutcome(
+                        fixture.FixtureId,
+                        fixture.EventDate,
+                        fixture.KickoffUtc,
+                        fixture.HomeTeamName,
+                        fixture.AwayTeamName,
+                        fixture.StatusShort,
+                        fixture.StatusLong,
+                        "Pending",
+                        "NoPlayerStatsAvailable",
+                        import.ResultRowsPreviewed,
+                        import.ResultRowsWritten,
+                        import.ResultRowsInserted,
+                        import.ResultRowsUpdated,
+                        null));
+                    continue;
+                }
+
                 results.Add(new ApiSportsWorldCupFixtureImportOutcome(
                     fixture.FixtureId,
                     fixture.EventDate,
@@ -6370,6 +6459,7 @@ public static class ResultsDebugEndpoints
             toDate,
             discovered,
             skipped,
+            deferredCompleted,
             results,
             failures);
 
@@ -6378,6 +6468,9 @@ public static class ResultsDebugEndpoints
             discovered.Count,
             completed.Length,
             skipped.Count,
+            deferredCompleted.Length,
+            alreadyImported.Length,
+            completedToImport.Length,
             results.Count,
             failures.Count,
             totalPreviewed,
@@ -6387,6 +6480,8 @@ public static class ResultsDebugEndpoints
             CountDateRangeDays(fromDate, toDate) + completedToImport.Length,
             completed,
             skipped,
+            deferredCompleted,
+            alreadyImported,
             results,
             failures,
             coverageByDate,
@@ -6439,6 +6534,58 @@ public static class ResultsDebugEndpoints
             writeSummary,
             BuildApiSportsSoccerMappingDiagnostics(preview),
             ruleConfidenceCounts);
+    }
+
+    private static async Task<HashSet<string>> LoadSuccessfullyImportedApiSportsFixtureIdsAsync(
+        ApplicationDbContext dbContext,
+        DateOnly fromDate,
+        DateOnly toDate,
+        IReadOnlyCollection<string> candidateFixtureIds,
+        CancellationToken cancellationToken)
+    {
+        var importedFixtureIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        if (candidateFixtureIds.Count == 0)
+        {
+            return importedFixtureIds;
+        }
+
+        var resultIdentifiers = await dbContext.PropResults
+            .AsNoTracking()
+            .Where(result => result.ExternalSource == ApiSportsFootballResultSource
+                && result.EventDate >= fromDate
+                && result.EventDate <= toDate
+                && result.ExternalSourceIdentifier.StartsWith($"{ApiSportsFootballResultSource}:"))
+            .Select(result => result.ExternalSourceIdentifier)
+            .ToArrayAsync(cancellationToken);
+
+        foreach (var fixtureId in resultIdentifiers
+            .Select(ExtractApiSportsFixtureId)
+            .Where(id => !string.IsNullOrWhiteSpace(id))
+            .Select(id => id!)
+            .Where(id => candidateFixtureIds.Contains(id, StringComparer.OrdinalIgnoreCase)))
+        {
+            importedFixtureIds.Add(fixtureId);
+        }
+
+        var successfulFixtureStates = await dbContext.SoccerResultImportFixtureStates
+            .AsNoTracking()
+            .Where(state => state.Source == SoccerResultImportWorker.Source
+                && state.Competition == SoccerResultImportWorker.Competition
+                && state.EventDate >= fromDate
+                && state.EventDate <= toDate
+                && state.ImportStatus == "Imported"
+                && state.LastSuccessfulAt.HasValue
+                && state.ResultRowsWritten > 0)
+            .Select(state => state.FixtureId)
+            .ToArrayAsync(cancellationToken);
+
+        foreach (var fixtureId in successfulFixtureStates
+            .Where(id => candidateFixtureIds.Contains(id, StringComparer.OrdinalIgnoreCase)))
+        {
+            importedFixtureIds.Add(fixtureId);
+        }
+
+        return importedFixtureIds;
     }
 
     private static async Task<IReadOnlyList<ApiSportsFixtureDiscoveryRow>> DiscoverApiSportsWorldCupFixturesAsync(
@@ -8519,6 +8666,7 @@ public static class ResultsDebugEndpoints
         DateOnly toDate,
         IReadOnlyList<ApiSportsFixtureDiscoveryRow> discovered,
         IReadOnlyList<ApiSportsWorldCupSkippedFixture> skipped,
+        IReadOnlyList<ApiSportsFixtureDiscoveryRow> deferredCompleted,
         IReadOnlyList<ApiSportsWorldCupFixtureImportOutcome> imports,
         IReadOnlyList<ApiSportsWorldCupFixtureImportFailure> failures)
     {
@@ -8535,6 +8683,9 @@ public static class ResultsDebugEndpoints
         var failedFixtureIds = failures
             .Select(row => row.FixtureId)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var deferredFixtureIds = deferredCompleted
+            .Select(row => row.FixtureId)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
         return EnumerateDateRange(fromDate, toDate)
             .Select(date =>
@@ -8548,6 +8699,9 @@ public static class ResultsDebugEndpoints
                     .ToArray();
                 var importsForDate = imports.Where(row => row.EventDate == date).ToArray();
                 var failuresForDate = failures.Where(row => row.EventDate == date).ToArray();
+                var deferredForDate = discoveredForDate
+                    .Where(row => deferredFixtureIds.Contains(row.FixtureId))
+                    .ToArray();
                 var missingCompletedForDate = completedForDate
                     .Where(row => !successfulImportFixtureIds.Contains(row.FixtureId)
                         && !failedFixtureIds.Contains(row.FixtureId))
@@ -8560,7 +8714,7 @@ public static class ResultsDebugEndpoints
                     importsForDate.Length,
                     importsForDate.Sum(row => row.ResultRowsWritten),
                     importsForDate.Sum(row => row.ResultRowsPreviewed),
-                    skippedForDate.Length,
+                    skippedForDate.Length + deferredForDate.Length,
                     missingCompletedForDate.Length,
                     failuresForDate.Length,
                     1 + completedForDate.Length);
@@ -14831,6 +14985,9 @@ public static class ResultsDebugEndpoints
         int DiscoveredFixtureCount,
         int CompletedFixtureCount,
         int SkippedFixtureCount,
+        int DeferredFixtureCount,
+        int AlreadyImportedFixtureCount,
+        int SelectedCompletedFixtureCount,
         int ImportedFixtureCount,
         int FailedFixtureCount,
         int ResultRowsPreviewed,
@@ -14840,6 +14997,8 @@ public static class ResultsDebugEndpoints
         int ApiCallsUsed,
         IReadOnlyList<ApiSportsFixtureDiscoveryRow> CompletedFixtures,
         IReadOnlyList<ApiSportsWorldCupSkippedFixture> SkippedFixtures,
+        IReadOnlyList<ApiSportsFixtureDiscoveryRow> DeferredFixtures,
+        IReadOnlyList<ApiSportsFixtureDiscoveryRow> AlreadyImportedFixtures,
         IReadOnlyList<ApiSportsWorldCupFixtureImportOutcome> Imports,
         IReadOnlyList<ApiSportsWorldCupFixtureImportFailure> Failures,
         IReadOnlyList<ApiSportsWorldCupDateCoverageRow> CoverageByDate,

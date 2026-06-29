@@ -3674,7 +3674,7 @@ public sealed class RefreshSafetyTests
 
         Assert.Equal("completed_with_pending_fixtures", state.LastStatus);
         Assert.Equal(0, state.LastFailedFixtureCount);
-        Assert.Equal(2, state.LastSkippedPendingFixtureCount);
+        Assert.Equal(3, state.LastSkippedPendingFixtureCount);
         Assert.Equal(1, state.LastImportedFixtureCount);
         Assert.True(state.LastResultRowsWritten > 0);
         var imported = Assert.Single(fixtureStates, row => row.FixtureId == "1489393");
@@ -3693,11 +3693,134 @@ public sealed class RefreshSafetyTests
         Assert.Null(live.LastErrorMessage);
 
         var maxLimited = Assert.Single(fixtureStates, row => row.FixtureId == "99999");
-        Assert.Equal("Skipped", maxLimited.ImportStatus);
+        Assert.Equal("Pending", maxLimited.ImportStatus);
         Assert.Equal("MaxFixturesPerRunLimit", maxLimited.SkipReason);
         Assert.Null(maxLimited.LastErrorMessage);
         Assert.True(factory.ApiSportsFootballClient.FixturesCallCount > 0);
         Assert.Equal(1, factory.ApiSportsFootballClient.FixturePlayerStatsCallCount);
+    }
+
+    [Fact]
+    public async Task SoccerResultImportWorker_RetriesMaxLimitDeferredCompletedFixturesOnLaterRun()
+    {
+        var config = ApiSportsLiveConfig();
+        config["SoccerResultImportWorker:Enabled"] = "true";
+        config["SoccerResultImportWorker:RecentWindowDays"] = "30";
+        config["SoccerResultImportWorker:MaxFixturesPerRun"] = "1";
+        await using var factory = new SafetyTestApplicationFactory(config);
+        await factory.EnsureDatabaseAsync();
+
+        var worker = ActivatorUtilities.CreateInstance<SoccerResultImportWorker>(factory.Services);
+
+        await worker.RunImportCycleAsync(CancellationToken.None);
+        await worker.RunImportCycleAsync(CancellationToken.None);
+
+        using var scope = factory.Services.CreateScope();
+        var dbContext = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+        var state = await dbContext.SoccerResultImportStates.SingleAsync();
+        var imported = await dbContext.SoccerResultImportFixtureStates.SingleAsync(row => row.FixtureId == "1489393");
+        var retried = await dbContext.SoccerResultImportFixtureStates.SingleAsync(row => row.FixtureId == "99999");
+
+        Assert.Equal("partial_failure", state.LastStatus);
+        Assert.Equal(1, state.LastFailedFixtureCount);
+        Assert.Equal(0, state.LastImportedFixtureCount);
+        Assert.Equal("Imported", imported.ImportStatus);
+        Assert.True(imported.ResultRowsWritten > 0);
+        Assert.Equal("Failed", retried.ImportStatus);
+        Assert.Null(retried.SkipReason);
+        Assert.Contains("Synthetic API-Sports player-stat failure", retried.LastErrorMessage, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(1, retried.Attempts);
+        Assert.Equal(2, factory.ApiSportsFootballClient.FixturePlayerStatsCallCount);
+    }
+
+    [Fact]
+    public async Task SoccerResultImportWorker_DoesNotLetAlreadyImportedFixturesConsumeMaxPerRun()
+    {
+        var config = ApiSportsLiveConfig();
+        config["SoccerResultImportWorker:Enabled"] = "true";
+        config["SoccerResultImportWorker:RecentWindowDays"] = "30";
+        config["SoccerResultImportWorker:MaxFixturesPerRun"] = "1";
+        await using var factory = new SafetyTestApplicationFactory(config);
+        using var client = factory.CreateClient();
+        await factory.EnsureDatabaseAsync();
+        var importResponse = await client.PostAsJsonAsync("/api/debug/soccer/results/api-sports/world-cup/backfill-completed", new
+        {
+            fromDate = "2026-06-11",
+            toDate = "2026-06-11",
+            dryRun = false,
+            forceLive = true
+        });
+        await EnsureSuccessWithBodyAsync(importResponse);
+        var callsAfterManualImport = factory.ApiSportsFootballClient.FixturePlayerStatsCallCount;
+        var worker = ActivatorUtilities.CreateInstance<SoccerResultImportWorker>(factory.Services);
+
+        await worker.RunImportCycleAsync(CancellationToken.None);
+
+        using var scope = factory.Services.CreateScope();
+        var dbContext = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+        var state = await dbContext.SoccerResultImportStates.SingleAsync();
+        var retried = await dbContext.SoccerResultImportFixtureStates.SingleAsync(row => row.FixtureId == "99999");
+
+        Assert.Equal("partial_failure", state.LastStatus);
+        Assert.Equal(0, state.LastImportedFixtureCount);
+        Assert.Equal(1, state.LastFailedFixtureCount);
+        Assert.Equal("Failed", retried.ImportStatus);
+        Assert.Equal(callsAfterManualImport + 1, factory.ApiSportsFootballClient.FixturePlayerStatsCallCount);
+    }
+
+    [Fact]
+    public async Task SoccerResultImportWorker_TreatsPersistedSkippedMaxLimitFixtureAsEligible()
+    {
+        var config = ApiSportsLiveConfig();
+        config["SoccerResultImportWorker:Enabled"] = "true";
+        config["SoccerResultImportWorker:RecentWindowDays"] = "30";
+        config["SoccerResultImportWorker:MaxFixturesPerRun"] = "1";
+        await using var factory = new SafetyTestApplicationFactory(config);
+        using var client = factory.CreateClient();
+        await factory.EnsureDatabaseAsync();
+        var importResponse = await client.PostAsJsonAsync("/api/debug/soccer/results/api-sports/world-cup/backfill-completed", new
+        {
+            fromDate = "2026-06-11",
+            toDate = "2026-06-11",
+            dryRun = false,
+            forceLive = true
+        });
+        await EnsureSuccessWithBodyAsync(importResponse);
+
+        using (var scope = factory.Services.CreateScope())
+        {
+            var dbContext = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+            dbContext.SoccerResultImportFixtureStates.Add(new SoccerResultImportFixtureState
+            {
+                Id = Guid.NewGuid(),
+                Source = SoccerResultImportWorker.Source,
+                Competition = SoccerResultImportWorker.Competition,
+                FixtureId = "99999",
+                EventDate = new DateOnly(2026, 6, 14),
+                KickoffUtc = new DateTimeOffset(2026, 6, 14, 19, 0, 0, TimeSpan.Zero),
+                HomeTeamName = "Home FC",
+                AwayTeamName = "Away FC",
+                StatusShort = "FT",
+                StatusLong = "Match Finished",
+                ImportStatus = "Skipped",
+                SkipReason = "MaxFixturesPerRunLimit",
+                ResultRowsWritten = 0,
+                Attempts = 0
+            });
+            await dbContext.SaveChangesAsync();
+        }
+
+        var worker = ActivatorUtilities.CreateInstance<SoccerResultImportWorker>(factory.Services);
+
+        await worker.RunImportCycleAsync(CancellationToken.None);
+
+        using var verifyScope = factory.Services.CreateScope();
+        var verifyDbContext = verifyScope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+        var recovered = await verifyDbContext.SoccerResultImportFixtureStates.SingleAsync(row => row.FixtureId == "99999");
+        Assert.Equal("Failed", recovered.ImportStatus);
+        Assert.Null(recovered.SkipReason);
+        Assert.Equal(1, recovered.Attempts);
+        Assert.Contains("Synthetic API-Sports player-stat failure", recovered.LastErrorMessage, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]

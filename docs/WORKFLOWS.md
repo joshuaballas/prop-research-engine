@@ -413,7 +413,7 @@ Invoke-RestMethod "$base/api/debug/soccer/results/api-sports/world-cup/import-st
   ConvertTo-Json -Depth 80
 ```
 
-Backfill completed API-Sports Football fixtures with the existing debug-only endpoint. `dryRun=true` is the default, but live discovery still requires `forceLive=true`; review `coverageByDate`, skipped fixtures, failures, and preview row counts before setting `dryRun=false`.
+Backfill completed API-Sports Football fixtures with the existing debug-only endpoint. `dryRun=true` is the default, but live discovery still requires `forceLive=true`; review `coverageByDate`, skipped fixtures, deferred fixtures, failures, and preview row counts before setting `dryRun=false`. A completed fixture deferred by `MaxFixturesPerRunLimit` is backlog, not terminally skipped; it remains eligible for the next scheduled worker cycle or manual backfill until it imports successfully or records a true import failure.
 
 ```powershell
 Invoke-RestMethod -Method Post "$base/api/debug/soccer/results/api-sports/world-cup/backfill-completed" `

@@ -111,7 +111,7 @@ public sealed class SoccerResultImportWorker(
             state.LastCompletedAt = completedAt;
             state.LastStatus = result.FailedFixtureCount > 0
                 ? "partial_failure"
-                : result.SkippedFixtureCount > 0
+                : result.SkippedFixtureCount > 0 || result.DeferredFixtureCount > 0
                     ? "completed_with_pending_fixtures"
                     : "succeeded";
             state.LastErrorMessage = result.Failures.FirstOrDefault()?.Message;
@@ -126,7 +126,7 @@ public sealed class SoccerResultImportWorker(
             state.LastCompletedFixtureCount = result.CompletedFixtureCount;
             state.LastImportedFixtureCount = result.ImportedFixtureCount;
             state.LastFailedFixtureCount = result.FailedFixtureCount;
-            state.LastSkippedPendingFixtureCount = result.SkippedFixtureCount;
+            state.LastSkippedPendingFixtureCount = result.SkippedFixtureCount + result.DeferredFixtureCount;
             state.LastResultRowsWritten = result.ResultRowsWritten;
             state.LastResultRowsInserted = result.ResultRowsInserted;
             state.LastResultRowsUpdated = result.ResultRowsUpdated;
@@ -134,12 +134,15 @@ public sealed class SoccerResultImportWorker(
             await dbContext.SaveChangesAsync(cancellationToken);
 
             logger.LogInformation(
-                "Soccer World Cup result import worker cycle completed. Range: {FromDate}..{ToDate}; discovered: {Discovered}; completed: {Completed}; importedFixtures: {ImportedFixtures}; skippedPending: {SkippedPending}; failed: {Failed}; rowsWritten: {RowsWritten}; apiCallsUsed: {ApiCallsUsed}.",
+                "Soccer World Cup result import worker cycle completed. Range: {FromDate}..{ToDate}; discovered: {Discovered}; completed: {Completed}; selectedCompleted: {SelectedCompleted}; alreadyImported: {AlreadyImported}; importedFixtures: {ImportedFixtures}; deferred: {Deferred}; skippedPending: {SkippedPending}; failed: {Failed}; rowsWritten: {RowsWritten}; apiCallsUsed: {ApiCallsUsed}.",
                 fromDate,
                 toDate,
                 result.DiscoveredFixtureCount,
                 result.CompletedFixtureCount,
+                result.SelectedCompletedFixtureCount,
+                result.AlreadyImportedFixtureCount,
                 result.ImportedFixtureCount,
+                result.DeferredFixtureCount,
                 result.SkippedFixtureCount,
                 result.FailedFixtureCount,
                 result.ResultRowsWritten,
