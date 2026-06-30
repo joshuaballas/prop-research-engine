@@ -26,6 +26,7 @@ builder.Logging.ClearProviders();
 builder.Logging.AddConsole();
 
 builder.Services.AddOpenApi();
+builder.Services.AddMemoryCache();
 builder.Services.AddCors(options =>
 {
     options.AddDefaultPolicy(policy =>
@@ -103,6 +104,7 @@ builder.Services.AddScoped<IMlbResultCoverageService, MlbResultCoverageService>(
 builder.Services.AddScoped<ITheOddsApiMlbEventIngestionService, TheOddsApiMlbEventIngestionService>();
 builder.Services.AddScoped<ITheOddsMlbIngestionPlanner, TheOddsMlbIngestionPlanner>();
 builder.Services.AddScoped<ITheOddsRefreshPlannerService, TheOddsRefreshPlannerService>();
+builder.Services.AddScoped<IProviderDomainConfigService, ProviderDomainConfigService>();
 builder.Services.AddScoped<IPropResultRepository, PropResultRepository>();
 builder.Services.AddScoped<IPredictionRepository, PredictionRepository>();
 builder.Services.AddScoped<IPlayerIdentityAliasService, PlayerIdentityAliasService>();
@@ -151,6 +153,7 @@ if (!app.Environment.IsEnvironment("Testing"))
 {
     await ApplyDatabaseMigrationsAsync(app);
     await SeedAppConfigsAsync(app);
+    await SeedProviderDomainConfigsAsync(app);
 }
 
 if (app.Environment.IsDevelopment())
@@ -196,6 +199,7 @@ app.MapPlayerMappingDebugEndpoints();
 app.MapMarketClassificationDebugEndpoints();
 app.MapApplicationErrorDebugEndpoints();
 app.MapAppConfigDebugEndpoints();
+app.MapProviderDomainConfigDebugEndpoints();
 app.MapSystemHealthDebugEndpoints();
 app.MapDfsDebugEndpoints();
 app.MapTheOddsApiDebugEndpoints();
@@ -269,6 +273,30 @@ static async Task SeedAppConfigsAsync(WebApplication app)
     catch (Exception exception)
     {
         logger.LogWarning(exception, "AppConfigs seed failed; appsettings/default fallbacks remain active.");
+    }
+}
+
+static async Task SeedProviderDomainConfigsAsync(WebApplication app)
+{
+    await using var scope = app.Services.CreateAsyncScope();
+    var logger = scope.ServiceProvider
+        .GetRequiredService<ILoggerFactory>()
+        .CreateLogger("ProviderDomainConfigSeeder");
+
+    try
+    {
+        var result = await ProviderDomainConfigSeeder.SeedAsync(scope.ServiceProvider);
+        logger.LogInformation(
+            "Provider domain config seed completed. Competitions inserted: {CompetitionsInserted}; markets inserted: {MarketsInserted}; bookmakers inserted: {BookmakersInserted}; refresh targets inserted: {RefreshTargetsInserted}; metadata updated: {MetadataUpdated}.",
+            result.CompetitionsInserted,
+            result.MarketsInserted,
+            result.BookmakersInserted,
+            result.RefreshTargetsInserted,
+            result.MetadataUpdated);
+    }
+    catch (Exception exception)
+    {
+        logger.LogWarning(exception, "Provider domain config seed failed; structured appsettings fallbacks remain active.");
     }
 }
 

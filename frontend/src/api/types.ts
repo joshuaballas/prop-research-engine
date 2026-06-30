@@ -7,6 +7,18 @@ export interface MarketFreshnessDto {
   staleReason?: string | null;
   hasUsableMarketData?: boolean;
   minutesSinceLatestSuccessfulRefresh?: number | null;
+  lastSuccessfulRefreshCompletedAtUtc?: string | null;
+  latestSuccessfulRefreshCompletedAtUtc?: string | null;
+  nextRefreshAtUtc?: string | null;
+  nextRefreshDueUtc?: string | null;
+  nextRefreshStartEstimateUtc?: string | null;
+  nextHeaderSyncTargetUtc?: string | null;
+  nextDataAvailableEstimateUtc?: string | null;
+  secondsUntilNextRefresh?: number | null;
+  secondsUntilNextRefreshDue?: number | null;
+  secondsUntilNextDataAvailable?: number | null;
+  isRefreshInProgress?: boolean | null;
+  isOverdue?: boolean | null;
   lineShoppingSnapshotCount?: number;
   topPickSnapshotCount?: number;
   activeGroupCount?: number;

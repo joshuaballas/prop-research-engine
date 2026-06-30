@@ -8,6 +8,7 @@ public static class AppConfigClassifications
     public const string KeepInSecretProvider = "KeepInSecretProvider";
     public const string MoveToAppConfigs = "MoveToAppConfigs";
     public const string MoveToDomainTable = "MoveToDomainTable";
+    public const string MovedToDomainTable = "MovedToDomainTable";
     public const string RemoveRedundant = "RemoveRedundant";
     public const string NeedsDecision = "NeedsDecision";
 }

@@ -17,6 +17,10 @@ public sealed class ApplicationDbContext(DbContextOptions<ApplicationDbContext> 
     public DbSet<PlayerExternalRef> PlayerExternalRefs => Set<PlayerExternalRef>();
     public DbSet<ProviderEntityLink> ProviderEntityLinks => Set<ProviderEntityLink>();
     public DbSet<ProviderStatMapping> ProviderStatMappings => Set<ProviderStatMapping>();
+    public DbSet<ProviderCompetition> ProviderCompetitions => Set<ProviderCompetition>();
+    public DbSet<ProviderMarket> ProviderMarkets => Set<ProviderMarket>();
+    public DbSet<ProviderBookmaker> ProviderBookmakers => Set<ProviderBookmaker>();
+    public DbSet<ProviderRefreshTarget> ProviderRefreshTargets => Set<ProviderRefreshTarget>();
     public DbSet<PlayerMergeAudit> PlayerMergeAudits => Set<PlayerMergeAudit>();
     public DbSet<Game> Games => Set<Game>();
     public DbSet<PropType> PropTypes => Set<PropType>();
@@ -67,6 +71,7 @@ public sealed class ApplicationDbContext(DbContextOptions<ApplicationDbContext> 
         ConfigurePredictionTables(modelBuilder);
         ConfigureRecommendationSnapshotTables(modelBuilder);
         ConfigureProviderLineLifecycleTables(modelBuilder);
+        ConfigureProviderDomainConfigTables(modelBuilder);
         ConfigureIngestionTables(modelBuilder);
         ConfigureCorrelationTables(modelBuilder);
         ConfigureOptimizationTables(modelBuilder);
@@ -886,6 +891,80 @@ public sealed class ApplicationDbContext(DbContextOptions<ApplicationDbContext> 
             entity.HasIndex(x => x.RefreshRunId).HasDatabaseName("ix_provider_line_lifecycle_events_refresh_run_id");
             entity.HasIndex(x => x.OccurredAtUtc).HasDatabaseName("ix_provider_line_lifecycle_events_occurred_at_utc");
             entity.HasIndex(x => x.EventType).HasDatabaseName("ix_provider_line_lifecycle_events_event_type");
+        });
+    }
+
+    private static void ConfigureProviderDomainConfigTables(ModelBuilder modelBuilder)
+    {
+        modelBuilder.Entity<ProviderCompetition>(entity =>
+        {
+            entity.ToTable("provider_competitions");
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.ProviderKey).HasMaxLength(100).IsRequired();
+            entity.Property(x => x.Sport).HasMaxLength(50).IsRequired();
+            entity.Property(x => x.CompetitionKey).HasMaxLength(100).IsRequired();
+            entity.Property(x => x.DisplayName).HasMaxLength(200).IsRequired();
+            entity.Property(x => x.Country).HasMaxLength(100);
+            entity.Property(x => x.CompetitionType).HasMaxLength(50);
+            entity.Property(x => x.ProviderSportKey).HasMaxLength(100);
+            entity.Property(x => x.Notes).HasMaxLength(1000);
+            entity.HasIndex(x => new { x.ProviderKey, x.Sport, x.CompetitionKey }).IsUnique();
+            entity.HasIndex(x => new { x.ProviderKey, x.Sport });
+            entity.HasIndex(x => x.IsEnabled);
+            entity.HasIndex(x => x.ProviderLeagueId);
+        });
+
+        modelBuilder.Entity<ProviderMarket>(entity =>
+        {
+            entity.ToTable("provider_markets");
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.ProviderKey).HasMaxLength(100).IsRequired();
+            entity.Property(x => x.Sport).HasMaxLength(50).IsRequired();
+            entity.Property(x => x.CompetitionKey).HasMaxLength(100);
+            entity.Property(x => x.ProviderCategory).HasMaxLength(50).IsRequired();
+            entity.Property(x => x.MarketKey).HasMaxLength(150).IsRequired();
+            entity.Property(x => x.DisplayName).HasMaxLength(200).IsRequired();
+            entity.Property(x => x.InternalPropType).HasMaxLength(150);
+            entity.Property(x => x.Notes).HasMaxLength(1000);
+            entity.HasIndex(x => new { x.ProviderKey, x.Sport, x.CompetitionKey, x.ProviderCategory, x.MarketKey }).IsUnique();
+            entity.HasIndex(x => new { x.ProviderKey, x.Sport, x.IsEnabled });
+            entity.HasIndex(x => x.MarketKey);
+        });
+
+        modelBuilder.Entity<ProviderBookmaker>(entity =>
+        {
+            entity.ToTable("provider_bookmakers");
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.ProviderKey).HasMaxLength(100).IsRequired();
+            entity.Property(x => x.BookmakerKey).HasMaxLength(150).IsRequired();
+            entity.Property(x => x.DisplayName).HasMaxLength(200).IsRequired();
+            entity.Property(x => x.ProviderCategory).HasMaxLength(50).IsRequired();
+            entity.Property(x => x.Region).HasMaxLength(50).IsRequired();
+            entity.Property(x => x.Notes).HasMaxLength(1000);
+            entity.HasIndex(x => new { x.ProviderKey, x.BookmakerKey, x.ProviderCategory, x.Region }).IsUnique();
+            entity.HasIndex(x => new { x.ProviderKey, x.ProviderCategory, x.IsEnabled });
+            entity.HasIndex(x => x.BookmakerKey);
+        });
+
+        modelBuilder.Entity<ProviderRefreshTarget>(entity =>
+        {
+            entity.ToTable("provider_refresh_targets");
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.ProviderKey).HasMaxLength(100).IsRequired();
+            entity.Property(x => x.TargetKey).HasMaxLength(150).IsRequired();
+            entity.Property(x => x.Sport).HasMaxLength(50).IsRequired();
+            entity.Property(x => x.CompetitionKey).HasMaxLength(100).IsRequired();
+            entity.Property(x => x.CompetitionDisplayName).HasMaxLength(200).IsRequired();
+            entity.Property(x => x.ProviderCategory).HasMaxLength(50).IsRequired();
+            entity.Property(x => x.BookmakerPreset).HasMaxLength(100).IsRequired();
+            entity.Property(x => x.ProviderSportKey).HasMaxLength(100);
+            entity.Property(x => x.Regions).HasMaxLength(200);
+            entity.Property(x => x.DisabledReason).HasMaxLength(1000);
+            entity.Property(x => x.Notes).HasMaxLength(1000);
+            entity.HasIndex(x => new { x.ProviderKey, x.TargetKey }).IsUnique();
+            entity.HasIndex(x => new { x.ProviderKey, x.IsEnabled });
+            entity.HasIndex(x => new { x.Sport, x.CompetitionKey, x.ProviderCategory });
+            entity.HasIndex(x => x.Priority);
         });
     }
 

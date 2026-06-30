@@ -157,6 +157,93 @@ public sealed class ProviderStatMapping
     public PropType? CanonicalPropType { get; set; }
 }
 
+public sealed class ProviderCompetition
+{
+    public Guid Id { get; set; }
+    public string ProviderKey { get; set; } = string.Empty;
+    public string Sport { get; set; } = string.Empty;
+    public string CompetitionKey { get; set; } = string.Empty;
+    public string DisplayName { get; set; } = string.Empty;
+    public string? Country { get; set; }
+    public string? CompetitionType { get; set; }
+    public int? ProviderLeagueId { get; set; }
+    public string? ProviderSportKey { get; set; }
+    public bool IsEnabled { get; set; } = true;
+    public bool SupportsResultsImport { get; set; }
+    public bool SupportsOddsImport { get; set; }
+    public bool SupportsSeasonMetadata { get; set; }
+    public bool IsFixedSeason { get; set; }
+    public int? FixedSeason { get; set; }
+    public int Priority { get; set; } = 100;
+    public string? Notes { get; set; }
+    public DateTimeOffset CreatedAtUtc { get; set; } = DateTimeOffset.UtcNow;
+    public DateTimeOffset UpdatedAtUtc { get; set; } = DateTimeOffset.UtcNow;
+}
+
+public sealed class ProviderMarket
+{
+    public Guid Id { get; set; }
+    public string ProviderKey { get; set; } = string.Empty;
+    public string Sport { get; set; } = string.Empty;
+    public string? CompetitionKey { get; set; }
+    public string ProviderCategory { get; set; } = "Any";
+    public string MarketKey { get; set; } = string.Empty;
+    public string DisplayName { get; set; } = string.Empty;
+    public string? InternalPropType { get; set; }
+    public bool IsEnabled { get; set; } = true;
+    public bool IsDefault { get; set; } = true;
+    public bool SupportsOddsImport { get; set; } = true;
+    public bool SupportsLineShopping { get; set; } = true;
+    public bool SupportsTopPicks { get; set; }
+    public int Priority { get; set; } = 100;
+    public string? Notes { get; set; }
+    public DateTimeOffset CreatedAtUtc { get; set; } = DateTimeOffset.UtcNow;
+    public DateTimeOffset UpdatedAtUtc { get; set; } = DateTimeOffset.UtcNow;
+}
+
+public sealed class ProviderBookmaker
+{
+    public Guid Id { get; set; }
+    public string ProviderKey { get; set; } = string.Empty;
+    public string BookmakerKey { get; set; } = string.Empty;
+    public string DisplayName { get; set; } = string.Empty;
+    public string ProviderCategory { get; set; } = string.Empty;
+    public string Region { get; set; } = string.Empty;
+    public bool IsEnabled { get; set; } = true;
+    public bool IsDefault { get; set; }
+    public bool IsExpandedCoverage { get; set; }
+    public bool SupportsLineShopping { get; set; } = true;
+    public bool SupportsEntryBuilder { get; set; }
+    public int Priority { get; set; } = 100;
+    public string? Notes { get; set; }
+    public DateTimeOffset CreatedAtUtc { get; set; } = DateTimeOffset.UtcNow;
+    public DateTimeOffset UpdatedAtUtc { get; set; } = DateTimeOffset.UtcNow;
+}
+
+public sealed class ProviderRefreshTarget
+{
+    public Guid Id { get; set; }
+    public string ProviderKey { get; set; } = string.Empty;
+    public string TargetKey { get; set; } = string.Empty;
+    public string Sport { get; set; } = string.Empty;
+    public string CompetitionKey { get; set; } = string.Empty;
+    public string CompetitionDisplayName { get; set; } = string.Empty;
+    public string ProviderCategory { get; set; } = string.Empty;
+    public string BookmakerPreset { get; set; } = string.Empty;
+    public string? ProviderSportKey { get; set; }
+    public string? Regions { get; set; }
+    public int? MaxEvents { get; set; }
+    public int? EstimatedApiCalls { get; set; }
+    public bool SupportsResults { get; set; }
+    public bool SupportsHistory { get; set; }
+    public bool IsEnabled { get; set; }
+    public string? DisabledReason { get; set; }
+    public string? Notes { get; set; }
+    public int Priority { get; set; } = 100;
+    public DateTimeOffset CreatedAtUtc { get; set; } = DateTimeOffset.UtcNow;
+    public DateTimeOffset UpdatedAtUtc { get; set; } = DateTimeOffset.UtcNow;
+}
+
 public sealed class PlayerMergeAudit
 {
     public Guid MergeId { get; set; }

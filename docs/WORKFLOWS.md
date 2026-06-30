@@ -28,13 +28,13 @@ Invoke-RestMethod -Uri "http://localhost:5299/api/debug/system/health"
 
 `AppConfigs` is the first DB-backed configuration layer for non-secret scalar operational/runtime knobs. It is not a secret store. Connection strings, The Odds/API-Sports keys, auth/debug admin API keys, payment credentials, webhook signing secrets, encryption keys, passwords, tokens, and other credentials stay in user-secrets, environment variables, deployment-time app settings, or future Azure Key Vault-linked variable groups. Do not store plaintext secrets in `AppConfigs`.
 
-Structured business/config data does not belong in `AppConfigs`. Supported competitions, provider targets, bookmakers, markets, mappings, and other rows with identity/enabled flags are classified as `MoveToDomainTable` until a dedicated table/editor exists. The audit reports these at the parent path by default instead of exploding arrays into indexed leaf keys. JSON blob settings are not promoted as normal AppConfig rows.
+Structured business/config data does not belong in `AppConfigs`. Supported provider competitions, provider targets, bookmakers, markets, mappings, and other rows with identity/enabled flags live in normalized provider-domain tables. Migrated appsettings paths are classified as `MovedToDomainTable`; remaining future candidates can still use `MoveToDomainTable`. The audit reports these at the parent path by default instead of exploding arrays into indexed leaf keys. JSON blob settings are not promoted as normal AppConfig rows.
 
 The app still loads `appsettings.json`, environment-specific appsettings, ignored local appsettings, command-line args, and environment variables as bootstrap/fallback config. After EF migrations run, the startup seeder inserts missing scalar `MoveToAppConfigs` rows as `Environment=Global` and preserves DB-edited values. Environment-specific rows are overrides only. Effective reads prefer current-environment override, then `Global`, then appsettings fallback, then code default. Invalid DB values are diagnosed and fall back safely.
 
 Operator-facing metadata lives in the catalog/debug output for this pass: display name, short display name, category, section, help text, input type, unit, min/max, advanced/hidden flags, impact level, and sort order. Advanced/internal settings such as the legacy The Odds ingestion worker, direct Underdog ingestion, and compatibility Soccer fixture caps are hidden from a future normal admin UI by default.
 
-`GET /api/debug/app-configs` is the effective scalar-settings endpoint. By default it returns only visible, non-sensitive `MoveToAppConfigs` rows. Use `/api/debug/app-configs/audit` for `KeepInSecretProvider`, `KeepInBootstrapConfig`, `MoveToDomainTable`, `NeedsDecision`, and `RemoveRedundant` rows. Effective rows expose:
+`GET /api/debug/app-configs` is the effective scalar-settings endpoint. By default it returns only visible, non-sensitive `MoveToAppConfigs` rows. Use `/api/debug/app-configs/audit` for `KeepInSecretProvider`, `KeepInBootstrapConfig`, `MoveToDomainTable`, `MovedToDomainTable`, `NeedsDecision`, and `RemoveRedundant` rows. Effective rows expose:
 
 - `configuredValue`: AppConfigs row value when a DB row is selected, otherwise null.
 - `effectiveValue`: value used after environment/global/appsettings/code-default resolution; null for sensitive rows.
@@ -45,6 +45,63 @@ Operator-facing metadata lives in the catalog/debug output for this pass: displa
 Audit counts are parent/default counts. `includeChildren=true` returns detailed child rows such as model leaf settings with `isChildAuditItem=true`; child and total counts are reported separately so compact status and audit counts do not disagree.
 
 Legacy Soccer World Cup scalar overrides are retired. World Cup uses the fixed league `1`, season `2026` descriptor; recurring competitions resolve provider seasons from cached API-Sports `/leagues` metadata. The Soccer result worker competition allow-list remains an internal worker option, not a DB-editable scalar AppConfig.
+
+## Provider Domain Configuration
+
+Provider-domain tables own structured provider rows:
+
+- `provider_competitions`: supported provider competitions/leagues. API-Sports Football rows include EPL, La Liga, Bundesliga, Serie A, Ligue 1, MLS, Champions League, and fixed World Cup 2026.
+- `provider_markets`: The Odds market keys by sport, competition, and provider category.
+- `provider_bookmakers`: The Odds sportsbook/DFS bookmaker keys, region, default/expanded coverage flags, and Entry Builder support metadata.
+- `provider_refresh_targets`: scheduled refresh target topology such as `mlb-dfs`, `mlb-sportsbook`, and `soccer-world-cup-sportsbook`.
+
+Startup seeds missing provider-domain rows idempotently from the effective appsettings/options values, updates descriptive metadata, and preserves operator-edited enabled flags and priorities. Runtime readers prefer these DB rows and use appsettings/code fallback only when the domain rows are absent or the DB read fails during migration. Do not put API keys or secrets in provider-domain tables.
+
+Read-only inspection:
+
+```powershell
+$base = "http://localhost:5299"
+New-Item -ItemType Directory -Force .\tmp-analysis | Out-Null
+
+$domain = Invoke-RestMethod "$base/api/debug/provider-domain-config/status"
+$domain | ConvertTo-Json -Depth 100 | Set-Content .\tmp-analysis\provider-domain-config-status-full.json
+[pscustomobject]@{
+  ProviderCompetitionCount = $domain.providerCompetitionCount
+  EnabledProviderCompetitionCount = $domain.enabledProviderCompetitionCount
+  ProviderMarketCount = $domain.providerMarketCount
+  EnabledProviderMarketCount = $domain.enabledProviderMarketCount
+  ProviderBookmakerCount = $domain.providerBookmakerCount
+  EnabledProviderBookmakerCount = $domain.enabledProviderBookmakerCount
+  ProviderRefreshTargetCount = $domain.providerRefreshTargetCount
+  EnabledProviderRefreshTargetCount = $domain.enabledProviderRefreshTargetCount
+  AppsettingsFallbackCount = $domain.appsettingsFallbackCount
+} | Format-List
+
+$targets = Invoke-RestMethod "$base/api/debug/provider-domain-config/refresh-targets?includeDisabled=true"
+$targets | ConvertTo-Json -Depth 100 | Set-Content .\tmp-analysis\provider-refresh-targets-full.json
+$targets.targets |
+  Select-Object targetKey,sport,competitionKey,competitionDisplayName,providerCategory,isEnabled,providerSportKey,bookmakerPreset,estimatedApiCalls,disabledReason |
+  Format-Table -AutoSize
+```
+
+Safe manual SQL examples:
+
+```sql
+UPDATE provider_refresh_targets
+SET is_enabled = true,
+    disabled_reason = NULL,
+    updated_at_utc = now()
+WHERE provider_key = 'THE_ODDS_API'
+  AND target_key = 'mlb-sportsbook';
+
+UPDATE provider_competitions
+SET is_enabled = false,
+    notes = 'Temporarily disabled by operator.',
+    updated_at_utc = now()
+WHERE provider_key = 'API_SPORTS_FOOTBALL'
+  AND sport = 'SOCCER'
+  AND competition_key = 'MLS';
+```
 
 Console-safe inspection:
 
@@ -88,9 +145,9 @@ $status | ConvertTo-Json -Depth 100 | Set-Content .\tmp-analysis\app-configs-sta
 "Classification counts:"
 $status.countsByClassification | Format-Table -AutoSize
 
-"MoveToDomainTable:"
+"MovedToDomainTable:"
 $audit.settings |
-  Where-Object { $_.classification -eq "MoveToDomainTable" } |
+  Where-Object { $_.classification -eq "MovedToDomainTable" } |
   Select-Object key,displayName,reason |
   Format-Table -AutoSize
 

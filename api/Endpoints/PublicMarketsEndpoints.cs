@@ -64,6 +64,9 @@ public static class PublicMarketsEndpoints
             IOptions<SoccerPredictionsOptions> soccerPredictionOptions,
             IOptions<SoccerGradingOptions> soccerGradingOptions,
             IOptions<SoccerTopPicksOptions> soccerTopPicksOptions,
+            IOptions<TheOddsScheduledRefreshOptions> scheduledRefreshOptions,
+            ITheOddsScheduledRefreshState scheduledRefreshState,
+            ITheOddsRefreshPlannerService planner,
             ApplicationDbContext dbContext,
             CancellationToken cancellationToken) =>
         {
@@ -82,6 +85,9 @@ public static class PublicMarketsEndpoints
                 soccerPredictionOptions.Value,
                 soccerGradingOptions.Value,
                 soccerTopPicksOptions.Value,
+                scheduledRefreshOptions.Value,
+                scheduledRefreshState,
+                planner,
                 dbContext,
                 cancellationToken);
 
@@ -202,6 +208,9 @@ public static class PublicMarketsEndpoints
             IOptions<SoccerPredictionsOptions> soccerPredictionOptions,
             IOptions<SoccerGradingOptions> soccerGradingOptions,
             IOptions<SoccerTopPicksOptions> soccerTopPicksOptions,
+            IOptions<TheOddsScheduledRefreshOptions> scheduledRefreshOptions,
+            ITheOddsScheduledRefreshState scheduledRefreshState,
+            ITheOddsRefreshPlannerService planner,
             ApplicationDbContext dbContext,
             CancellationToken cancellationToken) =>
         {
@@ -214,6 +223,9 @@ public static class PublicMarketsEndpoints
                 soccerPredictionOptions.Value,
                 soccerGradingOptions.Value,
                 soccerTopPicksOptions.Value,
+                scheduledRefreshOptions.Value,
+                scheduledRefreshState,
+                planner,
                 dbContext,
                 cancellationToken);
 
@@ -573,9 +585,18 @@ public static class PublicMarketsEndpoints
         SoccerPredictionsOptions soccerPredictionOptions,
         SoccerGradingOptions soccerGradingOptions,
         SoccerTopPicksOptions soccerTopPicksOptions,
+        TheOddsScheduledRefreshOptions scheduledRefreshOptions,
+        ITheOddsScheduledRefreshState scheduledRefreshState,
+        ITheOddsRefreshPlannerService planner,
         ApplicationDbContext dbContext,
         CancellationToken cancellationToken)
     {
+        var refreshTiming = await BuildScheduledRefreshTimingAsync(
+            scheduledRefreshOptions,
+            scheduledRefreshState,
+            planner,
+            cancellationToken);
+
         if (IsSoccerSport(effectiveSport))
         {
             return await BuildGenericMarketFreshnessResponseAsync(
@@ -588,7 +609,8 @@ public static class PublicMarketsEndpoints
                 soccerGradingOptions,
                 soccerTopPicksOptions,
                 dbContext,
-                cancellationToken);
+                cancellationToken,
+                refreshTiming);
         }
 
         var response = await TheOddsApiDebugEndpoints.BuildMlbRefreshFreshnessResponseAsync(
@@ -601,6 +623,7 @@ public static class PublicMarketsEndpoints
             freshnessMinutes,
             dbContext,
             cancellationToken);
+        providerStatus = AlignProviderStatusWithPublicBoard(providerStatus, response.HasUsableMarketData);
 
         return new
         {
@@ -612,6 +635,18 @@ public static class PublicMarketsEndpoints
             effectiveSport,
             limitation = BuildMarketReadLimitation(soccerPredictionOptions.Enabled, soccerGradingOptions.Enabled),
             latestSuccessfulRefresh = response.LatestSuccessfulRun,
+            lastSuccessfulRefreshCompletedAtUtc = refreshTiming.LastSuccessfulRefreshCompletedAtUtc,
+            latestSuccessfulRefreshCompletedAtUtc = refreshTiming.LastSuccessfulRefreshCompletedAtUtc,
+            refreshTiming.NextRefreshAtUtc,
+            refreshTiming.NextRefreshDueUtc,
+            refreshTiming.NextRefreshStartEstimateUtc,
+            refreshTiming.NextHeaderSyncTargetUtc,
+            refreshTiming.NextDataAvailableEstimateUtc,
+            refreshTiming.SecondsUntilNextRefresh,
+            refreshTiming.SecondsUntilNextRefreshDue,
+            refreshTiming.SecondsUntilNextDataAvailable,
+            refreshTiming.IsRefreshInProgress,
+            refreshTiming.IsOverdue,
             latestProviderIngestionRun = response.LatestProviderIngestionRun,
             latestFinalizationRun = response.LatestFinalizationRun,
             latestUsablePublicSnapshotRun = response.LatestUsablePublicSnapshotRun,
@@ -660,7 +695,8 @@ public static class PublicMarketsEndpoints
         SoccerGradingOptions soccerGradingOptions,
         SoccerTopPicksOptions soccerTopPicksOptions,
         ApplicationDbContext dbContext,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        TheOddsScheduledRefreshTimingSnapshot? refreshTiming = null)
     {
         var thresholdMinutes = Math.Clamp(freshnessMinutes ?? 30, 1, 1440);
         var generatedAtUtc = DateTimeOffset.UtcNow;
@@ -728,6 +764,18 @@ public static class PublicMarketsEndpoints
             competition = ResolveCompetitionName(effectiveSport),
             resultGradingSupported = soccerGradingOptions.Enabled,
             limitation = BuildMarketReadLimitation(soccerPredictionOptions.Enabled, soccerGradingOptions.Enabled),
+            lastSuccessfulRefreshCompletedAtUtc = refreshTiming?.LastSuccessfulRefreshCompletedAtUtc,
+            latestSuccessfulRefreshCompletedAtUtc = refreshTiming?.LastSuccessfulRefreshCompletedAtUtc,
+            nextRefreshAtUtc = refreshTiming?.NextRefreshAtUtc,
+            nextRefreshDueUtc = refreshTiming?.NextRefreshDueUtc,
+            nextRefreshStartEstimateUtc = refreshTiming?.NextRefreshStartEstimateUtc,
+            nextHeaderSyncTargetUtc = refreshTiming?.NextHeaderSyncTargetUtc,
+            nextDataAvailableEstimateUtc = refreshTiming?.NextDataAvailableEstimateUtc,
+            secondsUntilNextRefresh = refreshTiming?.SecondsUntilNextRefresh,
+            secondsUntilNextRefreshDue = refreshTiming?.SecondsUntilNextRefreshDue,
+            secondsUntilNextDataAvailable = refreshTiming?.SecondsUntilNextDataAvailable,
+            isRefreshInProgress = refreshTiming?.IsRefreshInProgress,
+            isOverdue = refreshTiming?.IsOverdue,
             latestSuccessfulRefresh = latestSuccessfulRun is null
                 ? null
                 : new
@@ -1069,6 +1117,39 @@ public static class PublicMarketsEndpoints
                     ? "Target is eligible for the next scheduled cycle."
                     : target.SkipReason
             }).ToArray()
+        };
+    }
+
+    private static async Task<TheOddsScheduledRefreshTimingSnapshot> BuildScheduledRefreshTimingAsync(
+        TheOddsScheduledRefreshOptions scheduledOptions,
+        ITheOddsScheduledRefreshState scheduledRefreshState,
+        ITheOddsRefreshPlannerService planner,
+        CancellationToken cancellationToken)
+    {
+        var plan = await planner.BuildPlanAsync(cancellationToken);
+        return TheOddsScheduledRefreshTiming.Resolve(
+            scheduledOptions,
+            plan,
+            scheduledRefreshState.GetSnapshot());
+    }
+
+    private static TheOddsProviderStatusReadModel AlignProviderStatusWithPublicBoard(
+        TheOddsProviderStatusReadModel providerStatus,
+        bool hasUsableMarketData)
+    {
+        if (!hasUsableMarketData
+            || !string.Equals(providerStatus.status, "Degraded", StringComparison.OrdinalIgnoreCase)
+            || !providerStatus.statusReason.Contains("no usable active market snapshots", StringComparison.OrdinalIgnoreCase))
+        {
+            return providerStatus;
+        }
+
+        return providerStatus with
+        {
+            status = "Healthy",
+            latestRefreshHadUsableMarketData = true,
+            statusReason = "The public market board has currently actionable persisted market data.",
+            recommendedAction = "Continue serving persisted read endpoints; use dry-run before any manual live refresh."
         };
     }
 

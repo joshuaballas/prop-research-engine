@@ -2,6 +2,7 @@ using System.Net.Http.Json;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Options;
 using SportsBetting.Api.Configuration;
 using SportsBetting.Api.Data;
@@ -113,7 +114,7 @@ public sealed class AppConfigTests
             var dbContext = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
             var row = await dbContext.AppConfigs.SingleAsync(config => config.Key == "TheOdds.ScheduledRefresh.IntervalMinutes");
             var domainKeys = AppConfigCatalog.Definitions
-                .Where(definition => definition.Classification == AppConfigClassifications.MoveToDomainTable)
+                .Where(definition => definition.Classification is AppConfigClassifications.MoveToDomainTable or AppConfigClassifications.MovedToDomainTable)
                 .Select(definition => definition.Key)
                 .ToArray();
             Assert.Equal("99", row.Value);
@@ -122,6 +123,161 @@ public sealed class AppConfigTests
             Assert.Empty(await dbContext.AppConfigs.Where(config => config.Key == "TheOdds.Api.Markets").ToArrayAsync());
             Assert.Empty(await dbContext.AppConfigs.Where(config => domainKeys.Contains(config.Key)).ToArrayAsync());
         }
+    }
+
+    [Fact]
+    public async Task AppConfigSeeder_SeedsDevelopmentScheduledRefreshEnabledOverride()
+    {
+        await using var factory = new SafetyTestApplicationFactory();
+        await factory.EnsureDatabaseAsync();
+
+        await AppConfigSeeder.SeedAsync(factory.Services);
+
+        using var scope = factory.Services.CreateScope();
+        var dbContext = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+
+        var enabledGlobal = await dbContext.AppConfigs.SingleAsync(row =>
+            row.Key == "TheOdds.ScheduledRefresh.Enabled"
+            && row.Environment == AppConfigCatalog.EnvironmentGlobal);
+        var enabledDevelopment = await dbContext.AppConfigs.SingleAsync(row =>
+            row.Key == "TheOdds.ScheduledRefresh.Enabled"
+            && row.Environment == Environments.Development);
+        var liveRefreshDevelopment = await dbContext.AppConfigs.SingleAsync(row =>
+            row.Key == "TheOdds.ScheduledRefresh.AllowScheduledLiveRefresh"
+            && row.Environment == Environments.Development);
+
+        Assert.Equal("false", enabledGlobal.Value);
+        Assert.Equal("true", enabledDevelopment.Value);
+        Assert.Equal("true", liveRefreshDevelopment.Value);
+    }
+
+    [Fact]
+    public async Task ProviderDomainConfigSeeder_SeedsCompetitionsMarketsBookmakersAndRefreshTargets()
+    {
+        await using var factory = new SafetyTestApplicationFactory();
+        await factory.EnsureDatabaseAsync();
+
+        var result = await ProviderDomainConfigSeeder.SeedAsync(factory.Services);
+
+        using var scope = factory.Services.CreateScope();
+        var dbContext = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+        Assert.True(result.CompetitionsInserted >= 8);
+        Assert.True(result.MarketsInserted >= 16);
+        Assert.True(result.BookmakersInserted >= 10);
+        Assert.True(result.RefreshTargetsInserted >= 9);
+        Assert.Contains(await dbContext.ProviderCompetitions.ToArrayAsync(), row =>
+            row.ProviderKey == ProviderDomainConfigService.ApiSportsFootballProviderKey
+            && row.CompetitionKey == "EPL"
+            && row.ProviderLeagueId == 39
+            && row.SupportsSeasonMetadata);
+        Assert.Contains(await dbContext.ProviderCompetitions.ToArrayAsync(), row =>
+            row.CompetitionKey == ProviderDomainConfigService.WorldCupCompetitionKey
+            && row.ProviderLeagueId == 1
+            && row.IsFixedSeason
+            && row.FixedSeason == 2026);
+        Assert.Contains(await dbContext.ProviderMarkets.ToArrayAsync(), row =>
+            row.ProviderKey == ProviderDomainConfigService.TheOddsProviderKey
+            && row.Sport == "MLB"
+            && row.MarketKey == "batter_hits");
+        Assert.Contains(await dbContext.ProviderMarkets.ToArrayAsync(), row =>
+            row.ProviderKey == ProviderDomainConfigService.TheOddsProviderKey
+            && row.Sport == "SOCCER"
+            && row.CompetitionKey == ProviderDomainConfigService.WorldCupCompetitionKey
+            && row.MarketKey == "player_shots");
+        Assert.Contains(await dbContext.ProviderBookmakers.ToArrayAsync(), row =>
+            row.BookmakerKey == "draftkings"
+            && row.ProviderCategory == "Sportsbook"
+            && row.IsDefault);
+        Assert.Contains(await dbContext.ProviderBookmakers.ToArrayAsync(), row =>
+            row.BookmakerKey == "prizepicks"
+            && row.ProviderCategory == "DFS"
+            && row.SupportsEntryBuilder);
+        Assert.Contains(await dbContext.ProviderRefreshTargets.ToArrayAsync(), row =>
+            row.TargetKey == "mlb-dfs"
+            && row.Sport == "MLB"
+            && row.ProviderCategory == "DFS");
+        Assert.Contains(await dbContext.ProviderRefreshTargets.ToArrayAsync(), row =>
+            row.TargetKey == "soccer-world-cup-sportsbook"
+            && row.CompetitionKey == ProviderDomainConfigService.WorldCupCompetitionKey);
+    }
+
+    [Fact]
+    public async Task ProviderDomainConfigSeeder_IsIdempotentAndPreservesOperatorFlags()
+    {
+        await using var factory = new SafetyTestApplicationFactory();
+        await factory.EnsureDatabaseAsync();
+
+        await ProviderDomainConfigSeeder.SeedAsync(factory.Services);
+        using (var scope = factory.Services.CreateScope())
+        {
+            var dbContext = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+            var target = await dbContext.ProviderRefreshTargets.SingleAsync(row => row.TargetKey == "mlb-sportsbook");
+            target.IsEnabled = true;
+            target.Priority = 42;
+            await dbContext.SaveChangesAsync();
+        }
+
+        var second = await ProviderDomainConfigSeeder.SeedAsync(factory.Services);
+
+        using (var scope = factory.Services.CreateScope())
+        {
+            var dbContext = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+            var target = await dbContext.ProviderRefreshTargets.SingleAsync(row => row.TargetKey == "mlb-sportsbook");
+            Assert.Equal(0, second.RefreshTargetsInserted);
+            Assert.True(target.IsEnabled);
+            Assert.Equal(42, target.Priority);
+        }
+    }
+
+    [Fact]
+    public async Task ProviderDomainConfigDebugStatus_IsReadOnlyAndCompact()
+    {
+        await using var factory = new SafetyTestApplicationFactory();
+        using var client = factory.CreateClient();
+        await factory.EnsureDatabaseAsync();
+        await ProviderDomainConfigSeeder.SeedAsync(factory.Services);
+
+        var response = await client.GetAsync("/api/debug/provider-domain-config/status");
+
+        response.EnsureSuccessStatusCode();
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.True(json.GetProperty("readOnly").GetBoolean());
+        Assert.False(json.GetProperty("callsExternalApis").GetBoolean());
+        Assert.False(json.GetProperty("writesRows").GetBoolean());
+        Assert.True(json.GetProperty("providerCompetitionCount").GetInt32() >= 8);
+        Assert.True(json.GetProperty("providerMarketCount").GetInt32() >= 16);
+        Assert.True(json.GetProperty("providerBookmakerCount").GetInt32() >= 10);
+        Assert.True(json.GetProperty("providerRefreshTargetCount").GetInt32() >= 9);
+    }
+
+    [Fact]
+    public async Task ProviderDomainConfigService_ResolvesRuntimeListsFromDomainRows()
+    {
+        await using var factory = new SafetyTestApplicationFactory();
+        await factory.EnsureDatabaseAsync();
+        await ProviderDomainConfigSeeder.SeedAsync(factory.Services);
+
+        using var scope = factory.Services.CreateScope();
+        var service = scope.ServiceProvider.GetRequiredService<IProviderDomainConfigService>();
+        var apiSportsOptions = scope.ServiceProvider.GetRequiredService<IOptions<ApiSportsOptions>>().Value;
+        var theOddsApiOptions = scope.ServiceProvider.GetRequiredService<IOptions<TheOddsApiOptions>>().Value;
+        var workerOptions = scope.ServiceProvider.GetRequiredService<IOptions<TheOddsIngestionWorkerOptions>>().Value;
+        var scheduledOptions = scope.ServiceProvider.GetRequiredService<IOptions<TheOddsScheduledRefreshOptions>>().Value;
+
+        var competitions = await service.GetApiSportsSoccerCompetitionsAsync(apiSportsOptions, enabledOnly: true, CancellationToken.None);
+        var targets = await service.GetTheOddsScheduledRefreshTargetsAsync(scheduledOptions, CancellationToken.None);
+        var mlbSportsbook = targets.Single(row => row.ResolveKey() == "mlb-sportsbook");
+        var mlbDfs = targets.Single(row => row.ResolveKey() == "mlb-dfs");
+        var sportsbookBookmakers = await service.GetTheOddsBookmakerKeysAsync(mlbSportsbook, workerOptions, CancellationToken.None);
+        var dfsBookmakers = await service.GetTheOddsBookmakerKeysAsync(mlbDfs, workerOptions, CancellationToken.None);
+        var mlbMarkets = await service.GetTheOddsMarketKeysAsync(mlbSportsbook, theOddsApiOptions, workerOptions, CancellationToken.None);
+
+        Assert.Contains(competitions, row => row.Key == ProviderDomainConfigService.WorldCupCompetitionKey && row.IsWorldCup);
+        Assert.Contains(competitions, row => row.Key == "EPL" && !row.IsWorldCup);
+        Assert.Contains(targets, row => row.ResolveKey() == "soccer-world-cup-sportsbook");
+        Assert.Contains("mybookieag", sportsbookBookmakers);
+        Assert.Contains("prizepicks", dfsBookmakers);
+        Assert.Contains("batter_hits", mlbMarkets);
     }
 
     [Fact]
@@ -141,6 +297,23 @@ public sealed class AppConfigTests
 
         Assert.True(options.Enabled);
         Assert.Equal(21, options.IntervalMinutes);
+    }
+
+    [Fact]
+    public async Task ScheduledRefreshStatus_UsesEffectiveAppConfigEnabledOverride()
+    {
+        await using var factory = new SafetyTestApplicationFactory();
+        using var client = factory.CreateClient();
+        await factory.EnsureDatabaseAsync();
+        await AddAppConfigAsync(factory, "TheOdds.ScheduledRefresh.Enabled", "true", AppConfigValueTypes.Boolean, "Testing");
+        await AddAppConfigAsync(factory, "TheOdds.ScheduledRefresh.AllowScheduledLiveRefresh", "true", AppConfigValueTypes.Boolean, "Testing");
+
+        var response = await client.GetAsync("/api/debug/the-odds/mlb/scheduled-refresh/status");
+        response.EnsureSuccessStatusCode();
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+
+        Assert.True(json.GetProperty("enabled").GetBoolean());
+        Assert.True(json.TryGetProperty("nextRefreshDueUtc", out _));
     }
 
     [Fact]
@@ -201,8 +374,8 @@ public sealed class AppConfigTests
         var historicalCompetitions = settings.Single(row => row.GetProperty("key").GetString() == "ApiSports:Football:HistoricalCompetitions");
         var scheduledTargets = settings.Single(row => row.GetProperty("key").GetString() == "TheOddsScheduledRefresh:Targets");
 
-        Assert.Equal(AppConfigClassifications.MoveToDomainTable, historicalCompetitions.GetProperty("classification").GetString());
-        Assert.Equal(AppConfigClassifications.MoveToDomainTable, scheduledTargets.GetProperty("classification").GetString());
+        Assert.Equal(AppConfigClassifications.MovedToDomainTable, historicalCompetitions.GetProperty("classification").GetString());
+        Assert.Equal(AppConfigClassifications.MovedToDomainTable, scheduledTargets.GetProperty("classification").GetString());
         Assert.DoesNotContain(settings, row => row.GetProperty("key").GetString()?.StartsWith("ApiSports:Football:HistoricalCompetitions:0:", StringComparison.OrdinalIgnoreCase) == true);
     }
 
@@ -282,6 +455,7 @@ public sealed class AppConfigTests
         Assert.DoesNotContain(values, row => row.GetProperty("classification").GetString() == AppConfigClassifications.KeepInSecretProvider);
         Assert.DoesNotContain(values, row => row.GetProperty("classification").GetString() == AppConfigClassifications.KeepInBootstrapConfig);
         Assert.DoesNotContain(values, row => row.GetProperty("classification").GetString() == AppConfigClassifications.MoveToDomainTable);
+        Assert.DoesNotContain(values, row => row.GetProperty("classification").GetString() == AppConfigClassifications.MovedToDomainTable);
         Assert.DoesNotContain(values, row => row.GetProperty("classification").GetString() == AppConfigClassifications.NeedsDecision);
         Assert.DoesNotContain(values, row => row.GetProperty("classification").GetString() == AppConfigClassifications.RemoveRedundant);
         Assert.DoesNotContain(values, row => row.GetProperty("key").GetString() == "Soccer.Results.ApiSports.Worker.CompetitionKeys");

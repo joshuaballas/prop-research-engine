@@ -2413,6 +2413,206 @@ namespace SportsBetting.Api.Migrations
                     b.ToTable("prop_types", (string)null);
                 });
 
+            modelBuilder.Entity("SportsBetting.Api.Models.ProviderBookmaker", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<string>("BookmakerKey")
+                        .IsRequired()
+                        .HasMaxLength(150)
+                        .HasColumnType("character varying(150)")
+                        .HasColumnName("bookmaker_key");
+
+                    b.Property<DateTimeOffset>("CreatedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at_utc");
+
+                    b.Property<string>("DisplayName")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("display_name");
+
+                    b.Property<bool>("IsDefault")
+                        .HasColumnType("boolean")
+                        .HasColumnName("is_default");
+
+                    b.Property<bool>("IsEnabled")
+                        .HasColumnType("boolean")
+                        .HasColumnName("is_enabled");
+
+                    b.Property<bool>("IsExpandedCoverage")
+                        .HasColumnType("boolean")
+                        .HasColumnName("is_expanded_coverage");
+
+                    b.Property<string>("Notes")
+                        .HasMaxLength(1000)
+                        .HasColumnType("character varying(1000)")
+                        .HasColumnName("notes");
+
+                    b.Property<int>("Priority")
+                        .HasColumnType("integer")
+                        .HasColumnName("priority");
+
+                    b.Property<string>("ProviderCategory")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("character varying(50)")
+                        .HasColumnName("provider_category");
+
+                    b.Property<string>("ProviderKey")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)")
+                        .HasColumnName("provider_key");
+
+                    b.Property<string>("Region")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("character varying(50)")
+                        .HasColumnName("region");
+
+                    b.Property<bool>("SupportsEntryBuilder")
+                        .HasColumnType("boolean")
+                        .HasColumnName("supports_entry_builder");
+
+                    b.Property<bool>("SupportsLineShopping")
+                        .HasColumnType("boolean")
+                        .HasColumnName("supports_line_shopping");
+
+                    b.Property<DateTimeOffset>("UpdatedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at_utc");
+
+                    b.HasKey("Id")
+                        .HasName("pk_provider_bookmakers");
+
+                    b.HasIndex("BookmakerKey")
+                        .HasDatabaseName("ix_provider_bookmakers_bookmaker_key");
+
+                    b.HasIndex("ProviderKey", "ProviderCategory", "IsEnabled")
+                        .HasDatabaseName("ix_provider_bookmakers_provider_key_provider_category_is_enabl");
+
+                    b.HasIndex("ProviderKey", "BookmakerKey", "ProviderCategory", "Region")
+                        .IsUnique()
+                        .HasDatabaseName("ix_provider_bookmakers_provider_key_bookmaker_key_provider_cat");
+
+                    b.ToTable("provider_bookmakers", (string)null);
+                });
+
+            modelBuilder.Entity("SportsBetting.Api.Models.ProviderCompetition", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<string>("CompetitionKey")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)")
+                        .HasColumnName("competition_key");
+
+                    b.Property<string>("CompetitionType")
+                        .HasMaxLength(50)
+                        .HasColumnType("character varying(50)")
+                        .HasColumnName("competition_type");
+
+                    b.Property<string>("Country")
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)")
+                        .HasColumnName("country");
+
+                    b.Property<DateTimeOffset>("CreatedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at_utc");
+
+                    b.Property<string>("DisplayName")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("display_name");
+
+                    b.Property<int?>("FixedSeason")
+                        .HasColumnType("integer")
+                        .HasColumnName("fixed_season");
+
+                    b.Property<bool>("IsEnabled")
+                        .HasColumnType("boolean")
+                        .HasColumnName("is_enabled");
+
+                    b.Property<bool>("IsFixedSeason")
+                        .HasColumnType("boolean")
+                        .HasColumnName("is_fixed_season");
+
+                    b.Property<string>("Notes")
+                        .HasMaxLength(1000)
+                        .HasColumnType("character varying(1000)")
+                        .HasColumnName("notes");
+
+                    b.Property<int>("Priority")
+                        .HasColumnType("integer")
+                        .HasColumnName("priority");
+
+                    b.Property<string>("ProviderKey")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)")
+                        .HasColumnName("provider_key");
+
+                    b.Property<int?>("ProviderLeagueId")
+                        .HasColumnType("integer")
+                        .HasColumnName("provider_league_id");
+
+                    b.Property<string>("ProviderSportKey")
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)")
+                        .HasColumnName("provider_sport_key");
+
+                    b.Property<string>("Sport")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("character varying(50)")
+                        .HasColumnName("sport");
+
+                    b.Property<bool>("SupportsOddsImport")
+                        .HasColumnType("boolean")
+                        .HasColumnName("supports_odds_import");
+
+                    b.Property<bool>("SupportsResultsImport")
+                        .HasColumnType("boolean")
+                        .HasColumnName("supports_results_import");
+
+                    b.Property<bool>("SupportsSeasonMetadata")
+                        .HasColumnType("boolean")
+                        .HasColumnName("supports_season_metadata");
+
+                    b.Property<DateTimeOffset>("UpdatedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at_utc");
+
+                    b.HasKey("Id")
+                        .HasName("pk_provider_competitions");
+
+                    b.HasIndex("IsEnabled")
+                        .HasDatabaseName("ix_provider_competitions_is_enabled");
+
+                    b.HasIndex("ProviderLeagueId")
+                        .HasDatabaseName("ix_provider_competitions_provider_league_id");
+
+                    b.HasIndex("ProviderKey", "Sport")
+                        .HasDatabaseName("ix_provider_competitions_provider_key_sport");
+
+                    b.HasIndex("ProviderKey", "Sport", "CompetitionKey")
+                        .IsUnique()
+                        .HasDatabaseName("ix_provider_competitions_provider_key_sport_competition_key");
+
+                    b.ToTable("provider_competitions", (string)null);
+                });
+
             modelBuilder.Entity("SportsBetting.Api.Models.ProviderEntityLink", b =>
                 {
                     b.Property<Guid>("Id")
@@ -2806,6 +3006,226 @@ namespace SportsBetting.Api.Migrations
                         .HasDatabaseName("ix_provider_line_lifecycle_events_refresh_run_id");
 
                     b.ToTable("provider_line_lifecycle_events", (string)null);
+                });
+
+            modelBuilder.Entity("SportsBetting.Api.Models.ProviderMarket", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<string>("CompetitionKey")
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)")
+                        .HasColumnName("competition_key");
+
+                    b.Property<DateTimeOffset>("CreatedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at_utc");
+
+                    b.Property<string>("DisplayName")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("display_name");
+
+                    b.Property<string>("InternalPropType")
+                        .HasMaxLength(150)
+                        .HasColumnType("character varying(150)")
+                        .HasColumnName("internal_prop_type");
+
+                    b.Property<bool>("IsDefault")
+                        .HasColumnType("boolean")
+                        .HasColumnName("is_default");
+
+                    b.Property<bool>("IsEnabled")
+                        .HasColumnType("boolean")
+                        .HasColumnName("is_enabled");
+
+                    b.Property<string>("MarketKey")
+                        .IsRequired()
+                        .HasMaxLength(150)
+                        .HasColumnType("character varying(150)")
+                        .HasColumnName("market_key");
+
+                    b.Property<string>("Notes")
+                        .HasMaxLength(1000)
+                        .HasColumnType("character varying(1000)")
+                        .HasColumnName("notes");
+
+                    b.Property<int>("Priority")
+                        .HasColumnType("integer")
+                        .HasColumnName("priority");
+
+                    b.Property<string>("ProviderCategory")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("character varying(50)")
+                        .HasColumnName("provider_category");
+
+                    b.Property<string>("ProviderKey")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)")
+                        .HasColumnName("provider_key");
+
+                    b.Property<string>("Sport")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("character varying(50)")
+                        .HasColumnName("sport");
+
+                    b.Property<bool>("SupportsLineShopping")
+                        .HasColumnType("boolean")
+                        .HasColumnName("supports_line_shopping");
+
+                    b.Property<bool>("SupportsOddsImport")
+                        .HasColumnType("boolean")
+                        .HasColumnName("supports_odds_import");
+
+                    b.Property<bool>("SupportsTopPicks")
+                        .HasColumnType("boolean")
+                        .HasColumnName("supports_top_picks");
+
+                    b.Property<DateTimeOffset>("UpdatedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at_utc");
+
+                    b.HasKey("Id")
+                        .HasName("pk_provider_markets");
+
+                    b.HasIndex("MarketKey")
+                        .HasDatabaseName("ix_provider_markets_market_key");
+
+                    b.HasIndex("ProviderKey", "Sport", "IsEnabled")
+                        .HasDatabaseName("ix_provider_markets_provider_key_sport_is_enabled");
+
+                    b.HasIndex("ProviderKey", "Sport", "CompetitionKey", "ProviderCategory", "MarketKey")
+                        .IsUnique()
+                        .HasDatabaseName("ix_provider_markets_provider_key_sport_competition_key_provide");
+
+                    b.ToTable("provider_markets", (string)null);
+                });
+
+            modelBuilder.Entity("SportsBetting.Api.Models.ProviderRefreshTarget", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<string>("BookmakerPreset")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)")
+                        .HasColumnName("bookmaker_preset");
+
+                    b.Property<string>("CompetitionDisplayName")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("competition_display_name");
+
+                    b.Property<string>("CompetitionKey")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)")
+                        .HasColumnName("competition_key");
+
+                    b.Property<DateTimeOffset>("CreatedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at_utc");
+
+                    b.Property<string>("DisabledReason")
+                        .HasMaxLength(1000)
+                        .HasColumnType("character varying(1000)")
+                        .HasColumnName("disabled_reason");
+
+                    b.Property<int?>("EstimatedApiCalls")
+                        .HasColumnType("integer")
+                        .HasColumnName("estimated_api_calls");
+
+                    b.Property<bool>("IsEnabled")
+                        .HasColumnType("boolean")
+                        .HasColumnName("is_enabled");
+
+                    b.Property<int?>("MaxEvents")
+                        .HasColumnType("integer")
+                        .HasColumnName("max_events");
+
+                    b.Property<string>("Notes")
+                        .HasMaxLength(1000)
+                        .HasColumnType("character varying(1000)")
+                        .HasColumnName("notes");
+
+                    b.Property<int>("Priority")
+                        .HasColumnType("integer")
+                        .HasColumnName("priority");
+
+                    b.Property<string>("ProviderCategory")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("character varying(50)")
+                        .HasColumnName("provider_category");
+
+                    b.Property<string>("ProviderKey")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)")
+                        .HasColumnName("provider_key");
+
+                    b.Property<string>("ProviderSportKey")
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)")
+                        .HasColumnName("provider_sport_key");
+
+                    b.Property<string>("Regions")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("regions");
+
+                    b.Property<string>("Sport")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("character varying(50)")
+                        .HasColumnName("sport");
+
+                    b.Property<bool>("SupportsHistory")
+                        .HasColumnType("boolean")
+                        .HasColumnName("supports_history");
+
+                    b.Property<bool>("SupportsResults")
+                        .HasColumnType("boolean")
+                        .HasColumnName("supports_results");
+
+                    b.Property<string>("TargetKey")
+                        .IsRequired()
+                        .HasMaxLength(150)
+                        .HasColumnType("character varying(150)")
+                        .HasColumnName("target_key");
+
+                    b.Property<DateTimeOffset>("UpdatedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at_utc");
+
+                    b.HasKey("Id")
+                        .HasName("pk_provider_refresh_targets");
+
+                    b.HasIndex("Priority")
+                        .HasDatabaseName("ix_provider_refresh_targets_priority");
+
+                    b.HasIndex("ProviderKey", "IsEnabled")
+                        .HasDatabaseName("ix_provider_refresh_targets_provider_key_is_enabled");
+
+                    b.HasIndex("ProviderKey", "TargetKey")
+                        .IsUnique()
+                        .HasDatabaseName("ix_provider_refresh_targets_provider_key_target_key");
+
+                    b.HasIndex("Sport", "CompetitionKey", "ProviderCategory")
+                        .HasDatabaseName("ix_provider_refresh_targets_sport_competition_key_provider_cat");
+
+                    b.ToTable("provider_refresh_targets", (string)null);
                 });
 
             modelBuilder.Entity("SportsBetting.Api.Models.ProviderStatMapping", b =>

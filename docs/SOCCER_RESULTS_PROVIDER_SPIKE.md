@@ -32,6 +32,22 @@ No secrets are committed. Local config should use:
 
 One API-Sports key may cover multiple sports/products depending on subscription. This spike uses the Football product endpoint for World Cup. World Cup uses the fixed descriptor league `1`, season `2026`; the old scalar World Cup override keys are retired.
 
+Structured provider support is DB-backed. `provider_competitions` owns API-Sports Football competition rows such as EPL, La Liga, Bundesliga, Serie A, Ligue 1, MLS, Champions League, and fixed World Cup 2026. The Soccer result worker and current historical coverage/backfill diagnostics read those rows first and use appsettings only as a migration fallback. Recurring league seasons/windows still resolve from API-Sports provider metadata; do not add yearly season/window scalar config.
+
+Read-only provider-domain checks:
+
+```powershell
+$base = "http://localhost:5299"
+
+Invoke-RestMethod "$base/api/debug/provider-domain-config/competitions?includeDisabled=true" |
+  ConvertTo-Json -Depth 100 |
+  Set-Content .\tmp-analysis\provider-competitions-full.json
+
+Invoke-RestMethod "$base/api/debug/provider-domain-config/status" |
+  Select-Object providerCompetitionCount,enabledProviderCompetitionCount,appsettingsFallbackCount |
+  Format-List
+```
+
 If config is missing, debug endpoints return `MissingApiSportsConfig` with the missing fields.
 
 ## Debug Endpoints

@@ -34,6 +34,7 @@ public static class AppConfigDebugEndpoints
                 invalidCount = snapshot.ValidationIssues.Count(row => row.Source == "AppConfigs"),
                 validationIssueCount = snapshot.ValidationIssues.Count,
                 moveToDomainTableCount = audit.CountsByClassification.GetValueOrDefault(AppConfigClassifications.MoveToDomainTable),
+                movedToDomainTableCount = audit.CountsByClassification.GetValueOrDefault(AppConfigClassifications.MovedToDomainTable),
                 removeRedundantCount = audit.CountsByClassification.GetValueOrDefault(AppConfigClassifications.RemoveRedundant),
                 needsDecisionCount = audit.CountsByClassification.GetValueOrDefault(AppConfigClassifications.NeedsDecision),
                 advancedCount = snapshot.Values.Count(row => row.IsAdvanced),

@@ -793,6 +793,85 @@ public sealed class RefreshSafetyTests
     }
 
     [Fact]
+    public async Task MarketFreshness_WithUsablePublicBoard_DoesNotReportNoUsableSnapshotProviderReason()
+    {
+        await using var factory = new SafetyTestApplicationFactory(new Dictionary<string, string?>
+        {
+            ["TheOddsScheduledRefresh:Enabled"] = "true",
+            ["TheOddsScheduledRefresh:AllowScheduledLiveRefresh"] = "true"
+        });
+        using var client = factory.CreateClient();
+        var usableRunId = Guid.NewGuid();
+        var latestProviderRunId = Guid.NewGuid();
+        var now = DateTimeOffset.UtcNow;
+
+        using (var scope = factory.Services.CreateScope())
+        {
+            var dbContext = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+            await dbContext.Database.EnsureCreatedAsync();
+            var usableRun = CreateTheOddsRun(
+                usableRunId,
+                "MLB",
+                now.AddMinutes(-6),
+                now.AddMinutes(-6).AddSeconds(20),
+                "default",
+                "Sportsbook",
+                new { lineShoppingSummary = new { activeGroups = 1, staleOrExpiredGroups = 0 } });
+            var latestProviderRun = CreateTheOddsRun(
+                latestProviderRunId,
+                "MLB",
+                now.AddMinutes(-2),
+                now.AddMinutes(-2).AddSeconds(20),
+                "default",
+                "Sportsbook",
+                new { lineShoppingSummary = new { activeGroups = 0, staleOrExpiredGroups = 0 } });
+            dbContext.TheOddsRefreshRuns.AddRange(usableRun, latestProviderRun);
+            dbContext.MarketLineShoppingSnapshots.Add(new MarketLineShoppingSnapshot
+            {
+                Id = Guid.NewGuid(),
+                TheOddsRefreshRunId = usableRunId,
+                Sport = "MLB",
+                SlateDate = DateOnly.FromDateTime(now.UtcDateTime),
+                GeneratedAtUtc = now.AddMinutes(-6).AddSeconds(21),
+                BookmakerPreset = "default",
+                ProviderCategory = "Sportsbook",
+                Player = "Test Player",
+                EventStartTime = now.AddHours(2),
+                LifecycleStatus = "Active",
+                IsStale = false,
+                IsExpired = false,
+                PropType = "Hits",
+                Line = 0.5m,
+                BestSide = "Over",
+                StrategyClassification = "Candidate",
+                StrategyTier = "MlbSportsbookRecommendation",
+                EntryProvider = "Sportsbook",
+                EntryCompatibilityGroup = "Sportsbook",
+                EntryProviderCategory = "Sportsbook",
+                DetailsJson = JsonSerializer.SerializeToDocument(new { player = "Test Player" })
+            });
+            await dbContext.SaveChangesAsync();
+        }
+
+        var response = await client.GetAsync("/api/markets/freshness?sport=MLB&freshnessMinutes=9999");
+
+        await EnsureSuccessWithBodyAsync(response);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        var providerStatus = json.GetProperty("providerStatus");
+        Assert.True(json.GetProperty("isFresh").GetBoolean());
+        Assert.True(json.GetProperty("hasUsableMarketData").GetBoolean());
+        Assert.Equal("HasCurrentlyActionableRows", json.GetProperty("currentPublicBoardStatus").GetString());
+        Assert.Equal("Healthy", providerStatus.GetProperty("status").GetString());
+        Assert.True(providerStatus.GetProperty("latestRefreshHadUsableMarketData").GetBoolean());
+        Assert.DoesNotContain(
+            "no usable active market snapshots",
+            providerStatus.GetProperty("statusReason").GetString(),
+            StringComparison.OrdinalIgnoreCase);
+        Assert.True(json.TryGetProperty("nextHeaderSyncTargetUtc", out _));
+        Assert.True(json.TryGetProperty("nextDataAvailableEstimateUtc", out _));
+    }
+
+    [Fact]
     public async Task PublicSnapshots_ExcludePreservedRowsAfterEventStart_AndFreshnessReportsNoCurrentBoard()
     {
         await using var factory = new SafetyTestApplicationFactory();

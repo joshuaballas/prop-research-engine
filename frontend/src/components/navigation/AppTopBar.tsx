@@ -1,11 +1,11 @@
 import HelpOutlineRoundedIcon from '@mui/icons-material/HelpOutlineRounded';
 import { Avatar, Button, Stack, Tooltip, Typography } from '@mui/material';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import type { MarketFreshnessDto, ScheduledRefreshStatusDto } from '../../api/types';
+import type { ScheduledRefreshStatusDto } from '../../api/types';
 import { GlossaryDialog } from '../glossary/GlossaryDialog';
 import { isDemoDataMode } from '../../config/dataMode';
 import { mockUser } from '../../data/mockUser';
-import { useMarketFreshnessData, useProviderStatusData, useScheduledRefreshStatusData } from '../../hooks/useMarketData';
+import { useProviderStatusData, useScheduledRefreshStatusData } from '../../hooks/useMarketData';
 import { bumpMarketDataRefreshVersion } from '../../hooks/useMarketDataRefresh';
 
 export function AppTopBar() {
@@ -15,10 +15,8 @@ export function AppTopBar() {
   const [glossaryOpen, setGlossaryOpen] = useState(false);
   const lastObservedSuccessfulRefreshRef = useRef<string | null | undefined>(undefined);
   const lastZeroRefetchTargetMsRef = useRef<number | null>(null);
-  const freshnessQuery = useMarketFreshnessData([marketStatusQueryTick]);
   const providerStatusQuery = useProviderStatusData([marketStatusQueryTick]);
   const scheduledRefreshQuery = useScheduledRefreshStatusData([scheduledStatusQueryTick]);
-  const freshness = freshnessQuery.data;
   const providerStatus = providerStatusQuery.data;
   const scheduledRefresh = scheduledRefreshQuery.data;
   const countdownTargetMs = useMemo(
@@ -38,7 +36,7 @@ export function AppTopBar() {
     isRefreshInProgress ||
     (countdownTargetMs !== null && estimatedServerNowMs >= countdownTargetMs);
   const latestScheduledSuccessfulRefreshCompletedAt = useMemo(
-    () => getLatestSuccessfulRefreshCompletedAt(scheduledRefresh, undefined),
+    () => getLatestSuccessfulRefreshCompletedAt(scheduledRefresh),
     [scheduledRefresh]
   );
   const syncDisplay = useMemo(
@@ -46,13 +44,10 @@ export function AppTopBar() {
       now: estimatedServerNowMs,
       scheduledRefresh,
       countdownTargetMs,
-      freshness,
-      hasStatusError: Boolean(freshnessQuery.error || providerStatusQuery.error || scheduledRefreshQuery.error),
+      hasStatusError: Boolean(providerStatusQuery.error || scheduledRefreshQuery.error),
       providerRejectedKeyDetected: providerStatus?.providerRejectedKeyDetected,
     }),
     [
-      freshness,
-      freshnessQuery.error,
       estimatedServerNowMs,
       providerStatus?.providerRejectedKeyDetected,
       providerStatusQuery.error,
@@ -257,18 +252,16 @@ function buildSyncDisplay({
   now,
   scheduledRefresh,
   countdownTargetMs,
-  freshness,
   hasStatusError,
   providerRejectedKeyDetected,
 }: {
   now: number;
   scheduledRefresh?: ScheduledRefreshStatusDto;
   countdownTargetMs: number | null;
-  freshness?: MarketFreshnessDto;
   hasStatusError: boolean;
   providerRejectedKeyDetected?: boolean;
 }) {
-  const primary = formatUpdatedAge(now, scheduledRefresh, freshness);
+  const primary = formatUpdatedAge(now, scheduledRefresh);
   if (hasStatusError || providerRejectedKeyDetected) {
     return {
       primary,
@@ -368,6 +361,12 @@ function getCountdownTargetMs(scheduledRefresh?: ScheduledRefreshStatusDto) {
     if (!Number.isNaN(nextDataAvailableMs)) return nextDataAvailableMs;
   }
 
+  const nextRefreshDueUtc = scheduledRefresh?.nextRefreshDueUtc ?? scheduledRefresh?.NextRefreshDueUtc;
+  if (nextRefreshDueUtc) {
+    const nextRefreshDueMs = Date.parse(nextRefreshDueUtc);
+    if (!Number.isNaN(nextRefreshDueMs)) return nextRefreshDueMs;
+  }
+
   const nextRefreshAtUtc = scheduledRefresh?.nextRefreshAtUtc ?? scheduledRefresh?.NextRefreshAtUtc;
   if (nextRefreshAtUtc) {
     const nextRefreshAtMs = Date.parse(nextRefreshAtUtc);
@@ -387,15 +386,14 @@ function getServerClientOffsetMs(scheduledRefresh?: ScheduledRefreshStatusDto) {
   return Number.isNaN(serverTimestampMs) ? 0 : serverTimestampMs - Date.now();
 }
 
-function getLatestSuccessfulRefreshCompletedAt(scheduledRefresh?: ScheduledRefreshStatusDto, freshness?: MarketFreshnessDto) {
+function getLatestSuccessfulRefreshCompletedAt(scheduledRefresh?: ScheduledRefreshStatusDto) {
   return getMostRecentUtc([
     scheduledRefresh?.lastSuccessfulRefreshCompletedAtUtc,
     scheduledRefresh?.LastSuccessfulRefreshCompletedAtUtc,
     scheduledRefresh?.latestSuccessfulRefreshCompletedAtUtc,
     scheduledRefresh?.LatestSuccessfulRefreshCompletedAtUtc,
     getRefreshCompletedAt(scheduledRefresh?.latestSuccessfulRefresh ?? scheduledRefresh?.LatestSuccessfulRefresh),
-    getLatestTargetSuccessfulRefreshCompletedAt(scheduledRefresh),
-    getRefreshCompletedAt(freshness?.latestSuccessfulRefresh ?? freshness?.LatestSuccessfulRefresh)
+    getLatestTargetSuccessfulRefreshCompletedAt(scheduledRefresh)
   ]);
 }
 
@@ -458,11 +456,8 @@ function getMostRecentUtc(values: Array<string | null | undefined>) {
   return latestValue;
 }
 
-function formatUpdatedAge(now: number, scheduledRefresh?: ScheduledRefreshStatusDto, freshness?: MarketFreshnessDto) {
-  const completedAt =
-    getLatestSuccessfulRefreshCompletedAt(scheduledRefresh, undefined) ??
-    getRefreshCompletedAt(freshness?.latestSuccessfulRefresh ?? freshness?.LatestSuccessfulRefresh) ??
-    freshness?.generatedAtUtc;
+function formatUpdatedAge(now: number, scheduledRefresh?: ScheduledRefreshStatusDto) {
+  const completedAt = getLatestSuccessfulRefreshCompletedAt(scheduledRefresh);
   if (!completedAt) return 'No market sync yet';
 
   const completedAtMs = Date.parse(completedAt);

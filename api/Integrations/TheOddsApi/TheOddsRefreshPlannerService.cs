@@ -1,6 +1,7 @@
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
+using SportsBetting.Api.Configuration;
 using SportsBetting.Api.Data;
 using SportsBetting.Api.Models;
 
@@ -18,8 +19,10 @@ public interface ITheOddsRefreshPlannerService
 public sealed class TheOddsRefreshPlannerService(
     ApplicationDbContext dbContext,
     IOptions<TheOddsRefreshPlannerOptions> options,
+    IOptions<TheOddsApiOptions> theOddsApiOptions,
     IOptions<TheOddsScheduledRefreshOptions> scheduledRefreshOptions,
-    IOptions<TheOddsIngestionWorkerOptions> workerOptions) : ITheOddsRefreshPlannerService
+    IOptions<TheOddsIngestionWorkerOptions> workerOptions,
+    IProviderDomainConfigService providerDomainConfigService) : ITheOddsRefreshPlannerService
 {
     private const string DefaultExpandedSportsbookBookmakers =
         "draftkings,fanduel,betmgm,espnbet,betrivers,fanatics,williamhill_us,betonlineag,bovada,lowvig,mybookieag";
@@ -189,13 +192,28 @@ public sealed class TheOddsRefreshPlannerService(
         bool providerRejectedKeyDetected,
         CancellationToken cancellationToken)
     {
-        var targets = scheduledOptions.GetConfiguredTargets();
+        var targets = await providerDomainConfigService.GetTheOddsScheduledRefreshTargetsAsync(
+            scheduledOptions,
+            cancellationToken);
         var plans = new List<TheOddsRefreshTargetPlan>(targets.Count);
 
         foreach (var target in targets)
         {
             var targetKey = target.ResolveKey();
-            var targetBookmakers = ResolveTargetBookmakers(target, workerOptions.Value);
+            var targetBookmakerKeys = await providerDomainConfigService.GetTheOddsBookmakerKeysAsync(
+                target,
+                workerOptions.Value,
+                cancellationToken);
+            var targetMarketKeys = await providerDomainConfigService.GetTheOddsMarketKeysAsync(
+                target,
+                theOddsApiOptions.Value,
+                workerOptions.Value,
+                cancellationToken);
+            var targetBookmakers = new TargetBookmakerPlan(
+                targetBookmakerKeys,
+                targetBookmakerKeys,
+                []);
+            var targetMarkets = JoinCommaSeparated(targetMarketKeys);
             var targetBookmakerPresets = ResolveTargetPersistedBookmakerPresets(target);
             var candidateRuns = await dbContext.TheOddsRefreshRuns
                 .AsNoTracking()
@@ -289,7 +307,7 @@ public sealed class TheOddsRefreshPlannerService(
                 EffectiveBookmakers: targetBookmakers.EffectiveBookmakers,
                 RequestedBookmakers: targetBookmakers.RequestedBookmakers,
                 SkippedBookmakers: targetBookmakers.SkippedBookmakers,
-                Markets: target.Markets,
+                Markets: targetMarkets,
                 SupportsResults: target.SupportsResults,
                 SupportsHistory: target.SupportsHistory,
                 ExecutionWired: executionWired,
@@ -447,6 +465,11 @@ public sealed class TheOddsRefreshPlannerService(
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToArray();
     }
+
+    private static string? JoinCommaSeparated(IReadOnlyCollection<string> values)
+        => values.Count == 0
+            ? null
+            : string.Join(',', values.Where(value => !string.IsNullOrWhiteSpace(value)).Distinct(StringComparer.OrdinalIgnoreCase));
 
     private static string? NullIfWhiteSpace(string? value)
     {

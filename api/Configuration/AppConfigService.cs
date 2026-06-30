@@ -644,92 +644,215 @@ public static class AppConfigSeeder
         using var scope = services.CreateScope();
         var dbContext = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
         var configuration = scope.ServiceProvider.GetRequiredService<IConfiguration>();
+        var environment = scope.ServiceProvider.GetRequiredService<IHostEnvironment>();
+        var globalFileValues = await ReadJsonFileValuesAsync(environment.ContentRootPath, "appsettings.json", cancellationToken);
+        var developmentFileValues = await ReadJsonFileValuesAsync(environment.ContentRootPath, $"appsettings.{Environments.Development}.json", cancellationToken);
         var now = DateTimeOffset.UtcNow;
         var inserted = 0;
         var metadataUpdated = 0;
 
         foreach (var definition in AppConfigCatalog.Definitions.Where(row => row.SeedToAppConfigs && !row.IsSensitive))
         {
-            var existing = await dbContext.AppConfigs.SingleOrDefaultAsync(
-                row => row.Key == definition.Key && row.Environment == AppConfigCatalog.EnvironmentGlobal,
-                cancellationToken);
-            var seedValue = GetSeedValue(configuration, definition);
+            var seedValue = TryGetSeedValue(globalFileValues, definition, out var globalFileValue)
+                ? globalFileValue
+                : GetSeedValue(configuration, definition);
 
             if (string.IsNullOrWhiteSpace(seedValue) && definition.DefaultValue is null)
             {
                 continue;
             }
 
-            if (existing is null)
+            var globalResult = await UpsertSeedRowAsync(
+                dbContext,
+                definition,
+                AppConfigCatalog.EnvironmentGlobal,
+                seedValue ?? definition.DefaultValue ?? string.Empty,
+                now,
+                cancellationToken);
+            inserted += globalResult.Inserted;
+            metadataUpdated += globalResult.MetadataUpdated;
+
+            if (!TryGetSeedValue(developmentFileValues, definition, out var developmentSeedValue))
             {
-                dbContext.AppConfigs.Add(new AppConfig
-                {
-                    Id = Guid.NewGuid(),
-                    Key = definition.Key,
-                    Value = seedValue ?? definition.DefaultValue ?? string.Empty,
-                    ValueType = definition.ValueType,
-                    Category = definition.Category,
-                    Description = definition.Description,
-                    DefaultValue = definition.DefaultValue,
-                    IsSensitive = definition.IsSensitive,
-                    IsRuntimeEditable = definition.IsRuntimeEditable,
-                    RequiresRestart = definition.RequiresRestart,
-                    ValidationJson = definition.ValidationJson,
-                    Environment = AppConfigCatalog.EnvironmentGlobal,
-                    IsEnabled = true,
-                    CreatedAtUtc = now,
-                    UpdatedAtUtc = now,
-                    UpdatedBy = "AppConfigSeeder"
-                });
-                inserted++;
                 continue;
             }
 
-            var changed = false;
-            if (!string.Equals(existing.ValueType, definition.ValueType, StringComparison.Ordinal))
+            var globalComparisonValue = seedValue ?? definition.DefaultValue ?? string.Empty;
+            if (string.Equals(developmentSeedValue, globalComparisonValue, StringComparison.Ordinal))
             {
-                existing.ValueType = definition.ValueType;
-                changed = true;
+                continue;
             }
 
-            if (!string.Equals(existing.Category, definition.Category, StringComparison.Ordinal))
-            {
-                existing.Category = definition.Category;
-                changed = true;
-            }
-
-            changed |= SetIfDifferent(existing.Description, definition.Description, value => existing.Description = value);
-            changed |= SetIfDifferent(existing.DefaultValue, definition.DefaultValue, value => existing.DefaultValue = value);
-            changed |= SetIfDifferent(existing.ValidationJson, definition.ValidationJson, value => existing.ValidationJson = value);
-
-            if (existing.IsSensitive != definition.IsSensitive)
-            {
-                existing.IsSensitive = definition.IsSensitive;
-                changed = true;
-            }
-
-            if (existing.IsRuntimeEditable != definition.IsRuntimeEditable)
-            {
-                existing.IsRuntimeEditable = definition.IsRuntimeEditable;
-                changed = true;
-            }
-
-            if (existing.RequiresRestart != definition.RequiresRestart)
-            {
-                existing.RequiresRestart = definition.RequiresRestart;
-                changed = true;
-            }
-
-            if (changed)
-            {
-                existing.UpdatedAtUtc = now;
-                existing.UpdatedBy = "AppConfigSeeder";
-                metadataUpdated++;
-            }
+            var developmentResult = await UpsertSeedRowAsync(
+                dbContext,
+                definition,
+                Environments.Development,
+                developmentSeedValue,
+                now,
+                cancellationToken);
+            inserted += developmentResult.Inserted;
+            metadataUpdated += developmentResult.MetadataUpdated;
         }
 
         await dbContext.SaveChangesAsync(cancellationToken);
         return new AppConfigSeedResult(inserted, metadataUpdated);
+    }
+
+    private static async Task<AppConfigSeedResult> UpsertSeedRowAsync(
+        ApplicationDbContext dbContext,
+        AppConfigDefinition definition,
+        string environment,
+        string value,
+        DateTimeOffset now,
+        CancellationToken cancellationToken)
+    {
+        var existing = await dbContext.AppConfigs.SingleOrDefaultAsync(
+            row => row.Key == definition.Key && row.Environment == environment,
+            cancellationToken);
+
+        if (existing is null)
+        {
+            dbContext.AppConfigs.Add(new AppConfig
+            {
+                Id = Guid.NewGuid(),
+                Key = definition.Key,
+                Value = value,
+                ValueType = definition.ValueType,
+                Category = definition.Category,
+                Description = definition.Description,
+                DefaultValue = definition.DefaultValue,
+                IsSensitive = definition.IsSensitive,
+                IsRuntimeEditable = definition.IsRuntimeEditable,
+                RequiresRestart = definition.RequiresRestart,
+                ValidationJson = definition.ValidationJson,
+                Environment = environment,
+                IsEnabled = true,
+                CreatedAtUtc = now,
+                UpdatedAtUtc = now,
+                UpdatedBy = "AppConfigSeeder"
+            });
+            return new AppConfigSeedResult(1, 0);
+        }
+
+        var changed = false;
+        if (!string.Equals(existing.ValueType, definition.ValueType, StringComparison.Ordinal))
+        {
+            existing.ValueType = definition.ValueType;
+            changed = true;
+        }
+
+        if (!string.Equals(existing.Category, definition.Category, StringComparison.Ordinal))
+        {
+            existing.Category = definition.Category;
+            changed = true;
+        }
+
+        changed |= SetIfDifferent(existing.Description, definition.Description, next => existing.Description = next);
+        changed |= SetIfDifferent(existing.DefaultValue, definition.DefaultValue, next => existing.DefaultValue = next);
+        changed |= SetIfDifferent(existing.ValidationJson, definition.ValidationJson, next => existing.ValidationJson = next);
+
+        if (existing.IsSensitive != definition.IsSensitive)
+        {
+            existing.IsSensitive = definition.IsSensitive;
+            changed = true;
+        }
+
+        if (existing.IsRuntimeEditable != definition.IsRuntimeEditable)
+        {
+            existing.IsRuntimeEditable = definition.IsRuntimeEditable;
+            changed = true;
+        }
+
+        if (existing.RequiresRestart != definition.RequiresRestart)
+        {
+            existing.RequiresRestart = definition.RequiresRestart;
+            changed = true;
+        }
+
+        if (changed)
+        {
+            existing.UpdatedAtUtc = now;
+            existing.UpdatedBy = "AppConfigSeeder";
+            return new AppConfigSeedResult(0, 1);
+        }
+
+        return new AppConfigSeedResult(0, 0);
+    }
+
+    private static async Task<IReadOnlyDictionary<string, string?>> ReadJsonFileValuesAsync(
+        string contentRootPath,
+        string fileName,
+        CancellationToken cancellationToken)
+    {
+        var path = Path.Combine(contentRootPath, fileName);
+        if (!File.Exists(path))
+        {
+            return new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
+        }
+
+        await using var stream = File.OpenRead(path);
+        using var document = await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken);
+        var values = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
+        FlattenJson(document.RootElement, null, values);
+        return values;
+    }
+
+    private static void FlattenJson(JsonElement element, string? prefix, IDictionary<string, string?> values)
+    {
+        switch (element.ValueKind)
+        {
+            case JsonValueKind.Object:
+                foreach (var property in element.EnumerateObject())
+                {
+                    FlattenJson(property.Value, string.IsNullOrWhiteSpace(prefix) ? property.Name : $"{prefix}:{property.Name}", values);
+                }
+                break;
+            case JsonValueKind.Array:
+                if (!string.IsNullOrWhiteSpace(prefix))
+                {
+                    values[prefix] = element.GetRawText();
+                }
+                break;
+            case JsonValueKind.String:
+                values[prefix ?? string.Empty] = element.GetString();
+                break;
+            case JsonValueKind.Number:
+            case JsonValueKind.True:
+            case JsonValueKind.False:
+                values[prefix ?? string.Empty] = element.GetRawText();
+                break;
+            case JsonValueKind.Null:
+                values[prefix ?? string.Empty] = null;
+                break;
+        }
+    }
+
+    private static bool TryGetSeedValue(
+        IReadOnlyDictionary<string, string?> values,
+        AppConfigDefinition definition,
+        out string seedValue)
+    {
+        seedValue = string.Empty;
+        if (string.IsNullOrWhiteSpace(definition.BootstrapPath)
+            || !values.TryGetValue(definition.BootstrapPath, out var value)
+            || value is null)
+        {
+            return false;
+        }
+
+        seedValue = NormalizeSeedValue(value, definition);
+        return true;
+    }
+
+    private static string NormalizeSeedValue(string value, AppConfigDefinition definition)
+    {
+        if (definition.ValueType == AppConfigValueTypes.StringList)
+        {
+            var values = ParseStringList(value);
+            return values.Length > 0 ? string.Join(',', values) : value;
+        }
+
+        return value;
     }
 
     private static string? GetSeedValue(IConfiguration configuration, AppConfigDefinition definition)
@@ -759,6 +882,24 @@ public static class AppConfigSeeder
 
         assign(next);
         return true;
+    }
+
+    private static string[] ParseStringList(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return [];
+        }
+
+        var trimmed = value.Trim();
+        if (trimmed.StartsWith('['))
+        {
+            return JsonSerializer.Deserialize<string[]>(trimmed) ?? [];
+        }
+
+        return trimmed
+            .Split([',', ';'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .ToArray();
     }
 }
 

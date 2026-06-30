@@ -63,6 +63,10 @@ public sealed record TheOddsMlbRefreshRequest(
     Guid? ScheduledCycleId = null,
     string? TargetKey = null,
     DateTimeOffset? TargetLaunchStartedAtUtc = null,
+    string? Bookmakers = null,
+    string? ExpandedBookmakers = null,
+    string? DfsBookmakers = null,
+    string? Markets = null,
     bool DeferPublicFinalization = false,
     bool BypassLiveRefreshGate = false);
 
@@ -137,10 +141,14 @@ public static partial class TheOddsApiDebugEndpoints
             var resolveSlateDateMs = stepStopwatch.ElapsedMilliseconds;
             var lifecycleFreshnessMinutes = Math.Clamp(freshnessMinutes ?? DefaultTheOddsLineShoppingFreshnessMinutes, 1, 1440);
             var preset = ResolveTheOddsBookmakerPreset(bookmakerPreset);
-            var configuredSportsbookBookmakers = NullIfWhiteSpace(options.Bookmakers);
-            var configuredExpandedSportsbookBookmakers = NullIfWhiteSpace(options.ExpandedBookmakers)
+            var configuredSportsbookBookmakers = NullIfWhiteSpace(request.Bookmakers)
+                ?? NullIfWhiteSpace(options.Bookmakers);
+            var configuredExpandedSportsbookBookmakers = NullIfWhiteSpace(request.ExpandedBookmakers)
+                ?? NullIfWhiteSpace(options.ExpandedBookmakers)
                 ?? ExpandedTheOddsUsSportsbookBookmakers;
-            var configuredDfsBookmakers = NullIfWhiteSpace(options.DfsBookmakers) ?? DefaultTheOddsDfsBookmakers;
+            var configuredDfsBookmakers = NullIfWhiteSpace(request.DfsBookmakers)
+                ?? NullIfWhiteSpace(options.DfsBookmakers)
+                ?? DefaultTheOddsDfsBookmakers;
             var presetSelection = ResolveTheOddsRefreshBookmakerSelection(
                 preset,
                 configuredSportsbookBookmakers,
@@ -151,7 +159,7 @@ public static partial class TheOddsApiDebugEndpoints
             var includeDfsBookmakers = presetSelection.IncludeDfs;
             var dfsRegion = NullIfWhiteSpace(options.DfsRegion) ?? "us_dfs";
             var dfsBookmakers = presetSelection.DfsBookmakers;
-            var markets = NullIfWhiteSpace(options.Markets);
+            var markets = NullIfWhiteSpace(request.Markets) ?? NullIfWhiteSpace(options.Markets);
             var shouldFetchSportsbookBookmakers = !string.IsNullOrWhiteSpace(bookmakers);
             var requestedBookmakers = ParseCommaSeparatedSet(bookmakers);
             var requestedDfsBookmakers = includeDfsBookmakers

@@ -1,4 +1,5 @@
 using SportsBetting.Api.Data;
+using SportsBetting.Api.Configuration;
 using SportsBetting.Api.Integrations.Results.Mlb;
 using SportsBetting.Api.Integrations.Results.Soccer;
 using SportsBetting.Api.Models;
@@ -1512,11 +1513,18 @@ public static class ResultsDebugEndpoints
             DateOnly? toDate,
             bool? enabledOnly,
             IOptions<ApiSportsOptions> options,
+            IProviderDomainConfigService providerDomainConfigService,
             ApplicationDbContext dbContext,
             CancellationToken cancellationToken) =>
         {
             var range = NormalizeApiSportsHistoricalCoverageDateRange(fromDate, toDate);
-            var competitions = GetConfiguredApiSportsHistoricalCompetitions(options.Value, enabledOnly != false);
+            var competitions = (await providerDomainConfigService.GetApiSportsSoccerCompetitionsAsync(
+                    options.Value,
+                    enabledOnly != false,
+                    cancellationToken))
+                .Where(row => !row.IsWorldCup)
+                .Select(ToHistoricalCompetitionOptions)
+                .ToArray();
             var statKeysOfInterest = ApiSportsHistoricalStatKeysOfInterest;
             var sport = await dbContext.Sports
                 .AsNoTracking()
@@ -1659,7 +1667,7 @@ public static class ResultsDebugEndpoints
                     soccerEntryBuilderEnabled = false,
                     importsRows = false
                 },
-                configuredCompetitionCount = competitions.Count,
+                configuredCompetitionCount = competitions.Length,
                 enabledCompetitionCount = competitions.Count(row => row.Enabled),
                 statsOfInterest = statKeysOfInterest.Select(statKey => new { statKey, displayName = ToApiSportsHistoricalStatDisplayName(statKey) }).ToArray(),
                 totalImportedResultRows = rows.Count,
@@ -1679,6 +1687,7 @@ public static class ResultsDebugEndpoints
         endpoints.MapPost("/api/debug/soccer/results/api-sports/historical/backfill-completed", async (
             ApiSportsHistoricalBackfillCompletedRequest request,
             IOptions<ApiSportsOptions> options,
+            IProviderDomainConfigService providerDomainConfigService,
             IApiSportsFootballClient client,
             IApiSportsSoccerSeasonResolver seasonResolver,
             ApplicationDbContext dbContext,
@@ -1719,7 +1728,13 @@ public static class ResultsDebugEndpoints
                 });
             }
 
-            var competitions = GetConfiguredApiSportsHistoricalCompetitions(options.Value, enabledOnly: true);
+            var competitions = (await providerDomainConfigService.GetApiSportsSoccerCompetitionsAsync(
+                    options.Value,
+                    enabledOnly: true,
+                    cancellationToken))
+                .Where(row => !row.IsWorldCup)
+                .Select(ToHistoricalCompetitionOptions)
+                .ToArray();
             var competition = competitions.SingleOrDefault(row => string.Equals(row.Key, competitionKey, StringComparison.OrdinalIgnoreCase));
             if (competition is null)
             {
@@ -7929,6 +7944,23 @@ public static class ResultsDebugEndpoints
             .ThenBy(row => row.Season ?? 0)
             .ToArray();
     }
+
+    private static ApiSportsFootballHistoricalCompetitionOptions ToHistoricalCompetitionOptions(
+        ApiSportsSoccerCompetitionDescriptor competition)
+        => new()
+        {
+            Key = competition.Key,
+            DisplayName = competition.DisplayName,
+            LeagueId = competition.LeagueId,
+            Season = competition.Season <= 0 ? null : competition.Season,
+            Enabled = competition.Enabled,
+            Country = competition.Country,
+            Type = competition.Type,
+            ActiveFromDate = competition.ActiveFromDate,
+            ActiveToDate = competition.ActiveToDate,
+            BackfillFromDate = competition.BackfillFromDate,
+            BackfillToDate = competition.BackfillToDate
+        };
 
     internal static ApiSportsSoccerCompetitionDescriptor GetApiSportsWorldCupCompetitionDescriptor()
     {

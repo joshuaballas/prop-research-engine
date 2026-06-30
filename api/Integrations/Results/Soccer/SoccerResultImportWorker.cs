@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
+using SportsBetting.Api.Configuration;
 using SportsBetting.Api.Data;
 using SportsBetting.Api.Diagnostics;
 using SportsBetting.Api.Endpoints;
@@ -45,16 +46,27 @@ public sealed class SoccerResultImportWorker(
             await using var scope = scopeFactory.CreateAsyncScope();
             var dbContext = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
             var apiSportsOptions = scope.ServiceProvider.GetRequiredService<IOptions<ApiSportsOptions>>().Value;
+            var providerDomainConfigService = scope.ServiceProvider.GetRequiredService<IProviderDomainConfigService>();
             var configError = ValidateApiSportsConfig(apiSportsOptions);
             if (configError is not null)
             {
-                await PersistNotConfiguredForSelectedCompetitionsAsync(dbContext, apiSportsOptions, startedAt, configError, cancellationToken);
+                await PersistNotConfiguredForSelectedCompetitionsAsync(
+                    dbContext,
+                    providerDomainConfigService,
+                    apiSportsOptions,
+                    startedAt,
+                    configError,
+                    cancellationToken);
                 logger.LogWarning("Soccer API-Sports result import worker skipped because API-Sports is not configured. Reason: {Reason}", configError);
                 return;
             }
 
             var workerOptions = options.Value;
-            var competitions = ResolveWorkerCompetitions(apiSportsOptions, workerOptions);
+            var competitions = await ResolveWorkerCompetitionsAsync(
+                providerDomainConfigService,
+                apiSportsOptions,
+                workerOptions,
+                cancellationToken);
             if (competitions.Count == 0)
             {
                 var state = await GetOrCreateStateAsync(dbContext, Competition, cancellationToken);
@@ -318,11 +330,16 @@ public sealed class SoccerResultImportWorker(
         await dbContext.SaveChangesAsync(cancellationToken);
     }
 
-    private static IReadOnlyList<ApiSportsSoccerCompetitionDescriptor> ResolveWorkerCompetitions(
+    private static async Task<IReadOnlyList<ApiSportsSoccerCompetitionDescriptor>> ResolveWorkerCompetitionsAsync(
+        IProviderDomainConfigService providerDomainConfigService,
         ApiSportsOptions apiSportsOptions,
-        SoccerResultImportWorkerOptions workerOptions)
+        SoccerResultImportWorkerOptions workerOptions,
+        CancellationToken cancellationToken)
     {
-        var supported = ResultsDebugEndpoints.GetSupportedApiSportsSoccerCompetitions(apiSportsOptions, enabledOnly: true);
+        var supported = await providerDomainConfigService.GetApiSportsSoccerCompetitionsAsync(
+            apiSportsOptions,
+            enabledOnly: true,
+            cancellationToken);
         var requestedKeys = workerOptions.CompetitionKeys
             .Where(key => !string.IsNullOrWhiteSpace(key))
             .Select(key => key.Trim())
@@ -377,12 +394,16 @@ public sealed class SoccerResultImportWorker(
 
     private static async Task PersistNotConfiguredForSelectedCompetitionsAsync(
         ApplicationDbContext dbContext,
+        IProviderDomainConfigService providerDomainConfigService,
         ApiSportsOptions apiSportsOptions,
         DateTimeOffset startedAt,
         string configError,
         CancellationToken cancellationToken)
     {
-        var competitions = ResultsDebugEndpoints.GetSupportedApiSportsSoccerCompetitions(apiSportsOptions, enabledOnly: true);
+        var competitions = await providerDomainConfigService.GetApiSportsSoccerCompetitionsAsync(
+            apiSportsOptions,
+            enabledOnly: true,
+            cancellationToken);
         if (competitions.Count == 0)
         {
             competitions = [ResultsDebugEndpoints.GetApiSportsWorldCupCompetitionDescriptor()];

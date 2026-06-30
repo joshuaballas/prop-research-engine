@@ -368,6 +368,16 @@ public sealed class TheOddsMlbScheduledRefreshWorker(
             ScheduledCycleId: scheduledCycleId,
             TargetKey: target.Key,
             TargetLaunchStartedAtUtc: startedAtUtc,
+            Bookmakers: string.Equals(target.ProviderCategory, "Sportsbook", StringComparison.OrdinalIgnoreCase)
+                ? JoinOrNull(target.EffectiveBookmakers)
+                : null,
+            ExpandedBookmakers: string.Equals(target.ProviderCategory, "Sportsbook", StringComparison.OrdinalIgnoreCase)
+                ? JoinOrNull(target.EffectiveBookmakers)
+                : null,
+            DfsBookmakers: string.Equals(target.ProviderCategory, "DFS", StringComparison.OrdinalIgnoreCase)
+                ? JoinOrNull(target.EffectiveBookmakers)
+                : null,
+            Markets: target.Markets,
             DeferPublicFinalization: true,
             BypassLiveRefreshGate: true);
 
