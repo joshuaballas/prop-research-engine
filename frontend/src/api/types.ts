@@ -558,6 +558,8 @@ export interface MarketPerformanceSummaryDto {
     yesterdayDate?: string | null;
     yesterdayGradedOpportunities?: number;
     overallGradedOpportunities?: number;
+    uniqueGradedDateCount?: number;
+    gradedOpportunitiesByDate?: PerformanceGradedOpportunitiesByDateDto[];
     overallIncludesLatestGradedSlate?: boolean;
     overallDateRange?: PerformanceDateRangeDto | null;
     overallExcludedLatestGradedSlateReason?: string | null;
@@ -701,6 +703,8 @@ export interface PerformanceGrainDiagnosticsDto {
   yesterdayDate?: string | null;
   yesterdayGradedOpportunities?: number;
   overallGradedOpportunities?: number;
+  uniqueGradedDateCount?: number;
+  gradedOpportunitiesByDate?: PerformanceGradedOpportunitiesByDateDto[];
   overallIncludesLatestGradedSlate?: boolean;
   overallDateRange?: PerformanceDateRangeDto | null;
   overallExcludedLatestGradedSlateReason?: string | null;
@@ -708,6 +712,14 @@ export interface PerformanceGrainDiagnosticsDto {
   includeLegacy?: boolean;
   excludedOpportunityCount?: number;
   providerLineDiagnostics?: ProviderLineDiagnosticsDto;
+}
+
+export interface PerformanceGradedOpportunitiesByDateDto {
+  gradedDate?: string | null;
+  gradedOpportunities?: number;
+  won?: number;
+  lost?: number;
+  pushed?: number;
 }
 
 export interface PerformanceResultRowDto {
@@ -727,6 +739,11 @@ export interface PerformanceResultRowDto {
   displayExpectedValue?: number | null;
   expectedValueUnavailableReason?: string | null;
   eventStartTimeUtc?: string | null;
+  eventDate?: string | null;
+  expectedResultDate?: string | null;
+  resultDate?: string | null;
+  gradedDate?: string | null;
+  ledgerCapturedAtUtc?: string | null;
   estimatedEv?: number | null;
   hitChance?: number | null;
   trust?: string | null;
@@ -741,6 +758,7 @@ export interface PerformanceGroupDto {
   groupType: string;
   groupKey: string;
   sport?: string;
+  totalCandidatePicks?: number;
   gradedPicks?: number;
   wins?: number;
   losses?: number;

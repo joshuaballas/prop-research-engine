@@ -2080,6 +2080,8 @@ public sealed class RefreshSafetyTests
     [InlineData("/api/markets/line-shopping?take=10&includeBookmakerPrices=false")]
     [InlineData("/api/markets/line-shopping?sport=All&take=10&includeBookmakerPrices=false")]
     [InlineData("/api/markets/performance-summary?candidateOnly=true")]
+    [InlineData("/api/markets/performance-summary?sport=All&includeNoResultDiagnostics=true")]
+    [InlineData("/api/markets/performance-results?sport=All&includeDiagnostics=true")]
     [InlineData("/api/dfs/entry-rules")]
     public async Task PublicMarketEndpoints_AreReadOnly_AndDoNotCallProviders(string path)
     {
@@ -2304,6 +2306,110 @@ public sealed class RefreshSafetyTests
         Assert.Equal(0, factory.TheOddsAdapter.CallCount);
         Assert.Equal(0, factory.ApiSportsFootballClient.FixturesCallCount);
         Assert.Equal(0, factory.ApiSportsFootballClient.FixturePlayerStatsCallCount);
+    }
+
+    [Fact]
+    public async Task ResultImportStatus_ReportsMultiSportWorkerHealthWithoutExternalCalls()
+    {
+        await using var factory = new SafetyTestApplicationFactory(new Dictionary<string, string?>
+        {
+            ["MlbResultImportWorker:Enabled"] = "true",
+            ["SoccerResultImportWorker:Enabled"] = "true",
+            ["ApiSports:Enabled"] = "true",
+            ["ApiSports:ApiKey"] = "TEST_API_SPORTS_KEY"
+        });
+        using var client = factory.CreateClient();
+        await factory.EnsureDatabaseAsync();
+        var latestCompletedDate = DateOnly.FromDateTime(DateTime.UtcNow.AddDays(-1));
+        var now = DateTimeOffset.UtcNow;
+
+        using (var scope = factory.Services.CreateScope())
+        {
+            var dbContext = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+            dbContext.MlbResultImportStates.Add(new MlbResultImportState
+            {
+                Id = Guid.NewGuid(),
+                Source = "mlb",
+                LastSuccessfulImportDate = latestCompletedDate.AddDays(-1),
+                LastSuccessfulRunAt = now.AddMinutes(-55),
+                LastStartedAt = now.AddMinutes(-56),
+                LastCompletedAt = now.AddMinutes(-55),
+                LastStatus = "succeeded"
+            });
+            dbContext.MlbResultImportDateStates.Add(new MlbResultImportDateState
+            {
+                Id = Guid.NewGuid(),
+                EventDate = latestCompletedDate,
+                Status = "pending",
+                CoverageStatus = "NotStarted",
+                Attempts = 0,
+                CreatedAt = now,
+                UpdatedAt = now
+            });
+            dbContext.SoccerResultImportStates.Add(new SoccerResultImportState
+            {
+                Id = Guid.NewGuid(),
+                Source = SoccerResultImportWorker.Source,
+                Competition = SoccerResultImportWorker.Competition,
+                LastSuccessfulRunAt = now.AddMinutes(-40),
+                LastStartedAt = now.AddMinutes(-41),
+                LastCompletedAt = now.AddMinutes(-40),
+                LastStatus = "completed_with_pending_fixtures",
+                LatestCompletedFixtureDetectedId = "fixture-1",
+                LatestCompletedFixtureDetectedDate = latestCompletedDate,
+                LatestCompletedFixtureImportedId = "fixture-0",
+                LatestCompletedFixtureImportedDate = latestCompletedDate.AddDays(-1)
+            });
+            dbContext.SoccerResultImportFixtureStates.Add(new SoccerResultImportFixtureState
+            {
+                Id = Guid.NewGuid(),
+                Source = SoccerResultImportWorker.Source,
+                Competition = SoccerResultImportWorker.Competition,
+                FixtureId = "fixture-1",
+                EventDate = latestCompletedDate,
+                KickoffUtc = now.AddHours(-4),
+                HomeTeamName = "Home",
+                AwayTeamName = "Away",
+                StatusShort = "FT",
+                StatusLong = "Match Finished",
+                ImportStatus = "NotStarted",
+                CreatedAt = now,
+                UpdatedAt = now
+            });
+            await dbContext.SaveChangesAsync();
+        }
+
+        var response = await client.GetAsync("/api/debug/results/import/status");
+
+        await EnsureSuccessWithBodyAsync(response);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.True(json.GetProperty("readOnly").GetBoolean());
+        Assert.False(json.GetProperty("callsExternalApis").GetBoolean());
+        Assert.False(json.GetProperty("writesRows").GetBoolean());
+        var workflows = json.GetProperty("workflows").EnumerateArray().ToArray();
+        var mlb = workflows.Single(row => row.GetProperty("sport").GetString() == "MLB");
+        var soccer = workflows.Single(row => row.GetProperty("sport").GetString() == "SOCCER");
+
+        Assert.True(mlb.GetProperty("workerEnabled").GetBoolean());
+        Assert.True(mlb.GetProperty("scheduledEnabled").GetBoolean());
+        Assert.Equal(1, mlb.GetProperty("pendingCompletedDateCount").GetInt32());
+        Assert.Equal(latestCompletedDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture), mlb
+            .GetProperty("pendingCompletedDates")
+            .EnumerateArray()
+            .Single()
+            .GetProperty("eventDate")
+            .GetString());
+        Assert.Contains("pending", mlb.GetProperty("staleOrDisabledWarning").GetString(), StringComparison.OrdinalIgnoreCase);
+
+        Assert.True(soccer.GetProperty("workerEnabled").GetBoolean());
+        Assert.True(soccer.GetProperty("scheduledEnabled").GetBoolean());
+        Assert.Equal(1, soccer.GetProperty("pendingCompletedFixtureCount").GetInt32());
+        Assert.Equal(1, soccer.GetProperty("pendingCompletedDateCount").GetInt32());
+        Assert.Contains("pending", soccer.GetProperty("staleOrDisabledWarning").GetString(), StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(0, factory.TheOddsAdapter.CallCount);
+        Assert.Equal(0, factory.ApiSportsFootballClient.FixturesCallCount);
+        Assert.Equal(0, factory.ApiSportsFootballClient.FixturePlayerStatsCallCount);
+        Assert.Equal(0, factory.MlbResultsProvider.CallCount);
     }
 
     [Fact]
@@ -3338,7 +3444,7 @@ public sealed class RefreshSafetyTests
     }
 
     [Fact]
-    public async Task SoccerPerformanceSummary_RemainsUnavailable_WithoutCallingProviders()
+    public async Task SoccerPerformanceSummary_ReturnsReadOnlyDiagnostics_WithoutCallingProviders()
     {
         await using var factory = new SafetyTestApplicationFactory();
         using var client = factory.CreateClient();
@@ -3349,12 +3455,12 @@ public sealed class RefreshSafetyTests
 
         await EnsureSuccessWithBodyAsync(response);
         var json = await response.Content.ReadFromJsonAsync<JsonElement>();
-        Assert.Equal("SOCCER", json.GetProperty("sport").GetString());
+        Assert.Equal("SOCCER", json.GetProperty("effectiveSport").GetString());
         Assert.False(json.GetProperty("callsExternalApis").GetBoolean());
         Assert.True(json.GetProperty("readOnly").GetBoolean());
-        Assert.False(json.GetProperty("resultGradingSupported").GetBoolean());
         Assert.Equal(0, json.GetProperty("summary").GetProperty("gradedPicks").GetInt32());
-        Assert.Equal("Soccer grading and model hit chance are not available yet.", json.GetProperty("unavailableReason").GetString());
+        Assert.True(json.TryGetProperty("dataAvailability", out _));
+        Assert.False(json.TryGetProperty("unavailableReason", out _));
         Assert.Equal(0, factory.TheOddsAdapter.CallCount);
         Assert.Equal(before, await factory.CountArtifactsAsync());
     }
@@ -4520,8 +4626,8 @@ public sealed class RefreshSafetyTests
         var dbContext = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
         var state = await dbContext.SoccerResultImportStates.SingleAsync();
         Assert.Equal("EPL", state.Competition);
-        Assert.Equal("skipped", state.LastStatus);
-        Assert.Contains("OutsideProviderSeasonWindow", state.LastErrorMessage, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal("SkippedOutsideSeasonWindow", state.LastStatus);
+        Assert.Null(state.LastErrorMessage);
         Assert.Equal(0, state.LastApiCallsUsed);
         Assert.Equal(0, factory.ApiSportsFootballClient.FixturesCallCount);
         Assert.Equal(0, factory.ApiSportsFootballClient.FixturePlayerStatsCallCount);

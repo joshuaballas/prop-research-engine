@@ -51,6 +51,9 @@ export function PerformancePage() {
     ?? undefined;
   const resultsQuery = usePerformanceResults(selectedResultsDate, Boolean(selectedResultsDate));
   const performanceRows = performanceQuery.rows;
+  const overallDateRangeLabel = formatDisplayDateRange(
+    performanceQuery.summary?.overall?.dateRange ?? performanceQuery.summary?.performanceGrainDiagnostics?.overallDateRange
+  );
   const hasGradedSample = (performanceQuery.summary?.dataAvailability?.gradedPicks ?? performanceRows.find((row) => row.groupType === 'Overall')?.gradedPicks ?? 0) > 0;
   const activeTab = breakdownTabs.find((tab) => tab.label === selectedTab) ?? breakdownTabs[0];
   const visibleRows = useMemo(
@@ -87,7 +90,7 @@ export function PerformancePage() {
             Overall History
           </Typography>
           <Typography color="text.secondary">
-            Longer-term results grouped by provider and prop type.
+            Longer-term results grouped by provider and prop type{overallDateRangeLabel ? ` (${overallDateRangeLabel})` : ''}.
           </Typography>
         </Stack>
 
@@ -727,6 +730,15 @@ function formatDisplayDate(value: string) {
     month: 'short',
     day: 'numeric'
   });
+}
+
+function formatDisplayDateRange(range?: { fromDate?: string | null; toDate?: string | null } | null) {
+  if (!range?.fromDate && !range?.toDate) return '';
+  if (range.fromDate && range.toDate && range.fromDate !== range.toDate) {
+    return `${formatDisplayDate(range.fromDate)}-${formatDisplayDate(range.toDate)}`;
+  }
+
+  return formatDisplayDate(range.fromDate ?? range.toDate ?? '');
 }
 
 function CleanBaselineCard() {

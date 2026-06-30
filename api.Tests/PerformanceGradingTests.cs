@@ -469,7 +469,7 @@ public sealed class PerformanceGradingTests
         Assert.Equal(4, broadJson.GetProperty("dataAvailability").GetProperty("rowsAfterPerformanceEligibility").GetInt32());
         Assert.Equal(
             broadJson.GetProperty("dataAvailability").GetProperty("rowsAfterPerformanceEligibility").GetInt32(),
-            broadJson.GetProperty("groups").GetProperty("overall")[0].GetProperty("totalPicks").GetInt32());
+            broadJson.GetProperty("groups").GetProperty("overall")[0].GetProperty("totalCandidatePicks").GetInt32());
     }
 
     [Fact]
@@ -1255,7 +1255,7 @@ public sealed class PerformanceGradingTests
         Assert.Equal(0, json.GetProperty("dataAvailability").GetProperty("rowsExcludedNonPlayable").GetInt32());
         var providerCategoryGroup = Assert.Single(json.GetProperty("groups").GetProperty("byProviderCategory").EnumerateArray());
         Assert.Equal("Sportsbook", providerCategoryGroup.GetProperty("providerCategory").GetString());
-        Assert.Equal(1, providerCategoryGroup.GetProperty("totalPicks").GetInt32());
+        Assert.Equal(1, providerCategoryGroup.GetProperty("totalCandidatePicks").GetInt32());
         Assert.Equal(1, providerCategoryGroup.GetProperty("gradedPicks").GetInt32());
     }
 
@@ -1520,6 +1520,197 @@ public sealed class PerformanceGradingTests
         var row = json.GetProperty("rows")[0];
         Assert.Equal(4, row.GetProperty("providerLineCount").GetInt32());
         Assert.Equal(4, row.GetProperty("providerLineBookmakers").GetArrayLength());
+        Assert.Equal(date.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture), row.GetProperty("eventDate").GetString());
+        Assert.Equal(date.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture), row.GetProperty("expectedResultDate").GetString());
+        Assert.Equal(date.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture), row.GetProperty("resultDate").GetString());
+        Assert.Equal(date.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture), row.GetProperty("gradedDate").GetString());
+        Assert.Equal(JsonValueKind.String, row.GetProperty("ledgerCapturedAtUtc").ValueKind);
+    }
+
+    [Fact]
+    public async Task PerformanceSummary_All_AggregatesMlbAndSoccerWithSportBreakdown()
+    {
+        await using var factory = new SafetyTestApplicationFactory();
+        using var client = factory.CreateClient();
+        var date = new DateOnly(2026, 6, 29);
+        await SeedPerformanceScenarioAsync(
+            factory,
+            date,
+            "Total Bases",
+            "Over",
+            1.5m,
+            2m);
+        await SeedPerformanceScenarioAsync(
+            factory,
+            date,
+            "Shots",
+            "Over",
+            1.5m,
+            3m,
+            provider: "FanDuel",
+            bookmaker: "FanDuel",
+            providerCategory: "Sportsbook",
+            isActionableForUser: false,
+            resetDatabase: false,
+            sportCode: "SOCCER");
+
+        var response = await client.GetAsync("/api/markets/performance-summary?sport=All&gradingMode=allHistory&includeNoResultDiagnostics=true");
+
+        await EnsureSuccessWithBodyAsync(response);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal("ALL", json.GetProperty("requestedSport").GetString());
+        Assert.Equal("ALL", json.GetProperty("effectiveSport").GetString());
+        Assert.Equal(2, json.GetProperty("summary").GetProperty("gradedPicks").GetInt32());
+        var bySport = json.GetProperty("groups").GetProperty("bySport").EnumerateArray().ToArray();
+        Assert.Contains(bySport, row =>
+            row.GetProperty("groupKey").GetString() == "MLB" &&
+            row.GetProperty("gradedPicks").GetInt32() == 1);
+        Assert.Contains(bySport, row =>
+            row.GetProperty("groupKey").GetString() == "SOCCER" &&
+            row.GetProperty("gradedPicks").GetInt32() == 1);
+    }
+
+    [Fact]
+    public async Task PerformanceResults_All_ReturnsMixedSportRows()
+    {
+        await using var factory = new SafetyTestApplicationFactory();
+        using var client = factory.CreateClient();
+        var date = new DateOnly(2026, 6, 29);
+        await SeedPerformanceScenarioAsync(
+            factory,
+            date,
+            "Total Bases",
+            "Over",
+            1.5m,
+            2m);
+        await SeedPerformanceScenarioAsync(
+            factory,
+            date,
+            "Shots",
+            "Over",
+            1.5m,
+            3m,
+            provider: "FanDuel",
+            bookmaker: "FanDuel",
+            providerCategory: "Sportsbook",
+            isActionableForUser: false,
+            resetDatabase: false,
+            sportCode: "SOCCER");
+
+        var response = await client.GetAsync($"/api/markets/performance-results?sport=All&date={date:yyyy-MM-dd}&includeDiagnostics=true");
+
+        await EnsureSuccessWithBodyAsync(response);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal("ALL", json.GetProperty("sport").GetString());
+        Assert.Equal(2, json.GetProperty("summary").GetProperty("gradedPicks").GetInt32());
+        var rows = json.GetProperty("rows").EnumerateArray().ToArray();
+        Assert.Contains(rows, row => row.GetProperty("sport").GetString() == "MLB");
+        Assert.Contains(rows, row => row.GetProperty("sport").GetString() == "SOCCER");
+    }
+
+    [Fact]
+    public async Task PerformanceSummary_All_EqualsMlbWhenSoccerHasNoGradedRows_AndKeepsOpportunityGrain()
+    {
+        await using var factory = new SafetyTestApplicationFactory();
+        using var client = factory.CreateClient();
+        var date = new DateOnly(2026, 6, 29);
+        await SeedPerformanceScenarioAsync(
+            factory,
+            date,
+            "Pitcher Strikeouts",
+            "Under",
+            6.5m,
+            4m,
+            provider: "FanDuel",
+            bookmaker: "FanDuel",
+            providerCategory: "Sportsbook",
+            isActionableForUser: false,
+            estimatedEv: 0.12m);
+        await SeedPerformanceScenarioAsync(
+            factory,
+            date,
+            "Hits",
+            "Over",
+            0.5m,
+            null,
+            provider: "FanDuel",
+            bookmaker: "FanDuel",
+            providerCategory: "Sportsbook",
+            isActionableForUser: false,
+            estimatedEv: 0.06m,
+            resetDatabase: false);
+        using (var scope = factory.Services.CreateScope())
+        {
+            var dbContext = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+            var original = await dbContext.RecommendationSnapshots.SingleAsync(row => row.Sport == "MLB" && row.PropType == "Pitcher Strikeouts");
+            dbContext.RecommendationSnapshots.Add(CloneRecommendationSnapshot(dbContext, original, provider: "DraftKings", bookmaker: "DraftKings", estimatedEv: 0.11m, rankingScoreDelta: 2m));
+            dbContext.RecommendationSnapshots.Add(CloneRecommendationSnapshot(dbContext, original, provider: "BetMGM", bookmaker: "BetMGM", estimatedEv: 0.10m, rankingScoreDelta: 1m));
+            dbContext.RecommendationSnapshots.Add(CloneRecommendationSnapshot(dbContext, original, provider: "BetRivers", bookmaker: "BetRivers", estimatedEv: 0.09m, rankingScoreDelta: 0.5m));
+            var excluded = CloneRecommendationSnapshot(dbContext, original, provider: "Caesars", bookmaker: "Caesars", estimatedEv: 0.20m, rankingScoreDelta: 3m);
+            excluded.IsExcludedFromPerformance = true;
+            excluded.PerformanceExclusionReason = "TestExcluded";
+            dbContext.RecommendationSnapshots.Add(excluded);
+            await dbContext.SaveChangesAsync();
+        }
+
+        var mlbResponse = await client.GetAsync("/api/markets/performance-summary?sport=MLB&gradingMode=allHistory&includeNoResultDiagnostics=true");
+        var allResponse = await client.GetAsync("/api/markets/performance-summary?sport=All&gradingMode=allHistory&includeNoResultDiagnostics=true");
+
+        await EnsureSuccessWithBodyAsync(mlbResponse);
+        await EnsureSuccessWithBodyAsync(allResponse);
+        var mlb = await mlbResponse.Content.ReadFromJsonAsync<JsonElement>();
+        var all = await allResponse.Content.ReadFromJsonAsync<JsonElement>();
+
+        Assert.Equal(mlb.GetProperty("summary").GetProperty("gradedPicks").GetInt32(), all.GetProperty("summary").GetProperty("gradedPicks").GetInt32());
+        Assert.Equal(mlb.GetProperty("summary").GetProperty("won").GetInt32(), all.GetProperty("summary").GetProperty("won").GetInt32());
+        Assert.Equal(mlb.GetProperty("summary").GetProperty("lost").GetInt32(), all.GetProperty("summary").GetProperty("lost").GetInt32());
+        Assert.Equal(mlb.GetProperty("summary").GetProperty("pushed").GetInt32(), all.GetProperty("summary").GetProperty("pushed").GetInt32());
+        Assert.Equal(mlb.GetProperty("overall").GetProperty("gradedOpportunities").GetInt32(), all.GetProperty("overall").GetProperty("gradedOpportunities").GetInt32());
+        Assert.Equal(mlb.GetProperty("yesterday").GetProperty("gradedOpportunities").GetInt32(), all.GetProperty("yesterday").GetProperty("gradedOpportunities").GetInt32());
+        Assert.Equal(1, all.GetProperty("summary").GetProperty("gradedPicks").GetInt32());
+
+        var providerLineDiagnostics = all.GetProperty("providerLineDiagnostics");
+        Assert.Equal(5, providerLineDiagnostics.GetProperty("providerLineCount").GetInt32());
+        Assert.Equal(2, providerLineDiagnostics.GetProperty("dedupedProviderLineCount").GetInt32());
+        Assert.Equal(1, all.GetProperty("dataAvailability").GetProperty("excludedFromPerformanceRows").GetInt32());
+
+        var bySport = all.GetProperty("groups").GetProperty("bySport").EnumerateArray().ToArray();
+        var sportGradedTotal = bySport.Sum(row => row.GetProperty("gradedPicks").GetInt32());
+        Assert.Equal(all.GetProperty("summary").GetProperty("gradedPicks").GetInt32(), sportGradedTotal);
+        var mlbSportGroup = Assert.Single(bySport);
+        Assert.Equal("MLB", mlbSportGroup.GetProperty("groupKey").GetString());
+        Assert.False(mlbSportGroup.TryGetProperty("totalPicks", out _));
+        Assert.Equal(2, mlbSportGroup.GetProperty("totalCandidatePicks").GetInt32());
+        Assert.Equal(1, mlbSportGroup.GetProperty("gradedPicks").GetInt32());
+        Assert.Equal(
+            mlbSportGroup.GetProperty("gradedPicks").GetInt32() +
+            mlbSportGroup.GetProperty("noResults").GetInt32() +
+            mlbSportGroup.GetProperty("unmatched").GetInt32() +
+            mlbSportGroup.GetProperty("pending").GetInt32(),
+            mlbSportGroup.GetProperty("totalCandidatePicks").GetInt32());
+        Assert.Equal(1, mlbSportGroup.GetProperty("noResults").GetInt32());
+    }
+
+    [Fact]
+    public async Task PerformanceSummary_SoccerWithoutRows_ReturnsDiagnosticsInsteadOfUnsupportedResponse()
+    {
+        await using var factory = new SafetyTestApplicationFactory();
+        using var client = factory.CreateClient();
+        using (var scope = factory.Services.CreateScope())
+        {
+            var dbContext = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+            await dbContext.Database.EnsureCreatedAsync();
+        }
+
+        var response = await client.GetAsync("/api/markets/performance-summary?sport=SOCCER&includeNoResultDiagnostics=true");
+
+        await EnsureSuccessWithBodyAsync(response);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal("SOCCER", json.GetProperty("effectiveSport").GetString());
+        Assert.Equal(0, json.GetProperty("summary").GetProperty("gradedPicks").GetInt32());
+        Assert.True(json.TryGetProperty("dataAvailability", out _));
+        Assert.True(json.TryGetProperty("performanceGrainDiagnostics", out _));
+        Assert.False(json.TryGetProperty("unavailableReason", out _));
     }
 
     [Fact]
@@ -1631,13 +1822,16 @@ public sealed class PerformanceGradingTests
 
         var overallResponse = await client.GetAsync("/api/markets/performance-summary?sport=MLB&gradingMode=allHistory");
         var latestResponse = await client.GetAsync("/api/markets/performance-summary?sport=MLB&gradingMode=latestGraded");
+        var defaultResponse = await client.GetAsync("/api/markets/performance-summary?sport=MLB");
         var resultsResponse = await client.GetAsync($"/api/markets/performance-results?sport=MLB&date={latestDate:yyyy-MM-dd}&includeDiagnostics=true");
 
         await EnsureSuccessWithBodyAsync(overallResponse);
         await EnsureSuccessWithBodyAsync(latestResponse);
+        await EnsureSuccessWithBodyAsync(defaultResponse);
         await EnsureSuccessWithBodyAsync(resultsResponse);
         var overallJson = await overallResponse.Content.ReadFromJsonAsync<JsonElement>();
         var latestJson = await latestResponse.Content.ReadFromJsonAsync<JsonElement>();
+        var defaultJson = await defaultResponse.Content.ReadFromJsonAsync<JsonElement>();
         var resultsJson = await resultsResponse.Content.ReadFromJsonAsync<JsonElement>();
 
         Assert.Equal("Opportunity", overallJson.GetProperty("primaryGrain").GetString());
@@ -1652,8 +1846,16 @@ public sealed class PerformanceGradingTests
         Assert.Equal(5, overallJson.GetProperty("overall").GetProperty("gradedOpportunities").GetInt32());
         Assert.Equal(5, overallJson.GetProperty("performanceGrainDiagnostics").GetProperty("overallGradedOpportunities").GetInt32());
         Assert.Equal(3, overallJson.GetProperty("performanceGrainDiagnostics").GetProperty("yesterdayGradedOpportunities").GetInt32());
+        Assert.Equal(2, overallJson.GetProperty("performanceGrainDiagnostics").GetProperty("uniqueGradedDateCount").GetInt32());
+        Assert.Equal(2, overallJson.GetProperty("performanceGrainDiagnostics").GetProperty("gradedOpportunitiesByDate").GetArrayLength());
         Assert.Equal(5, overallJson.GetProperty("groups").GetProperty("overall")[0].GetProperty("gradedPicks").GetInt32());
         Assert.Equal(5, overallJson.GetProperty("groups").GetProperty("byPropType")[0].GetProperty("gradedPicks").GetInt32());
+        Assert.Equal("latestGraded", defaultJson.GetProperty("gradingMode").GetString());
+        Assert.Equal(3, defaultJson.GetProperty("summary").GetProperty("gradedPicks").GetInt32());
+        Assert.Equal(3, defaultJson.GetProperty("yesterday").GetProperty("gradedOpportunities").GetInt32());
+        Assert.Equal(5, defaultJson.GetProperty("overall").GetProperty("gradedOpportunities").GetInt32());
+        Assert.Equal(2, defaultJson.GetProperty("performanceGrainDiagnostics").GetProperty("uniqueGradedDateCount").GetInt32());
+        Assert.Equal(5, defaultJson.GetProperty("dataAvailability").GetProperty("overallGradedOpportunities").GetInt32());
 
         var filteredOverallResponse = await client.GetAsync($"/api/markets/performance-summary?sport=MLB&gradingMode=allHistory&toDate={priorDate:yyyy-MM-dd}");
 
@@ -1705,6 +1907,10 @@ public sealed class PerformanceGradingTests
         Assert.Equal(3, overallJson.GetProperty("overall").GetProperty("gradedOpportunities").GetInt32());
         Assert.Equal(3, overallJson.GetProperty("yesterday").GetProperty("gradedOpportunities").GetInt32());
         Assert.True(overallJson.GetProperty("overall").GetProperty("includesLatestGradedSlate").GetBoolean());
+        Assert.Equal(1, overallJson.GetProperty("performanceGrainDiagnostics").GetProperty("uniqueGradedDateCount").GetInt32());
+        Assert.Equal(1, overallJson.GetProperty("performanceGrainDiagnostics").GetProperty("gradedOpportunitiesByDate").GetArrayLength());
+        Assert.Equal(latestDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture), overallJson.GetProperty("performanceGrainDiagnostics").GetProperty("overallDateRange").GetProperty("fromDate").GetString());
+        Assert.Equal(latestDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture), overallJson.GetProperty("performanceGrainDiagnostics").GetProperty("overallDateRange").GetProperty("toDate").GetString());
     }
 
     [Fact]
@@ -1894,7 +2100,9 @@ public sealed class PerformanceGradingTests
         bool resultUsesDifferentPlayerIdWithSameName = false,
         bool resultUsesDifferentPropTypeIdWithEquivalentName = false,
         decimal? additionalSameNameResultValue = null,
-        string? modelEra = TopPicksModelOptions.DefaultLikelyHitV1ModelEra)
+        string? modelEra = TopPicksModelOptions.DefaultLikelyHitV1ModelEra,
+        string sportCode = "MLB",
+        string? leagueCode = null)
     {
         using var scope = factory.Services.CreateScope();
         var dbContext = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
@@ -1904,21 +2112,29 @@ public sealed class PerformanceGradingTests
             await dbContext.Database.EnsureCreatedAsync();
         }
 
+        var normalizedSportCode = string.IsNullOrWhiteSpace(sportCode)
+            ? "MLB"
+            : sportCode.Trim().ToUpperInvariant();
+        var effectiveLeagueCode = string.IsNullOrWhiteSpace(leagueCode)
+            ? normalizedSportCode == "SOCCER" ? "World Cup" : "MLB"
+            : leagueCode.Trim();
+        var sportName = normalizedSportCode == "SOCCER" ? "Soccer" : "Major League Baseball";
+
         var sport = resetDatabase
             ? null
-            : await dbContext.Sports.FirstOrDefaultAsync(row => row.Code == "MLB");
+            : await dbContext.Sports.FirstOrDefaultAsync(row => row.Code == normalizedSportCode);
         if (sport is null)
         {
-            sport = new Sport { Id = Guid.NewGuid(), Name = "Major League Baseball", Code = "MLB" };
+            sport = new Sport { Id = Guid.NewGuid(), Name = sportName, Code = normalizedSportCode };
             dbContext.Sports.Add(sport);
         }
 
         var league = resetDatabase
             ? null
-            : await dbContext.Leagues.FirstOrDefaultAsync(row => row.Code == "MLB");
+            : await dbContext.Leagues.FirstOrDefaultAsync(row => row.Code == effectiveLeagueCode && row.SportId == sport.Id);
         if (league is null)
         {
-            league = new League { Id = Guid.NewGuid(), SportId = sport.Id, Name = "MLB", Code = "MLB" };
+            league = new League { Id = Guid.NewGuid(), SportId = sport.Id, Name = effectiveLeagueCode, Code = effectiveLeagueCode };
             dbContext.Leagues.Add(league);
         }
 
@@ -1955,7 +2171,7 @@ public sealed class PerformanceGradingTests
             LastSeenAtUtc = capturedAtUtc ?? DateTimeOffset.UtcNow.AddHours(-2),
             CapturedAtUtc = capturedAtUtc ?? DateTimeOffset.UtcNow.AddHours(-2),
             SeenCount = 1,
-            Sport = "MLB",
+            Sport = normalizedSportCode,
             SlateDate = date,
             ExpectedResultDate = date,
             ResultDateSource = "Test",

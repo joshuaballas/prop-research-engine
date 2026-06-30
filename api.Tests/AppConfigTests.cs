@@ -153,6 +153,81 @@ public sealed class AppConfigTests
     }
 
     [Fact]
+    public async Task AppConfigSeeder_SeedsDevelopmentResultWorkerOverridesAcrossSupportedSports()
+    {
+        await using var factory = new SafetyTestApplicationFactory();
+        await factory.EnsureDatabaseAsync();
+
+        await AppConfigSeeder.SeedAsync(factory.Services);
+
+        using var scope = factory.Services.CreateScope();
+        var dbContext = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+
+        var mlbGlobal = await dbContext.AppConfigs.SingleAsync(row =>
+            row.Key == "Mlb.Results.Worker.Enabled"
+            && row.Environment == AppConfigCatalog.EnvironmentGlobal);
+        var mlbDevelopment = await dbContext.AppConfigs.SingleAsync(row =>
+            row.Key == "Mlb.Results.Worker.Enabled"
+            && row.Environment == Environments.Development);
+        var soccerGlobal = await dbContext.AppConfigs.SingleAsync(row =>
+            row.Key == "Soccer.Results.ApiSports.Worker.Enabled"
+            && row.Environment == AppConfigCatalog.EnvironmentGlobal);
+        var soccerDevelopment = await dbContext.AppConfigs.SingleAsync(row =>
+            row.Key == "Soccer.Results.ApiSports.Worker.Enabled"
+            && row.Environment == Environments.Development);
+
+        Assert.Equal("true", mlbGlobal.Value);
+        Assert.Equal("true", mlbDevelopment.Value);
+        Assert.Equal("false", soccerGlobal.Value);
+        Assert.Equal("true", soccerDevelopment.Value);
+    }
+
+    [Fact]
+    public async Task AppConfigSeeder_PreservesOperatorEditedDevelopmentResultWorkerOverride()
+    {
+        await using var factory = new SafetyTestApplicationFactory();
+        await factory.EnsureDatabaseAsync();
+
+        using (var scope = factory.Services.CreateScope())
+        {
+            var dbContext = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+            var definition = AppConfigCatalog.FindByAppConfigKey("Mlb.Results.Worker.Enabled")!;
+            dbContext.AppConfigs.Add(new AppConfig
+            {
+                Id = Guid.NewGuid(),
+                Key = definition.Key,
+                Value = "false",
+                ValueType = definition.ValueType,
+                Category = definition.Category,
+                Description = definition.Description,
+                DefaultValue = definition.DefaultValue,
+                IsSensitive = definition.IsSensitive,
+                IsRuntimeEditable = definition.IsRuntimeEditable,
+                RequiresRestart = definition.RequiresRestart,
+                ValidationJson = definition.ValidationJson,
+                Environment = Environments.Development,
+                IsEnabled = true,
+                CreatedAtUtc = DateTimeOffset.UtcNow,
+                UpdatedAtUtc = DateTimeOffset.UtcNow,
+                UpdatedBy = "Operator"
+            });
+            await dbContext.SaveChangesAsync();
+        }
+
+        await AppConfigSeeder.SeedAsync(factory.Services);
+
+        using (var scope = factory.Services.CreateScope())
+        {
+            var dbContext = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+            var mlbDevelopment = await dbContext.AppConfigs.SingleAsync(row =>
+                row.Key == "Mlb.Results.Worker.Enabled"
+                && row.Environment == Environments.Development);
+
+            Assert.Equal("false", mlbDevelopment.Value);
+        }
+    }
+
+    [Fact]
     public async Task ProviderDomainConfigSeeder_SeedsCompetitionsMarketsBookmakersAndRefreshTargets()
     {
         await using var factory = new SafetyTestApplicationFactory();

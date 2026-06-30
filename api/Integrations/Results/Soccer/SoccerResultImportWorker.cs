@@ -449,11 +449,18 @@ public sealed class SoccerResultImportWorker(
     {
         var completedAt = DateTimeOffset.UtcNow;
         var state = await GetOrCreateStateAsync(dbContext, competition.Competition, cancellationToken);
+        var isExpectedSkip = string.Equals(skippedReason, "OutsideProviderSeasonWindow", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(skippedReason, "SeasonMetadataUnavailable", StringComparison.OrdinalIgnoreCase);
         state.LastStartedAt = startedAt;
         state.LastCompletedAt = completedAt;
-        state.LastStatus = "skipped";
-        state.LastErrorMessage =
-            $"{skippedReason}: requested {requestedFromDate:yyyy-MM-dd}..{requestedToDate:yyyy-MM-dd}. {skippedMessage}".Trim();
+        state.LastStatus = string.Equals(skippedReason, "OutsideProviderSeasonWindow", StringComparison.OrdinalIgnoreCase)
+            ? "SkippedOutsideSeasonWindow"
+            : string.Equals(skippedReason, "SeasonMetadataUnavailable", StringComparison.OrdinalIgnoreCase)
+                ? "SkippedSeasonMetadataUnavailable"
+                : "skipped";
+        state.LastErrorMessage = isExpectedSkip
+            ? null
+            : $"{skippedReason}: requested {requestedFromDate:yyyy-MM-dd}..{requestedToDate:yyyy-MM-dd}. {skippedMessage}".Trim();
         state.LastApiCallsUsed = 0;
         state.LastDiscoveredFixtureCount = 0;
         state.LastCompletedFixtureCount = 0;

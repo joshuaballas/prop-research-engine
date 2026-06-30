@@ -101,7 +101,7 @@ public static class AppConfigCatalog
         Move("ProviderLineLifecycle.ExpireAfterHours", "ProviderLineLifecycle:ExpireAfterHours", AppConfigValueTypes.Integer, "ProviderLineLifecycle", "Age after which lifecycle rows expire.", "12", ["ProviderLineLifecycleOptions"]),
         Move("ProviderLineLifecycle.RecordSeenUnchangedEvents", "ProviderLineLifecycle:RecordSeenUnchangedEvents", AppConfigValueTypes.Boolean, "ProviderLineLifecycle", "Whether unchanged sightings create lifecycle events.", "false", ["ProviderLineLifecycleOptions"]),
 
-        Move("Mlb.Results.Worker.Enabled", "MlbResultImportWorker:Enabled", AppConfigValueTypes.Boolean, "MlbResults", "Enables MLB result import worker.", "true", ["MlbResultImportWorkerOptions"]),
+        Move("Mlb.Results.Worker.Enabled", "MlbResultImportWorker:Enabled", AppConfigValueTypes.Boolean, "MlbResults", "Enables MLB result import worker.", "true", ["MlbResultImportWorkerOptions"], developmentDefaultValue: "true"),
         Move("Mlb.Results.Worker.IntervalMinutes", "MlbResultImportWorker:IntervalMinutes", AppConfigValueTypes.Integer, "MlbResults", "MLB result import worker cadence.", "60", ["MlbResultImportWorkerOptions"]),
         Move("Mlb.Results.Worker.MaxBackfillDatesPerRun", "MlbResultImportWorker:MaxBackfillDatesPerRun", AppConfigValueTypes.Integer, "MlbResults", "MLB result import date cap per run.", "14", ["MlbResultImportWorkerOptions"]),
         Move("Mlb.Results.Worker.RecentWindowDays", "MlbResultImportWorker:RecentWindowDays", AppConfigValueTypes.Integer, "MlbResults", "Recent MLB result import window.", "14", ["MlbResultImportWorkerOptions"]),

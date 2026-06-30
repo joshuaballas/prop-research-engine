@@ -300,17 +300,21 @@ function normalizeHistoryStatKey(value: string): PlayerHistoryStatKey | null {
 
 function mapPerformanceGroup(row: PerformanceGroupDto, fallbackType: string): PerformanceGroup {
   const gradedPicks = row.gradedPicks ?? 0;
+  const noResults = row.noResults ?? 0;
   const unmatched = row.unmatched ?? 0;
   const pending = row.pending ?? 0;
+  const totalCandidatePicks = row.totalCandidatePicks ?? gradedPicks + noResults + unmatched + pending;
   const hasGradeableSample = row.hasGradeableSample ?? gradedPicks > 0;
   const warning = row.sampleSizeWarning || gradedPicks < 30 ? 'Limited history' : undefined;
   return {
     groupType: normalizePerformanceGroupType(row.groupType, fallbackType),
     groupKey: row.groupKey,
+    totalCandidatePicks,
     gradedPicks,
     wins: row.wins ?? 0,
     losses: row.losses ?? 0,
     pushes: row.pushes ?? 0,
+    noResults,
     unmatched,
     pending,
     hasGradeableSample,

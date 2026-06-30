@@ -687,8 +687,7 @@ public static class AppConfigSeeder
             inserted += globalResult.Inserted;
             metadataUpdated += globalResult.MetadataUpdated;
 
-            if (string.IsNullOrWhiteSpace(definition.DevelopmentDefaultValue)
-                || string.Equals(definition.DevelopmentDefaultValue, seedValue, StringComparison.Ordinal))
+            if (string.IsNullOrWhiteSpace(definition.DevelopmentDefaultValue))
             {
                 continue;
             }

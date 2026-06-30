@@ -745,6 +745,222 @@ public static class ResultsDebugEndpoints
         .WithName("MlbResultsImportStatusDebug")
         .WithSummary("Returns MLB result import worker status and optional date-specific import status.");
 
+        endpoints.MapGet("/api/debug/results/import/status", async (
+            ApplicationDbContext dbContext,
+            IOptions<MlbResultImportWorkerOptions> mlbWorkerOptionsAccessor,
+            IOptions<SoccerResultImportWorkerOptions> soccerWorkerOptionsAccessor,
+            IOptions<ApiSportsOptions> apiSportsOptionsAccessor,
+            CancellationToken cancellationToken) =>
+        {
+            var generatedAtUtc = DateTimeOffset.UtcNow;
+            var mlbWorkerOptions = mlbWorkerOptionsAccessor.Value;
+            var soccerWorkerOptions = soccerWorkerOptionsAccessor.Value;
+            var latestMlbCompletedDate = DateOnly.FromDateTime(generatedAtUtc.UtcDateTime.AddDays(-1));
+            var mlbRecentWindowStartDate = MlbResultImportWorker.GetRecentWindowStartDate(latestMlbCompletedDate, mlbWorkerOptions);
+            var mlbState = await dbContext.MlbResultImportStates
+                .AsNoTracking()
+                .SingleOrDefaultAsync(row => row.Source == "mlb", cancellationToken);
+            var mlbCoverage = await dbContext.PropResults
+                .AsNoTracking()
+                .Where(result => result.ExternalSource == "mlb")
+                .GroupBy(result => result.ExternalSource)
+                .Select(group => new
+                {
+                    Start = group.Min(result => result.EventDate),
+                    End = group.Max(result => result.EventDate)
+                })
+                .SingleOrDefaultAsync(cancellationToken);
+            var mlbLatestCompletedCoverageDate = await dbContext.MlbResultImportDateStates
+                .AsNoTracking()
+                .Where(row => row.CoverageStatus == "Complete")
+                .Select(row => (DateOnly?)row.EventDate)
+                .MaxAsync(cancellationToken);
+            var mlbCandidateDateStates = await dbContext.MlbResultImportDateStates
+                .AsNoTracking()
+                .Where(row => row.EventDate <= latestMlbCompletedDate
+                    && row.CoverageStatus != "Complete"
+                    && row.CoverageStatus != "NoGames")
+                .ToArrayAsync(cancellationToken);
+            var mlbSelectionRows = MlbResultImportWorker.BuildSelectionRows(
+                mlbCandidateDateStates,
+                latestMlbCompletedDate,
+                mlbWorkerOptions);
+            var mlbPendingRows = mlbSelectionRows
+                .Where(row => row.IsEligible)
+                .OrderBy(row => row.IsHistorical)
+                .ThenByDescending(row => row.EventDate)
+                .ThenBy(row => row.Attempts)
+                .Take(Math.Max(1, mlbWorkerOptions.MaxBackfillDatesPerRun))
+                .ToArray();
+            var mlbWorkerEnabled = mlbWorkerOptions.Enabled;
+            var mlbWarning = !mlbWorkerEnabled
+                ? "MLB result/stat import worker is disabled; completed MLB dates will not be imported automatically."
+                : mlbPendingRows.Length > 0
+                    ? "MLB has completed dates pending result/stat import."
+                    : null;
+
+            var soccerConfigError = SoccerResultImportWorker.ValidateApiSportsConfig(apiSportsOptionsAccessor.Value);
+            var soccerStates = await dbContext.SoccerResultImportStates
+                .AsNoTracking()
+                .Where(row => row.Source == SoccerResultImportWorker.Source)
+                .ToArrayAsync(cancellationToken);
+            var latestSoccerState = soccerStates
+                .OrderByDescending(row => row.LastStartedAt ?? row.LastCompletedAt ?? row.UpdatedAt)
+                .FirstOrDefault();
+            var soccerCoverage = await dbContext.PropResults
+                .AsNoTracking()
+                .Where(result => result.ExternalSource == ApiSportsFootballResultSource)
+                .GroupBy(result => result.ExternalSource)
+                .Select(group => new
+                {
+                    Start = group.Min(result => result.EventDate),
+                    End = group.Max(result => result.EventDate)
+                })
+                .SingleOrDefaultAsync(cancellationToken);
+            var soccerPendingCompletedFixtures = await dbContext.SoccerResultImportFixtureStates
+                .AsNoTracking()
+                .Where(row => row.Source == SoccerResultImportWorker.Source)
+                .Where(row => row.ImportStatus != "Imported")
+                .ToArrayAsync(cancellationToken);
+            soccerPendingCompletedFixtures = soccerPendingCompletedFixtures
+                .Where(row => IsApiSportsFixtureCompleted(row.StatusShort, row.StatusLong))
+                .ToArray();
+            var soccerScheduledEnabled = soccerWorkerOptions.Enabled && soccerConfigError is null;
+            var soccerWarning = !soccerWorkerOptions.Enabled
+                ? "Soccer API-Sports result/stat import worker is disabled; completed Soccer fixtures will not be imported automatically."
+                : soccerConfigError is not null
+                    ? $"Soccer API-Sports result/stat import worker is enabled but cannot run because {soccerConfigError}"
+                    : soccerPendingCompletedFixtures.Length > 0
+                        ? "Soccer has completed fixtures pending result/stat import."
+                        : null;
+
+            var workflows = new object[]
+            {
+                new
+                {
+                    sport = "MLB",
+                    provider = "MLB Stats API",
+                    workflow = nameof(MlbResultImportWorker),
+                    workerEnabled = mlbWorkerEnabled,
+                    scheduledEnabled = mlbWorkerEnabled,
+                    intervalMinutes = Math.Max(1, mlbWorkerOptions.IntervalMinutes),
+                    lastRunStartedAtUtc = mlbState?.LastStartedAt,
+                    lastRunCompletedAtUtc = mlbState?.LastCompletedAt,
+                    lastRunSucceeded = mlbState is not null
+                        && string.Equals(mlbState.LastStatus, "succeeded", StringComparison.OrdinalIgnoreCase),
+                    lastSuccessfulRunAtUtc = mlbState?.LastSuccessfulRunAt,
+                    lastStatus = mlbState?.LastStatus ?? "never_run",
+                    lastErrorMessage = mlbState?.LastErrorMessage,
+                    latestImportedCoverageDate = mlbCoverage?.End,
+                    latestCompletedCoverageDate = mlbLatestCompletedCoverageDate,
+                    latestSuccessfulImportDate = mlbState?.LastSuccessfulImportDate,
+                    pendingCompletedDateCount = mlbPendingRows.Length,
+                    pendingCompletedDates = mlbPendingRows
+                        .Select(row => new
+                        {
+                            row.EventDate,
+                            row.CoverageStatus,
+                            row.Status,
+                            row.Attempts,
+                            row.SelectedReason
+                        })
+                        .ToArray(),
+                    workerSelectionPolicy = new
+                    {
+                        recentWindowDays = Math.Max(1, mlbWorkerOptions.RecentWindowDays),
+                        recentWindowStartDate = mlbRecentWindowStartDate,
+                        maxBackfillDatesPerRun = Math.Max(1, mlbWorkerOptions.MaxBackfillDatesPerRun),
+                        historicalBackfillEnabled = mlbWorkerOptions.HistoricalBackfillEnabled
+                    },
+                    staleOrDisabledWarning = mlbWarning
+                },
+                new
+                {
+                    sport = "SOCCER",
+                    provider = "API-Sports Football",
+                    workflow = nameof(SoccerResultImportWorker),
+                    workerEnabled = soccerWorkerOptions.Enabled,
+                    scheduledEnabled = soccerScheduledEnabled,
+                    intervalMinutes = Math.Max(1, soccerWorkerOptions.IntervalMinutes),
+                    lastRunStartedAtUtc = latestSoccerState?.LastStartedAt,
+                    lastRunCompletedAtUtc = latestSoccerState?.LastCompletedAt,
+                    lastRunSucceeded = latestSoccerState is not null
+                        && IsSuccessfulSoccerResultWorkerStatus(latestSoccerState.LastStatus),
+                    lastSuccessfulRunAtUtc = latestSoccerState?.LastSuccessfulRunAt,
+                    lastStatus = latestSoccerState?.LastStatus ?? "never_run",
+                    lastErrorMessage = FirstNonBlank(latestSoccerState?.LastErrorMessage, soccerConfigError),
+                    latestImportedCoverageDate = soccerCoverage?.End,
+                    latestCompletedCoverageDate = soccerStates
+                        .Select(row => row.LatestCompletedFixtureImportedDate)
+                        .Where(value => value.HasValue)
+                        .DefaultIfEmpty()
+                        .Max(),
+                    latestCompletedFixtureDetectedDate = soccerStates
+                        .Select(row => row.LatestCompletedFixtureDetectedDate)
+                        .Where(value => value.HasValue)
+                        .DefaultIfEmpty()
+                        .Max(),
+                    pendingCompletedFixtureCount = soccerPendingCompletedFixtures.Length,
+                    pendingCompletedDateCount = soccerPendingCompletedFixtures
+                        .Where(row => row.EventDate.HasValue)
+                        .Select(row => row.EventDate!.Value)
+                        .Distinct()
+                        .Count(),
+                    pendingCompletedFixtures = soccerPendingCompletedFixtures
+                        .OrderBy(row => row.EventDate)
+                        .ThenBy(row => row.KickoffUtc)
+                        .ThenBy(row => row.FixtureId)
+                        .Take(25)
+                        .Select(row => new
+                        {
+                            row.Competition,
+                            row.FixtureId,
+                            row.EventDate,
+                            row.KickoffUtc,
+                            row.HomeTeamName,
+                            row.AwayTeamName,
+                            row.StatusShort,
+                            row.StatusLong,
+                            row.ImportStatus,
+                            row.SkipReason,
+                            row.Attempts,
+                            row.ResultRowsWritten,
+                            row.LastErrorMessage
+                        })
+                        .ToArray(),
+                    workerSelectionPolicy = new
+                    {
+                        recentWindowDays = Math.Max(1, soccerWorkerOptions.RecentWindowDays),
+                        maxFixturesPerCompetitionPerRun = Math.Max(1, soccerWorkerOptions.MaxFixturesPerCompetitionPerRun ?? soccerWorkerOptions.MaxFixturesPerRun),
+                        maxFixturesTotalPerRun = soccerWorkerOptions.MaxFixturesTotalPerRun,
+                        importCompletedFixturesOnly = soccerWorkerOptions.ImportCompletedFixturesOnly,
+                        competition = soccerWorkerOptions.Competition,
+                        competitionKeys = soccerWorkerOptions.CompetitionKeys
+                    },
+                    staleOrDisabledWarning = soccerWarning
+                }
+            };
+
+            return Results.Ok(new
+            {
+                generatedAtUtc,
+                readOnly = true,
+                callsExternalApis = false,
+                writesRows = false,
+                summary = new
+                {
+                    supportedSportCount = workflows.Length,
+                    enabledWorkerCount = (mlbWorkerEnabled ? 1 : 0) + (soccerWorkerOptions.Enabled ? 1 : 0),
+                    scheduledEnabledCount = (mlbWorkerEnabled ? 1 : 0) + (soccerScheduledEnabled ? 1 : 0),
+                    staleOrDisabledWarningCount = (mlbWarning is null ? 0 : 1) + (soccerWarning is null ? 0 : 1)
+                },
+                workflows,
+                workflowSeparation = "Market odds refresh and result/stat import are separate workflows. This status is persisted read-only and does not call external providers."
+            });
+        })
+        .WithName("ResultImportWorkersStatusDebug")
+        .WithSummary("Returns read-only multi-sport result/stat worker health status without external provider calls.");
+
         endpoints.MapGet("/api/debug/results/import/mlb-range/status", async (
             ApplicationDbContext dbContext,
             IOptions<MlbResultImportWorkerOptions> workerOptionsAccessor,
