@@ -1,12 +1,17 @@
 import HelpOutlineRoundedIcon from '@mui/icons-material/HelpOutlineRounded';
-import { Avatar, Button, Stack, Typography } from '@mui/material';
+import { Avatar, Box, Button, Stack, Tooltip, Typography } from '@mui/material';
 import { useState } from 'react';
 import { GlossaryDialog } from '../glossary/GlossaryDialog';
 import { isDemoDataMode } from '../../config/dataMode';
 import { mockUser } from '../../data/mockUser';
+import { useMarketFreshnessData } from '../../hooks/useMarketData';
+import { palette } from '../../theme/palette';
 
 export function AppTopBar() {
   const [glossaryOpen, setGlossaryOpen] = useState(false);
+  const freshnessQuery = useMarketFreshnessData(['app-top-bar-live-data']);
+  const freshness = freshnessQuery.data;
+  const liveDataState = resolveLiveDataState(freshness, Boolean(freshnessQuery.error));
 
   return (
     <>
@@ -41,6 +46,7 @@ export function AppTopBar() {
           Glossary
         </Button>
         <Stack direction="row" spacing={{ xs: 1, sm: 2 }} alignItems="center" minWidth={0} sx={{ flex: { xs: 1, sm: '0 1 auto' }, justifyContent: 'flex-end' }}>
+          {liveDataState ? <LiveDataIndicator state={liveDataState} /> : null}
           {isDemoDataMode ? (
             <Typography
               variant="caption"
@@ -58,4 +64,89 @@ export function AppTopBar() {
       <GlossaryDialog open={glossaryOpen} onClose={() => setGlossaryOpen(false)} />
     </>
   );
+}
+
+type LiveDataState = 'healthy' | 'issue';
+
+function LiveDataIndicator({ state }: { state: LiveDataState }) {
+  const isHealthy = state === 'healthy';
+  const label = isHealthy ? 'Auto refresh' : 'Refresh issue';
+  const tooltip = isHealthy
+    ? 'Market data refreshes automatically in the background. No page reload needed.'
+    : 'Market data could not refresh. The current board may be stale.';
+
+  return (
+    <Tooltip title={tooltip} arrow>
+      <Stack
+        component="span"
+        direction="row"
+        alignItems="center"
+        spacing={0.75}
+        aria-label={`${label}. ${tooltip}`}
+        sx={{
+          color: isHealthy ? palette.success : palette.danger,
+          flexShrink: 0,
+          cursor: 'default'
+        }}
+      >
+        <Box
+          component="span"
+          sx={{
+            width: 8,
+            height: 8,
+            borderRadius: '999px',
+            bgcolor: isHealthy ? palette.success : palette.danger,
+            boxShadow: isHealthy ? `0 0 0 0 ${palette.success}66` : `0 0 0 2px ${palette.danger}22`,
+            animation: isHealthy ? 'live-data-pulse 1.8s ease-out infinite' : 'none',
+            '@keyframes live-data-pulse': {
+              '0%': { boxShadow: `0 0 0 0 ${palette.success}66` },
+              '70%': { boxShadow: `0 0 0 7px ${palette.success}00` },
+              '100%': { boxShadow: `0 0 0 0 ${palette.success}00` }
+            }
+          }}
+        />
+        <Typography
+          component="span"
+          variant="caption"
+          sx={{
+            color: 'inherit',
+            fontWeight: 900,
+            lineHeight: 1,
+            whiteSpace: 'nowrap',
+            letterSpacing: 0
+          }}
+        >
+          {label}
+        </Typography>
+      </Stack>
+    </Tooltip>
+  );
+}
+
+function resolveLiveDataState(
+  freshness: ReturnType<typeof useMarketFreshnessData>['data'],
+  hasPollingError: boolean
+): LiveDataState | null {
+  if (!freshness && !hasPollingError) {
+    return null;
+  }
+
+  if (hasPollingError || freshness?.hasUsableMarketData === false || freshness?.providerRejectedKeyDetected === true || hasProviderIssue(freshness?.providerStatus?.status, freshness?.hasUsableMarketData)) {
+    return 'issue';
+  }
+
+  return 'healthy';
+}
+
+function hasProviderIssue(status: string | undefined, hasUsableMarketData: boolean | undefined) {
+  const normalizedStatus = status?.trim().toLowerCase();
+  if (!normalizedStatus) {
+    return false;
+  }
+
+  if (normalizedStatus === 'degraded') {
+    return hasUsableMarketData !== true;
+  }
+
+  return ['blocked', 'error', 'rejectedkey', 'unavailable', 'unhealthy'].includes(normalizedStatus);
 }
