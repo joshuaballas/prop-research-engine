@@ -1,6 +1,6 @@
 import type { MarketOpportunity, PlayerHistoryStatKey, PlayerHistorySummary, ProjectionModifier, ProviderCategory, StrategyClassification } from '../types/markets';
 import type { PerformanceGroup } from '../types/performance';
-import type { BookmakerPriceDto, MarketGroupDto, MarketPerformanceSummaryDto, PerformanceGroupDto, PlayerHistoryCompetitionBreakdownDto, PlayerHistoryGameLogRowDto, PlayerHistoryStatSummaryDto, PlayerHistorySummaryDto } from './types';
+import type { BookmakerPriceDto, MarketGroupDto, MarketPerformanceSummaryDto, PerformanceGroupDto, PlayerHistoryCompetitionBreakdownDto, PlayerHistoryGameLogRowDto, PlayerHistoryStatSummaryDto, PlayerHistorySummaryDto, TopPickProviderOptionDto } from './types';
 
 export function mapMarketGroupsToOpportunities(groups: MarketGroupDto[] | undefined, sourcePrefix = 'market'): MarketOpportunity[] {
   return (groups ?? []).map((group, index) => mapMarketGroupToOpportunity(group, index, sourcePrefix));
@@ -75,7 +75,9 @@ function mapMarketGroupToOpportunity(group: MarketGroupDto, index: number, sourc
         : 'Sportsbook expected value requires odds/break-even pricing.');
   const provider = resolveDisplayProvider(group, providerCategory);
   const entryCompatibilityGroup = readString(group, 'entryCompatibilityGroup', 'EntryCompatibilityGroup') ?? provider.replace(/\s+/g, '');
-  const propType = readString(group, 'normalizedPropType', 'NormalizedPropType') ?? 'Market';
+  const propType = readString(group, 'normalizedPropType', 'NormalizedPropType', 'propType', 'PropType') ?? 'Market';
+  const propFamily = readString(group, 'propFamily', 'PropFamily') ?? null;
+  const propFamilyDisplayName = readString(group, 'propFamilyDisplayName', 'PropFamilyDisplayName') ?? null;
   const event = formatEvent(readString(group, 'awayTeam', 'AwayTeam'), readString(group, 'homeTeam', 'HomeTeam'));
   const strategyWarnings = readStringArray(group, 'strategyWarnings', 'StrategyWarnings');
   const strategyReasons = readStringArray(group, 'strategyReasons', 'StrategyReasons');
@@ -92,6 +94,7 @@ function mapMarketGroupToOpportunity(group: MarketGroupDto, index: number, sourc
   const eventId = readString(group, 'eventId', 'EventId');
   const eventStartTimeUtc = readString(group, 'eventStartTimeUtc', 'EventStartTimeUtc') ?? readString(group, 'eventStartTime', 'EventStartTime') ?? undefined;
   const bookmakerPrices = readArray<BookmakerPriceDto>(group, 'bookmakerPrices', 'BookmakerPrices') ?? [];
+  const providerOptions = readArray<TopPickProviderOptionDto>(group, 'providerOptions', 'ProviderOptions') ?? [];
   const projectionType = readString(group, 'projectionType', 'ProjectionType');
   const projectionTypeConfidence = readString(group, 'projectionTypeConfidence', 'ProjectionTypeConfidence');
   const isAlternateMarket = readBoolean(group, 'isAlternateMarket', 'IsAlternateMarket') ?? false;
@@ -131,6 +134,8 @@ function mapMarketGroupToOpportunity(group: MarketGroupDto, index: number, sourc
     sport: normalizeSport(readString(group, 'sport', 'Sport')),
     competition: readString(group, 'competition', 'Competition') ?? null,
     propType,
+    propFamily,
+    propFamilyDisplayName,
     side,
     line,
     provider,
@@ -208,14 +213,26 @@ function mapMarketGroupToOpportunity(group: MarketGroupDto, index: number, sourc
     warnings,
     sportsbookContext: formatReferenceContext(bookmakerPrices),
     playerHistorySummary: mapPlayerHistorySummary(group),
-    providerLines: bookmakerPrices.map((priceLine) => ({
-      provider: cleanProvider(readString(priceLine, 'bookmaker', 'Bookmaker', 'bookmakerKey', 'BookmakerKey') ?? 'Unknown'),
-      providerCategory: normalizeProviderCategory(readString(priceLine, 'providerCategory', 'ProviderCategory')),
-      line: readNumber(priceLine, 'line', 'Line') ?? line,
-      overPrice: readNumber(priceLine, 'overPrice', 'OverPrice') ?? undefined,
-      underPrice: readNumber(priceLine, 'underPrice', 'UnderPrice') ?? undefined,
-      note: readString(priceLine, 'region', 'Region')
-    }))
+    alternateProviderCount: readNumber(group, 'alternateProviderCount', 'AlternateProviderCount') ?? undefined,
+    providerFanoutCount: readNumber(group, 'providerFanoutCount', 'ProviderFanoutCount') ?? undefined,
+    providerLines: [
+      ...providerOptions.map((option) => ({
+        provider: cleanProvider(readString(option, 'bestPriceBookmaker', 'BestPriceBookmaker', 'bestBookmaker', 'BestBookmaker', 'bookmaker', 'Bookmaker', 'provider', 'Provider', 'entryProvider', 'EntryProvider') ?? 'Unknown'),
+        providerCategory: normalizeProviderCategory(readString(option, 'providerCategory', 'ProviderCategory')),
+        line,
+        overPrice: undefined,
+        underPrice: undefined,
+        note: formatProviderOptionPrice(option)
+      })),
+      ...bookmakerPrices.map((priceLine) => ({
+        provider: cleanProvider(readString(priceLine, 'bookmaker', 'Bookmaker', 'bookmakerKey', 'BookmakerKey') ?? 'Unknown'),
+        providerCategory: normalizeProviderCategory(readString(priceLine, 'providerCategory', 'ProviderCategory')),
+        line: readNumber(priceLine, 'line', 'Line') ?? line,
+        overPrice: readNumber(priceLine, 'overPrice', 'OverPrice') ?? undefined,
+        underPrice: readNumber(priceLine, 'underPrice', 'UnderPrice') ?? undefined,
+        note: readString(priceLine, 'region', 'Region')
+      }))
+    ]
   };
 }
 
@@ -262,6 +279,16 @@ function resolveDisplayProvider(group: MarketGroupDto, providerCategory: Provide
   }
 
   return cleanProvider(entryProvider ?? bestBookmaker ?? provider ?? 'Unknown');
+}
+
+function formatProviderOptionPrice(option: TopPickProviderOptionDto) {
+  const american = readNumber(option, 'bestAmericanPrice', 'BestAmericanPrice');
+  if (typeof american === 'number' && Number.isFinite(american)) {
+    return american > 0 ? `+${american}` : `${american}`;
+  }
+
+  const decimal = readNumber(option, 'bestDecimalPrice', 'BestDecimalPrice');
+  return typeof decimal === 'number' && Number.isFinite(decimal) ? decimal.toFixed(2) : undefined;
 }
 
 function mapPlayerHistoryStats(source: Record<string, PlayerHistoryStatSummaryDto | undefined>): PlayerHistorySummary['stats'] {

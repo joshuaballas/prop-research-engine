@@ -32,6 +32,8 @@ export interface MarketOpportunity {
   sport: Exclude<SportCode, 'ALL'>;
   competition?: string | null;
   propType: string;
+  propFamily?: string | null;
+  propFamilyDisplayName?: string | null;
   side: 'Over' | 'Under';
   line: number;
   provider: string;
@@ -107,6 +109,8 @@ export interface MarketOpportunity {
   warnings: string[];
   sportsbookContext?: string;
   providerLines?: ProviderLine[];
+  alternateProviderCount?: number;
+  providerFanoutCount?: number;
   playerHistorySummary?: PlayerHistorySummary | null;
 }
 

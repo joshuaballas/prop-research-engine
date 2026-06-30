@@ -1302,7 +1302,7 @@ public static class PublicMarketsEndpoints
             staleOrExpiredGroupCount);
     }
 
-    private static async Task<object> BuildMarketTopPicksResponseAsync(
+    internal static async Task<object> BuildMarketTopPicksResponseAsync(
         string? requestedSport,
         string effectiveSport,
         Guid? runId,
@@ -1331,6 +1331,7 @@ public static class PublicMarketsEndpoints
                 runId,
                 take,
                 providerCategory,
+                topPicksModelOptions,
                 soccerPredictionOptions,
                 soccerGradingOptions,
                 soccerTopPicksOptions,
@@ -1377,7 +1378,7 @@ public static class PublicMarketsEndpoints
         };
     }
 
-    private static async Task<object> BuildAllMarketTopPicksResponseAsync(
+    internal static async Task<object> BuildAllMarketTopPicksResponseAsync(
         Guid? runId,
         int? take,
         int? freshnessMinutes,
@@ -1437,7 +1438,8 @@ public static class PublicMarketsEndpoints
             .ThenBy(row => GetTopPickString(row, "sport") ?? string.Empty, StringComparer.OrdinalIgnoreCase)
             .ThenBy(row => GetTopPickString(row, "player") ?? string.Empty, StringComparer.OrdinalIgnoreCase)
             .ToArray();
-        var selectedTopPicks = allCandidates.Take(requestedTake).Select(TrimPublicTopPickRow).ToArray();
+        var curated = TheOddsApiDebugEndpoints.CuratePublicTopPickRows(allCandidates, requestedTake, providerCategory, topPicksModelOptions);
+        var selectedTopPicks = curated.Rows.Select(TrimPublicTopPickRow).ToArray();
 
         return new
         {
@@ -1469,7 +1471,8 @@ public static class PublicMarketsEndpoints
                 internalEvaluationTake = internalTake,
                 providerCategory,
                 sportsEvaluated = SupportedMarketSports,
-                totalRecommendationCandidates = allCandidates.Length
+                totalRecommendationCandidates = allCandidates.Length,
+                curation = curated.Diagnostics
             },
             summary = new
             {
@@ -1479,6 +1482,42 @@ public static class PublicMarketsEndpoints
                 activeCandidateCount = selectedTopPicks.Length,
                 returnedTopPicks = selectedTopPicks.Length,
                 totalRecommendationCandidates = allCandidates.Length,
+                preDedupeCandidateCount = curated.Diagnostics.PreDedupeCandidateCount,
+                postOpportunityDedupeCount = curated.Diagnostics.PostOpportunityDedupeCount,
+                suppressedProviderFanoutCount = curated.Diagnostics.SuppressedProviderFanoutCount,
+                suppressedByPlayerExposureCount = curated.Diagnostics.SuppressedByPlayerExposureCount,
+                suppressedByPlayerPropFamilyExposureCount = curated.Diagnostics.SuppressedByPlayerPropFamilyExposureCount,
+                suppressedByGameExposureCount = curated.Diagnostics.SuppressedByGameExposureCount,
+                suppressedBySlateCapCount = curated.Diagnostics.SuppressedBySlateCapCount,
+                providerFanoutOpportunityCount = curated.Diagnostics.ProviderFanoutOpportunityCount,
+                maxProviderFanoutCount = curated.Diagnostics.MaxProviderFanoutCount,
+                rowsWithProviderOptionsCount = curated.Diagnostics.RowsWithProviderOptionsCount,
+                curation = new
+                {
+                    curated.Diagnostics.PreDedupeCandidateCount,
+                    curated.Diagnostics.PostOpportunityDedupeCount,
+                    curated.Diagnostics.ReturnedTopPickCount,
+                    curated.Diagnostics.SuppressedProviderFanoutCount,
+                    curated.Diagnostics.SuppressedByPlayerExposureCount,
+                    curated.Diagnostics.SuppressedByPlayerPropFamilyExposureCount,
+                    curated.Diagnostics.SuppressedByGameExposureCount,
+                    curated.Diagnostics.SuppressedByTeamExposureCount,
+                    curated.Diagnostics.SuppressedByPropTypeExposureCount,
+                    curated.Diagnostics.SuppressedBySlateCapCount,
+                    curated.Diagnostics.RequestedTake,
+                    curated.Diagnostics.MaxPerSlateSport,
+                    curated.Diagnostics.MaxPerPlayer,
+                    curated.Diagnostics.MaxPerPlayerPropFamily,
+                    curated.Diagnostics.MaxPerGameEvent,
+                    curated.Diagnostics.MaxPerTeam,
+                    curated.Diagnostics.MaxPerPropType,
+                    curated.Diagnostics.OpportunityKeyFields,
+                    curated.Diagnostics.ProviderFanoutOpportunityCount,
+                    curated.Diagnostics.MaxProviderFanoutCount,
+                    curated.Diagnostics.RowsWithProviderOptionsCount,
+                    curated.Diagnostics.SampleProviderFanoutOpportunities,
+                    curated.Diagnostics.SuppressionReasonBreakdown
+                },
                 entryActionableCandidateCount = selectedTopPicks.Count(row => GetTopPickBool(row, "entryActionableForUser") == true),
                 actionableCandidateCount = selectedTopPicks.Count(row => GetTopPickBool(row, "entryActionableForUser") == true),
                 recommendationActionableCount = selectedTopPicks.Count(row => GetTopPickBool(row, "recommendationActionableForUser") == true),
@@ -1738,13 +1777,15 @@ public static class PublicMarketsEndpoints
         Guid? runId,
         int? take,
         string? providerCategory,
+        TopPicksModelOptions topPicksModelOptions,
         SoccerPredictionsOptions soccerPredictionOptions,
         SoccerGradingOptions soccerGradingOptions,
         SoccerTopPicksOptions soccerTopPicksOptions,
         ApplicationDbContext dbContext,
         CancellationToken cancellationToken)
     {
-        var requestedTake = Math.Clamp(take ?? 25, 1, 250);
+        var requestedTake = Math.Clamp(take ?? TopPicksDefaultTake, 1, TopPicksMaxTake);
+        var internalTake = Math.Max(requestedTake, TopPicksInternalEvaluationTake);
         var latestRunId = runId ?? await ResolveLatestTopPickSnapshotRunIdAsync(
             dbContext,
             effectiveSport,
@@ -1768,8 +1809,14 @@ public static class PublicMarketsEndpoints
             .OrderByDescending(row => row.BestEstimatedEv)
             .ThenByDescending(row => row.BestProbabilityEdge)
             .ThenBy(row => row.Player)
-            .Take(requestedTake)
+            .Take(internalTake)
             .ToArrayAsync(cancellationToken);
+        var candidateRows = rows
+            .Select(row => BuildSnapshotDetails(row.DetailsJson, row.Sport, row.EventName, row.EventStartTime))
+            .Select(TrimPublicTopPickRow)
+            .ToArray();
+        var curated = TheOddsApiDebugEndpoints.CuratePublicTopPickRows(candidateRows, requestedTake, providerCategory, topPicksModelOptions);
+        var selectedRows = curated.Rows.Select(TrimPublicTopPickRow).ToArray();
 
         return new
         {
@@ -1791,40 +1838,74 @@ public static class PublicMarketsEndpoints
                 refreshRunId = latestRunId,
                 topPickSnapshotsOnly = true
             },
-            source = rows.Length > 0 ? "persistedTopPickSnapshots" : "persistedTopPickSnapshotsUnavailable",
-            snapshotBacked = rows.Length > 0,
+            source = selectedRows.Length > 0 ? "persistedTopPickSnapshots" : "persistedTopPickSnapshotsUnavailable",
+            snapshotBacked = selectedRows.Length > 0,
             refreshRunId = latestRunId,
-            fallbackReason = rows.Length == 0 ? $"No active persisted {ResolveSportDisplayName(effectiveSport)} top-pick snapshots are available yet." : null,
+            fallbackReason = selectedRows.Length == 0 ? $"No active persisted {ResolveSportDisplayName(effectiveSport)} top-pick snapshots are available yet." : null,
             diagnostics = new
             {
                 endpointKind = "top-picks",
-                source = rows.Length > 0 ? "persistedTopPickSnapshots" : "persistedTopPickSnapshotsUnavailable",
+                source = selectedRows.Length > 0 ? "persistedTopPickSnapshots" : "persistedTopPickSnapshotsUnavailable",
                 callsTheOddsApi = false,
                 usesPersistedDatabaseRowsOnly = true,
-                snapshotBacked = rows.Length > 0,
-                returnedTopPicks = rows.Length,
+                snapshotBacked = selectedRows.Length > 0,
+                returnedTopPicks = selectedRows.Length,
+                curation = curated.Diagnostics,
                 providerCategory
             },
             run = new
             {
                 runId = latestRunId,
-                predictionCount = rows.Length
+                predictionCount = selectedRows.Length
             },
             summary = new
             {
-                activeCandidateCount = rows.Length,
-                actionableCandidateCount = IsSoccerSport(effectiveSport) ? 0 : rows.Count(row => row.EntryActionableForUser),
-                returnedTopPicks = rows.Length,
-                totalActiveComparisonGroups = rows.Length
+                activeCandidateCount = selectedRows.Length,
+                actionableCandidateCount = IsSoccerSport(effectiveSport) ? 0 : selectedRows.Count(row => GetTopPickBool(row, "entryActionableForUser") == true),
+                returnedTopPicks = selectedRows.Length,
+                totalActiveComparisonGroups = selectedRows.Length,
+                preDedupeCandidateCount = curated.Diagnostics.PreDedupeCandidateCount,
+                postOpportunityDedupeCount = curated.Diagnostics.PostOpportunityDedupeCount,
+                suppressedProviderFanoutCount = curated.Diagnostics.SuppressedProviderFanoutCount,
+                suppressedByPlayerExposureCount = curated.Diagnostics.SuppressedByPlayerExposureCount,
+                suppressedByPlayerPropFamilyExposureCount = curated.Diagnostics.SuppressedByPlayerPropFamilyExposureCount,
+                suppressedByGameExposureCount = curated.Diagnostics.SuppressedByGameExposureCount,
+                suppressedBySlateCapCount = curated.Diagnostics.SuppressedBySlateCapCount,
+                providerFanoutOpportunityCount = curated.Diagnostics.ProviderFanoutOpportunityCount,
+                maxProviderFanoutCount = curated.Diagnostics.MaxProviderFanoutCount,
+                rowsWithProviderOptionsCount = curated.Diagnostics.RowsWithProviderOptionsCount,
+                curation = new
+                {
+                    curated.Diagnostics.PreDedupeCandidateCount,
+                    curated.Diagnostics.PostOpportunityDedupeCount,
+                    curated.Diagnostics.ReturnedTopPickCount,
+                    curated.Diagnostics.SuppressedProviderFanoutCount,
+                    curated.Diagnostics.SuppressedByPlayerExposureCount,
+                    curated.Diagnostics.SuppressedByPlayerPropFamilyExposureCount,
+                    curated.Diagnostics.SuppressedByGameExposureCount,
+                    curated.Diagnostics.SuppressedByTeamExposureCount,
+                    curated.Diagnostics.SuppressedByPropTypeExposureCount,
+                    curated.Diagnostics.SuppressedBySlateCapCount,
+                    curated.Diagnostics.RequestedTake,
+                    curated.Diagnostics.MaxPerSlateSport,
+                    curated.Diagnostics.MaxPerPlayer,
+                    curated.Diagnostics.MaxPerPlayerPropFamily,
+                    curated.Diagnostics.MaxPerGameEvent,
+                    curated.Diagnostics.MaxPerTeam,
+                    curated.Diagnostics.MaxPerPropType,
+                    curated.Diagnostics.OpportunityKeyFields,
+                    curated.Diagnostics.ProviderFanoutOpportunityCount,
+                    curated.Diagnostics.MaxProviderFanoutCount,
+                    curated.Diagnostics.RowsWithProviderOptionsCount,
+                    curated.Diagnostics.SampleProviderFanoutOpportunities,
+                    curated.Diagnostics.SuppressionReasonBreakdown
+                }
             },
-            strategyClassificationSummary = rows
-                .GroupBy(row => string.IsNullOrWhiteSpace(row.StrategyClassification) ? "Unclassified" : row.StrategyClassification)
+            strategyClassificationSummary = selectedRows
+                .GroupBy(row => GetTopPickString(row, "strategyClassification") ?? "Unclassified", StringComparer.OrdinalIgnoreCase)
                 .Select(group => new { strategyClassification = group.Key, count = group.Count() })
                 .ToArray(),
-            topPicks = rows
-                .Select(row => BuildSnapshotDetails(row.DetailsJson, row.Sport, row.EventName, row.EventStartTime))
-                .Select(TrimPublicTopPickRow)
-                .ToArray()
+            topPicks = selectedRows
         };
     }
 
@@ -1850,10 +1931,17 @@ public static class PublicMarketsEndpoints
         "normalizedPropType",
         "propType",
         "propTypeId",
+        "propFamily",
         "side",
         "bestSide",
         "line",
         "provider",
+        "bestPriceBookmaker",
+        "providerFanoutCount",
+        "alternateProviderCount",
+        "providerOptions",
+        "opportunityKey",
+        "curationRank",
         "bookmaker",
         "bestBookmaker",
         "providerCategory",
@@ -2660,6 +2748,18 @@ public static class PublicMarketsEndpoints
         if (eventStartTime.HasValue && details["eventStartTimeUtc"] is null)
         {
             details["eventStartTimeUtc"] = eventStartTime.Value;
+        }
+
+        var propType = ReadNullableString(details, "propType", "PropType");
+        var normalizedPropType = ReadNullableString(details, "normalizedPropType", "NormalizedPropType");
+        if (string.IsNullOrWhiteSpace(propType) && !string.IsNullOrWhiteSpace(normalizedPropType))
+        {
+            details["propType"] = normalizedPropType;
+        }
+
+        if (string.IsNullOrWhiteSpace(normalizedPropType) && !string.IsNullOrWhiteSpace(propType))
+        {
+            details["normalizedPropType"] = propType;
         }
 
         var bestProbability = ReadNullableDecimal(details, "bestProbability", "BestProbability");

@@ -33,6 +33,12 @@ public sealed class TopPicksModelOptions
     public decimal ConsistencyGuardWeakRecent10HitRate { get; set; } = 0.50m;
     public decimal ConsistencyGuardExtremeWeakRecent10HitRate { get; set; } = 0.60m;
     public decimal ConsistencyGuardHighHitChanceGap { get; set; } = 0.25m;
+    public int PublicMaxTopPicksPerSlateSport { get; set; } = 50;
+    public int PublicMaxTopPicksPerPlayer { get; set; } = 3;
+    public int PublicMaxTopPicksPerPlayerPropFamily { get; set; } = 1;
+    public int PublicMaxTopPicksPerGameEvent { get; set; } = 10;
+    public int PublicMaxTopPicksPerTeam { get; set; }
+    public int PublicMaxTopPicksPerPropType { get; set; }
 
     public bool IsLikelyHitV1Enabled =>
         string.Equals(ActiveModel, LikelyHitV1, StringComparison.OrdinalIgnoreCase);

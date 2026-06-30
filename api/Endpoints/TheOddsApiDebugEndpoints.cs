@@ -436,6 +436,74 @@ public static partial class TheOddsApiDebugEndpoints
         .WithName("LikelyHitTopPickConsistencyAudit")
         .WithSummary("Read-only Likely-Hit public Top Picks consistency audit against persisted selected-side history.");
 
+        endpoints.MapGet("/api/debug/model/likely-hit/selected-side-diagnostics", async (
+            string? sport,
+            string? competition,
+            string? propType,
+            string? playerName,
+            string? providerCategory,
+            int? take,
+            bool? includePerformance,
+            ApplicationDbContext dbContext,
+            CancellationToken cancellationToken) =>
+        {
+            var response = await BuildLikelyHitSelectedSideDiagnosticsAsync(
+                sport,
+                competition,
+                propType,
+                playerName,
+                providerCategory,
+                take,
+                includePerformance,
+                dbContext,
+                cancellationToken);
+
+            return Results.Ok(response);
+        })
+        .WithName("LikelyHitSelectedSideDiagnostics")
+        .WithSummary("Read-only selected-side probability diagnostics for persisted Top Picks and Performance rows.");
+
+        endpoints.MapGet("/api/debug/model/likely-hit/value-audit", async (
+            string? sport,
+            string? competition,
+            string? propType,
+            string? playerName,
+            string? providerCategory,
+            int? take,
+            IPredictionProbabilityService probabilityService,
+            ILikelyHitModelService likelyHitModel,
+            IOptions<PredictionGenerationOptions> predictionGenerationOptions,
+            ISoccerWorldCupPredictionService soccerPredictionService,
+            IOptions<SoccerPredictionsOptions> soccerPredictionOptions,
+            IOptions<SoccerGradingOptions> soccerGradingOptions,
+            IOptions<SoccerTopPicksOptions> soccerTopPicksOptions,
+            IOptions<TopPicksModelOptions> topPicksModelOptions,
+            ApplicationDbContext dbContext,
+            CancellationToken cancellationToken) =>
+        {
+            var response = await BuildLikelyHitValueAuditAsync(
+                sport,
+                competition,
+                propType,
+                playerName,
+                providerCategory,
+                take,
+                probabilityService,
+                likelyHitModel,
+                predictionGenerationOptions.Value,
+                soccerPredictionService,
+                soccerPredictionOptions.Value,
+                soccerGradingOptions.Value,
+                soccerTopPicksOptions.Value,
+                topPicksModelOptions.Value,
+                dbContext,
+                cancellationToken);
+
+            return Results.Ok(response);
+        })
+        .WithName("LikelyHitValueAudit")
+        .WithSummary("Read-only Likely-Hit value and price-quality audit for current Top Picks and graded Performance rows.");
+
         endpoints.MapGet("/api/debug/model/likely-hit/opportunity-audit", async (
             string? sport,
             string? competition,

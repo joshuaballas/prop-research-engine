@@ -243,6 +243,26 @@ export interface PublicTopPicksResponseDto {
     ActionableCandidateCount?: number;
     returnedTopPicks?: number;
     ReturnedTopPicks?: number;
+    preDedupeCandidateCount?: number;
+    PreDedupeCandidateCount?: number;
+    postOpportunityDedupeCount?: number;
+    PostOpportunityDedupeCount?: number;
+    suppressedProviderFanoutCount?: number;
+    SuppressedProviderFanoutCount?: number;
+    suppressedByPlayerExposureCount?: number;
+    SuppressedByPlayerExposureCount?: number;
+    suppressedByPlayerPropFamilyExposureCount?: number;
+    SuppressedByPlayerPropFamilyExposureCount?: number;
+    suppressedByGameExposureCount?: number;
+    SuppressedByGameExposureCount?: number;
+    suppressedBySlateCapCount?: number;
+    SuppressedBySlateCapCount?: number;
+    providerFanoutOpportunityCount?: number;
+    ProviderFanoutOpportunityCount?: number;
+    maxProviderFanoutCount?: number;
+    MaxProviderFanoutCount?: number;
+    rowsWithProviderOptionsCount?: number;
+    RowsWithProviderOptionsCount?: number;
     totalActiveComparisonGroups?: number;
     TotalActiveComparisonGroups?: number;
   };
@@ -304,6 +324,12 @@ export interface MarketGroupDto {
   Player?: string;
   normalizedPropType?: string;
   NormalizedPropType?: string;
+  propType?: string;
+  PropType?: string;
+  propFamily?: string;
+  PropFamily?: string;
+  propFamilyDisplayName?: string | null;
+  PropFamilyDisplayName?: string | null;
   line?: number;
   Line?: number;
   marketClassification?: string;
@@ -365,6 +391,12 @@ export interface MarketGroupDto {
   ConfidenceScore?: number | null;
   bookmakerPrices?: BookmakerPriceDto[];
   BookmakerPrices?: BookmakerPriceDto[];
+  providerOptions?: TopPickProviderOptionDto[];
+  ProviderOptions?: TopPickProviderOptionDto[];
+  alternateProviderCount?: number;
+  AlternateProviderCount?: number;
+  providerFanoutCount?: number;
+  ProviderFanoutCount?: number;
   bestSide?: string;
   BestSide?: string;
   bestBookmaker?: string | null;
@@ -447,6 +479,37 @@ export interface MarketGroupDto {
   SupportedEntryTypes?: string[];
   allowedLegCounts?: number[];
   AllowedLegCounts?: number[];
+}
+
+export interface TopPickProviderOptionDto {
+  provider?: string | null;
+  Provider?: string | null;
+  bookmaker?: string | null;
+  Bookmaker?: string | null;
+  bestBookmaker?: string | null;
+  BestBookmaker?: string | null;
+  bestPriceBookmaker?: string | null;
+  BestPriceBookmaker?: string | null;
+  providerCategory?: string | null;
+  ProviderCategory?: string | null;
+  entryProvider?: string | null;
+  EntryProvider?: string | null;
+  entryActionableForUser?: boolean | null;
+  EntryActionableForUser?: boolean | null;
+  playablePriceEligible?: boolean | null;
+  PlayablePriceEligible?: boolean | null;
+  bestAmericanPrice?: number | null;
+  BestAmericanPrice?: number | null;
+  bestDecimalPrice?: number | null;
+  BestDecimalPrice?: number | null;
+  bestImpliedProbability?: number | null;
+  BestImpliedProbability?: number | null;
+  selectedSideProbability?: number | null;
+  SelectedSideProbability?: number | null;
+  bestProbabilityEdge?: number | null;
+  BestProbabilityEdge?: number | null;
+  displayExpectedValue?: number | null;
+  DisplayExpectedValue?: number | null;
 }
 
 export interface PlayerHistorySummaryDto {

@@ -247,6 +247,7 @@ public static partial class TheOddsApiDebugEndpoints
             take,
             providerCategory,
             freshnessMinutes,
+            topPicksModelOptions,
             dbContext,
             cancellationToken);
         if (snapshot is not null)
@@ -282,7 +283,7 @@ public static partial class TheOddsApiDebugEndpoints
                 snapshotBacked: false,
                 fallbackReason),
             Run: new { runId = (Guid?)null, refreshRunIds = Array.Empty<Guid>(), predictionCount = 0 },
-            Summary: BuildTopPickSnapshotSummary(Array.Empty<JsonObject>()),
+            Summary: BuildTopPickSnapshotSummary(Array.Empty<JsonObject>(), null),
             StrategyClassificationSummary: Array.Empty<object>(),
             TopPicks: Array.Empty<object>());
     }
@@ -307,6 +308,7 @@ public static partial class TheOddsApiDebugEndpoints
                 take,
                 providerCategory,
                 freshnessMinutes,
+                topPicksModelOptions,
                 dbContext,
                 cancellationToken);
             if (snapshot is not null)
@@ -331,6 +333,7 @@ public static partial class TheOddsApiDebugEndpoints
                 take,
                 providerCategory,
                 freshnessMinutes,
+                topPicksModelOptions,
                 dbContext,
                 cancellationToken);
             if (snapshot is not null)
@@ -1176,6 +1179,7 @@ public static partial class TheOddsApiDebugEndpoints
         int? take,
         string? providerCategory,
         int? freshnessMinutes,
+        TopPicksModelOptions topPicksModelOptions,
         ApplicationDbContext dbContext,
         CancellationToken cancellationToken)
     {
@@ -1245,11 +1249,11 @@ public static partial class TheOddsApiDebugEndpoints
             .OrderByDescending(row => GetDecimal(row, "displayExpectedValue") ?? decimal.MinValue)
             .ThenByDescending(row => GetDecimal(row, "selectedSideProbability") ?? decimal.MinValue)
             .ThenByDescending(row => GetDecimal(row, "rankingScore") ?? decimal.MinValue)
-            .Take(requestedTake)
             .ToArray();
+        var curated = CuratePublicTopPickRows(normalizedRows, requestedTake, providerCategory, topPicksModelOptions);
         var fallbackReason = activeRows.Length == 0
             ? BuildNoCurrentlyActionableSnapshotFallbackReason(topPickSnapshots: true)
-            : normalizedRows.Length == 0
+            : curated.Rows.Length == 0
                 ? "Latest top-pick snapshots still have currently actionable rows, but none pass the public recommendation safety filters."
                 : null;
 
@@ -1259,16 +1263,16 @@ public static partial class TheOddsApiDebugEndpoints
             RefreshRunId: refreshRunIds.Length == 1 ? refreshRunIds[0] : null,
             FallbackReason: fallbackReason,
             Diagnostics: BuildSnapshotDiagnostics(
-                normalizedRows.Length,
+                curated.Rows.Length,
                 providerCategory,
                 includeBookmakerPrices: false,
                 originalSnapshotRows: rows.Count,
                 currentActionableSnapshotRows: activeRows.Length,
                 preservedSnapshotExpiredAtReadTime: rows.Count > 0 && activeRows.Length == 0),
             Run: new { runId = rows.FirstOrDefault()?.PredictionRunId, refreshRunIds, predictionCount = refreshRuns.Sum(row => row.PredictionCount) },
-            Summary: BuildTopPickSnapshotSummary(normalizedRows),
-            StrategyClassificationSummary: BuildTopPickSnapshotStrategySummary(normalizedRows),
-            TopPicks: normalizedRows);
+            Summary: BuildTopPickSnapshotSummary(curated.Rows, curated.Diagnostics),
+            StrategyClassificationSummary: BuildTopPickSnapshotStrategySummary(curated.Rows),
+            TopPicks: curated.Rows);
     }
 
     private static string? NormalizePublicProviderCategoryFilter(string? providerCategory)
@@ -1639,12 +1643,50 @@ public static partial class TheOddsApiDebugEndpoints
         };
     }
 
-    private static object BuildTopPickSnapshotSummary(IReadOnlyCollection<JsonObject> rows)
+    private static object BuildTopPickSnapshotSummary(
+        IReadOnlyCollection<JsonObject> rows,
+        PublicTopPickCurationDiagnostics? curation)
     {
         return new
         {
             totalSnapshotRowsReturned = rows.Count,
             returnedTopPicks = rows.Count,
+            preDedupeCandidateCount = curation?.PreDedupeCandidateCount ?? rows.Count,
+            postOpportunityDedupeCount = curation?.PostOpportunityDedupeCount ?? rows.Count,
+            suppressedProviderFanoutCount = curation?.SuppressedProviderFanoutCount ?? 0,
+            suppressedByPlayerExposureCount = curation?.SuppressedByPlayerExposureCount ?? 0,
+            suppressedByPlayerPropFamilyExposureCount = curation?.SuppressedByPlayerPropFamilyExposureCount ?? 0,
+            suppressedByGameExposureCount = curation?.SuppressedByGameExposureCount ?? 0,
+            suppressedBySlateCapCount = curation?.SuppressedBySlateCapCount ?? 0,
+            providerFanoutOpportunityCount = curation?.ProviderFanoutOpportunityCount ?? 0,
+            maxProviderFanoutCount = curation?.MaxProviderFanoutCount ?? 0,
+            rowsWithProviderOptionsCount = curation?.RowsWithProviderOptionsCount ?? 0,
+            curation = curation is null ? null : new
+            {
+                curation.PreDedupeCandidateCount,
+                curation.PostOpportunityDedupeCount,
+                curation.ReturnedTopPickCount,
+                curation.SuppressedProviderFanoutCount,
+                curation.SuppressedByPlayerExposureCount,
+                curation.SuppressedByPlayerPropFamilyExposureCount,
+                curation.SuppressedByGameExposureCount,
+                curation.SuppressedByTeamExposureCount,
+                curation.SuppressedByPropTypeExposureCount,
+                curation.SuppressedBySlateCapCount,
+                curation.RequestedTake,
+                curation.MaxPerSlateSport,
+                curation.MaxPerPlayer,
+                curation.MaxPerPlayerPropFamily,
+                curation.MaxPerGameEvent,
+                curation.MaxPerTeam,
+                curation.MaxPerPropType,
+                curation.OpportunityKeyFields,
+                curation.ProviderFanoutOpportunityCount,
+                curation.MaxProviderFanoutCount,
+                curation.RowsWithProviderOptionsCount,
+                curation.SampleProviderFanoutOpportunities,
+                curation.SuppressionReasonBreakdown
+            },
             activeCandidateCount = rows.Count(row => GetBool(row, "isCandidate") == true),
             actionableCandidateCount = rows.Count(row => GetBool(row, "isCandidate") == true && GetBool(row, "entryActionableForUser") == true),
             sportsbookContextCandidateCount = rows.Count(row => GetBool(row, "isCandidate") == true && GetBool(row, "entryActionableForUser") != true),
@@ -1783,6 +1825,18 @@ public static partial class TheOddsApiDebugEndpoints
         if (readTimeLifecycle is not null)
         {
             ApplyReadTimeLifecycle(obj, readTimeLifecycle);
+        }
+
+        var propType = GetString(obj, "propType");
+        var normalizedPropType = GetString(obj, "normalizedPropType");
+        if (string.IsNullOrWhiteSpace(propType) && !string.IsNullOrWhiteSpace(normalizedPropType))
+        {
+            obj["propType"] = normalizedPropType;
+        }
+
+        if (string.IsNullOrWhiteSpace(normalizedPropType) && !string.IsNullOrWhiteSpace(propType))
+        {
+            obj["normalizedPropType"] = propType;
         }
 
         ApplySportsbookSnapshotEvSafety(obj);

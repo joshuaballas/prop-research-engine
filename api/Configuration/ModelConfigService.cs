@@ -141,6 +141,12 @@ public sealed class ModelConfigOptionsOverrides(IModelConfigService modelConfigS
         ApplyDecimal(set, nameof(TopPicksModelOptions.ConsistencyGuardWeakRecent10HitRate), value => options.ConsistencyGuardWeakRecent10HitRate = value);
         ApplyDecimal(set, nameof(TopPicksModelOptions.ConsistencyGuardExtremeWeakRecent10HitRate), value => options.ConsistencyGuardExtremeWeakRecent10HitRate = value);
         ApplyDecimal(set, nameof(TopPicksModelOptions.ConsistencyGuardHighHitChanceGap), value => options.ConsistencyGuardHighHitChanceGap = value);
+        ApplyInteger(set, nameof(TopPicksModelOptions.PublicMaxTopPicksPerSlateSport), value => options.PublicMaxTopPicksPerSlateSport = value);
+        ApplyInteger(set, nameof(TopPicksModelOptions.PublicMaxTopPicksPerPlayer), value => options.PublicMaxTopPicksPerPlayer = value);
+        ApplyInteger(set, nameof(TopPicksModelOptions.PublicMaxTopPicksPerPlayerPropFamily), value => options.PublicMaxTopPicksPerPlayerPropFamily = value);
+        ApplyInteger(set, nameof(TopPicksModelOptions.PublicMaxTopPicksPerGameEvent), value => options.PublicMaxTopPicksPerGameEvent = value);
+        ApplyInteger(set, nameof(TopPicksModelOptions.PublicMaxTopPicksPerTeam), value => options.PublicMaxTopPicksPerTeam = value);
+        ApplyInteger(set, nameof(TopPicksModelOptions.PublicMaxTopPicksPerPropType), value => options.PublicMaxTopPicksPerPropType = value);
     }
 
     public void Configure(PredictionGenerationOptions options)
@@ -410,6 +416,12 @@ public static class ModelConfigSeeder
         yield return Parameter(setId, nameof(options.ConsistencyGuardWeakRecent10HitRate), AppConfigValueTypes.Decimal, options.ConsistencyGuardWeakRecent10HitRate, "Consistency guard weak recent 10 hit rate", "probability", sortOrder++, now);
         yield return Parameter(setId, nameof(options.ConsistencyGuardExtremeWeakRecent10HitRate), AppConfigValueTypes.Decimal, options.ConsistencyGuardExtremeWeakRecent10HitRate, "Consistency guard extreme weak recent 10 hit rate", "probability", sortOrder++, now);
         yield return Parameter(setId, nameof(options.ConsistencyGuardHighHitChanceGap), AppConfigValueTypes.Decimal, options.ConsistencyGuardHighHitChanceGap, "Consistency guard high hit chance gap", "probability", sortOrder++, now);
+        yield return Parameter(setId, nameof(options.PublicMaxTopPicksPerSlateSport), AppConfigValueTypes.Integer, options.PublicMaxTopPicksPerSlateSport, "Public max top picks per slate sport", "count", sortOrder++, now);
+        yield return Parameter(setId, nameof(options.PublicMaxTopPicksPerPlayer), AppConfigValueTypes.Integer, options.PublicMaxTopPicksPerPlayer, "Public max top picks per player", "count", sortOrder++, now);
+        yield return Parameter(setId, nameof(options.PublicMaxTopPicksPerPlayerPropFamily), AppConfigValueTypes.Integer, options.PublicMaxTopPicksPerPlayerPropFamily, "Public max top picks per player prop family", "count", sortOrder++, now);
+        yield return Parameter(setId, nameof(options.PublicMaxTopPicksPerGameEvent), AppConfigValueTypes.Integer, options.PublicMaxTopPicksPerGameEvent, "Public max top picks per game event", "count", sortOrder++, now);
+        yield return Parameter(setId, nameof(options.PublicMaxTopPicksPerTeam), AppConfigValueTypes.Integer, options.PublicMaxTopPicksPerTeam, "Public max top picks per team", "count", sortOrder++, now);
+        yield return Parameter(setId, nameof(options.PublicMaxTopPicksPerPropType), AppConfigValueTypes.Integer, options.PublicMaxTopPicksPerPropType, "Public max top picks per prop type", "count", sortOrder++, now);
     }
 
     private static IEnumerable<ModelConfigParameter> BuildPredictionGenerationParameters(
