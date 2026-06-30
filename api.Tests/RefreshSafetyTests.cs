@@ -536,6 +536,37 @@ public sealed class RefreshSafetyTests
     }
 
     [Fact]
+    public async Task RefreshPlan_DoesNotExposeStaleCurrentRunScheduledDueUtc()
+    {
+        await using var factory = new SafetyTestApplicationFactory(new Dictionary<string, string?>
+        {
+            ["TheOddsScheduledRefresh:Enabled"] = "true",
+            ["TheOddsScheduledRefresh:AllowScheduledLiveRefresh"] = "true"
+        });
+        using var client = factory.CreateClient();
+        await factory.SeedCreditTelemetryRefreshAsync(requestsUsed: 2360, requestsRemaining: 97640, observedMinutesAgo: 15);
+        var startedAt = DateTimeOffset.UtcNow.AddSeconds(-15);
+        var staleScheduledDueAt = startedAt.AddDays(-2);
+        factory.Services.GetRequiredService<ITheOddsScheduledRefreshState>().MarkStarted(startedAt, staleScheduledDueAt);
+
+        var response = await client.GetAsync("/api/markets/refresh-plan");
+
+        await EnsureSuccessWithBodyAsync(response);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.True(json.GetProperty("isRefreshInProgress").GetBoolean());
+        Assert.Equal("RefreshInProgress", json.GetProperty("dataAvailableStatus").GetString());
+        Assert.Equal(
+            startedAt.ToUnixTimeSeconds(),
+            DateTimeOffset.Parse(json.GetProperty("currentRunScheduledDueUtc").GetString()!, CultureInfo.InvariantCulture).ToUnixTimeSeconds());
+        Assert.NotEqual(
+            staleScheduledDueAt.ToUnixTimeSeconds(),
+            DateTimeOffset.Parse(json.GetProperty("currentRunScheduledDueUtc").GetString()!, CultureInfo.InvariantCulture).ToUnixTimeSeconds());
+        Assert.NotEqual(JsonValueKind.Null, json.GetProperty("nextHeaderSyncTargetUtc").ValueKind);
+        Assert.NotEqual(JsonValueKind.Null, json.GetProperty("nextDataAvailableEstimateUtc").ValueKind);
+        Assert.NotEqual(JsonValueKind.Null, json.GetProperty("activeRunDataAvailableTargetUtc").ValueKind);
+    }
+
+    [Fact]
     public void ScheduledRefreshWorker_NoCompletionAnchorRunsImmediately()
     {
         var observedAt = DateTimeOffset.UtcNow;

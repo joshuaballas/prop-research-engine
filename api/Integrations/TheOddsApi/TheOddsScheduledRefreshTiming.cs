@@ -24,7 +24,7 @@ public static class TheOddsScheduledRefreshTiming
         var postRefreshReadBuffer = options.GetPostRefreshReadBuffer();
         var expectedRefreshDuration = options.GetExpectedRefreshDuration();
         var currentRunScheduledDueUtc = isRefreshInProgress
-            ? snapshot.LastRunScheduledDueUtc ?? snapshot.LastRunStartedAtUtc
+            ? ResolveCurrentRunScheduledDueUtc(snapshot.LastRunStartedAtUtc, snapshot.LastRunScheduledDueUtc, interval)
             : null;
         var currentRunEstimatedCompletionUtc = isRefreshInProgress
             ? snapshot.LastRunStartedAtUtc?.Add(expectedRefreshDuration)
@@ -96,6 +96,28 @@ public static class TheOddsScheduledRefreshTiming
         }
 
         return anchorUtc.Value.Add(interval);
+    }
+
+    private static DateTimeOffset? ResolveCurrentRunScheduledDueUtc(
+        DateTimeOffset? startedAtUtc,
+        DateTimeOffset? scheduledDueUtc,
+        TimeSpan interval)
+    {
+        if (!startedAtUtc.HasValue)
+        {
+            return null;
+        }
+
+        if (!scheduledDueUtc.HasValue)
+        {
+            return startedAtUtc;
+        }
+
+        var tolerance = interval <= TimeSpan.Zero ? TimeSpan.FromMinutes(15) : interval;
+        return scheduledDueUtc.Value >= startedAtUtc.Value.Subtract(tolerance)
+            && scheduledDueUtc.Value <= startedAtUtc.Value.Add(tolerance)
+            ? scheduledDueUtc
+            : startedAtUtc;
     }
 
     private static DateTimeOffset? ResolveLatestSuccessfulRefreshCompletedAtUtc(TheOddsRefreshPlanResult plan)
