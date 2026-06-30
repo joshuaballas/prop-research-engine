@@ -20,9 +20,22 @@ public static class TheOddsScheduledRefreshTiming
             ? SecondsBetween(snapshot.LastRunStartedAtUtc, nowUtc)
             : null;
         var anchorUtc = Max(latestSuccessfulRefreshCompletedAtUtc, snapshot.LastRunCompletedAtUtc);
-        var nextRefreshAtUtc = ResolveNextRefreshAtUtc(options.Enabled, anchorUtc, interval, nowUtc, isRefreshInProgress);
+        var nextRefreshAtUtc = ResolveNextRefreshAtUtc(options.Enabled, anchorUtc, interval, nowUtc);
         var postRefreshReadBuffer = options.GetPostRefreshReadBuffer();
-        var nextHeaderSyncTargetUtc = nextRefreshAtUtc?.Add(postRefreshReadBuffer);
+        var expectedRefreshDuration = options.GetExpectedRefreshDuration();
+        var currentRunScheduledDueUtc = isRefreshInProgress
+            ? snapshot.LastRunScheduledDueUtc ?? snapshot.LastRunStartedAtUtc
+            : null;
+        var currentRunEstimatedCompletionUtc = isRefreshInProgress
+            ? snapshot.LastRunStartedAtUtc?.Add(expectedRefreshDuration)
+            : null;
+        var currentRunEstimatedRemainingSeconds = isRefreshInProgress
+            ? NonNegativeSecondsUntil(nowUtc, currentRunEstimatedCompletionUtc)
+            : null;
+        var activeRunDataAvailableTargetUtc = isRefreshInProgress
+            ? currentRunEstimatedCompletionUtc?.Add(postRefreshReadBuffer)
+            : null;
+        var nextHeaderSyncTargetUtc = activeRunDataAvailableTargetUtc ?? nextRefreshAtUtc?.Add(postRefreshReadBuffer);
         var secondsUntilNextRefresh = SecondsUntil(nowUtc, nextRefreshAtUtc);
         var secondsUntilNextDataAvailable = SecondsUntil(nowUtc, nextHeaderSyncTargetUtc);
         var isOverdue = options.Enabled
@@ -51,9 +64,9 @@ public static class TheOddsScheduledRefreshTiming
             ConservativeDataAvailableEstimateUtc: nextHeaderSyncTargetUtc,
             NextRunEstimateUtc: nextRefreshAtUtc,
             WorkerNextWakeUtc: nextRefreshAtUtc,
-            CurrentRunScheduledDueUtc: null,
-            CurrentRunEstimatedRemainingSeconds: null,
-            ActiveRunDataAvailableTargetUtc: null,
+            CurrentRunScheduledDueUtc: currentRunScheduledDueUtc,
+            CurrentRunEstimatedRemainingSeconds: currentRunEstimatedRemainingSeconds,
+            ActiveRunDataAvailableTargetUtc: activeRunDataAvailableTargetUtc,
             NextCycleRefreshDueUtc: null,
             NextCycleDataAvailableEstimateUtc: null,
             DataAvailableStatus: isRefreshInProgress ? "RefreshInProgress" : "Waiting",
@@ -70,10 +83,9 @@ public static class TheOddsScheduledRefreshTiming
         bool enabled,
         DateTimeOffset? anchorUtc,
         TimeSpan interval,
-        DateTimeOffset nowUtc,
-        bool isRefreshInProgress)
+        DateTimeOffset nowUtc)
     {
-        if (!enabled || isRefreshInProgress)
+        if (!enabled)
         {
             return null;
         }
@@ -99,6 +111,12 @@ public static class TheOddsScheduledRefreshTiming
         return targetUtc.HasValue
             ? (int)Math.Ceiling((targetUtc.Value - generatedAtUtc).TotalSeconds)
             : null;
+    }
+
+    private static int? NonNegativeSecondsUntil(DateTimeOffset generatedAtUtc, DateTimeOffset? targetUtc)
+    {
+        var seconds = SecondsUntil(generatedAtUtc, targetUtc);
+        return seconds.HasValue ? Math.Max(0, seconds.Value) : null;
     }
 
     private static decimal? SecondsBetween(DateTimeOffset? startUtc, DateTimeOffset? endUtc)

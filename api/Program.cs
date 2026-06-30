@@ -72,6 +72,9 @@ builder.Services.AddSingleton<IConfigureOptions<SoccerPredictionsOptions>, AppCo
 builder.Services.AddSingleton<IConfigureOptions<SoccerGradingOptions>, AppConfigOptionsOverrides>();
 builder.Services.AddSingleton<IConfigureOptions<SoccerTopPicksOptions>, AppConfigOptionsOverrides>();
 builder.Services.AddSingleton<IConfigureOptions<UnderdogIngestionOptions>, AppConfigOptionsOverrides>();
+builder.Services.AddSingleton<IModelConfigService, ModelConfigService>();
+builder.Services.AddSingleton<IConfigureOptions<TopPicksModelOptions>, ModelConfigOptionsOverrides>();
+builder.Services.AddSingleton<IConfigureOptions<PredictionGenerationOptions>, ModelConfigOptionsOverrides>();
 builder.Services.AddHttpClient<IUnderdogAdapter, UnderdogAdapter>(client =>
 {
     client.Timeout = TimeSpan.FromSeconds(60);
@@ -154,6 +157,7 @@ if (!app.Environment.IsEnvironment("Testing"))
     await ApplyDatabaseMigrationsAsync(app);
     await SeedAppConfigsAsync(app);
     await SeedProviderDomainConfigsAsync(app);
+    await SeedModelConfigsAsync(app);
 }
 
 if (app.Environment.IsDevelopment())
@@ -200,6 +204,7 @@ app.MapMarketClassificationDebugEndpoints();
 app.MapApplicationErrorDebugEndpoints();
 app.MapAppConfigDebugEndpoints();
 app.MapProviderDomainConfigDebugEndpoints();
+app.MapModelConfigDebugEndpoints();
 app.MapSystemHealthDebugEndpoints();
 app.MapDfsDebugEndpoints();
 app.MapTheOddsApiDebugEndpoints();
@@ -297,6 +302,28 @@ static async Task SeedProviderDomainConfigsAsync(WebApplication app)
     catch (Exception exception)
     {
         logger.LogWarning(exception, "Provider domain config seed failed; structured appsettings fallbacks remain active.");
+    }
+}
+
+static async Task SeedModelConfigsAsync(WebApplication app)
+{
+    await using var scope = app.Services.CreateAsyncScope();
+    var logger = scope.ServiceProvider
+        .GetRequiredService<ILoggerFactory>()
+        .CreateLogger("ModelConfigSeeder");
+
+    try
+    {
+        var result = await ModelConfigSeeder.SeedAsync(scope.ServiceProvider);
+        logger.LogInformation(
+            "Model config seed completed. Sets inserted: {SetsInserted}; parameters inserted: {ParametersInserted}; metadata updated: {MetadataUpdated}.",
+            result.SetsInserted,
+            result.ParametersInserted,
+            result.MetadataUpdated);
+    }
+    catch (Exception exception)
+    {
+        logger.LogWarning(exception, "Model config seed failed; options/code defaults remain active.");
     }
 }
 

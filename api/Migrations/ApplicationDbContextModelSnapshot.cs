@@ -1539,6 +1539,134 @@ namespace SportsBetting.Api.Migrations
                     b.ToTable("mlb_result_import_states", (string)null);
                 });
 
+            modelBuilder.Entity("SportsBetting.Api.Models.ModelConfigParameter", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<DateTimeOffset>("CreatedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at_utc");
+
+                    b.Property<string>("Description")
+                        .HasMaxLength(1000)
+                        .HasColumnType("character varying(1000)")
+                        .HasColumnName("description");
+
+                    b.Property<string>("DisplayName")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("display_name");
+
+                    b.Property<Guid>("ModelConfigSetId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("model_config_set_id");
+
+                    b.Property<string>("ParameterKey")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("parameter_key");
+
+                    b.Property<int>("SortOrder")
+                        .HasColumnType("integer")
+                        .HasColumnName("sort_order");
+
+                    b.Property<string>("Unit")
+                        .HasMaxLength(50)
+                        .HasColumnType("character varying(50)")
+                        .HasColumnName("unit");
+
+                    b.Property<DateTimeOffset>("UpdatedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at_utc");
+
+                    b.Property<string>("Value")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("value");
+
+                    b.Property<string>("ValueType")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("character varying(50)")
+                        .HasColumnName("value_type");
+
+                    b.HasKey("Id")
+                        .HasName("pk_model_config_parameters");
+
+                    b.HasIndex("ParameterKey")
+                        .HasDatabaseName("ix_model_config_parameters_parameter_key");
+
+                    b.HasIndex("ModelConfigSetId", "ParameterKey")
+                        .IsUnique()
+                        .HasDatabaseName("ix_model_config_parameters_model_config_set_id_parameter_key");
+
+                    b.ToTable("model_config_parameters", (string)null);
+                });
+
+            modelBuilder.Entity("SportsBetting.Api.Models.ModelConfigSet", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<DateTimeOffset>("CreatedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at_utc");
+
+                    b.Property<string>("Description")
+                        .IsRequired()
+                        .HasMaxLength(1000)
+                        .HasColumnType("character varying(1000)")
+                        .HasColumnName("description");
+
+                    b.Property<bool>("IsActive")
+                        .HasColumnType("boolean")
+                        .HasColumnName("is_active");
+
+                    b.Property<string>("ModelEra")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("model_era");
+
+                    b.Property<string>("ModelKey")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)")
+                        .HasColumnName("model_key");
+
+                    b.Property<string>("Sport")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("character varying(50)")
+                        .HasColumnName("sport");
+
+                    b.Property<DateTimeOffset>("UpdatedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at_utc");
+
+                    b.HasKey("Id")
+                        .HasName("pk_model_config_sets");
+
+                    b.HasIndex("IsActive")
+                        .HasDatabaseName("ix_model_config_sets_is_active");
+
+                    b.HasIndex("ModelKey", "ModelEra", "Sport")
+                        .IsUnique()
+                        .HasDatabaseName("ix_model_config_sets_model_key_model_era_sport");
+
+                    b.HasIndex("ModelKey", "Sport", "IsActive")
+                        .HasDatabaseName("ix_model_config_sets_model_key_sport_is_active");
+
+                    b.ToTable("model_config_sets", (string)null);
+                });
+
             modelBuilder.Entity("SportsBetting.Api.Models.OptimizedEntry", b =>
                 {
                     b.Property<Guid>("Id")
@@ -4509,6 +4637,18 @@ namespace SportsBetting.Api.Migrations
                     b.Navigation("TheOddsRefreshRun");
                 });
 
+            modelBuilder.Entity("SportsBetting.Api.Models.ModelConfigParameter", b =>
+                {
+                    b.HasOne("SportsBetting.Api.Models.ModelConfigSet", "ModelConfigSet")
+                        .WithMany("Parameters")
+                        .HasForeignKey("ModelConfigSetId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
+                        .HasConstraintName("fk_model_config_parameters_model_config_sets_model_config_set_");
+
+                    b.Navigation("ModelConfigSet");
+                });
+
             modelBuilder.Entity("SportsBetting.Api.Models.OptimizedEntry", b =>
                 {
                     b.HasOne("SportsBetting.Api.Models.Platform", "Platform")
@@ -4896,6 +5036,11 @@ namespace SportsBetting.Api.Migrations
                     b.Navigation("Props");
 
                     b.Navigation("Teams");
+                });
+
+            modelBuilder.Entity("SportsBetting.Api.Models.ModelConfigSet", b =>
+                {
+                    b.Navigation("Parameters");
                 });
 
             modelBuilder.Entity("SportsBetting.Api.Models.OptimizedEntry", b =>

@@ -9,6 +9,7 @@ public static class AppConfigClassifications
     public const string MoveToAppConfigs = "MoveToAppConfigs";
     public const string MoveToDomainTable = "MoveToDomainTable";
     public const string MovedToDomainTable = "MovedToDomainTable";
+    public const string MovedToModelConfig = "MovedToModelConfig";
     public const string RemoveRedundant = "RemoveRedundant";
     public const string NeedsDecision = "NeedsDecision";
 }
@@ -51,6 +52,7 @@ public sealed record AppConfigDefinition(
     string Classification,
     string Reason,
     string? DefaultValue,
+    string? DevelopmentDefaultValue = null,
     bool SeedToAppConfigs = false,
     bool IsSensitive = false,
     bool IsRuntimeEditable = true,

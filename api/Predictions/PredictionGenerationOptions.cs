@@ -15,7 +15,10 @@ public sealed class PredictionGenerationOptions
         "Home Runs",
         "Stolen Bases",
         "Doubles",
-        "Singles"
+        "Singles",
+        "Hits",
+        "Total Bases",
+        "Pitcher Strikeouts"
     ];
 
     public decimal OverEdgeThreshold

@@ -49,15 +49,15 @@ public static class AppConfigCatalog
         Domain("TheOdds.IngestionWorker.Markets", "TheOddsIngestionWorker:Markets", AppConfigValueTypes.String, "The Odds Provider Data", "Manual ingestion market keys are provider domain data and should move to a dedicated market table/editor.", ["TheOddsIngestionWorkerOptions"]),
         Move("TheOdds.IngestionWorker.OnlyGameDates", "TheOddsIngestionWorker:OnlyGameDates", AppConfigValueTypes.String, "The Odds Legacy Worker", "Date selection mode for the older manual The Odds ingestion worker.", "Today", ["TheOddsIngestionWorkerOptions"], isAdvanced: true, isHidden: true),
 
-        Move("TheOdds.ScheduledRefresh.Enabled", "TheOddsScheduledRefresh:Enabled", AppConfigValueTypes.Boolean, "TheOddsScheduledRefresh", "Enables the scheduled one-clock The Odds refresh worker.", "false", ["TheOddsScheduledRefreshOptions", "TheOddsMlbScheduledRefreshWorker"]),
+        Move("TheOdds.ScheduledRefresh.Enabled", "TheOddsScheduledRefresh:Enabled", AppConfigValueTypes.Boolean, "TheOddsScheduledRefresh", "Enables the scheduled one-clock The Odds refresh worker.", "false", ["TheOddsScheduledRefreshOptions", "TheOddsMlbScheduledRefreshWorker"], developmentDefaultValue: "true"),
         Move("TheOdds.ScheduledRefresh.IntervalMinutes", "TheOddsScheduledRefresh:IntervalMinutes", AppConfigValueTypes.Integer, "TheOddsScheduledRefresh", "Scheduled refresh cadence.", "15", ["TheOddsScheduledRefreshOptions"]),
-        Move("TheOdds.ScheduledRefresh.BookmakerPreset", "TheOddsScheduledRefresh:BookmakerPreset", AppConfigValueTypes.String, "TheOddsScheduledRefresh", "Default bookmaker preset for fallback scheduled target.", "dfsOnly", ["TheOddsScheduledRefreshOptions"]),
+        Move("TheOdds.ScheduledRefresh.BookmakerPreset", "TheOddsScheduledRefresh:BookmakerPreset", AppConfigValueTypes.String, "TheOddsScheduledRefresh", "Default bookmaker preset for fallback scheduled target.", "dfsAll", ["TheOddsScheduledRefreshOptions"]),
         Move("TheOdds.ScheduledRefresh.IncludeCandidates", "TheOddsScheduledRefresh:IncludeCandidates", AppConfigValueTypes.Boolean, "TheOddsScheduledRefresh", "Whether scheduled finalization includes candidates.", "true", ["TheOddsScheduledRefreshOptions"]),
         Move("TheOdds.ScheduledRefresh.IncludeLineShopping", "TheOddsScheduledRefresh:IncludeLineShopping", AppConfigValueTypes.Boolean, "TheOddsScheduledRefresh", "Whether scheduled finalization includes line shopping.", "true", ["TheOddsScheduledRefreshOptions"]),
         Move("TheOdds.ScheduledRefresh.IncludeFullDiagnostics", "TheOddsScheduledRefresh:IncludeFullDiagnostics", AppConfigValueTypes.Boolean, "TheOddsScheduledRefresh", "Whether scheduled refresh stores full diagnostics.", "false", ["TheOddsScheduledRefreshOptions"]),
         Move("TheOdds.ScheduledRefresh.FreshnessMinutes", "TheOddsScheduledRefresh:FreshnessMinutes", AppConfigValueTypes.Integer, "TheOddsScheduledRefresh", "Freshness window for scheduled refresh output.", "30", ["TheOddsScheduledRefreshOptions"]),
         Move("TheOdds.ScheduledRefresh.RequireForceLive", "TheOddsScheduledRefresh:RequireForceLive", AppConfigValueTypes.Boolean, "TheOddsScheduledRefresh", "Requires explicit force-live intent before scheduled diagnostics can call The Odds.", "true", ["TheOddsScheduledRefreshOptions"]),
-        Move("TheOdds.ScheduledRefresh.AllowScheduledLiveRefresh", "TheOddsScheduledRefresh:AllowScheduledLiveRefresh", AppConfigValueTypes.Boolean, "TheOddsScheduledRefresh", "Allows scheduled worker to call The Odds.", "false", ["TheOddsScheduledRefreshOptions"]),
+        Move("TheOdds.ScheduledRefresh.AllowScheduledLiveRefresh", "TheOddsScheduledRefresh:AllowScheduledLiveRefresh", AppConfigValueTypes.Boolean, "TheOddsScheduledRefresh", "Allows scheduled worker to call The Odds.", "false", ["TheOddsScheduledRefreshOptions"], developmentDefaultValue: "true"),
         Move("TheOdds.ScheduledRefresh.AllowEventDiscoveryWhenNoPersistedEvents", "TheOddsScheduledRefresh:AllowEventDiscoveryWhenNoPersistedEvents", AppConfigValueTypes.Boolean, "TheOddsScheduledRefresh", "Allows event discovery when no persisted event cache exists.", "true", ["TheOddsScheduledRefreshOptions"]),
         Move("TheOdds.ScheduledRefresh.FallbackEstimatedApiCalls", "TheOddsScheduledRefresh:FallbackEstimatedApiCalls", AppConfigValueTypes.Integer, "TheOddsScheduledRefresh", "Fallback call estimate for scheduled targets.", "8", ["TheOddsScheduledRefreshOptions"]),
         Move("TheOdds.ScheduledRefresh.MaxEstimatedCallsPerRun", "TheOddsScheduledRefresh:MaxEstimatedCallsPerRun", AppConfigValueTypes.Integer, "TheOddsScheduledRefresh", "Optional scheduled refresh per-run estimate cap.", "0", ["TheOddsScheduledRefreshOptions"]),
@@ -70,7 +70,7 @@ public static class AppConfigCatalog
         Move("TheOdds.RefreshPlanner.DefaultBookmakerPreset", "TheOddsRefreshPlanner:DefaultBookmakerPreset", AppConfigValueTypes.String, "TheOddsRefreshPlanner", "Default bookmaker preset for planner estimates.", "dfsOnly", ["TheOddsRefreshPlannerOptions"]),
         Move("TheOdds.RefreshPlanner.PlannerIntervalSeconds", "TheOddsRefreshPlanner:PlannerIntervalSeconds", AppConfigValueTypes.Integer, "TheOddsRefreshPlanner", "Planner evaluation interval.", "60", ["TheOddsRefreshPlannerOptions"]),
         Move("TheOdds.RefreshPlanner.MaxDailyCredits", "TheOddsRefreshPlanner:MaxDailyCredits", AppConfigValueTypes.Integer, "TheOddsRefreshPlanner", "Local daily credit budget.", "0", ["TheOddsRefreshPlannerOptions"]),
-        Move("TheOdds.RefreshPlanner.MaxMonthlyCredits", "TheOddsRefreshPlanner:MaxMonthlyCredits", AppConfigValueTypes.Integer, "TheOddsRefreshPlanner", "Local monthly credit budget.", "500", ["TheOddsRefreshPlannerOptions"]),
+        Move("TheOdds.RefreshPlanner.MaxMonthlyCredits", "TheOddsRefreshPlanner:MaxMonthlyCredits", AppConfigValueTypes.Integer, "TheOddsRefreshPlanner", "Local monthly credit budget.", "500", ["TheOddsRefreshPlannerOptions"], developmentDefaultValue: "100000"),
         Move("TheOdds.RefreshPlanner.BlockOnPerRunEstimate", "TheOddsRefreshPlanner:BlockOnPerRunEstimate", AppConfigValueTypes.Boolean, "TheOddsRefreshPlanner", "Blocks when per-run estimate exceeds cap.", "false", ["TheOddsRefreshPlannerOptions"]),
         Move("TheOdds.RefreshPlanner.BlockOnProviderCredits", "TheOddsRefreshPlanner:BlockOnProviderCredits", AppConfigValueTypes.Boolean, "TheOddsRefreshPlanner", "Blocks when provider reported credits are low.", "false", ["TheOddsRefreshPlannerOptions"]),
         Move("TheOdds.RefreshPlanner.BlockOnLocalMonthlyBudget", "TheOddsRefreshPlanner:BlockOnLocalMonthlyBudget", AppConfigValueTypes.Boolean, "TheOddsRefreshPlanner", "Blocks when local monthly budget would be exceeded.", "false", ["TheOddsRefreshPlannerOptions"]),
@@ -112,7 +112,7 @@ public static class AppConfigCatalog
         Move("Mlb.Results.Worker.MinimumCompleteDistinctPlayers", "MlbResultImportWorker:MinimumCompleteDistinctPlayers", AppConfigValueTypes.Integer, "MlbResults", "MLB complete-coverage distinct-player threshold.", "100", ["MlbResultImportWorkerOptions"]),
         Move("Mlb.Results.Worker.MinimumCompleteDistinctPropTypes", "MlbResultImportWorker:MinimumCompleteDistinctPropTypes", AppConfigValueTypes.Integer, "MlbResults", "MLB complete-coverage prop-type threshold.", "12", ["MlbResultImportWorkerOptions"]),
 
-        Move("Soccer.Results.ApiSports.Worker.Enabled", "SoccerResultImportWorker:Enabled", AppConfigValueTypes.Boolean, "SoccerResults", "Enables Soccer API-Sports result/stat import worker.", "false", ["SoccerResultImportWorkerOptions"]),
+        Move("Soccer.Results.ApiSports.Worker.Enabled", "SoccerResultImportWorker:Enabled", AppConfigValueTypes.Boolean, "SoccerResults", "Enables Soccer API-Sports result/stat import worker.", "false", ["SoccerResultImportWorkerOptions"], developmentDefaultValue: "true"),
         Move("Soccer.Results.ApiSports.Worker.IntervalMinutes", "SoccerResultImportWorker:IntervalMinutes", AppConfigValueTypes.Integer, "SoccerResults", "Soccer API-Sports result worker cadence.", "60", ["SoccerResultImportWorkerOptions"]),
         Move("Soccer.Results.ApiSports.Worker.MaxFixturesPerRun", "SoccerResultImportWorker:MaxFixturesPerRun", AppConfigValueTypes.Integer, "Soccer Results", "Compatibility fallback fixture cap used only when the newer per-competition and total Soccer caps are unset.", "8", ["SoccerResultImportWorkerOptions"], isAdvanced: true, isHidden: true),
         Move("Soccer.Results.ApiSports.Worker.MaxFixturesPerCompetitionPerRun", "SoccerResultImportWorker:MaxFixturesPerCompetitionPerRun", AppConfigValueTypes.Integer, "SoccerResults", "Per-competition fixture cap per run.", "8", ["SoccerResultImportWorkerOptions"]),
@@ -126,13 +126,13 @@ public static class AppConfigCatalog
         Move("Soccer.IdentityResolution.AutoWriteSafeLinks", "SoccerIdentityResolution:AutoWriteSafeLinks", AppConfigValueTypes.Boolean, "SoccerIdentityResolution", "Allows automatic safe Soccer alias link writes.", "true", ["SoccerIdentityResolutionOptions"]),
         Move("Soccer.IdentityResolution.MaxWritesPerRun", "SoccerIdentityResolution:MaxWritesPerRun", AppConfigValueTypes.Integer, "SoccerIdentityResolution", "Write cap for automatic Soccer identity resolution.", "100", ["SoccerIdentityResolutionOptions"]),
 
-        Move("Soccer.Predictions.Enabled", "SoccerPredictions:Enabled", AppConfigValueTypes.Boolean, "SoccerPredictions", "Enables Soccer prediction support.", "false", ["SoccerPredictionsOptions"]),
+        Move("Soccer.Predictions.Enabled", "SoccerPredictions:Enabled", AppConfigValueTypes.Boolean, "SoccerPredictions", "Enables Soccer prediction support.", "false", ["SoccerPredictionsOptions"], developmentDefaultValue: "true"),
         Move("Soccer.Predictions.MinimumSampleSize", "SoccerPredictions:MinimumSampleSize", AppConfigValueTypes.Integer, "SoccerPredictions", "Minimum sample for Soccer probability generation.", "5", ["SoccerPredictionsOptions"]),
         Move("Soccer.Predictions.LowSampleWarningThreshold", "SoccerPredictions:LowSampleWarningThreshold", AppConfigValueTypes.Integer, "SoccerPredictions", "Soccer low-sample warning threshold.", "10", ["SoccerPredictionsOptions"]),
         Move("Soccer.Predictions.TopPickMinimumSampleSize", "SoccerPredictions:TopPickMinimumSampleSize", AppConfigValueTypes.Integer, "SoccerPredictions", "Soccer Top Pick sample threshold.", "20", ["SoccerPredictionsOptions"]),
         Move("Soccer.Predictions.MinimumTopPickHitProbability", "SoccerPredictions:MinimumTopPickHitProbability", AppConfigValueTypes.Decimal, "SoccerPredictions", "Soccer Top Pick hit-probability threshold.", "0.55", ["SoccerPredictionsOptions"]),
-        Move("Soccer.Grading.Enabled", "SoccerGrading:Enabled", AppConfigValueTypes.Boolean, "SoccerGrading", "Enables Soccer grading support.", "false", ["SoccerGradingOptions"]),
-        Move("Soccer.TopPicks.Enabled", "SoccerTopPicks:Enabled", AppConfigValueTypes.Boolean, "SoccerTopPicks", "Enables Soccer Top Picks support.", "false", ["SoccerTopPicksOptions"]),
+        Move("Soccer.Grading.Enabled", "SoccerGrading:Enabled", AppConfigValueTypes.Boolean, "SoccerGrading", "Enables Soccer grading support.", "false", ["SoccerGradingOptions"], developmentDefaultValue: "true"),
+        Move("Soccer.TopPicks.Enabled", "SoccerTopPicks:Enabled", AppConfigValueTypes.Boolean, "SoccerTopPicks", "Enables Soccer Top Picks support.", "false", ["SoccerTopPicksOptions"], developmentDefaultValue: "true"),
         Move("Soccer.TopPicks.MinimumTopPickSampleSize", "SoccerTopPicks:MinimumTopPickSampleSize", AppConfigValueTypes.Integer, "SoccerTopPicks", "Soccer Top Picks sample threshold.", "20", ["SoccerTopPicksOptions"]),
         Move("Soccer.TopPicks.MinimumHitProbability", "SoccerTopPicks:MinimumHitProbability", AppConfigValueTypes.Decimal, "SoccerTopPicks", "Soccer Top Picks hit-probability threshold.", "0.55", ["SoccerTopPicksOptions"]),
         Move("Soccer.TopPicks.AllowNegativeEv", "SoccerTopPicks:AllowNegativeEv", AppConfigValueTypes.Boolean, "SoccerTopPicks", "Allows Soccer Top Picks without positive EV.", "true", ["SoccerTopPicksOptions"]),
@@ -142,8 +142,8 @@ public static class AppConfigCatalog
 
         Needs("DebugAdmin.Enabled", "DebugAdmin:Enabled", AppConfigValueTypes.Boolean, "DebugAdmin", "Security-adjacent debug access setting; keep bootstrap until an admin config workflow exists.", ["DebugAdminOptions"]),
         Needs("DebugAdmin.RequireApiKey", "DebugAdmin:RequireApiKey", AppConfigValueTypes.Boolean, "DebugAdmin", "Security-adjacent debug access setting; keep bootstrap until an admin config workflow exists.", ["DebugAdminOptions"]),
-        Needs("MlbPredictionGeneration", "MlbPredictionGeneration", AppConfigValueTypes.Json, "Model", "Model thresholds are intentionally not migrated in this pass.", ["PredictionGenerationOptions"]),
-        Needs("TopPicksModel", "TopPicksModel", AppConfigValueTypes.Json, "Model", "Model thresholds are intentionally not migrated in this pass.", ["TopPicksModelOptions"])
+        Model("MlbPredictionGeneration", "MlbPredictionGeneration", "MLB prediction generation thresholds and enabled prop types moved to versioned model config tables.", ["PredictionGenerationOptions"]),
+        Model("TopPicksModel", "TopPicksModel", "Top Picks model thresholds and active model era moved to versioned model config tables.", ["TopPicksModelOptions"])
     ];
 
     public static AppConfigDefinition? FindByBootstrapPath(string key)
@@ -166,6 +166,7 @@ public static class AppConfigCatalog
         string description,
         string? defaultValue,
         IReadOnlyList<string> consumers,
+        string? developmentDefaultValue = null,
         bool seedToAppConfigs = true,
         bool isAdvanced = false,
         bool isHidden = false,
@@ -179,6 +180,7 @@ public static class AppConfigCatalog
             AppConfigClassifications.MoveToAppConfigs,
             "Non-secret operational/runtime setting that can safely use DB-backed override with appsettings fallback.",
             defaultValue,
+            DevelopmentDefaultValue: developmentDefaultValue,
             SeedToAppConfigs: seedToAppConfigs,
             IsSensitive: false,
             IsRuntimeEditable: true,
@@ -321,6 +323,31 @@ public static class AppConfigCatalog
             IsAdvanced: true,
             ImpactLevel: AppConfigImpactLevels.Medium);
 
+    private static AppConfigDefinition Model(
+        string key,
+        string bootstrapPath,
+        string reason,
+        IReadOnlyList<string> consumers)
+        => Create(
+            key,
+            bootstrapPath,
+            AppConfigValueTypes.Json,
+            "Model",
+            reason,
+            AppConfigClassifications.MovedToModelConfig,
+            $"{reason} Runtime reads these values from model_config_sets/model_config_parameters.",
+            null,
+            SeedToAppConfigs: false,
+            IsSensitive: false,
+            IsRuntimeEditable: false,
+            RequiresRestart: true,
+            RuntimeRefreshSafe: false,
+            MaskInDiagnostics: false,
+            Consumers: consumers,
+            InputType: AppConfigInputTypes.AdvancedText,
+            IsAdvanced: true,
+            ImpactLevel: AppConfigImpactLevels.Medium);
+
     private static AppConfigDefinition Create(
         string key,
         string? bootstrapPath,
@@ -330,6 +357,7 @@ public static class AppConfigCatalog
         string classification,
         string reason,
         string? defaultValue,
+        string? DevelopmentDefaultValue = null,
         bool SeedToAppConfigs = false,
         bool IsSensitive = false,
         bool IsRuntimeEditable = true,
@@ -374,6 +402,7 @@ public static class AppConfigCatalog
             classification,
             reason,
             defaultValue,
+            DevelopmentDefaultValue,
             SeedToAppConfigs,
             IsSensitive,
             IsRuntimeEditable,

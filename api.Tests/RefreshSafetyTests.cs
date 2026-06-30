@@ -12,6 +12,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
+using SportsBetting.Api.Configuration;
 using SportsBetting.Api.Integrations.Results;
 using SportsBetting.Api.Integrations.Results.Mlb;
 using SportsBetting.Api.Integrations.Results.Soccer;
@@ -514,17 +515,23 @@ public sealed class RefreshSafetyTests
         Assert.True(json.GetProperty("isRefreshInProgress").GetBoolean());
         Assert.False(json.GetProperty("isOverdue").GetBoolean());
         Assert.Equal("SimpleCompletionInterval", json.GetProperty("estimateBasis").GetString());
-        Assert.Equal(JsonValueKind.Null, json.GetProperty("nextRefreshAtUtc").ValueKind);
-        Assert.Equal(JsonValueKind.Null, json.GetProperty("nextRefreshDueUtc").ValueKind);
-        Assert.Equal(JsonValueKind.Null, json.GetProperty("nextHeaderSyncTargetUtc").ValueKind);
-        Assert.Equal(JsonValueKind.Null, json.GetProperty("nextDataAvailableEstimateUtc").ValueKind);
-        Assert.Equal(JsonValueKind.Null, json.GetProperty("conservativeDataAvailableEstimateUtc").ValueKind);
-        Assert.Equal(JsonValueKind.Null, json.GetProperty("workerNextWakeUtc").ValueKind);
-        Assert.Equal(JsonValueKind.Null, json.GetProperty("secondsUntilNextRefresh").ValueKind);
-        Assert.Equal(JsonValueKind.Null, json.GetProperty("secondsUntilNextDataAvailable").ValueKind);
+        var nextRefreshAtUtc = DateTimeOffset.Parse(json.GetProperty("nextRefreshAtUtc").GetString()!, CultureInfo.InvariantCulture);
+        var nextRefreshDueUtc = DateTimeOffset.Parse(json.GetProperty("nextRefreshDueUtc").GetString()!, CultureInfo.InvariantCulture);
+        var nextHeaderSyncTargetUtc = DateTimeOffset.Parse(json.GetProperty("nextHeaderSyncTargetUtc").GetString()!, CultureInfo.InvariantCulture);
+        var nextDataAvailableEstimateUtc = DateTimeOffset.Parse(json.GetProperty("nextDataAvailableEstimateUtc").GetString()!, CultureInfo.InvariantCulture);
+        var conservativeDataAvailableEstimateUtc = DateTimeOffset.Parse(json.GetProperty("conservativeDataAvailableEstimateUtc").GetString()!, CultureInfo.InvariantCulture);
+        var activeRunDataAvailableTargetUtc = DateTimeOffset.Parse(json.GetProperty("activeRunDataAvailableTargetUtc").GetString()!, CultureInfo.InvariantCulture);
+        Assert.Equal(nextRefreshAtUtc, nextRefreshDueUtc);
+        Assert.Equal(activeRunDataAvailableTargetUtc, nextHeaderSyncTargetUtc);
+        Assert.Equal(nextHeaderSyncTargetUtc, nextDataAvailableEstimateUtc);
+        Assert.Equal(nextHeaderSyncTargetUtc, conservativeDataAvailableEstimateUtc);
+        Assert.NotEqual(JsonValueKind.Null, json.GetProperty("workerNextWakeUtc").ValueKind);
+        Assert.NotEqual(JsonValueKind.Null, json.GetProperty("secondsUntilNextRefresh").ValueKind);
+        Assert.NotEqual(JsonValueKind.Null, json.GetProperty("secondsUntilNextDataAvailable").ValueKind);
         Assert.Equal(startedAt.ToUnixTimeSeconds(), DateTimeOffset.Parse(json.GetProperty("currentRunStartedAtUtc").GetString()!, CultureInfo.InvariantCulture).ToUnixTimeSeconds());
-        Assert.Equal(JsonValueKind.Null, json.GetProperty("currentRunScheduledDueUtc").ValueKind);
+        Assert.Equal(startedAt.ToUnixTimeSeconds(), DateTimeOffset.Parse(json.GetProperty("currentRunScheduledDueUtc").GetString()!, CultureInfo.InvariantCulture).ToUnixTimeSeconds());
         Assert.True(json.GetProperty("currentRunElapsedSeconds").GetDecimal() >= 0m);
+        Assert.True(json.GetProperty("currentRunEstimatedRemainingSeconds").GetInt32() >= 0);
         Assert.Equal("RefreshInProgress", json.GetProperty("dataAvailableStatus").GetString());
     }
 
@@ -1130,17 +1137,28 @@ public sealed class RefreshSafetyTests
         await using var factory = new SafetyTestApplicationFactory(new Dictionary<string, string?>
         {
             ["TheOddsScheduledRefresh:Enabled"] = "true",
-            ["TheOddsScheduledRefresh:AllowScheduledLiveRefresh"] = "true",
-            ["TheOddsScheduledRefresh:Targets:2:Enabled"] = "true",
-            ["TheOddsScheduledRefresh:Targets:2:DisabledReason"] = null,
-            ["TheOddsApi:SoccerWorldCupSportKey"] = "soccer_fifa_world_cup",
-            ["TheOddsApi:SoccerWorldCupMarkets"] = "player_goals,player_shots"
+            ["TheOddsScheduledRefresh:AllowScheduledLiveRefresh"] = "true"
         });
         using var client = factory.CreateClient();
         using (var scope = factory.Services.CreateScope())
         {
             var dbContext = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
             await dbContext.Database.EnsureCreatedAsync();
+        }
+        await ProviderDomainConfigSeeder.SeedAsync(factory.Services);
+        using (var scope = factory.Services.CreateScope())
+        {
+            var dbContext = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+            var worldCupTarget = await dbContext.ProviderRefreshTargets.SingleAsync(
+                row => row.TargetKey == "soccer-world-cup-sportsbook");
+            worldCupTarget.IsEnabled = true;
+            worldCupTarget.DisabledReason = null;
+            worldCupTarget.ProviderSportKey = "soccer_fifa_world_cup";
+            worldCupTarget.BookmakerPreset = "allSportsbooks";
+            worldCupTarget.Regions = "us";
+            worldCupTarget.UpdatedAtUtc = DateTimeOffset.UtcNow;
+            await dbContext.SaveChangesAsync();
+            scope.ServiceProvider.GetRequiredService<IProviderDomainConfigService>().ClearCache();
         }
 
         var response = await client.GetAsync("/api/markets/refresh-plan");
@@ -1182,6 +1200,25 @@ public sealed class RefreshSafetyTests
         {
             var dbContext = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
             await dbContext.Database.EnsureCreatedAsync();
+        }
+        await ProviderDomainConfigSeeder.SeedAsync(factory.Services);
+        using (var scope = factory.Services.CreateScope())
+        {
+            var dbContext = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+            foreach (var targetKey in new[] { "mlb-sportsbook", "soccer-world-cup-sportsbook" })
+            {
+                var target = await dbContext.ProviderRefreshTargets.SingleAsync(row => row.TargetKey == targetKey);
+                target.IsEnabled = true;
+                target.DisabledReason = null;
+                if (targetKey == "soccer-world-cup-sportsbook")
+                {
+                    target.ProviderSportKey = "soccer_fifa_world_cup";
+                    target.BookmakerPreset = "allSportsbooks";
+                    target.Regions = "us";
+                }
+                target.UpdatedAtUtc = DateTimeOffset.UtcNow;
+            }
+
             dbContext.TheOddsRefreshRuns.AddRange(
                 new TheOddsRefreshRun
                 {

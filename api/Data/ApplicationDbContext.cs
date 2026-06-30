@@ -21,6 +21,8 @@ public sealed class ApplicationDbContext(DbContextOptions<ApplicationDbContext> 
     public DbSet<ProviderMarket> ProviderMarkets => Set<ProviderMarket>();
     public DbSet<ProviderBookmaker> ProviderBookmakers => Set<ProviderBookmaker>();
     public DbSet<ProviderRefreshTarget> ProviderRefreshTargets => Set<ProviderRefreshTarget>();
+    public DbSet<ModelConfigSet> ModelConfigSets => Set<ModelConfigSet>();
+    public DbSet<ModelConfigParameter> ModelConfigParameters => Set<ModelConfigParameter>();
     public DbSet<PlayerMergeAudit> PlayerMergeAudits => Set<PlayerMergeAudit>();
     public DbSet<Game> Games => Set<Game>();
     public DbSet<PropType> PropTypes => Set<PropType>();
@@ -72,6 +74,7 @@ public sealed class ApplicationDbContext(DbContextOptions<ApplicationDbContext> 
         ConfigureRecommendationSnapshotTables(modelBuilder);
         ConfigureProviderLineLifecycleTables(modelBuilder);
         ConfigureProviderDomainConfigTables(modelBuilder);
+        ConfigureModelConfigTables(modelBuilder);
         ConfigureIngestionTables(modelBuilder);
         ConfigureCorrelationTables(modelBuilder);
         ConfigureOptimizationTables(modelBuilder);
@@ -965,6 +968,40 @@ public sealed class ApplicationDbContext(DbContextOptions<ApplicationDbContext> 
             entity.HasIndex(x => new { x.ProviderKey, x.IsEnabled });
             entity.HasIndex(x => new { x.Sport, x.CompetitionKey, x.ProviderCategory });
             entity.HasIndex(x => x.Priority);
+        });
+    }
+
+    private static void ConfigureModelConfigTables(ModelBuilder modelBuilder)
+    {
+        modelBuilder.Entity<ModelConfigSet>(entity =>
+        {
+            entity.ToTable("model_config_sets");
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.ModelKey).HasMaxLength(100).IsRequired();
+            entity.Property(x => x.ModelEra).HasMaxLength(200).IsRequired();
+            entity.Property(x => x.Sport).HasMaxLength(50).IsRequired();
+            entity.Property(x => x.Description).HasMaxLength(1000).IsRequired();
+            entity.HasIndex(x => new { x.ModelKey, x.ModelEra, x.Sport }).IsUnique();
+            entity.HasIndex(x => new { x.ModelKey, x.Sport, x.IsActive });
+            entity.HasIndex(x => x.IsActive);
+        });
+
+        modelBuilder.Entity<ModelConfigParameter>(entity =>
+        {
+            entity.ToTable("model_config_parameters");
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.ParameterKey).HasMaxLength(200).IsRequired();
+            entity.Property(x => x.ValueType).HasMaxLength(50).IsRequired();
+            entity.Property(x => x.Value).IsRequired();
+            entity.Property(x => x.DisplayName).HasMaxLength(200).IsRequired();
+            entity.Property(x => x.Description).HasMaxLength(1000);
+            entity.Property(x => x.Unit).HasMaxLength(50);
+            entity.HasOne(x => x.ModelConfigSet)
+                .WithMany(x => x.Parameters)
+                .HasForeignKey(x => x.ModelConfigSetId)
+                .OnDelete(DeleteBehavior.Cascade);
+            entity.HasIndex(x => new { x.ModelConfigSetId, x.ParameterKey }).IsUnique();
+            entity.HasIndex(x => x.ParameterKey);
         });
     }
 

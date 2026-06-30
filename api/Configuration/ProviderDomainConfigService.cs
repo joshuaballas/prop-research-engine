@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Caching.Memory;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Options;
 using SportsBetting.Api.Data;
 using SportsBetting.Api.Integrations.Results.Soccer;
@@ -337,6 +338,41 @@ public sealed class ProviderDomainConfigService(
         return season > 0 ? $"API_SPORTS_{normalizedKey}_{season}" : $"API_SPORTS_{normalizedKey}";
     }
 
+    internal static IReadOnlyList<ApiSportsSoccerCompetitionDescriptor> DefaultApiSportsHistoricalCompetitions()
+        =>
+        [
+            HistoricalCompetition("EPL", "EPL", 39, "England", "League"),
+            HistoricalCompetition("LA_LIGA", "La Liga", 140, "Spain", "League"),
+            HistoricalCompetition("BUNDESLIGA", "Bundesliga", 78, "Germany", "League"),
+            HistoricalCompetition("SERIE_A", "Serie A", 135, "Italy", "League"),
+            HistoricalCompetition("LIGUE_1", "Ligue 1", 61, "France", "League"),
+            HistoricalCompetition("MLS", "MLS", 253, "USA", "League"),
+            HistoricalCompetition("CHAMPIONS_LEAGUE", "Champions League", 2, "Europe", "Cup")
+        ];
+
+    private static ApiSportsSoccerCompetitionDescriptor HistoricalCompetition(
+        string key,
+        string displayName,
+        int leagueId,
+        string country,
+        string type)
+        => new(
+            key,
+            displayName,
+            displayName,
+            leagueId,
+            0,
+            true,
+            country,
+            type,
+            null,
+            null,
+            null,
+            null,
+            BuildHistoricalLeagueCode(key, 0),
+            "HistoricalResultImport",
+            false);
+
     private static TheOddsScheduledRefreshTargetOptions ToTheOddsScheduledRefreshTargetOptions(ProviderRefreshTarget row)
         => new()
         {
@@ -474,14 +510,12 @@ public static class ProviderDomainConfigSeeder
     {
         using var scope = services.CreateScope();
         var dbContext = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
-        var apiSportsOptions = scope.ServiceProvider.GetRequiredService<IOptions<ApiSportsOptions>>().Value;
-        var theOddsApiOptions = scope.ServiceProvider.GetRequiredService<IOptions<TheOddsApiOptions>>().Value;
-        var workerOptions = scope.ServiceProvider.GetRequiredService<IOptions<TheOddsIngestionWorkerOptions>>().Value;
         var scheduledOptions = scope.ServiceProvider.GetRequiredService<IOptions<TheOddsScheduledRefreshOptions>>().Value;
+        var environment = scope.ServiceProvider.GetRequiredService<IHostEnvironment>();
         var now = DateTimeOffset.UtcNow;
         var metadataUpdated = 0;
 
-        var competitionSeedRows = BuildCompetitionSeeds(apiSportsOptions).ToArray();
+        var competitionSeedRows = BuildCompetitionSeeds().ToArray();
         var competitionsInserted = 0;
         foreach (var seed in competitionSeedRows)
         {
@@ -499,7 +533,7 @@ public static class ProviderDomainConfigSeeder
             metadataUpdated += UpdateCompetitionMetadata(existing, seed, now);
         }
 
-        var marketSeedRows = BuildMarketSeeds(theOddsApiOptions, workerOptions).ToArray();
+        var marketSeedRows = BuildMarketSeeds().ToArray();
         var marketsInserted = 0;
         foreach (var seed in marketSeedRows)
         {
@@ -519,7 +553,7 @@ public static class ProviderDomainConfigSeeder
             metadataUpdated += UpdateMarketMetadata(existing, seed, now);
         }
 
-        var bookmakerSeedRows = BuildBookmakerSeeds(workerOptions).ToArray();
+        var bookmakerSeedRows = BuildBookmakerSeeds().ToArray();
         var bookmakersInserted = 0;
         foreach (var seed in bookmakerSeedRows)
         {
@@ -538,7 +572,7 @@ public static class ProviderDomainConfigSeeder
             metadataUpdated += UpdateBookmakerMetadata(existing, seed, now);
         }
 
-        var targetSeedRows = BuildRefreshTargetSeeds(scheduledOptions).ToArray();
+        var targetSeedRows = BuildRefreshTargetSeeds(scheduledOptions, environment).ToArray();
         var refreshTargetsInserted = 0;
         foreach (var seed in targetSeedRows)
         {
@@ -568,7 +602,7 @@ public static class ProviderDomainConfigSeeder
             now);
     }
 
-    private static IEnumerable<ProviderCompetition> BuildCompetitionSeeds(ApiSportsOptions options)
+    private static IEnumerable<ProviderCompetition> BuildCompetitionSeeds()
     {
         var now = DateTimeOffset.UtcNow;
         yield return new ProviderCompetition
@@ -594,9 +628,7 @@ public static class ProviderDomainConfigSeeder
         };
 
         var priority = 100;
-        foreach (var competition in ProviderDomainConfigService.BuildFallbackApiSportsSoccerCompetitions(options, enabledOnly: false)
-            .Where(row => !row.IsWorldCup)
-            .OrderBy(row => row.DisplayName, StringComparer.OrdinalIgnoreCase))
+        foreach (var competition in ProviderDomainConfigService.DefaultApiSportsHistoricalCompetitions().OrderBy(row => row.DisplayName, StringComparer.OrdinalIgnoreCase))
         {
             yield return new ProviderCompetition
             {
@@ -622,11 +654,13 @@ public static class ProviderDomainConfigSeeder
         }
     }
 
-    private static IEnumerable<ProviderMarket> BuildMarketSeeds(TheOddsApiOptions apiOptions, TheOddsIngestionWorkerOptions workerOptions)
+    private static IEnumerable<ProviderMarket> BuildMarketSeeds()
     {
         var now = DateTimeOffset.UtcNow;
-        var mlbMarkets = SplitCsv(apiOptions.Markets)
-            .Concat(SplitCsv(workerOptions.Markets))
+        var apiDefaults = new TheOddsApiOptions();
+        var workerDefaults = new TheOddsIngestionWorkerOptions();
+        var mlbMarkets = SplitCsv(apiDefaults.Markets)
+            .Concat(SplitCsv(workerDefaults.Markets))
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToArray();
         var priority = 100;
@@ -655,9 +689,7 @@ public static class ProviderDomainConfigSeeder
         }
 
         priority = 100;
-        foreach (var market in SplitCsv(string.IsNullOrWhiteSpace(apiOptions.SoccerWorldCupMarkets)
-            ? "player_goals,player_assists,player_shots,player_shots_on_target"
-            : apiOptions.SoccerWorldCupMarkets))
+        foreach (var market in SplitCsv("player_goals,player_assists,player_shots,player_shots_on_target"))
         {
             yield return new ProviderMarket
             {
@@ -682,9 +714,10 @@ public static class ProviderDomainConfigSeeder
         }
     }
 
-    private static IEnumerable<ProviderBookmaker> BuildBookmakerSeeds(TheOddsIngestionWorkerOptions options)
+    private static IEnumerable<ProviderBookmaker> BuildBookmakerSeeds()
     {
         var now = DateTimeOffset.UtcNow;
+        var options = new TheOddsIngestionWorkerOptions();
         var defaultSportsbookKeys = SplitCsv(options.Bookmakers);
         var expandedSportsbookKeys = SplitCsv(string.IsNullOrWhiteSpace(options.ExpandedBookmakers)
             ? "draftkings,fanduel,betmgm,espnbet,betrivers,fanatics,williamhill_us,betonlineag,bovada,lowvig,mybookieag"
@@ -739,11 +772,19 @@ public static class ProviderDomainConfigSeeder
         }
     }
 
-    private static IEnumerable<ProviderRefreshTarget> BuildRefreshTargetSeeds(TheOddsScheduledRefreshOptions options)
+    private static IEnumerable<ProviderRefreshTarget> BuildRefreshTargetSeeds(
+        TheOddsScheduledRefreshOptions options,
+        IHostEnvironment environment)
     {
         var now = DateTimeOffset.UtcNow;
         var priority = 100;
-        foreach (var target in options.GetConfiguredTargets())
+        var targets = options.Targets.Count > 0
+            ? options.GetConfiguredTargets()
+            : TheOddsScheduledRefreshOptions.CreateDefaultTargets(
+                options.BookmakerPreset,
+                options.GetFallbackEstimatedApiCalls(),
+                developmentEnabled: environment.IsDevelopment());
+        foreach (var target in targets)
         {
             var competitionKey = ProviderDomainConfigService.NormalizeCompetitionKey(target.Sport, target.Competition);
             yield return new ProviderRefreshTarget

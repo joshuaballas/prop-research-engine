@@ -9,6 +9,7 @@ using SportsBetting.Api.Data;
 using SportsBetting.Api.Integrations.Results.Soccer;
 using SportsBetting.Api.Integrations.TheOddsApi;
 using SportsBetting.Api.Models;
+using SportsBetting.Api.Predictions;
 
 namespace SportsBetting.Api.Tests;
 
@@ -248,6 +249,84 @@ public sealed class AppConfigTests
         Assert.True(json.GetProperty("providerMarketCount").GetInt32() >= 16);
         Assert.True(json.GetProperty("providerBookmakerCount").GetInt32() >= 10);
         Assert.True(json.GetProperty("providerRefreshTargetCount").GetInt32() >= 9);
+    }
+
+    [Fact]
+    public async Task ModelConfigSeeder_SeedsActiveModelSetsAndParameters()
+    {
+        await using var factory = new SafetyTestApplicationFactory();
+        await factory.EnsureDatabaseAsync();
+
+        var result = await ModelConfigSeeder.SeedAsync(factory.Services);
+
+        using var scope = factory.Services.CreateScope();
+        var dbContext = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+        var sets = await dbContext.ModelConfigSets.Include(row => row.Parameters).ToArrayAsync();
+
+        Assert.Equal(2, result.SetsInserted);
+        Assert.True(result.ParametersInserted >= 30);
+        Assert.Contains(sets, row =>
+            row.ModelKey == ModelConfigService.TopPicksModelKey
+            && row.ModelEra == TopPicksModelOptions.DefaultLikelyHitV1ModelEra
+            && row.IsActive);
+        Assert.Contains(sets, row =>
+            row.ModelKey == ModelConfigService.MlbPredictionGenerationModelKey
+            && row.Sport == "MLB"
+            && row.Parameters.Any(parameter => parameter.ParameterKey == "EnabledPropType.Pitcher Strikeouts"));
+    }
+
+    [Fact]
+    public async Task ModelConfigOptionsOverride_UsesModelConfigRows()
+    {
+        await using var factory = new SafetyTestApplicationFactory();
+        await factory.EnsureDatabaseAsync();
+        await ModelConfigSeeder.SeedAsync(factory.Services);
+
+        using var scope = factory.Services.CreateScope();
+        var dbContext = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+        var topPicks = await dbContext.ModelConfigParameters.SingleAsync(row =>
+            row.ModelConfigSet!.ModelKey == ModelConfigService.TopPicksModelKey
+            && row.ParameterKey == nameof(TopPicksModelOptions.MlbMinimumHitChance));
+        topPicks.Value = "0.67";
+        var minimumPick = await dbContext.ModelConfigParameters.SingleAsync(row =>
+            row.ModelConfigSet!.ModelKey == ModelConfigService.MlbPredictionGenerationModelKey
+            && row.ParameterKey == nameof(PredictionGenerationOptions.MinimumPickHitProbability));
+        minimumPick.Value = "0.59";
+        var hits = await dbContext.ModelConfigParameters.SingleAsync(row =>
+            row.ModelConfigSet!.ModelKey == ModelConfigService.MlbPredictionGenerationModelKey
+            && row.ParameterKey == "EnabledPropType.Hits");
+        hits.Value = "false";
+        await dbContext.SaveChangesAsync();
+        scope.ServiceProvider.GetRequiredService<IModelConfigService>().ClearCache();
+
+        var topPicksOptions = scope.ServiceProvider.GetRequiredService<IOptionsFactory<TopPicksModelOptions>>().Create(Options.DefaultName);
+        var predictionOptions = scope.ServiceProvider.GetRequiredService<IOptionsFactory<PredictionGenerationOptions>>().Create(Options.DefaultName);
+
+        Assert.Equal(0.67m, topPicksOptions.MlbMinimumHitChance);
+        Assert.Equal(0.59m, predictionOptions.MinimumPickHitProbability);
+        Assert.DoesNotContain("Hits", predictionOptions.EnabledPropTypes);
+        Assert.Contains("Pitcher Strikeouts", predictionOptions.EnabledPropTypes);
+    }
+
+    [Fact]
+    public async Task ModelConfigDebugStatus_IsReadOnlyAndCompact()
+    {
+        await using var factory = new SafetyTestApplicationFactory();
+        using var client = factory.CreateClient();
+        await factory.EnsureDatabaseAsync();
+        await ModelConfigSeeder.SeedAsync(factory.Services);
+
+        var response = await client.GetAsync("/api/debug/model-config/status");
+
+        response.EnsureSuccessStatusCode();
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.True(json.GetProperty("readOnly").GetBoolean());
+        Assert.False(json.GetProperty("callsExternalApis").GetBoolean());
+        Assert.False(json.GetProperty("writesRows").GetBoolean());
+        Assert.True(json.GetProperty("modelConfigSetCount").GetInt32() >= 2);
+        Assert.True(json.GetProperty("parameterCount").GetInt32() >= 30);
+        Assert.Equal(TopPicksModelOptions.DefaultLikelyHitV1ModelEra, json.GetProperty("activeTopPicksModelEra").GetString());
+        Assert.True(json.GetProperty("activeMlbPredictionConfigPresent").GetBoolean());
     }
 
     [Fact]
@@ -519,8 +598,52 @@ public sealed class AppConfigTests
         var childResponse = await client.GetAsync("/api/debug/app-configs/audit?includeChildren=true");
         childResponse.EnsureSuccessStatusCode();
         var childJson = await childResponse.Content.ReadFromJsonAsync<JsonElement>();
-        Assert.Contains(childJson.GetProperty("settings").EnumerateArray(), row => row.GetProperty("isChildAuditItem").GetBoolean());
-        Assert.NotEmpty(childJson.GetProperty("childCountsByClassification").EnumerateObject().ToArray());
+        var childSettings = childJson.GetProperty("settings").EnumerateArray().ToArray();
+        Assert.DoesNotContain(childSettings, row =>
+            row.GetProperty("classification").GetString() == AppConfigClassifications.NeedsDecision
+            && (row.GetProperty("key").GetString()?.StartsWith("MlbPredictionGeneration:", StringComparison.OrdinalIgnoreCase) == true
+                || row.GetProperty("key").GetString()?.StartsWith("TopPicksModel:", StringComparison.OrdinalIgnoreCase) == true
+                || row.GetProperty("key").GetString()?.Contains(":Targets:", StringComparison.OrdinalIgnoreCase) == true
+                || row.GetProperty("key").GetString()?.Contains(":HistoricalCompetitions:", StringComparison.OrdinalIgnoreCase) == true));
+    }
+
+    [Fact]
+    public async Task CommittedAppsettings_ArePrunedToBootstrapSecretsAndProviderWiring()
+    {
+        var contentRoot = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "api"));
+        var appsettingsPath = Path.Combine(contentRoot, "appsettings.json");
+        await using var stream = File.OpenRead(appsettingsPath);
+        using var document = await JsonDocument.ParseAsync(stream);
+        var root = document.RootElement;
+
+        var forbiddenSections = new[]
+        {
+            "TheOddsScheduledRefresh",
+            "TheOddsRefreshPlanner",
+            "TheOddsIngestionWorker",
+            "MlbResultImportWorker",
+            "SoccerResultImportWorker",
+            "SoccerIdentityResolution",
+            "SoccerPredictions",
+            "SoccerGrading",
+            "SoccerTopPicks",
+            "MlbPredictionGeneration",
+            "TopPicksModel",
+            "UnderdogIngestion"
+        };
+
+        foreach (var section in forbiddenSections)
+        {
+            Assert.False(root.TryGetProperty(section, out _), $"{section} should not be in committed appsettings.json.");
+        }
+
+        Assert.True(root.TryGetProperty("ConnectionStrings", out _));
+        Assert.True(root.TryGetProperty("TheOddsApi", out var theOdds));
+        Assert.True(theOdds.TryGetProperty("BaseUrl", out _));
+        Assert.False(theOdds.TryGetProperty("Markets", out _));
+        Assert.True(root.TryGetProperty("ApiSports", out var apiSports));
+        Assert.True(apiSports.GetProperty("Football").TryGetProperty("BaseUrl", out _));
+        Assert.False(apiSports.GetProperty("Football").TryGetProperty("HistoricalCompetitions", out _));
     }
 
     [Fact]

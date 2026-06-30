@@ -244,6 +244,36 @@ public sealed class ProviderRefreshTarget
     public DateTimeOffset UpdatedAtUtc { get; set; } = DateTimeOffset.UtcNow;
 }
 
+public sealed class ModelConfigSet
+{
+    public Guid Id { get; set; }
+    public string ModelKey { get; set; } = string.Empty;
+    public string ModelEra { get; set; } = string.Empty;
+    public string Sport { get; set; } = string.Empty;
+    public bool IsActive { get; set; }
+    public string Description { get; set; } = string.Empty;
+    public DateTimeOffset CreatedAtUtc { get; set; } = DateTimeOffset.UtcNow;
+    public DateTimeOffset UpdatedAtUtc { get; set; } = DateTimeOffset.UtcNow;
+    public ICollection<ModelConfigParameter> Parameters { get; set; } = [];
+}
+
+public sealed class ModelConfigParameter
+{
+    public Guid Id { get; set; }
+    public Guid ModelConfigSetId { get; set; }
+    public string ParameterKey { get; set; } = string.Empty;
+    public string ValueType { get; set; } = string.Empty;
+    public string Value { get; set; } = string.Empty;
+    public string DisplayName { get; set; } = string.Empty;
+    public string? Description { get; set; }
+    public string? Unit { get; set; }
+    public int SortOrder { get; set; }
+    public DateTimeOffset CreatedAtUtc { get; set; } = DateTimeOffset.UtcNow;
+    public DateTimeOffset UpdatedAtUtc { get; set; } = DateTimeOffset.UtcNow;
+
+    public ModelConfigSet? ModelConfigSet { get; set; }
+}
+
 public sealed class PlayerMergeAudit
 {
     public Guid MergeId { get; set; }

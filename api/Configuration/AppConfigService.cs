@@ -339,9 +339,7 @@ public sealed class AppConfigService(
         }
 
         if (bootstrapPath.Contains(":Targets:", StringComparison.OrdinalIgnoreCase)
-            || bootstrapPath.Contains(":HistoricalCompetitions:", StringComparison.OrdinalIgnoreCase)
-            || bootstrapPath.StartsWith("MlbPredictionGeneration:", StringComparison.OrdinalIgnoreCase)
-            || bootstrapPath.StartsWith("TopPicksModel:", StringComparison.OrdinalIgnoreCase))
+            || bootstrapPath.Contains(":HistoricalCompetitions:", StringComparison.OrdinalIgnoreCase))
         {
             return new AppConfigDefinition(
                 bootstrapPath.Replace(':', '.'),
@@ -358,6 +356,30 @@ public sealed class AppConfigService(
                 DisplayName: BuildDisplayName(bootstrapPath),
                 Section: "Domain / Model Configuration",
                 HelpText: "Complex collection or model setting needs a focused migration/validation decision before DB-backed edits.",
+                InputType: AppConfigInputTypes.AdvancedText,
+                IsChildAuditItem: IsChildAuditPath(bootstrapPath),
+                IsAdvanced: true,
+                ImpactLevel: AppConfigImpactLevels.Medium);
+        }
+
+        if (bootstrapPath.StartsWith("MlbPredictionGeneration:", StringComparison.OrdinalIgnoreCase)
+            || bootstrapPath.StartsWith("TopPicksModel:", StringComparison.OrdinalIgnoreCase))
+        {
+            return new AppConfigDefinition(
+                bootstrapPath.Replace(':', '.'),
+                bootstrapPath,
+                AppConfigValueTypes.String,
+                "Model",
+                "Model setting inferred from appsettings.",
+                AppConfigClassifications.MovedToModelConfig,
+                "Model settings are stored in model_config_sets/model_config_parameters.",
+                null,
+                IsRuntimeEditable: false,
+                RequiresRestart: true,
+                RuntimeRefreshSafe: false,
+                DisplayName: BuildDisplayName(bootstrapPath),
+                Section: "Model Configuration",
+                HelpText: "Model settings are stored in model_config_sets/model_config_parameters.",
                 InputType: AppConfigInputTypes.AdvancedText,
                 IsChildAuditItem: IsChildAuditPath(bootstrapPath),
                 IsAdvanced: true,
@@ -643,21 +665,14 @@ public static class AppConfigSeeder
     {
         using var scope = services.CreateScope();
         var dbContext = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
-        var configuration = scope.ServiceProvider.GetRequiredService<IConfiguration>();
-        var environment = scope.ServiceProvider.GetRequiredService<IHostEnvironment>();
-        var globalFileValues = await ReadJsonFileValuesAsync(environment.ContentRootPath, "appsettings.json", cancellationToken);
-        var developmentFileValues = await ReadJsonFileValuesAsync(environment.ContentRootPath, $"appsettings.{Environments.Development}.json", cancellationToken);
         var now = DateTimeOffset.UtcNow;
         var inserted = 0;
         var metadataUpdated = 0;
 
         foreach (var definition in AppConfigCatalog.Definitions.Where(row => row.SeedToAppConfigs && !row.IsSensitive))
         {
-            var seedValue = TryGetSeedValue(globalFileValues, definition, out var globalFileValue)
-                ? globalFileValue
-                : GetSeedValue(configuration, definition);
-
-            if (string.IsNullOrWhiteSpace(seedValue) && definition.DefaultValue is null)
+            var seedValue = definition.DefaultValue;
+            if (string.IsNullOrWhiteSpace(seedValue))
             {
                 continue;
             }
@@ -666,19 +681,14 @@ public static class AppConfigSeeder
                 dbContext,
                 definition,
                 AppConfigCatalog.EnvironmentGlobal,
-                seedValue ?? definition.DefaultValue ?? string.Empty,
+                seedValue,
                 now,
                 cancellationToken);
             inserted += globalResult.Inserted;
             metadataUpdated += globalResult.MetadataUpdated;
 
-            if (!TryGetSeedValue(developmentFileValues, definition, out var developmentSeedValue))
-            {
-                continue;
-            }
-
-            var globalComparisonValue = seedValue ?? definition.DefaultValue ?? string.Empty;
-            if (string.Equals(developmentSeedValue, globalComparisonValue, StringComparison.Ordinal))
+            if (string.IsNullOrWhiteSpace(definition.DevelopmentDefaultValue)
+                || string.Equals(definition.DevelopmentDefaultValue, seedValue, StringComparison.Ordinal))
             {
                 continue;
             }
@@ -687,7 +697,7 @@ public static class AppConfigSeeder
                 dbContext,
                 definition,
                 Environments.Development,
-                developmentSeedValue,
+                definition.DevelopmentDefaultValue,
                 now,
                 cancellationToken);
             inserted += developmentResult.Inserted;
