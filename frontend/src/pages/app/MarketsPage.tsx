@@ -9,6 +9,7 @@ import { MetricCard } from '../../components/ui/MetricCard';
 import { PageHeader } from '../../components/ui/PageHeader';
 import { SectionHeader } from '../../components/ui/SectionHeader';
 import { useMarketScannerData } from '../../hooks/useMarketData';
+import type { MarketReadSport } from '../../hooks/useMarketData';
 import { useResponsiveView } from '../../hooks/useResponsiveView';
 import { palette } from '../../theme/palette';
 import type { MarketOpportunity } from '../../types/markets';
@@ -33,13 +34,18 @@ const sortOptions: MarketFilterOption[] = [
   { label: 'Starts soon', value: 'StartsSoon' }
 ];
 
+const sportOptions: MarketFilterOption[] = [
+  { label: 'All', value: 'All' },
+  { label: 'MLB', value: 'MLB' },
+  { label: 'Soccer', value: 'SOCCER' }
+];
+
 export function MarketsPage() {
   const { isMobile } = useResponsiveView();
   const [filters, setFilters] = useState<MarketFilterValues>(defaultFilters);
   const [page, setPage] = useState(1);
-  const marketsQuery = useMarketScannerData(75, 'market');
+  const marketsQuery = useMarketScannerData(75, 'market', toMarketReadSport(filters.sport));
   const allMarkets = marketsQuery.markets;
-  const sportOptions = useMemo(() => buildOptions(allMarkets.map((market) => market.sport)), [allMarkets]);
   const sportFilteredRows = useMemo(
     () => allMarkets.filter((market) => filters.sport === 'All' || market.sport === filters.sport),
     [allMarkets, filters.sport]
@@ -217,6 +223,10 @@ function categoryFilterValue(category: string) {
 
 function categoryFilterLabel(value: string) {
   return value;
+}
+
+function toMarketReadSport(value: string): MarketReadSport {
+  return value === 'MLB' || value === 'SOCCER' ? value : 'All';
 }
 
 function ApiStateCard({ message, tone = 'default' }: { message: string; tone?: 'default' | 'error' }) {

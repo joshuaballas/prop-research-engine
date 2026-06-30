@@ -1687,6 +1687,8 @@ public static partial class TheOddsApiDebugEndpoints
                 {
                     target.Key,
                     target.Enabled,
+                    target.Priority,
+                    target.RefreshIntervalMinutes,
                     target.Sport,
                     target.Competition,
                     target.ProviderCategory,
@@ -1723,6 +1725,9 @@ public static partial class TheOddsApiDebugEndpoints
                     target.LatestSuccessfulRefreshCompletedAtUtc,
                     target.LatestAttemptAtUtc,
                     target.NextEligibleRefreshUtc,
+                    target.IsDue,
+                    target.IsRunning,
+                    target.LastRunDurationSeconds,
                     target.ProviderStatus,
                     target.ProviderAvailable,
                     target.BudgetAllowed,

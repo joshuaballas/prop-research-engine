@@ -91,6 +91,15 @@ public sealed class TheOddsMlbScheduledRefreshWorker(
         DateTimeOffset observedAt,
         TimeSpan interval)
     {
+        var nextTargetRefreshAt = plan.Targets
+            .Where(target => target.Enabled && target.ExecutionWired)
+            .Select(target => (DateTimeOffset?)target.NextEligibleRefreshUtc)
+            .Min();
+        if (nextTargetRefreshAt.HasValue)
+        {
+            return nextTargetRefreshAt.Value <= observedAt ? observedAt : nextTargetRefreshAt.Value;
+        }
+
         var latestPlanSuccessAt = ResolveLatestSuccessfulRefreshCompletedAt(plan);
         var anchor = Max(
             snapshot.LastSuccessfulRefreshCompletedAtUtc,
@@ -209,6 +218,9 @@ public sealed class TheOddsMlbScheduledRefreshWorker(
             var eligibleTargets = plan.Targets
                 .Where(target => target.ShouldRefresh)
                 .DistinctBy(target => target.Key, StringComparer.OrdinalIgnoreCase)
+                .OrderBy(target => target.NextEligibleRefreshUtc)
+                .ThenBy(target => target.Priority)
+                .ThenBy(target => target.Key, StringComparer.OrdinalIgnoreCase)
                 .ToArray();
 
             if (eligibleTargets.Length == 0)

@@ -29,6 +29,7 @@ import { SectionHeader } from '../../components/ui/SectionHeader';
 import { compactActionButtonSx, lockedActionButtonSx, removeActionButtonSx, secondaryGhostButtonSx } from '../../components/ui/buttonStyles';
 import { useEntryBuilder } from '../../hooks/useEntryBuilder';
 import { useLineShoppingData, useMarketFreshnessData, usePerformanceData, useTopPicksData } from '../../hooks/useMarketData';
+import type { MarketReadSport } from '../../hooks/useMarketData';
 import { useSelectedSports } from '../../hooks/useSelectedSports';
 import { palette } from '../../theme/palette';
 import type { MarketOpportunity } from '../../types/markets';
@@ -40,9 +41,10 @@ import { renderOpportunityCautionText, renderWarningText } from '../../utils/war
 export function DashboardPage() {
   const sports = useSelectedSports();
   const builder = useEntryBuilder();
+  const marketReadSport = resolveDashboardMarketReadSport(sports.selectedSports);
   const freshnessQuery = useMarketFreshnessData();
-  const topPicksQuery = useTopPicksData(10, 'dashboard-top-pick');
-  const lineShoppingQuery = useLineShoppingData(12, true, 'dashboard-line-shopping');
+  const topPicksQuery = useTopPicksData(10, 'dashboard-top-pick', marketReadSport);
+  const lineShoppingQuery = useLineShoppingData(12, true, 'dashboard-line-shopping', marketReadSport);
   const performanceQuery = usePerformanceData('latestCompleted');
   const topPicks = topPicksQuery.markets;
   const lineShoppingMarkets = lineShoppingQuery.markets;
@@ -218,6 +220,13 @@ export function DashboardPage() {
       </Box>
     </Stack>
   );
+}
+
+function resolveDashboardMarketReadSport(selectedSports: SportCode[]): MarketReadSport {
+  const selectedSpecificSports = selectedSports.filter((sport): sport is Exclude<SportCode, 'ALL'> => sport !== 'ALL');
+  return selectedSpecificSports.length === 1 && (selectedSpecificSports[0] === 'MLB' || selectedSpecificSports[0] === 'SOCCER')
+    ? selectedSpecificSports[0]
+    : 'All';
 }
 
 function DashboardOpportunityCard({ market, builder }: { market: MarketOpportunity; builder: ReturnType<typeof useEntryBuilder> }) {

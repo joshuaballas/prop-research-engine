@@ -6,12 +6,35 @@ export interface ApiQueryState<T> {
   error?: Error;
 }
 
-export function useApiQuery<T>(loader: (signal: AbortSignal) => Promise<T>, deps: readonly unknown[] = []): ApiQueryState<T> {
+export interface ApiQueryOptions {
+  refetchIntervalMs?: number;
+}
+
+export function useApiQuery<T>(
+  loader: (signal: AbortSignal) => Promise<T>,
+  deps: readonly unknown[] = [],
+  options: ApiQueryOptions = {}
+): ApiQueryState<T> {
   const [state, setState] = useState<ApiQueryState<T>>({ loading: true });
+  const [pollTick, setPollTick] = useState(0);
+
+  useEffect(() => {
+    if (!options.refetchIntervalMs || options.refetchIntervalMs <= 0) {
+      return;
+    }
+
+    const timer = window.setInterval(() => {
+      setPollTick((value) => value + 1);
+    }, options.refetchIntervalMs);
+
+    return () => {
+      window.clearInterval(timer);
+    };
+  }, [options.refetchIntervalMs]);
 
   useEffect(() => {
     const controller = new AbortController();
-    setState((current) => ({ data: current.data, loading: true }));
+    setState((current) => ({ data: current.data, loading: current.data === undefined }));
 
     loader(controller.signal)
       .then((data) => {
@@ -21,13 +44,13 @@ export function useApiQuery<T>(loader: (signal: AbortSignal) => Promise<T>, deps
       })
       .catch((error: Error) => {
         if (!controller.signal.aborted) {
-          setState({ error, loading: false });
+          setState((current) => ({ data: current.data, error, loading: false }));
         }
       });
 
     return () => controller.abort();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, deps);
+  }, [...deps, pollTick]);
 
   return state;
 }

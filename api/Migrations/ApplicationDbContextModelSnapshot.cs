@@ -3308,6 +3308,12 @@ namespace SportsBetting.Api.Migrations
                         .HasColumnType("character varying(100)")
                         .HasColumnName("provider_sport_key");
 
+                    b.Property<int>("RefreshIntervalMinutes")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer")
+                        .HasDefaultValue(30)
+                        .HasColumnName("refresh_interval_minutes");
+
                     b.Property<string>("Regions")
                         .HasMaxLength(200)
                         .HasColumnType("character varying(200)")

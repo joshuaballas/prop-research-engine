@@ -19,6 +19,7 @@ import { MarketTableSkeleton, TopPickCardSkeleton, TopPickSkeletonGrid } from '.
 import { OpportunityPickText } from '../../components/ui/OpportunityCard';
 import { useEntryBuilder } from '../../hooks/useEntryBuilder';
 import { useTopPicksData } from '../../hooks/useMarketData';
+import type { MarketReadSport } from '../../hooks/useMarketData';
 import { useResponsiveView } from '../../hooks/useResponsiveView';
 import { palette } from '../../theme/palette';
 import type { MarketOpportunity } from '../../types/markets';
@@ -52,7 +53,7 @@ export function TopPicksPage() {
   const { isMobile } = useResponsiveView();
   const [filters, setFilters] = useState<TopPickFilterValues>(defaultTopPickFilters);
   const [page, setPage] = useState(1);
-  const topPicksQuery = useTopPicksData(500, 'top-pick');
+  const topPicksQuery = useTopPicksData(500, 'top-pick', toMarketReadSport(filters.sport));
   const topPicks = topPicksQuery.markets;
   const availableSportCodes = useMemo(() => getAvailableSportCodes(topPicks), [topPicks]);
   const sportFilterOptions = useMemo<SelectOption[]>(() => {
@@ -186,6 +187,10 @@ function ApiStateCard({ message, tone = 'default' }: { message: string; tone?: '
       <Typography color={tone === 'error' ? 'error.main' : 'text.secondary'}>{message}</Typography>
     </Box>
   );
+}
+
+function toMarketReadSport(value: string): MarketReadSport {
+  return value === 'MLB' || value === 'SOCCER' ? value : 'All';
 }
 
 function buildStringOptions(values: string[], labelForValue?: (value: string) => string) {

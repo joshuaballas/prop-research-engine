@@ -29,6 +29,16 @@ public static class ProviderDomainConfigDebugEndpoints
                 providerRefreshTargetCount = snapshot.ProviderRefreshTargets.Count,
                 enabledProviderRefreshTargetCount = snapshot.ProviderRefreshTargets.Count(row => row.IsEnabled),
                 snapshot.AppsettingsFallbackCount,
+                appsettingsFallbackInvocationCount = snapshot.AppsettingsFallbackCount,
+                appsettingsFallbacks = snapshot.AppsettingsFallbacks.Select(row => new
+                {
+                    row.Key,
+                    row.ConfigArea,
+                    row.Consumer,
+                    row.Reason,
+                    row.OccurrenceCount,
+                    row.LastObservedAtUtc
+                }).ToArray(),
                 staleOrMissingDomainConfigWarnings = warnings,
                 lastSeededAtUtc = ResolveLastSeededAt(snapshot),
                 countsByProvider = snapshot.ProviderCompetitions
@@ -210,6 +220,7 @@ public static class ProviderDomainConfigDebugEndpoints
                     row.Regions,
                     row.MaxEvents,
                     row.EstimatedApiCalls,
+                    row.RefreshIntervalMinutes,
                     row.SupportsResults,
                     row.SupportsHistory,
                     row.IsEnabled,

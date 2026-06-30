@@ -99,7 +99,7 @@ public sealed class ProviderDomainConfigService(
         catch (Exception exception)
         {
             logger.LogWarning(exception, "Provider domain config DB read failed; runtime will use appsettings fallback where available.");
-            return new ProviderDomainConfigSnapshot(
+            var snapshot = new ProviderDomainConfigSnapshot(
                 DateTimeOffset.UtcNow,
                 loadSucceeded: false,
                 loadError: exception.Message,
@@ -107,7 +107,28 @@ public sealed class ProviderDomainConfigService(
                 providerMarkets: [],
                 providerBookmakers: [],
                 providerRefreshTargets: [],
-                appsettingsFallbackCount: 4);
+                appsettingsFallbackCount: 0);
+            snapshot.RegisterAppsettingsFallback(
+                "API_SPORTS_FOOTBALL:SOCCER:competitions",
+                "ProviderCompetitions",
+                "ApiSportsSoccerCompetitions",
+                "Provider domain config DB read failed; API-Sports soccer competition consumers use appsettings fallback.");
+            snapshot.RegisterAppsettingsFallback(
+                "THE_ODDS_API:refresh-targets",
+                "ProviderRefreshTargets",
+                "TheOddsScheduledRefreshTargets",
+                "Provider domain config DB read failed; The Odds scheduled target consumers use appsettings fallback.");
+            snapshot.RegisterAppsettingsFallback(
+                "THE_ODDS_API:bookmakers",
+                "ProviderBookmakers",
+                "TheOddsBookmakerKeys",
+                "Provider domain config DB read failed; The Odds bookmaker consumers use appsettings fallback.");
+            snapshot.RegisterAppsettingsFallback(
+                "THE_ODDS_API:markets",
+                "ProviderMarkets",
+                "TheOddsMarketKeys",
+                "Provider domain config DB read failed; The Odds market consumers use appsettings fallback.");
+            return snapshot;
         }
     }
 
@@ -135,7 +156,13 @@ public sealed class ProviderDomainConfigService(
                 .ToArray();
         }
 
-        snapshot.RegisterAppsettingsFallback();
+        snapshot.RegisterAppsettingsFallback(
+            $"API_SPORTS_FOOTBALL:SOCCER:competitions:enabledOnly={enabledOnly}",
+            "ProviderCompetitions",
+            "ApiSportsSoccerCompetitions",
+            enabledOnly
+                ? "No enabled API-Sports soccer competition rows support results import; using ApiSports:Football:HistoricalCompetitions appsettings fallback."
+                : "No API-Sports soccer competition rows support results import; using ApiSports:Football:HistoricalCompetitions appsettings fallback.");
         return BuildFallbackApiSportsSoccerCompetitions(fallbackOptions, enabledOnly);
     }
 
@@ -155,7 +182,11 @@ public sealed class ProviderDomainConfigService(
             return rows.Select(ToTheOddsScheduledRefreshTargetOptions).ToArray();
         }
 
-        snapshot.RegisterAppsettingsFallback();
+        snapshot.RegisterAppsettingsFallback(
+            "THE_ODDS_API:refresh-targets",
+            "ProviderRefreshTargets",
+            "TheOddsScheduledRefreshTargets",
+            "No The Odds provider refresh target rows exist; using TheOddsScheduledRefresh:Targets appsettings fallback.");
         return fallbackOptions.GetConfiguredTargets();
     }
 
@@ -198,7 +229,11 @@ public sealed class ProviderDomainConfigService(
             }
         }
 
-        snapshot.RegisterAppsettingsFallback();
+        snapshot.RegisterAppsettingsFallback(
+            $"THE_ODDS_API:bookmakers:{target.ResolveKey()}:{providerCategory}:{region}:{target.BookmakerPreset ?? "default"}",
+            "ProviderBookmakers",
+            "TheOddsBookmakerKeys",
+            $"No enabled {providerCategory} bookmaker rows matched region '{region}' and preset '{target.BookmakerPreset ?? "default"}'; using TheOddsIngestionWorker bookmaker appsettings fallback.");
         return ResolveFallbackBookmakerKeys(target, fallbackOptions);
     }
 
@@ -236,7 +271,11 @@ public sealed class ProviderDomainConfigService(
             return rows;
         }
 
-        snapshot.RegisterAppsettingsFallback();
+        snapshot.RegisterAppsettingsFallback(
+            $"THE_ODDS_API:markets:{target.ResolveKey()}:{target.Sport}:{competitionKey}:{providerCategory}",
+            "ProviderMarkets",
+            "TheOddsMarketKeys",
+            $"No enabled The Odds market rows matched sport '{target.Sport}', competition '{competitionKey}', and category '{providerCategory}'; using TheOddsApi/TheOddsIngestionWorker market appsettings fallback.");
         return ResolveFallbackMarketKeys(target, apiFallbackOptions, workerFallbackOptions);
     }
 
@@ -388,10 +427,13 @@ public sealed class ProviderDomainConfigService(
             Regions = row.Regions,
             MaxEvents = row.MaxEvents,
             EstimatedApiCalls = row.EstimatedApiCalls,
+            RefreshIntervalMinutes = row.RefreshIntervalMinutes,
             SupportsResults = row.SupportsResults,
             SupportsHistory = row.SupportsHistory,
             DisabledReason = row.DisabledReason,
-            Notes = row.Notes
+            Notes = row.Notes,
+            Priority = row.Priority,
+            CreatedAtUtc = row.CreatedAtUtc
         };
 
     private static string NormalizeProviderCategory(string? value)
@@ -480,6 +522,8 @@ public sealed class ProviderDomainConfigSnapshot(
     int appsettingsFallbackCount)
 {
     private int fallbackCount = appsettingsFallbackCount;
+    private readonly object fallbackSync = new();
+    private readonly List<ProviderDomainConfigFallbackDetail> fallbackDetails = [];
 
     public DateTimeOffset GeneratedAtUtc { get; } = generatedAtUtc;
     public bool LoadSucceeded { get; } = loadSucceeded;
@@ -489,9 +533,65 @@ public sealed class ProviderDomainConfigSnapshot(
     public IReadOnlyList<ProviderBookmaker> ProviderBookmakers { get; } = providerBookmakers;
     public IReadOnlyList<ProviderRefreshTarget> ProviderRefreshTargets { get; } = providerRefreshTargets;
     public int AppsettingsFallbackCount => fallbackCount;
+    public IReadOnlyList<ProviderDomainConfigFallbackDetail> AppsettingsFallbacks
+    {
+        get
+        {
+            lock (fallbackSync)
+            {
+                return fallbackDetails
+                    .OrderBy(row => row.ConfigArea, StringComparer.OrdinalIgnoreCase)
+                    .ThenBy(row => row.Key, StringComparer.OrdinalIgnoreCase)
+                    .ThenBy(row => row.Consumer, StringComparer.OrdinalIgnoreCase)
+                    .ToArray();
+            }
+        }
+    }
 
-    internal void RegisterAppsettingsFallback() => Interlocked.Increment(ref fallbackCount);
+    internal void RegisterAppsettingsFallback(
+        string key,
+        string configArea,
+        string consumer,
+        string reason)
+    {
+        Interlocked.Increment(ref fallbackCount);
+        var observedAtUtc = DateTimeOffset.UtcNow;
+        lock (fallbackSync)
+        {
+            var existingIndex = fallbackDetails.FindIndex(row =>
+                string.Equals(row.Key, key, StringComparison.OrdinalIgnoreCase)
+                && string.Equals(row.ConfigArea, configArea, StringComparison.OrdinalIgnoreCase)
+                && string.Equals(row.Consumer, consumer, StringComparison.OrdinalIgnoreCase)
+                && string.Equals(row.Reason, reason, StringComparison.OrdinalIgnoreCase));
+            if (existingIndex >= 0)
+            {
+                var existing = fallbackDetails[existingIndex];
+                fallbackDetails[existingIndex] = existing with
+                {
+                    OccurrenceCount = existing.OccurrenceCount + 1,
+                    LastObservedAtUtc = observedAtUtc
+                };
+                return;
+            }
+
+            fallbackDetails.Add(new ProviderDomainConfigFallbackDetail(
+                key,
+                configArea,
+                consumer,
+                reason,
+                OccurrenceCount: 1,
+                LastObservedAtUtc: observedAtUtc));
+        }
+    }
 }
+
+public sealed record ProviderDomainConfigFallbackDetail(
+    string Key,
+    string ConfigArea,
+    string Consumer,
+    string Reason,
+    int OccurrenceCount,
+    DateTimeOffset LastObservedAtUtc);
 
 public sealed record ProviderDomainConfigSeedResult(
     int CompetitionsInserted,
@@ -801,6 +901,7 @@ public static class ProviderDomainConfigSeeder
                 Regions = target.Regions,
                 MaxEvents = target.MaxEvents,
                 EstimatedApiCalls = target.EstimatedApiCalls,
+                RefreshIntervalMinutes = target.RefreshIntervalMinutes,
                 SupportsResults = target.SupportsResults,
                 SupportsHistory = target.SupportsHistory,
                 IsEnabled = target.Enabled,
@@ -866,6 +967,7 @@ public static class ProviderDomainConfigSeeder
         existing.Regions = seed.Regions;
         existing.MaxEvents = seed.MaxEvents;
         existing.EstimatedApiCalls = seed.EstimatedApiCalls;
+        existing.RefreshIntervalMinutes = seed.RefreshIntervalMinutes;
         existing.SupportsResults = seed.SupportsResults;
         existing.SupportsHistory = seed.SupportsHistory;
         existing.DisabledReason = seed.DisabledReason;

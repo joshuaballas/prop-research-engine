@@ -17,24 +17,26 @@ import {
 import type { MarketOpportunity } from '../types/markets';
 import { useMarketDataRefreshVersion } from './useMarketDataRefresh';
 
-const MARKET_READ_SPORTS = ['MLB', 'SOCCER'] as const;
+const MARKET_DATA_POLL_INTERVAL_MS = 15000;
+const MARKET_QUERY_OPTIONS = { refetchIntervalMs: MARKET_DATA_POLL_INTERVAL_MS };
+export type MarketReadSport = 'All' | 'MLB' | 'SOCCER';
 
 export function useMarketFreshnessData(deps: readonly unknown[] = []) {
   const refreshVersion = useMarketDataRefreshVersion();
-  return useApiQuery((signal) => (isDemoDataMode ? Promise.resolve(demoMarketFreshness) : getMarketFreshness(signal)), [...deps, refreshVersion]);
+  return useApiQuery((signal) => (isDemoDataMode ? Promise.resolve(demoMarketFreshness) : getMarketFreshness(signal)), [...deps, refreshVersion], MARKET_QUERY_OPTIONS);
 }
 
 export function useProviderStatusData(deps: readonly unknown[] = []) {
   const refreshVersion = useMarketDataRefreshVersion();
-  return useApiQuery((signal) => (isDemoDataMode ? Promise.resolve(demoProviderStatus) : getProviderStatus(signal)), [...deps, refreshVersion]);
+  return useApiQuery((signal) => (isDemoDataMode ? Promise.resolve(demoProviderStatus) : getProviderStatus(signal)), [...deps, refreshVersion], MARKET_QUERY_OPTIONS);
 }
 
 export function useScheduledRefreshStatusData(deps: readonly unknown[] = []) {
   const refreshVersion = useMarketDataRefreshVersion();
-  return useApiQuery((signal) => (isDemoDataMode ? Promise.resolve(demoScheduledRefreshStatus) : getScheduledRefreshStatus(signal)), [...deps, refreshVersion]);
+  return useApiQuery((signal) => (isDemoDataMode ? Promise.resolve(demoScheduledRefreshStatus) : getScheduledRefreshStatus(signal)), [...deps, refreshVersion], MARKET_QUERY_OPTIONS);
 }
 
-export function useTopPicksData(take = 30, sourcePrefix = 'top-pick') {
+export function useTopPicksData(take = 30, sourcePrefix = 'top-pick', sport: MarketReadSport = 'All') {
   const refreshVersion = useMarketDataRefreshVersion();
   const query = useApiQuery(
     async (signal) => {
@@ -42,17 +44,18 @@ export function useTopPicksData(take = 30, sourcePrefix = 'top-pick') {
         return mapDemoMarketsToOpportunities(demoTopPicks.slice(0, take), sourcePrefix);
       }
 
-      const response = await getTopPicks(signal, take);
+      const response = await getTopPicks(signal, take, normalizeTopPicksReadSport(sport));
       return mapMarketGroupsToOpportunities(response.topPicks, sourcePrefix);
     },
-    [take, sourcePrefix, refreshVersion]
+    [take, sourcePrefix, sport, refreshVersion],
+    MARKET_QUERY_OPTIONS
   );
   const markets = query.data ?? [];
 
   return { ...query, markets };
 }
 
-export function useLineShoppingData(take = 50, topOnly = false, sourcePrefix = 'line-shopping') {
+export function useLineShoppingData(take = 50, topOnly = false, sourcePrefix = 'line-shopping', sport: MarketReadSport = 'All') {
   const refreshVersion = useMarketDataRefreshVersion();
   const query = useApiQuery(
     async (signal) => {
@@ -60,17 +63,18 @@ export function useLineShoppingData(take = 50, topOnly = false, sourcePrefix = '
         return mapDemoMarketsToOpportunities(demoLineShopping.slice(0, take), sourcePrefix);
       }
 
-      const responses = await Promise.all(MARKET_READ_SPORTS.map((sport) => getLineShopping(signal, take, topOnly, sport)));
-      return responses.flatMap((response, sportIndex) => mapMarketGroupsToOpportunities(response.comparisonGroups, `${sourcePrefix}-${MARKET_READ_SPORTS[sportIndex].toLowerCase()}`));
+      const response = await getLineShopping(signal, take, topOnly, normalizeLineShoppingReadSport(sport));
+      return mapMarketGroupsToOpportunities(response.comparisonGroups, `${sourcePrefix}-${sport.toLowerCase()}`);
     },
-    [take, topOnly, sourcePrefix, refreshVersion]
+    [take, topOnly, sourcePrefix, sport, refreshVersion],
+    MARKET_QUERY_OPTIONS
   );
   const markets = query.data ?? [];
 
   return { ...query, markets };
 }
 
-export function useMarketScannerData(take = 75, sourcePrefix = 'market') {
+export function useMarketScannerData(take = 75, sourcePrefix = 'market', sport: MarketReadSport = 'All') {
   const refreshVersion = useMarketDataRefreshVersion();
   const query = useApiQuery(
     async (signal) => {
@@ -78,10 +82,11 @@ export function useMarketScannerData(take = 75, sourcePrefix = 'market') {
         return mapDemoMarketsToOpportunities(demoMarketScanner.slice(0, take), sourcePrefix);
       }
 
-      const responses = await Promise.all(MARKET_READ_SPORTS.map((sport) => getLineShopping(signal, take, false, sport)));
-      return responses.flatMap((response, sportIndex) => mapMarketGroupsToOpportunities(response.comparisonGroups, `${sourcePrefix}-${MARKET_READ_SPORTS[sportIndex].toLowerCase()}`));
+      const response = await getLineShopping(signal, take, false, normalizeLineShoppingReadSport(sport));
+      return mapMarketGroupsToOpportunities(response.comparisonGroups, `${sourcePrefix}-${sport.toLowerCase()}`);
     },
-    [take, sourcePrefix, refreshVersion]
+    [take, sourcePrefix, sport, refreshVersion],
+    MARKET_QUERY_OPTIONS
   );
   const markets = query.data ?? [];
 
@@ -100,7 +105,8 @@ export function useEntryCandidateData(take = 40) {
       return mapMarketGroupsToOpportunities(response.topPicks, 'entry-candidate')
         .filter((market) => market.providerCategory === 'DFS' && market.canAddToEntry);
     },
-    [take, refreshVersion]
+    [take, refreshVersion],
+    MARKET_QUERY_OPTIONS
   );
   const markets = query.data ?? [];
 
@@ -118,7 +124,8 @@ export function usePerformanceData(gradingMode: PerformanceGradingMode = 'latest
       const response = await getPerformanceSummary(signal, gradingMode);
       return { rows: mapPerformanceSummaryToGroups(response), summary: response };
     },
-    [gradingMode, refreshVersion]
+    [gradingMode, refreshVersion],
+    MARKET_QUERY_OPTIONS
   );
   const rows = useMemo(
     () => query.data?.rows ?? [],
@@ -138,8 +145,17 @@ export function usePerformanceResults(date?: string, enabled = true) {
 
       return getPerformanceResults(signal, date);
     },
-    [date, enabled, refreshVersion]
+    [date, enabled, refreshVersion],
+    MARKET_QUERY_OPTIONS
   );
+}
+
+function normalizeLineShoppingReadSport(sport: MarketReadSport) {
+  return sport === 'All' ? 'All' : sport;
+}
+
+function normalizeTopPicksReadSport(sport: MarketReadSport) {
+  return sport === 'All' ? undefined : sport;
 }
 
 function mapDemoMarketsToOpportunities(markets: MarketOpportunity[] | undefined, sourcePrefix: string) {

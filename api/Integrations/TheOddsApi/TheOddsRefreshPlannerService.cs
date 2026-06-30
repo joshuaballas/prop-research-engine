@@ -126,13 +126,13 @@ public sealed class TheOddsRefreshPlannerService(
         var stopAfterStartTriggered = plannerOptions.StopAfterEventStart &&
             eventStartTimes.Length > 0 &&
             eventStartTimes.All(value => value <= generatedAtUtc);
-        var skipReason = BuildSkipReason(
+        var globalSkipReason = BuildSkipReason(
             plannerOptions,
             providerDiagnostics.ProviderRejectedKeyDetected,
             providerAvailable,
             budget.BudgetAllowed,
             budget.BudgetBlockReason,
-            cadenceAllowsRefresh,
+            cadenceAllowsRefresh: true,
             recentProviderFailureBackoff,
             stopAfterStartTriggered,
             estimatedSlateEvents,
@@ -146,7 +146,26 @@ public sealed class TheOddsRefreshPlannerService(
             providerAvailable,
             providerStatus,
             providerDiagnostics.ProviderRejectedKeyDetected,
+            globalSkipReason,
             cancellationToken);
+        var dueTargets = targetPlans
+            .Where(target => target.ShouldRefresh)
+            .OrderBy(target => target.NextEligibleRefreshUtc)
+            .ThenBy(target => target.Priority)
+            .ThenBy(target => target.Key, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        var earliestNextEligibleRefreshUtc = targetPlans
+            .Where(target => target.Enabled && target.ExecutionWired)
+            .Select(target => target.NextEligibleRefreshUtc)
+            .DefaultIfEmpty(generatedAtUtc)
+            .Min();
+        var planShouldRefresh = globalSkipReason is null && dueTargets.Length > 0;
+        var planSkipReason = planShouldRefresh
+            ? null
+            : globalSkipReason ?? ResolveAggregateTargetSkipReason(targetPlans);
+        var planEstimatedApiCalls = dueTargets.Length > 0
+            ? dueTargets.Sum(target => target.EstimatedApiCalls)
+            : targetPlans.Where(target => target.Enabled).Sum(target => target.EstimatedApiCalls);
 
         return new TheOddsRefreshPlanResult(
             generatedAtUtc,
@@ -158,7 +177,7 @@ public sealed class TheOddsRefreshPlannerService(
             SlateDate: slateDate,
             BookmakerPreset: plannerOptions.DefaultBookmakerPreset,
             EstimatedSlateEvents: estimatedSlateEvents,
-            EstimatedApiCalls: estimatedApiCalls,
+            EstimatedApiCalls: planEstimatedApiCalls,
             EstimateSource: estimateSource,
             CadenceRule: cadence,
             MinutesUntilNextEventStart: minutesUntilNextEventStart,
@@ -171,12 +190,12 @@ public sealed class TheOddsRefreshPlannerService(
             MinutesSinceLastAttempt: latestAttemptAt.HasValue
                 ? Math.Round((decimal)(generatedAtUtc - latestAttemptAt.Value).TotalMinutes, 2)
                 : null,
-            NextEligibleRefreshUtc: nextEligibleRefreshUtc,
+            NextEligibleRefreshUtc: earliestNextEligibleRefreshUtc,
             Budget: budget,
             HasUsableMarketData: latestHadUsableMarketData,
-            ShouldRefresh: skipReason is null,
-            SkipReason: skipReason,
-            RecommendedAction: BuildRecommendedAction(skipReason, estimateSource, providerDiagnostics, budget))
+            ShouldRefresh: planShouldRefresh,
+            SkipReason: planSkipReason,
+            RecommendedAction: BuildRecommendedAction(planSkipReason, estimateSource, providerDiagnostics, budget))
         {
             Targets = targetPlans
         };
@@ -190,6 +209,7 @@ public sealed class TheOddsRefreshPlannerService(
         bool providerAvailable,
         string providerStatus,
         bool providerRejectedKeyDetected,
+        string? globalSkipReason,
         CancellationToken cancellationToken)
     {
         var targets = await providerDomainConfigService.GetTheOddsScheduledRefreshTargetsAsync(
@@ -233,16 +253,26 @@ public sealed class TheOddsRefreshPlannerService(
                 .Where(row => row.Succeeded && !row.DryRun && !row.Blocked)
                 .OrderByDescending(row => row.CompletedAtUtc ?? row.StartedAtUtc)
                 .FirstOrDefault();
+            var targetIsRunning = latestRun is
+            {
+                CompletedAtUtc: null,
+                Succeeded: false,
+                Failed: false,
+                Blocked: false
+            };
 
             var latestSuccessAt = latestSuccessfulRun?.CompletedAtUtc ?? latestSuccessfulRun?.StartedAtUtc;
             var latestAttemptAt = latestRun?.CompletedAtUtc ?? latestRun?.StartedAtUtc;
             var estimatedApiCalls = Math.Max(1, target.EstimatedApiCalls ?? target.MaxEvents ?? scheduledOptions.GetFallbackEstimatedApiCalls());
-            var nextEligibleRefreshUtc = latestSuccessAt?.Add(scheduledOptions.GetInterval()) ?? generatedAtUtc;
+            var refreshInterval = target.GetRefreshInterval();
+            var cadenceAnchorAt = latestSuccessAt ?? latestAttemptAt ?? target.CreatedAtUtc;
+            var nextEligibleRefreshUtc = cadenceAnchorAt?.Add(refreshInterval) ?? generatedAtUtc.Add(refreshInterval);
             var disabledReason = string.IsNullOrWhiteSpace(target.DisabledReason) ? null : target.DisabledReason;
             var providerSportKeyVerified = IsProviderSportKeyVerified(target);
             var executionWired = IsScheduledExecutionWired(target);
             var missingProviderKey = string.IsNullOrWhiteSpace(target.ProviderSportKey);
             var blockers = new List<string>();
+            var cadenceDue = generatedAtUtc >= nextEligibleRefreshUtc;
 
             if (!target.Enabled)
             {
@@ -283,6 +313,26 @@ public sealed class TheOddsRefreshPlannerService(
                 blockers.Add("ScheduledExecutionNotYetWiredForTarget");
             }
 
+            if (!currentPlanBudget.BudgetAllowed)
+            {
+                blockers.Add("BudgetBlocked");
+            }
+
+            if (!cadenceDue)
+            {
+                blockers.Add("CadenceNotDue");
+            }
+
+            if (targetIsRunning)
+            {
+                blockers.Add("TargetRefreshAlreadyRunning");
+            }
+
+            if (!string.IsNullOrWhiteSpace(globalSkipReason))
+            {
+                blockers.Add(globalSkipReason);
+            }
+
             var shouldRefresh = scheduledOptions.Enabled
                 && target.Enabled
                 && !missingProviderKey
@@ -291,11 +341,17 @@ public sealed class TheOddsRefreshPlannerService(
                 && !providerRejectedKeyDetected
                 && scheduledOptions.AllowScheduledLiveRefresh
                 && executionWired
+                && currentPlanBudget.BudgetAllowed
+                && cadenceDue
+                && !targetIsRunning
+                && string.IsNullOrWhiteSpace(globalSkipReason)
                 && generatedAtUtc >= nextEligibleRefreshUtc;
 
             plans.Add(new TheOddsRefreshTargetPlan(
                 Key: targetKey,
                 Enabled: target.Enabled,
+                Priority: target.Priority,
+                RefreshIntervalMinutes: (int)refreshInterval.TotalMinutes,
                 Sport: target.Sport,
                 Competition: target.Competition,
                 ProviderCategory: target.ProviderCategory,
@@ -327,6 +383,9 @@ public sealed class TheOddsRefreshPlannerService(
                 PlatformPropsUpdatedFromLatestRun: latestRun?.PlatformPropsUpdated,
                 PlatformPropsUpsertedFromLatestRun: latestRun?.PlatformPropsUpserted,
                 NextEligibleRefreshUtc: nextEligibleRefreshUtc,
+                IsDue: cadenceDue,
+                IsRunning: targetIsRunning,
+                LastRunDurationSeconds: CalculateDurationSeconds(latestRun?.StartedAtUtc, latestRun?.CompletedAtUtc),
                 ProviderStatus: providerStatus,
                 ProviderAvailable: providerAvailable,
                 BudgetAllowed: currentPlanBudget.BudgetAllowed,
@@ -363,6 +422,47 @@ public sealed class TheOddsRefreshPlannerService(
         return !string.IsNullOrWhiteSpace(runCompetition)
             && string.Equals(runCompetition, target.Competition, StringComparison.OrdinalIgnoreCase);
     }
+
+    private static string ResolveAggregateTargetSkipReason(IReadOnlyList<TheOddsRefreshTargetPlan> targetPlans)
+    {
+        if (targetPlans.Count == 0)
+        {
+            return "NoConfiguredRefreshTargets";
+        }
+
+        var enabledTargets = targetPlans.Where(target => target.Enabled).ToArray();
+        if (enabledTargets.Length == 0)
+        {
+            return "NoEnabledRefreshTargets";
+        }
+
+        var nonCadenceBlockers = enabledTargets
+            .SelectMany(target => SplitCommaSeparated(target.SkipReason))
+            .Where(reason => !string.Equals(reason, "CadenceNotDue", StringComparison.OrdinalIgnoreCase))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        if (nonCadenceBlockers.Length > 0)
+        {
+            return string.Join(",", nonCadenceBlockers);
+        }
+
+        return "CadenceNotDue";
+    }
+
+    private static decimal? CalculateDurationSeconds(DateTimeOffset? startedAtUtc, DateTimeOffset? completedAtUtc)
+    {
+        if (!startedAtUtc.HasValue || !completedAtUtc.HasValue)
+        {
+            return null;
+        }
+
+        return Math.Round((decimal)(completedAtUtc.Value - startedAtUtc.Value).TotalSeconds, 3);
+    }
+
+    private static string[] SplitCommaSeparated(string? value)
+        => string.IsNullOrWhiteSpace(value)
+            ? []
+            : value.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
 
     private static string[] ResolveTargetPersistedBookmakerPresets(TheOddsScheduledRefreshTargetOptions target)
     {
@@ -1216,6 +1316,8 @@ public sealed record TheOddsRefreshPlanResult(
 public sealed record TheOddsRefreshTargetPlan(
     string Key,
     bool Enabled,
+    int Priority,
+    int RefreshIntervalMinutes,
     string Sport,
     string Competition,
     string ProviderCategory,
@@ -1247,6 +1349,9 @@ public sealed record TheOddsRefreshTargetPlan(
     int? PlatformPropsUpdatedFromLatestRun,
     int? PlatformPropsUpsertedFromLatestRun,
     DateTimeOffset NextEligibleRefreshUtc,
+    bool IsDue,
+    bool IsRunning,
+    decimal? LastRunDurationSeconds,
     string ProviderStatus,
     bool ProviderAvailable,
     bool BudgetAllowed,

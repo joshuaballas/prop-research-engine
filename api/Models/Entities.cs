@@ -234,6 +234,7 @@ public sealed class ProviderRefreshTarget
     public string? Regions { get; set; }
     public int? MaxEvents { get; set; }
     public int? EstimatedApiCalls { get; set; }
+    public int RefreshIntervalMinutes { get; set; } = 30;
     public bool SupportsResults { get; set; }
     public bool SupportsHistory { get; set; }
     public bool IsEnabled { get; set; }

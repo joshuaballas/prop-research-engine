@@ -567,15 +567,15 @@ public sealed class RefreshSafetyTests
     }
 
     [Fact]
-    public void ScheduledRefreshWorker_NoCompletionAnchorRunsImmediately()
+    public void ScheduledRefreshWorker_NoCompletionAnchorWaitsUntilTargetInterval()
     {
         var observedAt = DateTimeOffset.UtcNow;
         var plan = CreateScheduledRefreshPlan(
             generatedAtUtc: observedAt,
-            nextEligibleRefreshUtc: observedAt,
-            shouldRefresh: true,
-            targetShouldRefresh: true,
-            skipReason: null);
+            nextEligibleRefreshUtc: observedAt.AddMinutes(15),
+            shouldRefresh: false,
+            targetShouldRefresh: false,
+            skipReason: "CadenceNotDue");
 
         var nextRefreshAt = TheOddsMlbScheduledRefreshWorker.ResolveNextRefreshAt(
             plan,
@@ -583,7 +583,7 @@ public sealed class RefreshSafetyTests
             observedAt,
             TimeSpan.FromMinutes(15));
 
-        Assert.Equal(observedAt, nextRefreshAt);
+        Assert.Equal(observedAt.AddMinutes(15), nextRefreshAt);
     }
 
     [Fact]
@@ -615,10 +615,10 @@ public sealed class RefreshSafetyTests
         var lastCompletedAttemptAt = observedAt.AddMinutes(-1);
         var plan = CreateScheduledRefreshPlan(
             generatedAtUtc: observedAt,
-            nextEligibleRefreshUtc: observedAt,
-            shouldRefresh: true,
-            targetShouldRefresh: true,
-            skipReason: null);
+            nextEligibleRefreshUtc: lastCompletedAttemptAt.AddMinutes(15),
+            shouldRefresh: false,
+            targetShouldRefresh: false,
+            skipReason: "CadenceNotDue");
 
         var nextRefreshAt = TheOddsMlbScheduledRefreshWorker.ResolveNextRefreshAt(
             plan,
@@ -1203,15 +1203,161 @@ public sealed class RefreshSafetyTests
         Assert.True(worldCup.GetProperty("enabled").GetBoolean());
         Assert.True(worldCup.GetProperty("executionWired").GetBoolean());
         Assert.True(worldCup.GetProperty("providerSportKeyVerified").GetBoolean());
+        Assert.Equal(30, worldCup.GetProperty("refreshIntervalMinutes").GetInt32());
+        Assert.False(worldCup.GetProperty("isDue").GetBoolean());
         Assert.Contains(worldCup.GetProperty("effectiveBookmakers").EnumerateArray(), row => row.GetString() == "bovada");
-        Assert.True(worldCup.GetProperty("shouldRefresh").GetBoolean());
-        Assert.Equal(JsonValueKind.Null, worldCup.GetProperty("skipReason").ValueKind);
+        Assert.False(worldCup.GetProperty("shouldRefresh").GetBoolean());
+        Assert.Contains("CadenceNotDue", worldCup.GetProperty("skipReason").GetString());
         Assert.False(epl.GetProperty("enabled").GetBoolean());
         Assert.False(epl.GetProperty("executionWired").GetBoolean());
         Assert.False(epl.GetProperty("providerSportKeyVerified").GetBoolean());
         Assert.Contains("The Odds EPL sport key needs verification", epl.GetProperty("skipReason").GetString());
         Assert.Contains("MissingProviderSportKey", epl.GetProperty("skipReason").GetString());
         Assert.Contains("ScheduledExecutionNotYetWiredForTarget", epl.GetProperty("skipReason").GetString());
+        Assert.Equal(0, factory.TheOddsAdapter.CallCount);
+    }
+
+    [Fact]
+    public async Task RefreshPlan_SelectsOnlyDueTargetsUsingPerTargetIntervals()
+    {
+        await using var factory = new SafetyTestApplicationFactory(new Dictionary<string, string?>
+        {
+            ["TheOddsScheduledRefresh:Enabled"] = "true",
+            ["TheOddsScheduledRefresh:AllowScheduledLiveRefresh"] = "true"
+        });
+        using var client = factory.CreateClient();
+        var now = DateTimeOffset.UtcNow;
+        await factory.EnsureDatabaseAsync();
+        await ProviderDomainConfigSeeder.SeedAsync(factory.Services);
+
+        using (var scope = factory.Services.CreateScope())
+        {
+            var dbContext = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+            var mlbSportsbook = await dbContext.ProviderRefreshTargets.SingleAsync(row => row.TargetKey == "mlb-sportsbook");
+            var worldCup = await dbContext.ProviderRefreshTargets.SingleAsync(row => row.TargetKey == "soccer-world-cup-sportsbook");
+            mlbSportsbook.IsEnabled = true;
+            mlbSportsbook.DisabledReason = null;
+            worldCup.IsEnabled = true;
+            worldCup.DisabledReason = null;
+            worldCup.ProviderSportKey = "soccer_fifa_world_cup";
+            worldCup.BookmakerPreset = "allSportsbooks";
+            worldCup.Regions = "us";
+
+            dbContext.TheOddsRefreshRuns.AddRange(
+                new TheOddsRefreshRun
+                {
+                    Id = Guid.NewGuid(),
+                    Provider = "The Odds API",
+                    Sport = "MLB",
+                    StartedAtUtc = now.AddMinutes(-6),
+                    CompletedAtUtc = now.AddMinutes(-5),
+                    Succeeded = true,
+                    BookmakerPreset = "dfsAll",
+                    ProviderCategoriesIncluded = "DFS"
+                },
+                new TheOddsRefreshRun
+                {
+                    Id = Guid.NewGuid(),
+                    Provider = "The Odds API",
+                    Sport = "MLB",
+                    StartedAtUtc = now.AddMinutes(-21),
+                    CompletedAtUtc = now.AddMinutes(-20),
+                    Succeeded = true,
+                    BookmakerPreset = "default",
+                    ProviderCategoriesIncluded = "Sportsbook"
+                },
+                new TheOddsRefreshRun
+                {
+                    Id = Guid.NewGuid(),
+                    Provider = "The Odds API",
+                    Sport = "SOCCER",
+                    StartedAtUtc = now.AddMinutes(-6),
+                    CompletedAtUtc = now.AddMinutes(-5),
+                    Succeeded = true,
+                    BookmakerPreset = "soccerSportsbookContext",
+                    ProviderCategoriesIncluded = "Sportsbook",
+                    DiagnosticsJson = JsonSerializer.SerializeToDocument(new
+                    {
+                        sport = "SOCCER",
+                        competition = "World Cup"
+                    })
+                });
+            await dbContext.SaveChangesAsync();
+            scope.ServiceProvider.GetRequiredService<IProviderDomainConfigService>().ClearCache();
+        }
+
+        var response = await client.GetAsync("/api/markets/refresh-plan");
+
+        await EnsureSuccessWithBodyAsync(response);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.True(json.GetProperty("currentPlan").GetProperty("shouldRefresh").GetBoolean());
+        Assert.Equal(1, json.GetProperty("targetSummary").GetProperty("runnableTargetCount").GetInt32());
+        var targets = json.GetProperty("targets").EnumerateArray().ToArray();
+        var mlbDfs = targets.Single(row => row.GetProperty("key").GetString() == "mlb-dfs");
+        var mlbSportsbookTarget = targets.Single(row => row.GetProperty("key").GetString() == "mlb-sportsbook");
+        var worldCupTarget = targets.Single(row => row.GetProperty("key").GetString() == "soccer-world-cup-sportsbook");
+
+        Assert.Equal(15, mlbDfs.GetProperty("refreshIntervalMinutes").GetInt32());
+        Assert.False(mlbDfs.GetProperty("shouldRefresh").GetBoolean());
+        Assert.Contains("CadenceNotDue", mlbDfs.GetProperty("skipReason").GetString());
+        Assert.Equal(15, mlbSportsbookTarget.GetProperty("refreshIntervalMinutes").GetInt32());
+        Assert.True(mlbSportsbookTarget.GetProperty("isDue").GetBoolean());
+        Assert.True(mlbSportsbookTarget.GetProperty("shouldRefresh").GetBoolean());
+        Assert.Equal(30, worldCupTarget.GetProperty("refreshIntervalMinutes").GetInt32());
+        Assert.False(worldCupTarget.GetProperty("shouldRefresh").GetBoolean());
+        Assert.Contains("CadenceNotDue", worldCupTarget.GetProperty("skipReason").GetString());
+        Assert.Equal(0, factory.TheOddsAdapter.CallCount);
+    }
+
+    [Fact]
+    public async Task RefreshPlan_MarksTargetRunningAndBlocksDuplicateTargetLaunch()
+    {
+        await using var factory = new SafetyTestApplicationFactory(new Dictionary<string, string?>
+        {
+            ["TheOddsScheduledRefresh:Enabled"] = "true",
+            ["TheOddsScheduledRefresh:AllowScheduledLiveRefresh"] = "true"
+        });
+        using var client = factory.CreateClient();
+        var now = DateTimeOffset.UtcNow;
+        await factory.EnsureDatabaseAsync();
+        await ProviderDomainConfigSeeder.SeedAsync(factory.Services);
+
+        using (var scope = factory.Services.CreateScope())
+        {
+            var dbContext = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+            var mlbSportsbook = await dbContext.ProviderRefreshTargets.SingleAsync(row => row.TargetKey == "mlb-sportsbook");
+            mlbSportsbook.IsEnabled = true;
+            mlbSportsbook.DisabledReason = null;
+            mlbSportsbook.CreatedAtUtc = now.AddHours(-1);
+
+            dbContext.TheOddsRefreshRuns.Add(new TheOddsRefreshRun
+            {
+                Id = Guid.NewGuid(),
+                Provider = "The Odds API",
+                Sport = "MLB",
+                StartedAtUtc = now.AddMinutes(-20),
+                CompletedAtUtc = null,
+                Succeeded = false,
+                Failed = false,
+                Blocked = false,
+                BookmakerPreset = "default",
+                ProviderCategoriesIncluded = "Sportsbook"
+            });
+            await dbContext.SaveChangesAsync();
+            scope.ServiceProvider.GetRequiredService<IProviderDomainConfigService>().ClearCache();
+        }
+
+        var response = await client.GetAsync("/api/markets/refresh-plan");
+
+        await EnsureSuccessWithBodyAsync(response);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        var targets = json.GetProperty("targets").EnumerateArray().ToArray();
+        var mlbSportsbookTarget = targets.Single(row => row.GetProperty("key").GetString() == "mlb-sportsbook");
+
+        Assert.True(mlbSportsbookTarget.GetProperty("isDue").GetBoolean());
+        Assert.True(mlbSportsbookTarget.GetProperty("isRunning").GetBoolean());
+        Assert.False(mlbSportsbookTarget.GetProperty("shouldRefresh").GetBoolean());
+        Assert.Contains("TargetRefreshAlreadyRunning", mlbSportsbookTarget.GetProperty("skipReason").GetString());
         Assert.Equal(0, factory.TheOddsAdapter.CallCount);
     }
 
@@ -1932,6 +2078,7 @@ public sealed class RefreshSafetyTests
     [InlineData("/api/markets/refresh-plan/history?take=20")]
     [InlineData("/api/markets/top-picks?take=10")]
     [InlineData("/api/markets/line-shopping?take=10&includeBookmakerPrices=false")]
+    [InlineData("/api/markets/line-shopping?sport=All&take=10&includeBookmakerPrices=false")]
     [InlineData("/api/markets/performance-summary?candidateOnly=true")]
     [InlineData("/api/dfs/entry-rules")]
     public async Task PublicMarketEndpoints_AreReadOnly_AndDoNotCallProviders(string path)
@@ -2283,6 +2430,46 @@ public sealed class RefreshSafetyTests
         Assert.Equal(allGroups.Length, allJson.GetProperty("summary").GetProperty("returnedComparisonGroups").GetInt32());
         Assert.Contains(allJson.GetProperty("summary").GetProperty("providerCategoryBreakdown").EnumerateArray(), row => row.GetProperty("providerCategory").GetString() == "DFS");
         Assert.Contains(allJson.GetProperty("summary").GetProperty("providerCategoryBreakdown").EnumerateArray(), row => row.GetProperty("providerCategory").GetString() == "Sportsbook");
+        Assert.Equal(0, factory.TheOddsAdapter.CallCount);
+    }
+
+    [Fact]
+    public async Task PublicLineShopping_SportAllCombinesMlbAndSoccerRowsWithoutProviderCalls()
+    {
+        await using var factory = new SafetyTestApplicationFactory();
+        using var client = factory.CreateClient();
+        await factory.SeedExpectedValueDisplaySnapshotsAsync();
+        await factory.SeedSoccerWorldCupSnapshotsAsync(resetDatabase: false);
+
+        var response = await client.GetAsync("/api/markets/line-shopping?sport=All&providerCategory=All&topOnly=false&take=20&includeBookmakerPrices=false");
+
+        await EnsureSuccessWithBodyAsync(response);
+        AssertNoCaseInsensitiveDuplicatePropertiesInComparisonGroups(await response.Content.ReadAsStringAsync());
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        var groups = json.GetProperty("comparisonGroups").EnumerateArray().ToArray();
+
+        Assert.False(json.GetProperty("callsExternalApis").GetBoolean());
+        Assert.True(json.GetProperty("readOnly").GetBoolean());
+        Assert.Equal("ALL", json.GetProperty("effectiveSport").GetString());
+        Assert.NotEmpty(groups);
+        var diagnostics = json.GetProperty("diagnostics");
+        Assert.True(diagnostics.GetProperty("totalDurationMs").GetInt64() >= 0);
+        Assert.True(diagnostics.GetProperty("mergeDurationMs").GetInt64() >= 0);
+        Assert.True(diagnostics.GetProperty("finalProjectionDurationMs").GetInt64() >= 0);
+        Assert.True(diagnostics.GetProperty("serializationPrepDurationMs").GetInt64() >= 0);
+        Assert.Contains(diagnostics.GetProperty("perSportDurations").EnumerateArray(), row => row.GetProperty("sport").GetString() == "MLB");
+        Assert.Contains(diagnostics.GetProperty("perSportDurations").EnumerateArray(), row => row.GetProperty("sport").GetString() == "SOCCER");
+        Assert.Contains(diagnostics.GetProperty("perSportCandidateCounts").EnumerateArray(), row =>
+            row.GetProperty("sport").GetString() == "MLB" && row.GetProperty("candidateCount").GetInt32() > 0);
+        Assert.Contains(diagnostics.GetProperty("perSportCandidateCounts").EnumerateArray(), row =>
+            row.GetProperty("sport").GetString() == "SOCCER" && row.GetProperty("candidateCount").GetInt32() > 0);
+        Assert.Contains(groups, row => row.GetProperty("sport").GetString() == "MLB");
+        Assert.Contains(groups, row => row.GetProperty("sport").GetString() == "SOCCER");
+        Assert.Contains(json.GetProperty("summary").GetProperty("sportBreakdown").EnumerateArray(), row => row.GetProperty("sport").GetString() == "MLB");
+        Assert.Contains(json.GetProperty("summary").GetProperty("sportBreakdown").EnumerateArray(), row => row.GetProperty("sport").GetString() == "SOCCER");
+        Assert.Contains(json.GetProperty("summary").GetProperty("providerCategoryBreakdown").EnumerateArray(), row => row.GetProperty("providerCategory").GetString() == "DFS");
+        Assert.Contains(json.GetProperty("summary").GetProperty("providerCategoryBreakdown").EnumerateArray(), row => row.GetProperty("providerCategory").GetString() == "Sportsbook");
+        Assert.Equal(groups.Length, json.GetProperty("summary").GetProperty("returnedComparisonGroups").GetInt32());
         Assert.Equal(0, factory.TheOddsAdapter.CallCount);
     }
 
@@ -8780,6 +8967,8 @@ public sealed class RefreshSafetyTests
                 new TheOddsRefreshTargetPlan(
                     Key: "mlb-dfs",
                     Enabled: true,
+                    Priority: 100,
+                    RefreshIntervalMinutes: 15,
                     Sport: "MLB",
                     Competition: "MLB",
                     ProviderCategory: "DFS",
@@ -8811,6 +9000,9 @@ public sealed class RefreshSafetyTests
                     PlatformPropsUpdatedFromLatestRun: null,
                     PlatformPropsUpsertedFromLatestRun: null,
                     NextEligibleRefreshUtc: nextEligibleRefreshUtc,
+                    IsDue: generatedAtUtc >= nextEligibleRefreshUtc,
+                    IsRunning: false,
+                    LastRunDurationSeconds: null,
                     ProviderStatus: "Available",
                     ProviderAvailable: true,
                     BudgetAllowed: true,
@@ -10927,12 +11119,15 @@ public sealed class SafetyTestApplicationFactory : WebApplicationFactory<Program
         await dbContext.SaveChangesAsync();
     }
 
-    public async Task SeedSoccerWorldCupSnapshotsAsync()
+    public async Task SeedSoccerWorldCupSnapshotsAsync(bool resetDatabase = true)
     {
         using var scope = Services.CreateScope();
         var dbContext = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
-        await dbContext.Database.EnsureDeletedAsync();
-        await dbContext.Database.EnsureCreatedAsync();
+        if (resetDatabase)
+        {
+            await dbContext.Database.EnsureDeletedAsync();
+            await dbContext.Database.EnsureCreatedAsync();
+        }
 
         var refreshRun = new TheOddsRefreshRun
         {
@@ -11073,7 +11268,8 @@ public sealed class SafetyTestApplicationFactory : WebApplicationFactory<Program
         };
         var homeTeam = new Team { Id = Guid.NewGuid(), LeagueId = league.Id, Name = "Uruguay" };
         var awayTeam = new Team { Id = Guid.NewGuid(), LeagueId = league.Id, Name = "Cape Verde" };
-        var eventStart = new DateTimeOffset(2026, 6, 21, 22, 0, 0, TimeSpan.Zero);
+        var eventStart = DateTimeOffset.UtcNow.AddHours(3);
+        var eventDate = DateOnly.FromDateTime(eventStart.UtcDateTime);
         var game = new Game
         {
             Id = Guid.NewGuid(),
@@ -11102,7 +11298,7 @@ public sealed class SafetyTestApplicationFactory : WebApplicationFactory<Program
             Id = Guid.NewGuid(),
             Provider = "The Odds API",
             Sport = "SOCCER",
-            SlateDate = new DateOnly(2026, 6, 21),
+            SlateDate = eventDate,
             StartedAtUtc = DateTimeOffset.UtcNow.AddMinutes(-10),
             CompletedAtUtc = DateTimeOffset.UtcNow.AddMinutes(-9),
             Succeeded = true,

@@ -962,6 +962,7 @@ public sealed class ApplicationDbContext(DbContextOptions<ApplicationDbContext> 
             entity.Property(x => x.BookmakerPreset).HasMaxLength(100).IsRequired();
             entity.Property(x => x.ProviderSportKey).HasMaxLength(100);
             entity.Property(x => x.Regions).HasMaxLength(200);
+            entity.Property(x => x.RefreshIntervalMinutes).HasDefaultValue(30);
             entity.Property(x => x.DisabledReason).HasMaxLength(1000);
             entity.Property(x => x.Notes).HasMaxLength(1000);
             entity.HasIndex(x => new { x.ProviderKey, x.TargetKey }).IsUnique();

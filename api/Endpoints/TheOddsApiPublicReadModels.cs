@@ -572,6 +572,8 @@ public static partial class TheOddsApiDebugEndpoints
         var platformProps = await LoadSoccerWorldCupSportsbookPlatformPropsAsync(
             dbContext,
             providerCategory,
+            generatedAtUtc,
+            lifecycleFreshnessMinutes,
             cancellationToken);
         AddTimingStage(timingStages, stepStopwatch, "Soccer provider-context query/materialization", platformProps.Count);
         var rows = BuildTheOddsResearchOnlyLineShoppingRows(platformProps);
@@ -2504,6 +2506,8 @@ public static partial class TheOddsApiDebugEndpoints
         var platformProps = await LoadSoccerWorldCupSportsbookPlatformPropsAsync(
             dbContext,
             providerCategory: null,
+            readTimeUtc: null,
+            lifecycleFreshnessMinutes: null,
             cancellationToken);
         var activeRows = platformProps.Count(row => string.Equals(row.Status, "active", StringComparison.OrdinalIgnoreCase));
 
@@ -2525,6 +2529,8 @@ public static partial class TheOddsApiDebugEndpoints
     private static async Task<List<TheOddsPersistedPlatformPropRow>> LoadSoccerWorldCupSportsbookPlatformPropsAsync(
         ApplicationDbContext dbContext,
         string? providerCategory,
+        DateTimeOffset? readTimeUtc,
+        int? lifecycleFreshnessMinutes,
         CancellationToken cancellationToken)
     {
         if (!string.IsNullOrWhiteSpace(providerCategory)
@@ -2534,7 +2540,11 @@ public static partial class TheOddsApiDebugEndpoints
             return [];
         }
 
-        var rows = await LoadSoccerWorldCupSportsbookPlatformPropDataRowsAsync(dbContext, cancellationToken);
+        var rows = await LoadSoccerWorldCupSportsbookPlatformPropDataRowsAsync(
+            dbContext,
+            readTimeUtc,
+            lifecycleFreshnessMinutes,
+            cancellationToken);
         var platformProps = ParseTheOddsPlatformProps(rows);
 
         return platformProps
@@ -2544,11 +2554,47 @@ public static partial class TheOddsApiDebugEndpoints
 
     private static async Task<List<TheOddsPlatformPropDataRow>> LoadSoccerWorldCupSportsbookPlatformPropDataRowsAsync(
         ApplicationDbContext dbContext,
+        DateTimeOffset? readTimeUtc,
+        int? lifecycleFreshnessMinutes,
         CancellationToken cancellationToken)
     {
         if (!IsNpgsqlProvider(dbContext))
         {
-            var rows = await LoadTheOddsPlatformPropDataRowsAsync(dbContext, cancellationToken);
+            var query = dbContext.PlatformProps
+                .AsNoTracking()
+                .Where(platformProp => platformProp.Metadata != null)
+                .Where(platformProp => platformProp.Platform != null
+                    && platformProp.Platform.Slug != null
+                    && platformProp.Platform.Slug.StartsWith("theodds-"))
+                .Where(platformProp => platformProp.Prop != null
+                    && platformProp.Prop.League != null
+                    && platformProp.Prop.League.Sport != null
+                    && platformProp.Prop.League.Sport.Code == "SOCCER");
+
+            query = ApplySoccerWorldCupPublicContextReadFilters(query, readTimeUtc, lifecycleFreshnessMinutes);
+
+            var rows = await query
+                .Select(platformProp => new TheOddsPlatformPropDataRow(
+                    platformProp.Id,
+                    platformProp.PropId,
+                    platformProp.PlatformPropId,
+                    platformProp.Label,
+                    platformProp.CurrentLine,
+                    platformProp.OverAvailable,
+                    platformProp.UnderAvailable,
+                    platformProp.PayoutType,
+                    platformProp.Status,
+                    platformProp.ObservedAt,
+                    platformProp.RawPayloadId,
+                    platformProp.Platform == null ? "Unknown" : platformProp.Platform.Name,
+                    platformProp.Platform == null ? "unknown" : platformProp.Platform.Slug,
+                    platformProp.Prop == null ? Guid.Empty : platformProp.Prop.PlayerId,
+                    platformProp.Prop == null ? Guid.Empty : platformProp.Prop.PropTypeId,
+                    platformProp.Prop == null || platformProp.Prop.Player == null ? "Unknown" : platformProp.Prop.Player.DisplayName,
+                    platformProp.Prop == null || platformProp.Prop.PropType == null ? "Unknown" : platformProp.Prop.PropType.Name,
+                    platformProp.Metadata))
+                .ToListAsync(cancellationToken);
+
             return rows
                 .Where(row =>
                 {
@@ -2571,10 +2617,13 @@ public static partial class TheOddsApiDebugEndpoints
             }
         });
 
-        return await dbContext.PlatformProps
+        var npgsqlQuery = dbContext.PlatformProps
             .AsNoTracking()
             .Where(platformProp => platformProp.Metadata != null
-                && EF.Functions.JsonContains(platformProp.Metadata, filter))
+                && EF.Functions.JsonContains(platformProp.Metadata, filter));
+        npgsqlQuery = ApplySoccerWorldCupPublicContextReadFilters(npgsqlQuery, readTimeUtc, lifecycleFreshnessMinutes);
+
+        return await npgsqlQuery
             .Select(platformProp => new TheOddsPlatformPropDataRow(
                 platformProp.Id,
                 platformProp.PropId,
@@ -2595,6 +2644,30 @@ public static partial class TheOddsApiDebugEndpoints
                 platformProp.Prop == null || platformProp.Prop.PropType == null ? "Unknown" : platformProp.Prop.PropType.Name,
                 platformProp.Metadata))
             .ToListAsync(cancellationToken);
+    }
+
+    private static IQueryable<PlatformProp> ApplySoccerWorldCupPublicContextReadFilters(
+        IQueryable<PlatformProp> query,
+        DateTimeOffset? readTimeUtc,
+        int? lifecycleFreshnessMinutes)
+    {
+        if (!readTimeUtc.HasValue)
+        {
+            return query;
+        }
+
+        var nowUtc = readTimeUtc.Value;
+        query = query
+            .Where(platformProp => platformProp.Status == "active")
+            .Where(platformProp => platformProp.Prop != null && platformProp.Prop.StartsAt > nowUtc);
+
+        if (lifecycleFreshnessMinutes.HasValue)
+        {
+            var observedCutoffUtc = nowUtc.AddMinutes(-lifecycleFreshnessMinutes.Value);
+            query = query.Where(platformProp => platformProp.ObservedAt >= observedCutoffUtc);
+        }
+
+        return query;
     }
 
     private static bool IsRealSoccerWorldCupSportsbookContextRow(TheOddsPersistedPlatformPropRow row)

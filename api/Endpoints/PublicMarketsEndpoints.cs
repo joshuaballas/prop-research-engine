@@ -252,7 +252,7 @@ public static class PublicMarketsEndpoints
             IOptions<SoccerTopPicksOptions> soccerTopPicksOptions,
             CancellationToken cancellationToken) =>
         {
-            if (string.IsNullOrWhiteSpace(sport))
+            if (string.IsNullOrWhiteSpace(sport) || IsAllMarketSportRequest(sport))
             {
                 return Results.Ok(await BuildAllMarketTopPicksResponseAsync(
                     runId,
@@ -357,6 +357,26 @@ public static class PublicMarketsEndpoints
             IOptions<SoccerTopPicksOptions> soccerTopPicksOptions,
             CancellationToken cancellationToken) =>
         {
+            if (IsAllMarketSportRequest(sport))
+            {
+                return Results.Ok(await BuildAllMarketLineShoppingResponseAsync(
+                    runId,
+                    take,
+                    topOnly,
+                    freshnessMinutes,
+                    providerCategory,
+                    includeBookmakerPrices,
+                    bookmakerPreset,
+                    dbContext,
+                    probabilityService,
+                    predictionGenerationOptions.Value,
+                    soccerPredictionService,
+                    soccerPredictionOptions.Value,
+                    soccerGradingOptions.Value,
+                    soccerTopPicksOptions.Value,
+                    cancellationToken));
+            }
+
             var marketSport = ResolveMarketSport(sport);
             if (marketSport.UnsupportedResponse is not null)
             {
@@ -1056,6 +1076,8 @@ public static class PublicMarketsEndpoints
             {
                 target.Key,
                 target.Enabled,
+                target.Priority,
+                target.RefreshIntervalMinutes,
                 target.Sport,
                 target.Competition,
                 target.ProviderCategory,
@@ -1093,6 +1115,9 @@ public static class PublicMarketsEndpoints
                 target.LatestSuccessfulRefreshCompletedAtUtc,
                 target.LatestAttemptAtUtc,
                 target.NextEligibleRefreshUtc,
+                target.IsDue,
+                target.IsRunning,
+                target.LastRunDurationSeconds,
                 target.ShouldRefresh,
                 target.SkipReason,
                 target.ProviderAvailable,
@@ -1467,6 +1492,239 @@ public static class PublicMarketsEndpoints
         };
     }
 
+    private static async Task<object> BuildAllMarketLineShoppingResponseAsync(
+        Guid? runId,
+        int? take,
+        bool? topOnly,
+        int? freshnessMinutes,
+        string? providerCategory,
+        bool? includeBookmakerPrices,
+        string? bookmakerPreset,
+        ApplicationDbContext dbContext,
+        IPredictionProbabilityService probabilityService,
+        PredictionGenerationOptions predictionGenerationOptions,
+        ISoccerWorldCupPredictionService soccerPredictionService,
+        SoccerPredictionsOptions soccerPredictionOptions,
+        SoccerGradingOptions soccerGradingOptions,
+        SoccerTopPicksOptions soccerTopPicksOptions,
+        CancellationToken cancellationToken)
+    {
+        var totalStopwatch = Stopwatch.StartNew();
+        var stepStopwatch = Stopwatch.StartNew();
+        providerCategory = NormalizePublicProviderCategoryFilter(providerCategory);
+        var requestedTake = Math.Clamp(take ?? 50, 1, 500);
+        var perSportTake = requestedTake;
+
+        var mlbResponse = await BuildMarketLineShoppingResponseAsync(
+            requestedSport: "MLB",
+            effectiveSport: "MLB",
+            runId,
+            perSportTake,
+            topOnly,
+            freshnessMinutes,
+            providerCategory,
+            includeBookmakerPrices,
+            bookmakerPreset,
+            dbContext,
+            probabilityService,
+            predictionGenerationOptions,
+            soccerPredictionService,
+            soccerPredictionOptions,
+            soccerGradingOptions,
+            soccerTopPicksOptions,
+            cancellationToken,
+            includeFreshness: false);
+        var mlbDurationMs = stepStopwatch.ElapsedMilliseconds;
+        stepStopwatch.Restart();
+        var mlbRows = ExtractLineShoppingRows(mlbResponse);
+        var mlbExtractionDurationMs = stepStopwatch.ElapsedMilliseconds;
+        stepStopwatch.Restart();
+        var soccerResponse = await BuildMarketLineShoppingResponseAsync(
+            requestedSport: "SOCCER",
+            effectiveSport: "SOCCER",
+            runId,
+            perSportTake,
+            topOnly,
+            freshnessMinutes,
+            providerCategory,
+            includeBookmakerPrices,
+            bookmakerPreset,
+            dbContext,
+            probabilityService,
+            predictionGenerationOptions,
+            soccerPredictionService,
+            soccerPredictionOptions,
+            soccerGradingOptions,
+            soccerTopPicksOptions,
+            cancellationToken,
+            includeFreshness: false);
+        var soccerDurationMs = stepStopwatch.ElapsedMilliseconds;
+        stepStopwatch.Restart();
+        var soccerRows = ExtractLineShoppingRows(soccerResponse);
+        var soccerExtractionDurationMs = stepStopwatch.ElapsedMilliseconds;
+        stepStopwatch.Restart();
+        var perSportDurations = new[]
+        {
+            new
+            {
+                sport = "MLB",
+                durationMs = mlbDurationMs,
+                extractionDurationMs = mlbExtractionDurationMs,
+                innerTotalDurationMs = GetResponseLong(mlbResponse, "diagnostics", "totalDurationMs"),
+                snapshotBacked = GetResponseBool(mlbResponse, "snapshotBacked", "SnapshotBacked") == true
+            },
+            new
+            {
+                sport = "SOCCER",
+                durationMs = soccerDurationMs,
+                extractionDurationMs = soccerExtractionDurationMs,
+                innerTotalDurationMs = GetResponseLong(soccerResponse, "diagnostics", "totalDurationMs"),
+                snapshotBacked = GetResponseBool(soccerResponse, "snapshotBacked", "SnapshotBacked") == true
+            }
+        };
+        var perSportCandidateCounts = new[]
+        {
+            new
+            {
+                sport = "MLB",
+                candidateCount = mlbRows.Length,
+                activeCount = CountActiveLineShoppingGroups(mlbRows),
+                selectedCount = 0
+            },
+            new
+            {
+                sport = "SOCCER",
+                candidateCount = soccerRows.Length,
+                activeCount = CountActiveLineShoppingGroups(soccerRows),
+                selectedCount = 0
+            }
+        };
+
+        var allGroups = mlbRows
+            .Select(row => EnsureTopPickSportMetadata(row, "MLB", "MLB"))
+            .Concat(soccerRows.Select(row => EnsureTopPickSportMetadata(row, "SOCCER", SoccerCompetitionName)))
+            .ToArray();
+        var snapshotBacked = GetResponseBool(mlbResponse, "snapshotBacked", "SnapshotBacked") == true
+            || GetResponseBool(soccerResponse, "snapshotBacked", "SnapshotBacked") == true;
+        var mergeDurationMs = stepStopwatch.ElapsedMilliseconds;
+        stepStopwatch.Restart();
+        var selectedGroups = allGroups
+            .OrderBy(row => GetLineShoppingSelectionRank(row))
+            .ThenBy(row => GetTopPickBool(row, "entryActionableForUser") == true ? 0 : 1)
+            .ThenByDescending(row => GetTopPickDecimal(row, "topPickScore", "rankingScore") ?? decimal.MinValue)
+            .ThenByDescending(row => GetTopPickDecimal(row, "selectedSideProbability", "bestProbability") ?? decimal.MinValue)
+            .ThenByDescending(row => GetTopPickDecimal(row, "displayExpectedValue", "bestEstimatedEv") ?? decimal.MinValue)
+            .ThenBy(row => GetTopPickString(row, "sport") ?? string.Empty, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(row => GetTopPickString(row, "player") ?? string.Empty, StringComparer.OrdinalIgnoreCase)
+            .Take(requestedTake)
+            .Select(row => row.DeepClone().AsObject())
+            .ToArray();
+        var finalProjectionDurationMs = stepStopwatch.ElapsedMilliseconds;
+        stepStopwatch.Restart();
+        var hasRows = selectedGroups.Length > 0;
+        perSportCandidateCounts = perSportCandidateCounts
+            .Select(row => new
+            {
+                row.sport,
+                row.candidateCount,
+                row.activeCount,
+                selectedCount = selectedGroups.Count(selected => string.Equals(GetTopPickString(selected, "sport"), row.sport, StringComparison.OrdinalIgnoreCase))
+            })
+            .ToArray();
+        var sportBreakdown = selectedGroups
+            .GroupBy(row => GetTopPickString(row, "sport") ?? "Unknown", StringComparer.OrdinalIgnoreCase)
+            .Select(group => new { sport = group.Key, count = group.Count() })
+            .OrderBy(row => row.sport)
+            .ToArray();
+        var providerCategoryBreakdown = selectedGroups
+            .GroupBy(row => GetTopPickString(row, "providerCategory") ?? "Unknown", StringComparer.OrdinalIgnoreCase)
+            .Select(group => new
+            {
+                providerCategory = group.Key,
+                count = group.Count(),
+                candidateCount = group.Count(row => GetTopPickBool(row, "isCandidate") == true),
+                activeCount = group.Count(row => IsActiveLineShoppingGroup(row))
+            })
+            .OrderBy(row => row.providerCategory)
+            .ToArray();
+        var strategyClassificationSummary = selectedGroups
+            .GroupBy(row => GetTopPickString(row, "strategyClassification") ?? "Unclassified", StringComparer.OrdinalIgnoreCase)
+            .Select(group => new { strategyClassification = group.Key, count = group.Count() })
+            .OrderByDescending(row => row.count)
+            .ThenBy(row => row.strategyClassification)
+            .ToArray();
+        var serializationPrepDurationMs = stepStopwatch.ElapsedMilliseconds;
+        totalStopwatch.Stop();
+
+        return new
+        {
+            generatedAtUtc = DateTimeOffset.UtcNow,
+            callsExternalApis = false,
+            readOnly = true,
+            supportedSports = SupportedMarketSports,
+            supportedCompetitions = BuildSupportedCompetitionDiagnostics(soccerGradingOptions.Enabled),
+            requestedSport = "ALL",
+            effectiveSport = "ALL",
+            competition = (string?)null,
+            resultGradingSupported = true,
+            publicSoccerGradingEnabled = soccerGradingOptions.Enabled,
+            soccerPredictionsEnabled = soccerPredictionOptions.Enabled,
+            soccerTopPicksEnabled = soccerTopPicksOptions.Enabled,
+            limitation = BuildMarketReadLimitation(soccerPredictionOptions.Enabled, soccerGradingOptions.Enabled),
+            source = hasRows ? "persistedMixedMarketReads" : "persistedMixedMarketReadsUnavailable",
+            snapshotBacked,
+            refreshRunId = (Guid?)null,
+            fallbackReason = hasRows
+                ? null
+                : "No supported sport currently has public line-shopping rows matching the requested filters.",
+            diagnostics = new
+            {
+                allSportsMerged = true,
+                source = hasRows ? "persistedMixedMarketReads" : "persistedMixedMarketReadsUnavailable",
+                snapshotBacked,
+                requestedTake,
+                perSportTake,
+                topOnly = topOnly ?? true,
+                providerCategory,
+                includeBookmakerPrices = includeBookmakerPrices ?? false,
+                sportsEvaluated = SupportedMarketSports,
+                totalDurationMs = totalStopwatch.ElapsedMilliseconds,
+                perSportDurations,
+                perSportCandidateCounts,
+                mergeDurationMs,
+                finalProjectionDurationMs,
+                serializationPrepDurationMs,
+                totalComparisonCandidates = allGroups.Length,
+                returnedComparisonGroups = selectedGroups.Length,
+                callsTheOddsApi = false,
+                usesPersistedDatabaseRowsOnly = true
+            },
+            summary = new
+            {
+                allSportsMerged = true,
+                requestedTake,
+                perSportTake,
+                totalComparisonGroups = allGroups.Length,
+                totalActiveComparisonGroups = CountActiveLineShoppingGroups(allGroups),
+                returnedComparisonGroups = selectedGroups.Length,
+                actionableComparisonGroups = selectedGroups.Count(row => GetTopPickBool(row, "entryActionableForUser") == true),
+                actionableCandidateCount = selectedGroups.Count(row =>
+                    GetTopPickBool(row, "isCandidate") == true &&
+                    GetTopPickBool(row, "entryActionableForUser") == true),
+                sportsbookContextCandidateCount = selectedGroups.Count(row =>
+                    GetTopPickBool(row, "isCandidate") == true &&
+                    !string.Equals(GetTopPickString(row, "providerCategory"), "DFS", StringComparison.OrdinalIgnoreCase)),
+                dfsCandidateCount = selectedGroups.Count(row =>
+                    GetTopPickBool(row, "isCandidate") == true &&
+                    string.Equals(GetTopPickString(row, "providerCategory"), "DFS", StringComparison.OrdinalIgnoreCase)),
+                sportBreakdown,
+                providerCategoryBreakdown
+            },
+            strategyClassificationSummary,
+            comparisonGroups = selectedGroups
+        };
+    }
+
     private static async Task<object> BuildGenericMarketTopPicksResponseAsync(
         string? requestedSport,
         string effectiveSport,
@@ -1739,6 +1997,138 @@ public static class PublicMarketsEndpoints
             .ToArray();
     }
 
+    private static JsonObject[] ExtractLineShoppingRows(object response)
+    {
+        var groupsValue = GetResponsePropertyValue(response, "comparisonGroups", "ComparisonGroups");
+        var groups = groupsValue as JsonArray ?? JsonSerializer.SerializeToNode(groupsValue) as JsonArray;
+        if (groups is null)
+        {
+            return [];
+        }
+
+        return groups
+            .Select(row => row as JsonObject ?? JsonSerializer.SerializeToNode(row) as JsonObject)
+            .Where(row => row is not null)
+            .Select(row => row!)
+            .ToArray();
+    }
+
+    private static bool? GetResponseBool(object response, params string[] keys)
+    {
+        var value = GetResponsePropertyValue(response, keys);
+        if (value is bool boolean)
+        {
+            return boolean;
+        }
+
+        if (value is JsonValue jsonValue && jsonValue.TryGetValue<bool>(out var jsonBoolean))
+        {
+            return jsonBoolean;
+        }
+
+        return value is JsonElement element && element.ValueKind is JsonValueKind.True or JsonValueKind.False
+            ? element.GetBoolean()
+            : null;
+    }
+
+    private static long? GetResponseLong(object response, params string[] path)
+    {
+        object? current = response;
+        foreach (var segment in path)
+        {
+            current = GetResponsePropertyValue(current, segment);
+            if (current is null)
+            {
+                return null;
+            }
+        }
+
+        return current switch
+        {
+            long longValue => longValue,
+            int intValue => intValue,
+            JsonValue value when value.TryGetValue<long>(out var number) => number,
+            JsonElement element when element.ValueKind == JsonValueKind.Number && element.TryGetInt64(out var number) => number,
+            _ => null
+        };
+    }
+
+    private static object? GetResponsePropertyValue(object? response, params string[] names)
+    {
+        if (response is null)
+        {
+            return null;
+        }
+
+        if (response is JsonObject obj)
+        {
+            foreach (var name in names)
+            {
+                if (obj.TryGetPropertyValue(name, out var exactValue))
+                {
+                    return exactValue;
+                }
+
+                foreach (var property in obj)
+                {
+                    if (string.Equals(property.Key, name, StringComparison.OrdinalIgnoreCase))
+                    {
+                        return property.Value;
+                    }
+                }
+            }
+
+            return null;
+        }
+
+        var type = response.GetType();
+        foreach (var name in names)
+        {
+            var property = type.GetProperty(
+                name,
+                System.Reflection.BindingFlags.Instance |
+                System.Reflection.BindingFlags.Public |
+                System.Reflection.BindingFlags.IgnoreCase);
+            if (property is not null)
+            {
+                return property.GetValue(response);
+            }
+        }
+
+        return null;
+    }
+
+    private static int GetLineShoppingSelectionRank(JsonObject row)
+    {
+        if (GetTopPickBool(row, "isCandidate") == true)
+        {
+            return 0;
+        }
+
+        if (GetTopPickBool(row, "isWatchlist") == true)
+        {
+            return 1;
+        }
+
+        var strategy = GetTopPickString(row, "strategyClassification");
+        return string.Equals(strategy, "Research", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(strategy, "ResearchOnly", StringComparison.OrdinalIgnoreCase)
+            ? 2
+            : 3;
+    }
+
+    private static int CountActiveLineShoppingGroups(IEnumerable<JsonObject> rows)
+    {
+        return rows.Count(IsActiveLineShoppingGroup);
+    }
+
+    private static bool IsActiveLineShoppingGroup(JsonObject row)
+    {
+        return string.Equals(GetTopPickString(row, "lifecycleStatus"), "Active", StringComparison.OrdinalIgnoreCase)
+            && GetTopPickBool(row, "isStale") != true
+            && GetTopPickBool(row, "isExpired") != true;
+    }
+
     private static bool IsPublicRecommendationRow(JsonObject row)
     {
         return GetTopPickBool(row, "isRecommendation", "IsRecommendation") == true
@@ -1850,7 +2240,8 @@ public static class PublicMarketsEndpoints
         SoccerPredictionsOptions soccerPredictionOptions,
         SoccerGradingOptions soccerGradingOptions,
         SoccerTopPicksOptions soccerTopPicksOptions,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool includeFreshness = true)
     {
         providerCategory = NormalizePublicProviderCategoryFilter(providerCategory);
 
@@ -1905,7 +2296,9 @@ public static class PublicMarketsEndpoints
                 soccerPredictionsEnabled = soccerPredictionOptions.Enabled,
                 soccerTopPicksEnabled = soccerTopPicksOptions.Enabled,
                 limitation = BuildMarketReadLimitation(soccerPredictionOptions.Enabled, soccerGradingOptions.Enabled),
-                freshness = await BuildGenericMarketFreshnessResponseAsync(requestedSport, effectiveSport, null, null, freshnessMinutes, soccerPredictionOptions, soccerGradingOptions, soccerTopPicksOptions, dbContext, cancellationToken),
+                freshness = includeFreshness
+                    ? await BuildGenericMarketFreshnessResponseAsync(requestedSport, effectiveSport, null, null, freshnessMinutes, soccerPredictionOptions, soccerGradingOptions, soccerTopPicksOptions, dbContext, cancellationToken)
+                    : null,
                 soccerLineShopping.SnapshotBacked,
                 refreshRunId = soccerLineShopping.RefreshRunId,
                 soccerLineShopping.FallbackReason,
@@ -1917,12 +2310,14 @@ public static class PublicMarketsEndpoints
             };
         }
 
-        var freshness = await TheOddsApiDebugEndpoints.BuildMlbRefreshFreshnessResponseAsync(
-            slateDate: null,
-            bookmakerPreset,
-            freshnessMinutes,
-            dbContext,
-            cancellationToken);
+        var freshness = includeFreshness
+            ? await TheOddsApiDebugEndpoints.BuildMlbRefreshFreshnessResponseAsync(
+                slateDate: null,
+                bookmakerPreset,
+                freshnessMinutes,
+                dbContext,
+                cancellationToken)
+            : null;
         var lineShopping = await TheOddsApiDebugEndpoints.BuildMlbLineShoppingResponseAsync(
             runId,
             summaryOnly: false,
@@ -1945,7 +2340,7 @@ public static class PublicMarketsEndpoints
             requestedSport,
             effectiveSport,
             limitation = BuildMarketReadLimitation(),
-            freshness = ToPublicFreshnessSummary(freshness),
+            freshness = freshness is null ? null : ToPublicFreshnessSummary(freshness),
             lineShopping.SnapshotBacked,
             refreshRunId = lineShopping.RefreshRunId,
             lineShopping.FallbackReason,
@@ -2059,6 +2454,11 @@ public static class PublicMarketsEndpoints
         }
 
         return providerCategory.Trim();
+    }
+
+    private static bool IsAllMarketSportRequest(string? sport)
+    {
+        return string.Equals(sport?.Trim(), "All", StringComparison.OrdinalIgnoreCase);
     }
 
     private static MarketSportResolution ResolveMarketSport(string? sport)

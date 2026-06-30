@@ -56,6 +56,7 @@ public sealed class TheOddsScheduledRefreshOptions
                 ProviderSportKey = "baseball_mlb",
                 MaxEvents = null,
                 EstimatedApiCalls = Math.Max(1, fallbackEstimatedApiCalls),
+                RefreshIntervalMinutes = 15,
                 SupportsResults = true,
                 SupportsHistory = true
             },
@@ -69,6 +70,7 @@ public sealed class TheOddsScheduledRefreshOptions
                 BookmakerPreset = "allSportsbooks",
                 ProviderSportKey = "baseball_mlb",
                 EstimatedApiCalls = Math.Max(1, fallbackEstimatedApiCalls),
+                RefreshIntervalMinutes = 15,
                 SupportsResults = true,
                 SupportsHistory = true,
                 DisabledReason = mlbSportsbookEnabled ? null : "Enable explicitly after sportsbook scheduled cadence is approved.",
@@ -88,6 +90,7 @@ public sealed class TheOddsScheduledRefreshOptions
                 Regions = "us",
                 MaxEvents = 10,
                 EstimatedApiCalls = Math.Max(1, fallbackEstimatedApiCalls),
+                RefreshIntervalMinutes = 30,
                 SupportsResults = false,
                 SupportsHistory = true,
                 DisabledReason = soccerWorldCupEnabled ? null : "Enable explicitly after Soccer scheduled execution is approved.",
@@ -102,6 +105,7 @@ public sealed class TheOddsScheduledRefreshOptions
                 Competition = "EPL",
                 ProviderCategory = "Sportsbook",
                 BookmakerPreset = "soccerSportsbookContext",
+                RefreshIntervalMinutes = 30,
                 DisabledReason = "The Odds EPL sport key needs verification before scheduled refresh."
             },
             new TheOddsScheduledRefreshTargetOptions
@@ -111,6 +115,7 @@ public sealed class TheOddsScheduledRefreshOptions
                 Competition = "Ligue 1",
                 ProviderCategory = "Sportsbook",
                 BookmakerPreset = "soccerSportsbookContext",
+                RefreshIntervalMinutes = 30,
                 DisabledReason = "The Odds Ligue 1 sport key needs verification before scheduled refresh."
             },
             new TheOddsScheduledRefreshTargetOptions
@@ -120,6 +125,7 @@ public sealed class TheOddsScheduledRefreshOptions
                 Competition = "Bundesliga",
                 ProviderCategory = "Sportsbook",
                 BookmakerPreset = "soccerSportsbookContext",
+                RefreshIntervalMinutes = 30,
                 DisabledReason = "The Odds Bundesliga sport key needs verification before scheduled refresh."
             },
             new TheOddsScheduledRefreshTargetOptions
@@ -129,6 +135,7 @@ public sealed class TheOddsScheduledRefreshOptions
                 Competition = "Serie A",
                 ProviderCategory = "Sportsbook",
                 BookmakerPreset = "soccerSportsbookContext",
+                RefreshIntervalMinutes = 30,
                 DisabledReason = "The Odds Serie A sport key needs verification before scheduled refresh."
             },
             new TheOddsScheduledRefreshTargetOptions
@@ -138,6 +145,7 @@ public sealed class TheOddsScheduledRefreshOptions
                 Competition = "La Liga",
                 ProviderCategory = "Sportsbook",
                 BookmakerPreset = "soccerSportsbookContext",
+                RefreshIntervalMinutes = 30,
                 DisabledReason = "The Odds La Liga sport key needs verification before scheduled refresh."
             },
             new TheOddsScheduledRefreshTargetOptions
@@ -147,6 +155,7 @@ public sealed class TheOddsScheduledRefreshOptions
                 Competition = "MLS",
                 ProviderCategory = "Sportsbook",
                 BookmakerPreset = "soccerSportsbookContext",
+                RefreshIntervalMinutes = 30,
                 DisabledReason = "The Odds MLS sport key needs verification before scheduled refresh."
             }
         ];
@@ -167,10 +176,15 @@ public sealed class TheOddsScheduledRefreshTargetOptions
     public string? Bookmakers { get; set; }
     public string? Markets { get; set; }
     public int? EstimatedApiCalls { get; set; }
+    public int RefreshIntervalMinutes { get; set; } = 30;
     public bool SupportsResults { get; set; } = false;
     public bool SupportsHistory { get; set; } = false;
     public string? DisabledReason { get; set; }
     public string? Notes { get; set; }
+    public int Priority { get; set; } = 100;
+    public DateTimeOffset? CreatedAtUtc { get; set; }
+
+    public TimeSpan GetRefreshInterval() => TimeSpan.FromMinutes(Math.Clamp(RefreshIntervalMinutes, 1, 1440));
 
     public string ResolveKey()
     {

@@ -196,10 +196,17 @@ public sealed class AppConfigTests
         Assert.Contains(await dbContext.ProviderRefreshTargets.ToArrayAsync(), row =>
             row.TargetKey == "mlb-dfs"
             && row.Sport == "MLB"
-            && row.ProviderCategory == "DFS");
+            && row.ProviderCategory == "DFS"
+            && row.RefreshIntervalMinutes == 15);
+        Assert.Contains(await dbContext.ProviderRefreshTargets.ToArrayAsync(), row =>
+            row.TargetKey == "mlb-sportsbook"
+            && row.Sport == "MLB"
+            && row.ProviderCategory == "Sportsbook"
+            && row.RefreshIntervalMinutes == 15);
         Assert.Contains(await dbContext.ProviderRefreshTargets.ToArrayAsync(), row =>
             row.TargetKey == "soccer-world-cup-sportsbook"
-            && row.CompetitionKey == ProviderDomainConfigService.WorldCupCompetitionKey);
+            && row.CompetitionKey == ProviderDomainConfigService.WorldCupCompetitionKey
+            && row.RefreshIntervalMinutes == 30);
     }
 
     [Fact]
@@ -249,6 +256,41 @@ public sealed class AppConfigTests
         Assert.True(json.GetProperty("providerMarketCount").GetInt32() >= 16);
         Assert.True(json.GetProperty("providerBookmakerCount").GetInt32() >= 10);
         Assert.True(json.GetProperty("providerRefreshTargetCount").GetInt32() >= 9);
+        Assert.Equal(0, json.GetProperty("appsettingsFallbackCount").GetInt32());
+        Assert.Equal(0, json.GetProperty("appsettingsFallbackInvocationCount").GetInt32());
+        Assert.Empty(json.GetProperty("appsettingsFallbacks").EnumerateArray());
+    }
+
+    [Fact]
+    public async Task ProviderDomainConfigDebugStatus_ListsAppsettingsFallbackDetails()
+    {
+        await using var factory = new SafetyTestApplicationFactory();
+        using var client = factory.CreateClient();
+        await factory.EnsureDatabaseAsync();
+
+        using (var scope = factory.Services.CreateScope())
+        {
+            var service = scope.ServiceProvider.GetRequiredService<IProviderDomainConfigService>();
+            var scheduledOptions = scope.ServiceProvider.GetRequiredService<IOptions<TheOddsScheduledRefreshOptions>>().Value;
+            var targets = await service.GetTheOddsScheduledRefreshTargetsAsync(
+                scheduledOptions,
+                CancellationToken.None);
+            Assert.NotEmpty(targets);
+        }
+
+        var response = await client.GetAsync("/api/debug/provider-domain-config/status");
+
+        response.EnsureSuccessStatusCode();
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        var fallbacks = json.GetProperty("appsettingsFallbacks").EnumerateArray().ToArray();
+        Assert.Equal(1, json.GetProperty("appsettingsFallbackCount").GetInt32());
+        Assert.Equal(1, json.GetProperty("appsettingsFallbackInvocationCount").GetInt32());
+        var fallback = Assert.Single(fallbacks);
+        Assert.Equal("THE_ODDS_API:refresh-targets", fallback.GetProperty("key").GetString());
+        Assert.Equal("ProviderRefreshTargets", fallback.GetProperty("configArea").GetString());
+        Assert.Equal("TheOddsScheduledRefreshTargets", fallback.GetProperty("consumer").GetString());
+        Assert.Contains("appsettings fallback", fallback.GetProperty("reason").GetString());
+        Assert.Equal(1, fallback.GetProperty("occurrenceCount").GetInt32());
     }
 
     [Fact]
@@ -347,6 +389,7 @@ public sealed class AppConfigTests
         var targets = await service.GetTheOddsScheduledRefreshTargetsAsync(scheduledOptions, CancellationToken.None);
         var mlbSportsbook = targets.Single(row => row.ResolveKey() == "mlb-sportsbook");
         var mlbDfs = targets.Single(row => row.ResolveKey() == "mlb-dfs");
+        var worldCup = targets.Single(row => row.ResolveKey() == "soccer-world-cup-sportsbook");
         var sportsbookBookmakers = await service.GetTheOddsBookmakerKeysAsync(mlbSportsbook, workerOptions, CancellationToken.None);
         var dfsBookmakers = await service.GetTheOddsBookmakerKeysAsync(mlbDfs, workerOptions, CancellationToken.None);
         var mlbMarkets = await service.GetTheOddsMarketKeysAsync(mlbSportsbook, theOddsApiOptions, workerOptions, CancellationToken.None);
@@ -354,6 +397,9 @@ public sealed class AppConfigTests
         Assert.Contains(competitions, row => row.Key == ProviderDomainConfigService.WorldCupCompetitionKey && row.IsWorldCup);
         Assert.Contains(competitions, row => row.Key == "EPL" && !row.IsWorldCup);
         Assert.Contains(targets, row => row.ResolveKey() == "soccer-world-cup-sportsbook");
+        Assert.Equal(15, mlbDfs.RefreshIntervalMinutes);
+        Assert.Equal(15, mlbSportsbook.RefreshIntervalMinutes);
+        Assert.Equal(30, worldCup.RefreshIntervalMinutes);
         Assert.Contains("mybookieag", sportsbookBookmakers);
         Assert.Contains("prizepicks", dfsBookmakers);
         Assert.Contains("batter_hits", mlbMarkets);

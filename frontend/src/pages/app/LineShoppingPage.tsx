@@ -8,6 +8,7 @@ import { MarketCardSkeletonGrid, MarketTableSkeleton, MetricCardSkeleton } from 
 import { MetricCard } from '../../components/ui/MetricCard';
 import { useEntryBuilder } from '../../hooks/useEntryBuilder';
 import { useLineShoppingData } from '../../hooks/useMarketData';
+import type { MarketReadSport } from '../../hooks/useMarketData';
 import { useResponsiveView } from '../../hooks/useResponsiveView';
 import { palette } from '../../theme/palette';
 import type { MarketOpportunity } from '../../types/markets';
@@ -25,15 +26,20 @@ const defaultLineShoppingFilters: MarketFilterValues = {
   canAddOnly: false
 };
 
+const sportOptions: MarketFilterOption[] = [
+  { label: 'All', value: 'All' },
+  { label: 'MLB', value: 'MLB' },
+  { label: 'Soccer', value: 'SOCCER' }
+];
+
 export function LineShoppingPage() {
   const { isMobile } = useResponsiveView();
   const builder = useEntryBuilder();
   const [filters, setFilters] = useState<MarketFilterValues>(defaultLineShoppingFilters);
   const [candidateOnly, setCandidateOnly] = useState(false);
   const [page, setPage] = useState(1);
-  const lineShoppingQuery = useLineShoppingData(50, false, 'line-shopping');
+  const lineShoppingQuery = useLineShoppingData(50, false, 'line-shopping', toMarketReadSport(filters.sport));
   const lineShoppingMarkets = lineShoppingQuery.markets.filter(isLineShoppingDisplayMarket);
-  const sportOptions = useMemo(() => buildOptions(lineShoppingMarkets.map((market) => market.sport)), [lineShoppingMarkets]);
   const sportFilteredRows = useMemo(
     () => lineShoppingMarkets.filter((market) => filters.sport === 'All' || market.sport === filters.sport),
     [filters.sport, lineShoppingMarkets]
@@ -170,6 +176,10 @@ function categoryFilterValue(category: string) {
 
 function categoryFilterLabel(value: string) {
   return value;
+}
+
+function toMarketReadSport(value: string): MarketReadSport {
+  return value === 'MLB' || value === 'SOCCER' ? value : 'All';
 }
 
 function normalizeFilterSelection(
