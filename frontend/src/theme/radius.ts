@@ -12,6 +12,8 @@ export const radius = {
 
 export const themeShapeBorderRadius = 5;
 
-export function themeRadius(value: number) {
+// Use only for theme styleOverrides/raw CSS values. Do not use inside MUI sx
+// borderRadius because sx numeric values are already scaled by theme.shape.
+export function resolveThemeRadiusPx(value: number) {
   return value * themeShapeBorderRadius;
 }
