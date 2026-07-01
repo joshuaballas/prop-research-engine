@@ -89,7 +89,7 @@ export function LineShoppingPage() {
     <Stack spacing={3} sx={{ px: { xs: 0.75, sm: 0 } }}>
       <PageHeader
         title="Line Shopping"
-        description="Compare provider projections against reference lines without mixing incompatible entry types."
+        description="Compare provider prices and lines for the same betting opportunity."
       />
 
       {lineShoppingQuery.loading ? (
@@ -134,7 +134,7 @@ export function LineShoppingPage() {
       {lineShoppingQuery.loading ? (
         isMobile ? <MarketCardSkeletonGrid count={6} /> : <MarketTableSkeleton rows={8} columns={7} minWidth={980} />
       ) : lineShoppingQuery.error ? (
-        <ApiStateCard tone="error" message="Line-shopping rows could not be loaded from the market API." />
+        <ApiStateCard tone="error" message="Line-shopping rows could not be loaded right now." />
       ) : isMobile ? (
         groups.length ? (
           <>

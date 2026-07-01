@@ -29,16 +29,16 @@ export function BillingSummaryCard() {
       <Stack spacing={1.6}>
         <Stack spacing={0.35}>
           <Typography variant="h5" fontWeight={950}>
-            Current subscription
+            Plan access
           </Typography>
-          <Typography color="text.secondary">Plan access, renewal status, and payment details.</Typography>
+          <Typography color="text.secondary">Current workspace access and billing readiness.</Typography>
         </Stack>
         <Divider />
         <Stack spacing={0.4}>
           <BillingDetail label="Current plan" value={mockUser.planName} />
-          <BillingDetail label="Status" value={mockUser.subscriptionStatus} tone="success" />
-          <BillingDetail label="Renews" value={mockUser.renewalDate} />
-          <BillingDetail label="Payment method" value="Visa ending in 4242" />
+          <BillingDetail label="Workspace access" value={mockUser.subscriptionStatus} tone="success" />
+          <BillingDetail label="Billing" value="Not connected" />
+          <BillingDetail label="Payment method" value="Not connected" />
         </Stack>
       </Stack>
     </AppCard>

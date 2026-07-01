@@ -13,8 +13,7 @@ import type { PricingPlan } from '../../types/billing';
 import { formatCurrency } from '../../utils/formatters';
 
 function BillingPlanOption({ plan, isCurrent }: { plan: PricingPlan; isCurrent: boolean }) {
-  const { showToast } = useToast();
-  const actionLabel = isCurrent ? 'Current plan' : `Switch to ${plan.name}`;
+  const actionLabel = isCurrent ? 'Current plan' : 'Plan preview';
 
   return (
     <AppCard
@@ -64,10 +63,9 @@ function BillingPlanOption({ plan, isCurrent }: { plan: PricingPlan; isCurrent: 
       </Stack>
 
       <Button
-        variant={isCurrent ? 'outlined' : 'contained'}
-        disabled={isCurrent}
+        variant="outlined"
+        disabled
         startIcon={<SwapHorizOutlinedIcon />}
-        onClick={() => showToast(`${actionLabel} action will be available when billing is connected.`, 'info')}
         sx={{ mt: 'auto' }}
       >
         {actionLabel}
@@ -81,7 +79,7 @@ export function BillingPage() {
 
   return (
     <Stack spacing={3} sx={{ pb: { xs: 'calc(92px + env(safe-area-inset-bottom))', lg: 0 } }}>
-      <PageHeader title="Billing" description="Manage your plan, subscription status, and payment details." />
+      <PageHeader title="Billing" description="Review plan access and billing readiness." />
 
       <Box
         sx={{
@@ -96,10 +94,10 @@ export function BillingPage() {
           <Stack spacing={1.8} sx={{ height: '100%' }}>
             <Stack spacing={0.35}>
               <Typography variant="h5" fontWeight={950}>
-                Billing actions
+                Billing setup
               </Typography>
               <Typography color="text.secondary">
-                Subscription changes and payment updates will be handled securely once billing is connected.
+                Plan changes and payment updates are not connected yet. This page keeps the billing workflow scoped for later.
               </Typography>
             </Stack>
             <Divider />
@@ -116,19 +114,19 @@ export function BillingPage() {
                 startIcon={<CreditCardOutlinedIcon />}
                 onClick={() => showToast('Payment update action will be available when billing is connected.', 'info')}
               >
-                Update payment method
+                Add payment method
               </Button>
             </Stack>
             <Button
               variant="outlined"
-              onClick={() => showToast('Cancellation flow will be available when billing is connected.', 'warning')}
+              onClick={() => showToast('Plan cancellation will be available when billing is connected.', 'warning')}
               sx={{
                 ...destructiveOutlineButtonSx,
                 alignSelf: { xs: 'stretch', sm: 'flex-start' },
                 mt: 'auto'
               }}
             >
-              Cancel subscription
+              Cancel plan
             </Button>
           </Stack>
         </AppCard>

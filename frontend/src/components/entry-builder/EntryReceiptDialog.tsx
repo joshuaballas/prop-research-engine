@@ -41,7 +41,7 @@ export function EntryReceiptDialog({ open, onClose, legs, review, amount }: Entr
   const statusLabel = getReceiptStatusLabel(review);
   const disclaimerProvider = review.provider && review.provider !== 'No provider selected' ? review.provider : 'the provider';
   const warnings = buildReceiptWarnings(review);
-  const trackingHelperText = ready ? 'Entry Tracker coming later.' : 'Fix blockers before tracking.';
+  const trackingHelperText = ready ? 'Entry tracking is planned.' : 'Resolve entry blockers before tracking.';
   const legNotes = useMemo(() => legs.map((leg) => getLegNote(leg)), [legs]);
   const showNotesColumn = legNotes.some(Boolean);
 

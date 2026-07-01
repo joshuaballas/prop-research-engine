@@ -44,7 +44,7 @@ export function CreateAccountPage() {
           <Stack spacing={0.8}>
             <Typography variant="h4">Choose a plan first</Typography>
             <Typography color="text.secondary">
-              Select a plan before creating an account so checkout can continue with the right subscription.
+              Select a plan before creating an account so setup can use the right access level.
             </Typography>
           </Stack>
           <Button component={RouterLink} to="/pricing" variant="contained" size="large">
@@ -92,7 +92,7 @@ export function CreateAccountPage() {
             <Box>
               <Typography fontWeight={950}>Selected plan: {selectedPlan.name}</Typography>
               <Typography variant="body2" color="text.secondary">
-                Billing handled securely at checkout later.
+                Billing is not connected yet.
               </Typography>
             </Box>
           </Stack>
@@ -103,7 +103,7 @@ export function CreateAccountPage() {
           <TextField id="create-account-password" name="new-password" label="Password" type="password" placeholder="Create a password" autoComplete="new-password" fullWidth sx={authFieldSx} />
           <TextField id="create-account-confirm-password" name="confirm-password" label="Confirm password" type="password" placeholder="Confirm your password" autoComplete="new-password" fullWidth sx={authFieldSx} />
           <Button type="submit" variant="contained" size="large">
-            Continue to Checkout
+            Continue
           </Button>
         </Stack>
 

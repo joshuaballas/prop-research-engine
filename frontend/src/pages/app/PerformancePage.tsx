@@ -116,7 +116,7 @@ export function PerformancePage() {
       <Stack spacing={1.5}>
         <Stack spacing={0.4}>
           <Typography variant="h5" fontWeight={950}>
-            Yesterday's Results
+            Latest Graded Slate
           </Typography>
           <Typography color="text.secondary">
             Picks from the latest graded slate{selectedResultsDate ? ` (${formatDisplayDate(selectedResultsDate)})` : ''}.
@@ -138,7 +138,7 @@ export function PerformancePage() {
       {performanceQuery.loading ? (
         <PerformanceSummarySkeleton count={5} />
       ) : performanceQuery.error ? (
-        <ApiStateCard tone="error" message="Performance summary could not be loaded from the market API." />
+        <ApiStateCard tone="error" message="Performance summary could not be loaded right now." />
       ) : performanceRows.length && hasGradedSample ? (
         <PerformanceSummaryCards rows={performanceRows} />
       ) : (
@@ -255,7 +255,7 @@ function YesterdayResultsSection({
   }
 
   if (error) {
-    return <ApiStateCard tone="error" message="Yesterday's results could not be loaded from the market API." />;
+    return <ApiStateCard tone="error" message="Latest graded results could not be loaded right now." />;
   }
 
   if (!rows.length) {
@@ -263,7 +263,7 @@ function YesterdayResultsSection({
       <AppCard>
         <Stack spacing={0.65}>
           <Typography variant="h6" fontWeight={950}>
-            No graded results for yesterday yet.
+            No graded slate is available yet.
           </Typography>
           <Typography color="text.secondary">
             Results will appear after completed games are imported and matched.

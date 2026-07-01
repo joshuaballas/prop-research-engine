@@ -90,7 +90,7 @@ export function MarketsPage() {
 
   return (
     <Stack spacing={3} sx={{ px: { xs: 0.75, sm: 0 } }}>
-      <PageHeader title="Prop Scanner" description="Browse current provider props with hit chance, edge, and entry status." />
+      <PageHeader title="Prop Scanner" description="Browse current sportsbook and DFS props with hit chance, edge, and entry status." />
 
       {marketsQuery.loading ? (
         <MetricCardSkeleton count={3} />
@@ -133,7 +133,7 @@ export function MarketsPage() {
       {marketsQuery.loading ? (
         isMobile ? <MarketCardSkeletonGrid count={6} /> : <MarketTableSkeleton rows={8} columns={8} minWidth={980} />
       ) : marketsQuery.error ? (
-        <ApiStateCard tone="error" message="Prop scanner rows could not be loaded from the market API." />
+        <ApiStateCard tone="error" message="Current prop lines could not be loaded right now." />
       ) : isMobile ? (
         sortedMarkets.length ? (
           <>

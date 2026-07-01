@@ -62,7 +62,7 @@ export function PlanCard({ plan }: { plan: PricingPlan }) {
               </Typography>
             </Typography>
             <Typography variant="caption" color="text.secondary">
-              Cancel anytime. Billing will be handled securely at checkout.
+              Plan structure shown for future billing.
             </Typography>
           </Stack>
 

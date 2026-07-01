@@ -120,9 +120,9 @@ export function TopPicksPage() {
           </>
         )
       ) : topPicksQuery.error ? (
-        <ApiStateCard tone="error" message="Top picks could not be loaded from the market API." />
+        <ApiStateCard tone="error" message="Top picks could not be loaded right now." />
       ) : topPicks.length === 0 ? (
-        <ApiStateCard message="No top picks are available from the latest market snapshot." />
+        <ApiStateCard message="No top picks are available from the latest market board." />
       ) : visibleTopPicks.length === 0 ? (
         <ApiStateCard message="No top picks match these filters." />
       ) : isMobile ? (

@@ -84,7 +84,7 @@ export function AccountPage() {
 
   return (
     <Stack spacing={3} sx={{ pb: { xs: 'calc(92px + env(safe-area-inset-bottom))', lg: 0 } }}>
-      <PageHeader title="Account" description="Manage profile details, preferences, security, and plan access." />
+      <PageHeader title="Account" description="Manage profile details, preferences, and plan access." />
 
       <Grid container spacing={2} alignItems="stretch">
         <Grid size={{ xs: 12, lg: 7 }}>
@@ -170,12 +170,12 @@ export function AccountPage() {
                 <SectionTitle
                   icon={<SecurityOutlinedIcon fontSize="small" />}
                   title="Security"
-                  description="Review account protection settings before connecting live identity controls."
+                  description="Review account protection settings for the connected workspace."
                 />
                 <Stack spacing={0.5}>
                   <DetailRow label="Email sign-in" value="Enabled" tone="success" />
-                  <DetailRow label="MFA status" value="Not connected" tone="danger" />
-                  <DetailRow label="Recovery controls" value="Not connected" tone="danger" />
+                  <DetailRow label="MFA status" value="Not connected" tone="warning" />
+                  <DetailRow label="Recovery controls" value="Not connected" tone="warning" />
                 </Stack>
                 <Typography variant="body2" color="text.secondary">
                   Account security can support authenticator-app MFA once connected. Password changes and recovery will be
@@ -188,13 +188,13 @@ export function AccountPage() {
               <Stack spacing={2} sx={{ height: '100%' }}>
                 <SectionTitle
                   icon={<CreditCardOutlinedIcon fontSize="small" />}
-                  title="Account status"
-                  description="Review current access and jump to billing details."
+                  title="Plan access"
+                  description="Review current workspace access and billing setup."
                 />
                 <Stack spacing={0.5}>
                   <DetailRow label="Current plan" value={mockUser.planName} />
-                  <DetailRow label="Subscription" value={mockUser.subscriptionStatus} tone="success" />
-                  <DetailRow label="Renews" value={mockUser.renewalDate} />
+                  <DetailRow label="Workspace access" value={mockUser.subscriptionStatus} tone="success" />
+                  <DetailRow label="Billing" value="Not connected" tone="warning" />
                 </Stack>
                 <Button
                   component={RouterLink}
@@ -203,7 +203,7 @@ export function AccountPage() {
                   startIcon={<CreditCardOutlinedIcon />}
                   sx={{ mt: 'auto', alignSelf: { xs: 'stretch', sm: 'flex-start' } }}
                 >
-                  Manage billing
+                  Open billing setup
                 </Button>
               </Stack>
             </AppCard>

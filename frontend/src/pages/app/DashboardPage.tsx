@@ -84,7 +84,7 @@ export function DashboardPage() {
       {!isDataHealthy ? (
         <DataStateBanner
           title={freshnessQuery.error ? 'Market data is unavailable' : freshness?.hasUsableMarketData ? 'Market data needs attention' : 'No usable market data yet'}
-          message={freshnessQuery.error ? 'The read-only market API could not be reached.' : freshness?.usabilityWarning ?? 'Refresh or provider status may be limiting current market reads.'}
+          message={freshnessQuery.error ? 'Market data could not be reached.' : freshness?.usabilityWarning ?? 'Current market availability may be limited.'}
           status={dataStatus}
         />
       ) : null}

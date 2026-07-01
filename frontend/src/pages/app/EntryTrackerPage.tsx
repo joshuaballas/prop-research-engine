@@ -90,7 +90,7 @@ export function EntryTrackerPage() {
 
       <Grid container spacing={1.5} alignItems="stretch">
         <Grid size={{ xs: 12, sm: 6, lg: 3 }}>
-          <MetricCard label="Tracked Entries" value="Coming later" helper="Saved entries" />
+          <MetricCard label="Tracked Entries" value="Planned" helper="Saved entries" />
         </Grid>
         <Grid size={{ xs: 12, sm: 6, lg: 3 }}>
           <MetricCard label="Open Entries" value="-" helper="Waiting for results" />
@@ -127,9 +127,9 @@ function EntryTrackerEmptyState({ onOpenEntry }: { onOpenEntry: () => void }) {
     <AppCard>
       <Stack spacing={1.5} alignItems="flex-start">
         <Stack spacing={0.6}>
-          <Typography variant="h4">Entry tracking is coming later.</Typography>
+          <Typography variant="h4">Entry tracking is planned.</Typography>
           <Typography color="text.secondary">
-            Build an entry in the drawer, submit it manually in the provider app, then track it here once tracking is available.
+            Build entries in the drawer and submit them manually in the provider app. This page is reserved for saved entry history once tracking is connected.
           </Typography>
         </Stack>
         <Button
@@ -157,11 +157,11 @@ function EntryHistoryPreview() {
         <Stack direction="row" justifyContent="space-between" alignItems="flex-start" gap={1.5}>
           <Stack spacing={0.4}>
             <Stack direction="row" gap={1} alignItems="center" flexWrap="wrap" useFlexGap>
-              <Typography variant="h5">Entry History Preview</Typography>
+              <Typography variant="h5">Entry history preview</Typography>
               <ExampleBadge />
             </Stack>
             <Typography variant="body2" color="text.secondary">
-              Example rows show how tracked entries will be listed after tracking is available.
+              Example rows show how saved entries will be listed after tracking is connected.
             </Typography>
           </Stack>
         </Stack>
@@ -199,7 +199,7 @@ function FilterPreview() {
         </Box>
       ))}
       <Typography variant="caption" color="text.secondary" fontWeight={900}>
-        Filters coming later
+        Filters planned
       </Typography>
     </Stack>
   );

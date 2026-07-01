@@ -24,7 +24,7 @@ export function PricingPage() {
     {
       icon: <LockOutlinedIcon />,
       title: 'Secure billing path',
-      body: 'Checkout and subscription management are designed for secure billing once payment processing is connected.'
+      body: 'Checkout and plan management will be connected before paid access is offered.'
     }
   ];
 
@@ -38,7 +38,7 @@ export function PricingPage() {
           <Typography color="text.secondary" maxWidth={760} fontSize={{ md: 18 }}>
             Start with sportsbook and DFS line shopping, top candidates, and modifier-aware entry review.
           </Typography>
-          <MetadataText sx={{ mt: 1 }}>Monthly pricing. Annual plans coming later.</MetadataText>
+          <MetadataText sx={{ mt: 1 }}>Monthly pricing shown for planning. Billing is not connected yet.</MetadataText>
         </Stack>
 
         <Box
@@ -90,7 +90,7 @@ export function PricingPage() {
 
         <Stack spacing={1} textAlign="center" alignItems="center">
           <Typography color="text.secondary" variant="body2">
-            Prices are shown monthly. Secure checkout and billing management will be connected before accepting paid subscriptions.
+            Prices are shown monthly. Secure checkout and billing management will be connected before accepting paid access.
           </Typography>
           <Typography color="text.secondary" variant="body2" maxWidth={820}>
             This is a research tool. Odds, projections, payouts, and availability should be confirmed in the provider app before submitting.
