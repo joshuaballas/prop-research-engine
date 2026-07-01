@@ -1,4 +1,4 @@
-import { Box, Button, Skeleton, Stack, TableBody, TableCell, TableHead, TableRow, Typography } from '@mui/material';
+import { Box, Button, Grid, Stack, TableBody, TableCell, TableHead, TableRow, Typography } from '@mui/material';
 import { useEffect, useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
 import { Link as RouterLink } from 'react-router-dom';
@@ -7,7 +7,8 @@ import { SportToggleRail } from '../../components/navigation/SportToggleRail';
 import { PropDetailsModal } from '../../components/prop-history/PropDetailsModal';
 import { ProviderLabel } from '../../components/providers/ProviderLabel';
 import { DataStateBanner } from '../../components/ui/DataStateBanner';
-import { MarketTableSkeleton } from '../../components/ui/LoadingSkeletons';
+import { MarketTableSkeleton, MetricCardSkeleton } from '../../components/ui/LoadingSkeletons';
+import { MetricCard } from '../../components/ui/MetricCard';
 import { OpportunityPickText } from '../../components/ui/OpportunityCard';
 import { PageHeader } from '../../components/ui/PageHeader';
 import { SectionHeader } from '../../components/ui/SectionHeader';
@@ -90,12 +91,12 @@ export function DashboardPage() {
       ) : null}
 
       {anyPrimaryLoading ? (
-        <DashboardKpiSkeleton />
+        <MetricCardSkeleton count={3} />
       ) : (
-        <DashboardKpiStrip
+        <DashboardMetricCards
           items={[
             { label: 'Top opportunities', value: `${filteredTopPicks.length}`, helper: 'Current board' },
-            { label: 'Best edge', value: formatPercent(bestEdgeMarket?.probabilityEdge, { signed: true }), helper: bestEdgeMarket?.player ?? 'No active prop' },
+            { label: 'Best edge', value: formatPercent(bestEdgeMarket?.probabilityEdge, { signed: true }), helper: bestEdgeMarket?.player ?? 'No active prop', valueColor: 'success.main' },
             {
               label: 'Latest graded slate',
               value: hasLatestGradedSlate ? latestGradedDateLabel ?? 'Pending' : 'Pending',
@@ -151,70 +152,15 @@ function resolveDashboardMarketReadSport(selectedSports: SportCode[]): MarketRea
     : 'All';
 }
 
-function DashboardKpiStrip({ items }: { items: Array<{ label: string; value: string; helper: string }> }) {
+function DashboardMetricCards({ items }: { items: Array<{ label: string; value: string; helper: string; valueColor?: string }> }) {
   return (
-    <Box
-      sx={{
-        borderTop: '1px solid rgba(148,163,184,.16)',
-        borderBottom: '1px solid rgba(148,163,184,.16)',
-        display: 'grid',
-        gridTemplateColumns: 'repeat(3, minmax(0, 1fr))',
-        bgcolor: 'rgba(8,13,26,.18)'
-      }}
-    >
-      {items.map((item, index) => (
-        <Box
-          key={item.label}
-          sx={{
-            minWidth: 0,
-            px: { xs: 0.85, sm: 1.35, md: 1.7 },
-            py: { xs: 0.75, sm: 1.25, md: 1.45 },
-            borderLeft: {
-              xs: index === 0 ? 0 : '1px solid rgba(148,163,184,.12)'
-            }
-          }}
-        >
-          <Typography
-            variant="caption"
-            color="text.secondary"
-            fontWeight={850}
-            noWrap
-            sx={{ display: 'block', fontSize: { xs: 10.5, sm: undefined }, lineHeight: { xs: 1.15, sm: undefined } }}
-          >
-            {item.label}
-          </Typography>
-          <Typography variant="h5" sx={{ mt: { xs: 0.2, sm: 0.35 }, fontSize: { xs: 18, sm: undefined }, lineHeight: { xs: 1.15, sm: undefined } }} noWrap>
-            {item.value}
-          </Typography>
-          <Typography variant="body2" color="text.secondary" noWrap sx={{ display: { xs: 'none', sm: 'block' } }}>
-            {item.helper}
-          </Typography>
-        </Box>
+    <Grid container spacing={2}>
+      {items.map((item) => (
+        <Grid key={item.label} size={{ xs: 6, sm: 6, lg: 4 }}>
+          <MetricCard label={item.label} value={item.value} helper={item.helper} valueColor={item.valueColor} />
+        </Grid>
       ))}
-    </Box>
-  );
-}
-
-function DashboardKpiSkeleton() {
-  return (
-    <Box
-      aria-busy="true"
-      sx={{
-        borderTop: '1px solid rgba(148,163,184,.16)',
-        borderBottom: '1px solid rgba(148,163,184,.16)',
-        display: 'grid',
-        gridTemplateColumns: 'repeat(3, minmax(0, 1fr))',
-        bgcolor: 'rgba(8,13,26,.18)'
-      }}
-    >
-      {Array.from({ length: 3 }).map((_, index) => (
-        <Box key={index} sx={{ px: { xs: 0.85, sm: 1.35, md: 1.7 }, py: { xs: 0.75, sm: 1.25, md: 1.45 } }}>
-          <Skeleton width="72%" height={14} />
-          <Skeleton width="58%" height={24} />
-          <Skeleton sx={{ display: { xs: 'none', sm: 'block' } }} width="74%" height={16} />
-        </Box>
-      ))}
-    </Box>
+    </Grid>
   );
 }
 
