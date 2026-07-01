@@ -910,6 +910,130 @@ public sealed class RefreshSafetyTests
     }
 
     [Fact]
+    public async Task MarketFreshness_ColdStartWithEnabledTargets_ReturnsSyncingReadiness()
+    {
+        await using var factory = new SafetyTestApplicationFactory(new Dictionary<string, string?>
+        {
+            ["TheOddsScheduledRefresh:Enabled"] = "true",
+            ["TheOddsScheduledRefresh:AllowScheduledLiveRefresh"] = "true",
+            ["PublicMarkets:ColdStartGraceMinutes"] = "5"
+        });
+        using var client = factory.CreateClient();
+        await EnableReadinessTargetsAsync(factory, enableMlb: true, enableSoccer: true);
+
+        var response = await client.GetAsync("/api/markets/freshness");
+
+        await EnsureSuccessWithBodyAsync(response);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        var readiness = json.GetProperty("marketReadiness");
+        Assert.Equal("Syncing", readiness.GetProperty("status").GetString());
+        Assert.Equal("info", readiness.GetProperty("severity").GetString());
+        Assert.True(readiness.GetProperty("isColdStart").GetBoolean());
+        Assert.True(readiness.GetProperty("inStartupGraceWindow").GetBoolean());
+        Assert.Equal(2, readiness.GetProperty("supportedSportCount").GetInt32());
+        Assert.Equal(0, factory.TheOddsAdapter.CallCount);
+    }
+
+    [Fact]
+    public async Task MarketFreshness_PartialSportAvailabilityDuringGrace_IsNotError()
+    {
+        await using var factory = new SafetyTestApplicationFactory(new Dictionary<string, string?>
+        {
+            ["TheOddsScheduledRefresh:Enabled"] = "true",
+            ["TheOddsScheduledRefresh:AllowScheduledLiveRefresh"] = "true",
+            ["PublicMarkets:ColdStartGraceMinutes"] = "5"
+        });
+        using var client = factory.CreateClient();
+        await EnableReadinessTargetsAsync(factory, enableMlb: true, enableSoccer: true);
+        await AddFreshSoccerMarketSnapshotAsync(factory);
+
+        var response = await client.GetAsync("/api/markets/freshness");
+
+        await EnsureSuccessWithBodyAsync(response);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        var readiness = json.GetProperty("marketReadiness");
+        Assert.Equal("Partial", readiness.GetProperty("status").GetString());
+        Assert.NotEqual("error", readiness.GetProperty("severity").GetString());
+        Assert.Equal(1, readiness.GetProperty("readySportCount").GetInt32());
+        Assert.Contains(readiness.GetProperty("sports").EnumerateArray(), row =>
+            row.GetProperty("sport").GetString() == "SOCCER" &&
+            row.GetProperty("hasUsableMarketData").GetBoolean());
+        Assert.Equal(0, factory.TheOddsAdapter.CallCount);
+    }
+
+    [Fact]
+    public async Task MarketFreshness_MissingDataAfterGrace_ReturnsStaleReadiness()
+    {
+        await using var factory = new SafetyTestApplicationFactory(new Dictionary<string, string?>
+        {
+            ["TheOddsScheduledRefresh:Enabled"] = "true",
+            ["TheOddsScheduledRefresh:AllowScheduledLiveRefresh"] = "true",
+            ["PublicMarkets:ColdStartGraceMinutes"] = "0"
+        });
+        using var client = factory.CreateClient();
+        await EnableReadinessTargetsAsync(factory, enableMlb: true, enableSoccer: true);
+
+        var response = await client.GetAsync("/api/markets/freshness");
+
+        await EnsureSuccessWithBodyAsync(response);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        var readiness = json.GetProperty("marketReadiness");
+        Assert.Equal("Stale", readiness.GetProperty("status").GetString());
+        Assert.Equal("warning", readiness.GetProperty("severity").GetString());
+        Assert.False(readiness.GetProperty("inStartupGraceWindow").GetBoolean());
+        Assert.Equal(0, factory.TheOddsAdapter.CallCount);
+    }
+
+    [Fact]
+    public async Task MarketFreshness_ProviderRejectedKeyStillReturnsErrorReadiness()
+    {
+        await using var factory = new SafetyTestApplicationFactory(new Dictionary<string, string?>
+        {
+            ["TheOddsScheduledRefresh:Enabled"] = "true",
+            ["TheOddsScheduledRefresh:AllowScheduledLiveRefresh"] = "true",
+            ["PublicMarkets:ColdStartGraceMinutes"] = "5"
+        });
+        using var client = factory.CreateClient();
+        await EnableReadinessTargetsAsync(factory, enableMlb: true, enableSoccer: false);
+        await factory.SeedRejectedKeyRefreshAsync();
+
+        var response = await client.GetAsync("/api/markets/freshness");
+
+        await EnsureSuccessWithBodyAsync(response);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        var readiness = json.GetProperty("marketReadiness");
+        Assert.Equal("ProviderUnavailable", readiness.GetProperty("status").GetString());
+        Assert.Equal("error", readiness.GetProperty("severity").GetString());
+        Assert.Equal(0, factory.TheOddsAdapter.CallCount);
+    }
+
+    [Fact]
+    public async Task MarketFreshness_DisabledSoccerTarget_DoesNotMakeReadinessFail()
+    {
+        await using var factory = new SafetyTestApplicationFactory(new Dictionary<string, string?>
+        {
+            ["TheOddsScheduledRefresh:Enabled"] = "true",
+            ["TheOddsScheduledRefresh:AllowScheduledLiveRefresh"] = "true",
+            ["PublicMarkets:ColdStartGraceMinutes"] = "0"
+        });
+        using var client = factory.CreateClient();
+        await EnableReadinessTargetsAsync(factory, enableMlb: true, enableSoccer: false);
+        await AddFreshMlbMarketSnapshotAsync(factory);
+
+        var response = await client.GetAsync("/api/markets/freshness");
+
+        await EnsureSuccessWithBodyAsync(response);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        var readiness = json.GetProperty("marketReadiness");
+        Assert.Equal("Fresh", readiness.GetProperty("status").GetString());
+        Assert.Equal("ok", readiness.GetProperty("severity").GetString());
+        Assert.Equal(1, readiness.GetProperty("supportedSportCount").GetInt32());
+        Assert.DoesNotContain(readiness.GetProperty("sports").EnumerateArray(), row =>
+            row.GetProperty("sport").GetString() == "SOCCER");
+        Assert.Equal(0, factory.TheOddsAdapter.CallCount);
+    }
+
+    [Fact]
     public async Task PublicSnapshots_ExcludePreservedRowsAfterEventStart_AndFreshnessReportsNoCurrentBoard()
     {
         await using var factory = new SafetyTestApplicationFactory();
@@ -8869,6 +8993,150 @@ public sealed class RefreshSafetyTests
                 UpdatedAt = DateTimeOffset.UtcNow.AddDays(-(index + 1))
             });
         }
+    }
+
+    private static async Task EnableReadinessTargetsAsync(
+        SafetyTestApplicationFactory factory,
+        bool enableMlb,
+        bool enableSoccer)
+    {
+        await factory.EnsureDatabaseAsync();
+        await ProviderDomainConfigSeeder.SeedAsync(factory.Services);
+
+        using var scope = factory.Services.CreateScope();
+        var dbContext = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+        var targets = await dbContext.ProviderRefreshTargets.ToArrayAsync();
+        foreach (var target in targets)
+        {
+            target.IsEnabled = false;
+            target.DisabledReason = "Disabled for test readiness scope.";
+        }
+
+        foreach (var target in targets.Where(row => row.TargetKey is "mlb-dfs" or "mlb-sportsbook"))
+        {
+            target.IsEnabled = enableMlb;
+            target.DisabledReason = enableMlb ? null : "Disabled for test readiness scope.";
+            target.ProviderSportKey ??= "baseball_mlb";
+        }
+
+        var worldCup = targets.Single(row => row.TargetKey == "soccer-world-cup-sportsbook");
+        worldCup.IsEnabled = enableSoccer;
+        worldCup.DisabledReason = enableSoccer ? null : "Disabled for test readiness scope.";
+        worldCup.ProviderSportKey = "soccer_fifa_world_cup";
+        worldCup.BookmakerPreset = "allSportsbooks";
+        worldCup.Regions = "us";
+        worldCup.UpdatedAtUtc = DateTimeOffset.UtcNow;
+
+        await dbContext.SaveChangesAsync();
+        scope.ServiceProvider.GetRequiredService<IProviderDomainConfigService>().ClearCache();
+    }
+
+    private static async Task AddFreshMlbMarketSnapshotAsync(SafetyTestApplicationFactory factory)
+    {
+        using var scope = factory.Services.CreateScope();
+        var dbContext = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+        var now = DateTimeOffset.UtcNow;
+        var runId = Guid.NewGuid();
+        dbContext.TheOddsRefreshRuns.Add(CreateTheOddsRun(
+            runId,
+            "MLB",
+            now.AddMinutes(-2),
+            now.AddMinutes(-1),
+            "default",
+            "Sportsbook",
+            new { ingestion = new[] { new { success = true } } }));
+        dbContext.MarketLineShoppingSnapshots.Add(new MarketLineShoppingSnapshot
+        {
+            Id = Guid.NewGuid(),
+            TheOddsRefreshRunId = runId,
+            Sport = "MLB",
+            SlateDate = DateOnly.FromDateTime(now.UtcDateTime),
+            GeneratedAtUtc = now.AddMinutes(-1),
+            BookmakerPreset = "default",
+            ProviderCategory = "Sportsbook",
+            Provider = "FanDuel",
+            Bookmaker = "FanDuel",
+            Player = "Ready Player",
+            EventId = "ready-event",
+            EventName = "Away @ Home",
+            EventStartTime = now.AddHours(2),
+            LifecycleStatus = "Active",
+            IsStale = false,
+            IsExpired = false,
+            PropType = "Hits",
+            Line = 0.5m,
+            BestSide = "Over",
+            BestBookmaker = "FanDuel",
+            BestAmericanPrice = -110,
+            BestDecimalPrice = 1.91m,
+            BestProbability = 0.62m,
+            BestImpliedProbability = 0.52m,
+            BestProbabilityEdge = 0.10m,
+            BestEstimatedEv = 0.10m,
+            StrategyClassification = "Candidate",
+            StrategyTier = "MlbSportsbookRecommendation",
+            IsCandidate = true,
+            EntryProvider = "Sportsbook",
+            EntryCompatibilityGroup = "Sportsbook",
+            EntryProviderCategory = "Sportsbook",
+            EntryActionableForUser = false,
+            DetailsJson = JsonSerializer.SerializeToDocument(new { player = "Ready Player" })
+        });
+        await dbContext.SaveChangesAsync();
+    }
+
+    private static async Task AddFreshSoccerMarketSnapshotAsync(SafetyTestApplicationFactory factory)
+    {
+        using var scope = factory.Services.CreateScope();
+        var dbContext = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+        var now = DateTimeOffset.UtcNow;
+        var runId = Guid.NewGuid();
+        dbContext.TheOddsRefreshRuns.Add(CreateTheOddsRun(
+            runId,
+            "SOCCER",
+            now.AddMinutes(-2),
+            now.AddMinutes(-1),
+            "allSportsbooks",
+            "Sportsbook",
+            new { sport = "SOCCER", competition = "World Cup", ingestion = new[] { new { success = true } } }));
+        dbContext.MarketLineShoppingSnapshots.Add(new MarketLineShoppingSnapshot
+        {
+            Id = Guid.NewGuid(),
+            TheOddsRefreshRunId = runId,
+            Sport = "SOCCER",
+            SlateDate = DateOnly.FromDateTime(now.UtcDateTime),
+            GeneratedAtUtc = now.AddMinutes(-1),
+            BookmakerPreset = "allSportsbooks",
+            ProviderCategory = "Sportsbook",
+            Provider = "FanDuel",
+            Bookmaker = "FanDuel",
+            Player = "Ready Forward",
+            EventId = "soccer-ready-event",
+            EventName = "Away @ Home",
+            EventStartTime = now.AddHours(2),
+            LifecycleStatus = "Active",
+            IsStale = false,
+            IsExpired = false,
+            PropType = "Shots",
+            Line = 0.5m,
+            BestSide = "Over",
+            BestBookmaker = "FanDuel",
+            BestAmericanPrice = -110,
+            BestDecimalPrice = 1.91m,
+            BestProbability = 0.62m,
+            BestImpliedProbability = 0.52m,
+            BestProbabilityEdge = 0.10m,
+            BestEstimatedEv = 0.10m,
+            StrategyClassification = "Candidate",
+            StrategyTier = "SoccerSportsbookRecommendation",
+            IsCandidate = true,
+            EntryProvider = "Sportsbook",
+            EntryCompatibilityGroup = "Sportsbook",
+            EntryProviderCategory = "Sportsbook",
+            EntryActionableForUser = false,
+            DetailsJson = JsonSerializer.SerializeToDocument(new { player = "Ready Forward", competition = "World Cup" })
+        });
+        await dbContext.SaveChangesAsync();
     }
 
     private static TheOddsRefreshRun CreateTheOddsRun(

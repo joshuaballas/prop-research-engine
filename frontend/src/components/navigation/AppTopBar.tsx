@@ -2,6 +2,7 @@ import HelpOutlineRoundedIcon from '@mui/icons-material/HelpOutlineRounded';
 import { Avatar, Box, Button, Stack, Tooltip, Typography } from '@mui/material';
 import { useState } from 'react';
 import { GlossaryDialog } from '../glossary/GlossaryDialog';
+import type { MarketReadinessDto } from '../../api/types';
 import { isDemoDataMode } from '../../config/dataMode';
 import { mockUser } from '../../data/mockUser';
 import { useMarketFreshnessData } from '../../hooks/useMarketData';
@@ -66,14 +67,18 @@ export function AppTopBar() {
   );
 }
 
-type LiveDataState = 'healthy' | 'issue';
+type LiveDataState = 'healthy' | 'syncing' | 'issue';
 
 function LiveDataIndicator({ state }: { state: LiveDataState }) {
   const isHealthy = state === 'healthy';
-  const label = isHealthy ? 'Auto refresh' : 'Refresh issue';
+  const isIssue = state === 'issue';
+  const label = isHealthy ? 'Auto refresh' : isIssue ? 'Refresh issue' : 'Syncing market data';
   const tooltip = isHealthy
     ? 'Market data refreshes automatically in the background. No page reload needed.'
-    : 'Market data could not refresh. The current board may be stale.';
+    : isIssue
+      ? 'Market data could not refresh. The current board may be stale.'
+      : 'Market data is updating in the background. No page reload needed.';
+  const color = isHealthy ? palette.success : isIssue ? palette.danger : palette.warning;
 
   return (
     <Tooltip title={tooltip} arrow>
@@ -84,7 +89,7 @@ function LiveDataIndicator({ state }: { state: LiveDataState }) {
         spacing={0.75}
         aria-label={`${label}. ${tooltip}`}
         sx={{
-          color: isHealthy ? palette.success : palette.danger,
+          color,
           flexShrink: 0,
           cursor: 'default'
         }}
@@ -95,8 +100,8 @@ function LiveDataIndicator({ state }: { state: LiveDataState }) {
             width: 8,
             height: 8,
             borderRadius: '999px',
-            bgcolor: isHealthy ? palette.success : palette.danger,
-            boxShadow: isHealthy ? `0 0 0 0 ${palette.success}66` : `0 0 0 2px ${palette.danger}22`,
+            bgcolor: color,
+            boxShadow: isHealthy ? `0 0 0 0 ${palette.success}66` : `0 0 0 2px ${color}22`,
             animation: isHealthy ? 'live-data-pulse 1.8s ease-out infinite' : 'none',
             '@keyframes live-data-pulse': {
               '0%': { boxShadow: `0 0 0 0 ${palette.success}66` },
@@ -131,11 +136,43 @@ function resolveLiveDataState(
     return null;
   }
 
-  if (hasPollingError || freshness?.hasUsableMarketData === false || freshness?.providerRejectedKeyDetected === true || hasProviderIssue(freshness?.providerStatus?.status, freshness?.hasUsableMarketData)) {
+  if (hasPollingError) {
+    return 'issue';
+  }
+
+  const readinessState = resolveReadinessState(freshness?.marketReadiness);
+  if (readinessState) {
+    return readinessState;
+  }
+
+  if (freshness?.hasUsableMarketData === false || freshness?.providerRejectedKeyDetected === true || hasProviderIssue(freshness?.providerStatus?.status, freshness?.hasUsableMarketData)) {
     return 'issue';
   }
 
   return 'healthy';
+}
+
+function resolveReadinessState(readiness: MarketReadinessDto | null | undefined): LiveDataState | null {
+  const status = readiness?.status?.trim().toLowerCase();
+  const severity = readiness?.severity?.trim().toLowerCase();
+
+  if (!status && !severity) {
+    return null;
+  }
+
+  if (severity === 'error' || status === 'failed' || status === 'providerunavailable') {
+    return 'issue';
+  }
+
+  if (status === 'fresh' && (severity === undefined || severity === 'ok')) {
+    return 'healthy';
+  }
+
+  if (['syncing', 'initializing', 'partial', 'stale'].includes(status ?? '') || severity === 'info' || severity === 'warning') {
+    return 'syncing';
+  }
+
+  return null;
 }
 
 function hasProviderIssue(status: string | undefined, hasUsableMarketData: boolean | undefined) {

@@ -1,5 +1,6 @@
 export interface MarketFreshnessDto {
   generatedAtUtc: string;
+  marketReadiness?: MarketReadinessDto | null;
   latestSuccessfulRefresh?: MarketRefreshRunSummaryDto | null;
   LatestSuccessfulRefresh?: MarketRefreshRunSummaryDto | null;
   isFresh?: boolean;
@@ -32,6 +33,33 @@ export interface MarketFreshnessDto {
     statusReason?: string;
     recommendedAction?: string;
   };
+}
+
+export interface MarketReadinessDto {
+  status?: 'Fresh' | 'Syncing' | 'Initializing' | 'Partial' | 'Stale' | 'Failed' | 'ProviderUnavailable' | string;
+  severity?: 'ok' | 'info' | 'warning' | 'error' | string;
+  isColdStart?: boolean;
+  inStartupGraceWindow?: boolean;
+  reason?: string;
+  latestSuccessfulRefreshCompletedAtUtc?: string | null;
+  nextRefreshDueUtc?: string | null;
+  nextDataAvailableEstimateUtc?: string | null;
+  graceEndsAtUtc?: string | null;
+  supportedSportCount?: number;
+  readySportCount?: number;
+  partialSportCount?: number;
+  unavailableSportCount?: number;
+  sports?: MarketReadinessSportDto[];
+}
+
+export interface MarketReadinessSportDto {
+  sport?: string;
+  status?: string;
+  hasUsableMarketData?: boolean;
+  latestSnapshotCreatedAtUtc?: string | null;
+  latestSuccessfulRefreshCompletedAtUtc?: string | null;
+  enabledRefreshTargetCount?: number;
+  reason?: string;
 }
 
 export interface MarketRefreshRunSummaryDto {

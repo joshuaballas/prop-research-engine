@@ -1,4 +1,5 @@
 using SportsBetting.Api.Data;
+using SportsBetting.Api.Configuration;
 using SportsBetting.Api.Integrations.Results.Mlb;
 using SportsBetting.Api.Integrations.Results.Soccer;
 using SportsBetting.Api.Integrations.TheOddsApi;
@@ -72,7 +73,9 @@ public static class PublicMarketsEndpoints
             IOptions<SoccerGradingOptions> soccerGradingOptions,
             IOptions<SoccerTopPicksOptions> soccerTopPicksOptions,
             IOptions<TheOddsScheduledRefreshOptions> scheduledRefreshOptions,
+            IOptions<PublicMarketReadinessOptions> publicMarketReadinessOptions,
             ITheOddsScheduledRefreshState scheduledRefreshState,
+            IApplicationStartupClock startupClock,
             ITheOddsRefreshPlannerService planner,
             ApplicationDbContext dbContext,
             CancellationToken cancellationToken) =>
@@ -93,7 +96,9 @@ public static class PublicMarketsEndpoints
                 soccerGradingOptions.Value,
                 soccerTopPicksOptions.Value,
                 scheduledRefreshOptions.Value,
+                publicMarketReadinessOptions.Value,
                 scheduledRefreshState,
+                startupClock,
                 planner,
                 dbContext,
                 cancellationToken);
@@ -216,7 +221,9 @@ public static class PublicMarketsEndpoints
             IOptions<SoccerGradingOptions> soccerGradingOptions,
             IOptions<SoccerTopPicksOptions> soccerTopPicksOptions,
             IOptions<TheOddsScheduledRefreshOptions> scheduledRefreshOptions,
+            IOptions<PublicMarketReadinessOptions> publicMarketReadinessOptions,
             ITheOddsScheduledRefreshState scheduledRefreshState,
+            IApplicationStartupClock startupClock,
             ITheOddsRefreshPlannerService planner,
             ApplicationDbContext dbContext,
             CancellationToken cancellationToken) =>
@@ -231,7 +238,9 @@ public static class PublicMarketsEndpoints
                 soccerGradingOptions.Value,
                 soccerTopPicksOptions.Value,
                 scheduledRefreshOptions.Value,
+                publicMarketReadinessOptions.Value,
                 scheduledRefreshState,
+                startupClock,
                 planner,
                 dbContext,
                 cancellationToken);
@@ -613,15 +622,28 @@ public static class PublicMarketsEndpoints
         SoccerGradingOptions soccerGradingOptions,
         SoccerTopPicksOptions soccerTopPicksOptions,
         TheOddsScheduledRefreshOptions scheduledRefreshOptions,
+        PublicMarketReadinessOptions publicMarketReadinessOptions,
         ITheOddsScheduledRefreshState scheduledRefreshState,
+        IApplicationStartupClock startupClock,
         ITheOddsRefreshPlannerService planner,
         ApplicationDbContext dbContext,
         CancellationToken cancellationToken)
     {
-        var refreshTiming = await BuildScheduledRefreshTimingAsync(
+        var plan = await planner.BuildPlanAsync(cancellationToken);
+        var scheduledSnapshot = scheduledRefreshState.GetSnapshot();
+        var refreshTiming = TheOddsScheduledRefreshTiming.Resolve(
             scheduledRefreshOptions,
-            scheduledRefreshState,
-            planner,
+            plan,
+            scheduledSnapshot);
+        var marketReadiness = await BuildMarketReadinessAsync(
+            requestedSport,
+            effectiveSport,
+            freshnessMinutes,
+            publicMarketReadinessOptions,
+            startupClock.StartedAtUtc,
+            plan,
+            refreshTiming,
+            dbContext,
             cancellationToken);
 
         if (IsSoccerSport(effectiveSport))
@@ -637,7 +659,8 @@ public static class PublicMarketsEndpoints
                 soccerTopPicksOptions,
                 dbContext,
                 cancellationToken,
-                refreshTiming);
+                refreshTiming,
+                marketReadiness);
         }
 
         var response = await TheOddsApiDebugEndpoints.BuildMlbRefreshFreshnessResponseAsync(
@@ -657,6 +680,7 @@ public static class PublicMarketsEndpoints
             response.GeneratedAtUtc,
             response.CallsExternalApis,
             response.ReadOnly,
+            marketReadiness,
             supportedSports = SupportedMarketSports,
             requestedSport,
             effectiveSport,
@@ -712,6 +736,369 @@ public static class PublicMarketsEndpoints
         };
     }
 
+    private static async Task<PublicMarketReadinessResponse> BuildMarketReadinessAsync(
+        string? requestedSport,
+        string effectiveSport,
+        int? freshnessMinutes,
+        PublicMarketReadinessOptions options,
+        DateTimeOffset applicationStartedAtUtc,
+        TheOddsRefreshPlanResult plan,
+        TheOddsScheduledRefreshTimingSnapshot refreshTiming,
+        ApplicationDbContext dbContext,
+        CancellationToken cancellationToken)
+    {
+        var generatedAtUtc = plan.GeneratedAtUtc;
+        var thresholdMinutes = Math.Clamp(freshnessMinutes ?? 30, 1, 1440);
+        var graceWindow = options.GetColdStartGraceWindow();
+        var graceEndsAtUtc = applicationStartedAtUtc.Add(graceWindow);
+        var inStartupGraceWindow = graceWindow > TimeSpan.Zero && generatedAtUtc <= graceEndsAtUtc;
+        var enabledTargets = plan.Targets
+            .Where(target => target.Enabled)
+            .ToArray();
+        var readinessSports = ResolveReadinessSports(requestedSport, effectiveSport, enabledTargets);
+        var globalProviderUnavailable = plan.ProviderRejectedKeyDetected ||
+            !plan.ProviderAvailable ||
+            plan.Budget.ProviderRemainingHardStop ||
+            plan.Budget.IsBlockedByProviderCredits;
+        var sports = new List<PublicMarketReadinessSportResponse>(readinessSports.Length);
+
+        foreach (var sport in readinessSports)
+        {
+            var sportTargets = enabledTargets
+                .Where(target => string.Equals(NormalizeMarketSportCode(target.Sport), sport, StringComparison.OrdinalIgnoreCase))
+                .ToArray();
+            var snapshot = await BuildSportReadinessSnapshotAsync(
+                sport,
+                thresholdMinutes,
+                generatedAtUtc,
+                dbContext,
+                cancellationToken);
+            sports.Add(ResolveSportReadiness(
+                sport,
+                sportTargets,
+                snapshot,
+                generatedAtUtc,
+                inStartupGraceWindow,
+                globalProviderUnavailable,
+                plan.ProviderRejectedKeyDetected,
+                refreshTiming.IsRefreshInProgress));
+        }
+
+        var readySportCount = sports.Count(row => string.Equals(row.Status, "Fresh", StringComparison.OrdinalIgnoreCase));
+        var unavailableSportCount = sports.Count(row =>
+            string.Equals(row.Status, "Failed", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(row.Status, "ProviderUnavailable", StringComparison.OrdinalIgnoreCase));
+        var partialSportCount = Math.Max(0, sports.Count - readySportCount - unavailableSportCount);
+        var hasAnyReady = readySportCount > 0;
+        var allReady = sports.Count > 0 && readySportCount == sports.Count;
+        var hasProviderUnavailable = sports.Any(row => string.Equals(row.Status, "ProviderUnavailable", StringComparison.OrdinalIgnoreCase));
+        var hasFailed = sports.Any(row => string.Equals(row.Status, "Failed", StringComparison.OrdinalIgnoreCase));
+
+        var (status, severity, reason) = ResolveMarketReadinessStatus(
+            sports.Count,
+            allReady,
+            hasAnyReady,
+            hasProviderUnavailable,
+            hasFailed,
+            inStartupGraceWindow,
+            refreshTiming.IsRefreshInProgress,
+            enabledTargets.Length);
+
+        var latestSuccessfulRefreshCompletedAtUtc = sports
+            .Select(row => row.LatestSuccessfulRefreshCompletedAtUtc)
+            .Where(value => value.HasValue)
+            .DefaultIfEmpty()
+            .Max();
+
+        return new PublicMarketReadinessResponse(
+            Status: status,
+            Severity: severity,
+            IsColdStart: inStartupGraceWindow && !allReady,
+            InStartupGraceWindow: inStartupGraceWindow,
+            Reason: reason,
+            LatestSuccessfulRefreshCompletedAtUtc: latestSuccessfulRefreshCompletedAtUtc ?? refreshTiming.LastSuccessfulRefreshCompletedAtUtc,
+            NextRefreshDueUtc: refreshTiming.NextRefreshDueUtc,
+            NextDataAvailableEstimateUtc: refreshTiming.NextDataAvailableEstimateUtc,
+            GraceEndsAtUtc: graceWindow > TimeSpan.Zero ? graceEndsAtUtc : null,
+            SupportedSportCount: sports.Count,
+            ReadySportCount: readySportCount,
+            PartialSportCount: partialSportCount,
+            UnavailableSportCount: unavailableSportCount,
+            Sports: sports.ToArray());
+    }
+
+    private static string[] ResolveReadinessSports(
+        string? requestedSport,
+        string effectiveSport,
+        IReadOnlyCollection<TheOddsRefreshTargetPlan> enabledTargets)
+    {
+        if (!string.IsNullOrWhiteSpace(requestedSport) && !IsAllMarketSportRequest(requestedSport))
+        {
+            return [effectiveSport];
+        }
+
+        var targetSports = enabledTargets
+            .Select(target => NormalizeMarketSportCode(target.Sport))
+            .Where(sport => SupportedMarketSports.Contains(sport, StringComparer.OrdinalIgnoreCase))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(sport => sport, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        return targetSports.Length > 0 ? targetSports : [effectiveSport];
+    }
+
+    private static async Task<SportReadinessSnapshot> BuildSportReadinessSnapshotAsync(
+        string sport,
+        int freshnessMinutes,
+        DateTimeOffset generatedAtUtc,
+        ApplicationDbContext dbContext,
+        CancellationToken cancellationToken)
+    {
+        var lineShoppingRunId = await ResolveLatestLineShoppingSnapshotRunIdAsync(dbContext, sport, cancellationToken);
+        var topPickRunId = await ResolveLatestTopPickSnapshotRunIdAsync(dbContext, sport, cancellationToken);
+        var lineShoppingQuery = dbContext.MarketLineShoppingSnapshots
+            .AsNoTracking()
+            .Where(row => row.Sport == sport);
+        var topPickQuery = dbContext.MarketTopPickSnapshots
+            .AsNoTracking()
+            .Where(row => row.Sport == sport);
+
+        if (lineShoppingRunId.HasValue)
+        {
+            lineShoppingQuery = lineShoppingQuery.Where(row => row.TheOddsRefreshRunId == lineShoppingRunId.Value);
+        }
+
+        if (topPickRunId.HasValue)
+        {
+            topPickQuery = topPickQuery.Where(row => row.TheOddsRefreshRunId == topPickRunId.Value);
+        }
+
+        var activeLineShoppingCount = await lineShoppingQuery.CountAsync(
+            row => row.LifecycleStatus == "Active"
+                && !row.IsStale
+                && !row.IsExpired
+                && row.EventStartTime.HasValue
+                && row.EventStartTime.Value > generatedAtUtc,
+            cancellationToken);
+        var activeTopPickCount = await topPickQuery.CountAsync(
+            row => row.LifecycleStatus == "Active"
+                && !row.IsStale
+                && !row.IsExpired
+                && row.EventStartTime.HasValue
+                && row.EventStartTime.Value > generatedAtUtc,
+            cancellationToken);
+        var latestLineShoppingGeneratedAtUtc = await lineShoppingQuery
+            .Select(row => (DateTimeOffset?)row.GeneratedAtUtc)
+            .MaxAsync(cancellationToken);
+        var latestTopPickGeneratedAtUtc = await topPickQuery
+            .Select(row => (DateTimeOffset?)row.GeneratedAtUtc)
+            .MaxAsync(cancellationToken);
+        var latestSnapshotCreatedAtUtc = MaxNullableDateTimeOffset(latestLineShoppingGeneratedAtUtc, latestTopPickGeneratedAtUtc);
+        var lineShoppingSnapshotCount = await lineShoppingQuery.CountAsync(cancellationToken);
+        var topPickSnapshotCount = await topPickQuery.CountAsync(cancellationToken);
+        var latestSuccessfulRun = await dbContext.TheOddsRefreshRuns
+            .AsNoTracking()
+            .Where(row => row.Provider == "The Odds API"
+                && row.Sport == sport
+                && row.Succeeded
+                && !row.DryRun)
+            .OrderByDescending(row => row.CompletedAtUtc ?? row.StartedAtUtc)
+            .FirstOrDefaultAsync(cancellationToken);
+        var latestSuccessfulRefreshCompletedAtUtc = latestSuccessfulRun?.CompletedAtUtc ?? latestSuccessfulRun?.StartedAtUtc;
+        var latestRun = await dbContext.TheOddsRefreshRuns
+            .AsNoTracking()
+            .Where(row => row.Provider == "The Odds API" && row.Sport == sport)
+            .OrderByDescending(row => row.StartedAtUtc)
+            .FirstOrDefaultAsync(cancellationToken);
+        var soccerProviderContextCounts = IsSoccerSport(sport)
+            ? await TheOddsApiDebugEndpoints.GetSoccerWorldCupProviderContextCountsAsync(dbContext, cancellationToken)
+            : null;
+        var activeSnapshotRows = activeLineShoppingCount + activeTopPickCount;
+        var hasUsableMarketData = activeSnapshotRows > 0 || soccerProviderContextCounts?.PlatformRowCount > 0;
+        var latestReadinessAtUtc = latestSuccessfulRefreshCompletedAtUtc ?? latestSnapshotCreatedAtUtc;
+        var isFresh = hasUsableMarketData &&
+            latestReadinessAtUtc.HasValue &&
+            (generatedAtUtc - latestReadinessAtUtc.Value).TotalMinutes <= freshnessMinutes;
+
+        return new SportReadinessSnapshot(
+            HasUsableMarketData: hasUsableMarketData,
+            IsFresh: isFresh,
+            LatestSnapshotCreatedAtUtc: latestSnapshotCreatedAtUtc,
+            LatestSuccessfulRefreshCompletedAtUtc: latestSuccessfulRefreshCompletedAtUtc,
+            LineShoppingSnapshotCount: lineShoppingSnapshotCount,
+            TopPickSnapshotCount: topPickSnapshotCount,
+            ActiveSnapshotRowCount: activeSnapshotRows,
+            PublicReadableContextRowCount: soccerProviderContextCounts?.PlatformRowCount ?? 0,
+            LatestRunFailed: latestRun?.Failed == true,
+            LatestRunBlocked: latestRun?.Blocked == true,
+            LatestRunErrorMessage: latestRun?.ErrorMessage);
+    }
+
+    private static PublicMarketReadinessSportResponse ResolveSportReadiness(
+        string sport,
+        IReadOnlyCollection<TheOddsRefreshTargetPlan> targets,
+        SportReadinessSnapshot snapshot,
+        DateTimeOffset generatedAtUtc,
+        bool inStartupGraceWindow,
+        bool globalProviderUnavailable,
+        bool providerRejectedKeyDetected,
+        bool isRefreshInProgress)
+    {
+        if (globalProviderUnavailable)
+        {
+            var reason = providerRejectedKeyDetected
+                ? "The Odds provider rejected the configured API key."
+                : "The Odds provider is currently unavailable or blocked by provider credits.";
+            return ToSportReadinessResponse(sport, "ProviderUnavailable", snapshot, targets.Count, reason);
+        }
+
+        if (targets.Count == 0)
+        {
+            return ToSportReadinessResponse(
+                sport,
+                snapshot.HasUsableMarketData ? "Fresh" : "ProviderUnavailable",
+                snapshot,
+                0,
+                snapshot.HasUsableMarketData
+                    ? $"{ResolveSportDisplayName(sport)} has currently usable persisted market data; no enabled refresh target is configured."
+                    : $"No enabled {ResolveSportDisplayName(sport)} market refresh target is configured.");
+        }
+
+        var blockedTarget = targets.FirstOrDefault(target => !target.ExecutionWired || !target.ProviderSportKeyVerified || !target.ProviderAvailable);
+        if (blockedTarget is not null)
+        {
+            var reason = !blockedTarget.ExecutionWired
+                ? $"{blockedTarget.Key} is enabled but scheduled execution is not wired."
+                : !blockedTarget.ProviderSportKeyVerified
+                    ? $"{blockedTarget.Key} is enabled but its provider sport key is not verified."
+                    : $"{blockedTarget.Key} is enabled but the provider is unavailable.";
+            return ToSportReadinessResponse(sport, "ProviderUnavailable", snapshot, targets.Count, reason);
+        }
+
+        if (snapshot.HasUsableMarketData && snapshot.IsFresh)
+        {
+            return ToSportReadinessResponse(
+                sport,
+                "Fresh",
+                snapshot,
+                targets.Count,
+                $"{ResolveSportDisplayName(sport)} has currently usable persisted market data.");
+        }
+
+        if (snapshot.HasUsableMarketData)
+        {
+            return ToSportReadinessResponse(
+                sport,
+                "Stale",
+                snapshot,
+                targets.Count,
+                $"{ResolveSportDisplayName(sport)} has persisted market data, but it is outside the freshness window.");
+        }
+
+        if (inStartupGraceWindow || isRefreshInProgress || targets.Any(target => target.IsRunning || target.ShouldRefresh))
+        {
+            return ToSportReadinessResponse(
+                sport,
+                "Syncing",
+                snapshot,
+                targets.Count,
+                $"{ResolveSportDisplayName(sport)} market data is expected and the board is still initializing.");
+        }
+
+        if (snapshot.LatestRunFailed || snapshot.LatestRunBlocked)
+        {
+            return ToSportReadinessResponse(
+                sport,
+                "Failed",
+                snapshot,
+                targets.Count,
+                string.IsNullOrWhiteSpace(snapshot.LatestRunErrorMessage)
+                    ? $"{ResolveSportDisplayName(sport)} latest refresh did not complete successfully."
+                    : $"{ResolveSportDisplayName(sport)} latest refresh did not complete successfully: {snapshot.LatestRunErrorMessage}");
+        }
+
+        return ToSportReadinessResponse(
+            sport,
+            "Stale",
+            snapshot,
+            targets.Count,
+            $"{ResolveSportDisplayName(sport)} has no currently usable persisted market data.");
+    }
+
+    private static PublicMarketReadinessSportResponse ToSportReadinessResponse(
+        string sport,
+        string status,
+        SportReadinessSnapshot snapshot,
+        int enabledRefreshTargetCount,
+        string reason) =>
+        new(
+            Sport: sport,
+            Status: status,
+            HasUsableMarketData: snapshot.HasUsableMarketData,
+            LatestSnapshotCreatedAtUtc: snapshot.LatestSnapshotCreatedAtUtc,
+            LatestSuccessfulRefreshCompletedAtUtc: snapshot.LatestSuccessfulRefreshCompletedAtUtc,
+            EnabledRefreshTargetCount: enabledRefreshTargetCount,
+            Reason: reason);
+
+    private static (string Status, string Severity, string Reason) ResolveMarketReadinessStatus(
+        int supportedSportCount,
+        bool allReady,
+        bool hasAnyReady,
+        bool hasProviderUnavailable,
+        bool hasFailed,
+        bool inStartupGraceWindow,
+        bool isRefreshInProgress,
+        int enabledTargetCount)
+    {
+        if (supportedSportCount == 0 || enabledTargetCount == 0)
+        {
+            return (
+                "ProviderUnavailable",
+                "error",
+                "No enabled market refresh targets are configured for public market data.");
+        }
+
+        if (allReady)
+        {
+            return ("Fresh", "ok", "All enabled public market sports have usable persisted market data.");
+        }
+
+        if (hasProviderUnavailable)
+        {
+            return ("ProviderUnavailable", "error", "At least one enabled public market sport is blocked by provider availability or target configuration.");
+        }
+
+        if (hasFailed && !inStartupGraceWindow)
+        {
+            return ("Failed", "error", "At least one enabled public market sport failed to refresh.");
+        }
+
+        if (inStartupGraceWindow || isRefreshInProgress)
+        {
+            return hasAnyReady
+                ? ("Partial", "info", "Some public market sports are ready while others are still syncing.")
+                : ("Syncing", "info", "Public market data is initializing.");
+        }
+
+        return hasAnyReady
+            ? ("Partial", "warning", "Some enabled public market sports have usable data while others are stale or unavailable.")
+            : ("Stale", "warning", "No enabled public market sports currently have usable persisted market data.");
+    }
+
+    private static DateTimeOffset? MaxNullableDateTimeOffset(DateTimeOffset? first, DateTimeOffset? second)
+    {
+        if (!first.HasValue)
+        {
+            return second;
+        }
+
+        if (!second.HasValue)
+        {
+            return first;
+        }
+
+        return first.Value >= second.Value ? first : second;
+    }
+
     private static async Task<object> BuildGenericMarketFreshnessResponseAsync(
         string? requestedSport,
         string effectiveSport,
@@ -723,7 +1110,8 @@ public static class PublicMarketsEndpoints
         SoccerTopPicksOptions soccerTopPicksOptions,
         ApplicationDbContext dbContext,
         CancellationToken cancellationToken,
-        TheOddsScheduledRefreshTimingSnapshot? refreshTiming = null)
+        TheOddsScheduledRefreshTimingSnapshot? refreshTiming = null,
+        PublicMarketReadinessResponse? marketReadiness = null)
     {
         var thresholdMinutes = Math.Clamp(freshnessMinutes ?? 30, 1, 1440);
         var generatedAtUtc = DateTimeOffset.UtcNow;
@@ -784,6 +1172,7 @@ public static class PublicMarketsEndpoints
             generatedAtUtc,
             callsExternalApis = false,
             readOnly = true,
+            marketReadiness,
             supportedSports = SupportedMarketSports,
             supportedCompetitions = BuildSupportedCompetitionDiagnostics(),
             requestedSport,
@@ -7787,6 +8176,44 @@ public static class PublicMarketsEndpoints
         DateOnly? LatestResultsImportDate,
         DateOnly? LatestCompleteCoverageDate,
         IReadOnlyCollection<DateOnly> SkippedIncompleteResultDates);
+
+    private sealed record PublicMarketReadinessResponse(
+        string Status,
+        string Severity,
+        bool IsColdStart,
+        bool InStartupGraceWindow,
+        string Reason,
+        DateTimeOffset? LatestSuccessfulRefreshCompletedAtUtc,
+        DateTimeOffset? NextRefreshDueUtc,
+        DateTimeOffset? NextDataAvailableEstimateUtc,
+        DateTimeOffset? GraceEndsAtUtc,
+        int SupportedSportCount,
+        int ReadySportCount,
+        int PartialSportCount,
+        int UnavailableSportCount,
+        IReadOnlyList<PublicMarketReadinessSportResponse> Sports);
+
+    private sealed record PublicMarketReadinessSportResponse(
+        string Sport,
+        string Status,
+        bool HasUsableMarketData,
+        DateTimeOffset? LatestSnapshotCreatedAtUtc,
+        DateTimeOffset? LatestSuccessfulRefreshCompletedAtUtc,
+        int EnabledRefreshTargetCount,
+        string Reason);
+
+    private sealed record SportReadinessSnapshot(
+        bool HasUsableMarketData,
+        bool IsFresh,
+        DateTimeOffset? LatestSnapshotCreatedAtUtc,
+        DateTimeOffset? LatestSuccessfulRefreshCompletedAtUtc,
+        int LineShoppingSnapshotCount,
+        int TopPickSnapshotCount,
+        int ActiveSnapshotRowCount,
+        int PublicReadableContextRowCount,
+        bool LatestRunFailed,
+        bool LatestRunBlocked,
+        string? LatestRunErrorMessage);
 
     private sealed record TheOddsProviderStatusReadModel(
         string provider,

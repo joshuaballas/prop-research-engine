@@ -65,6 +65,8 @@ public static class AppConfigCatalog
         Move("TheOdds.ScheduledRefresh.PostRefreshReadBufferSeconds", "TheOddsScheduledRefresh:PostRefreshReadBufferSeconds", AppConfigValueTypes.Integer, "TheOddsScheduledRefresh", "Frontend read buffer after scheduled refresh interval.", "30", ["TheOddsScheduledRefreshOptions"]),
         Domain("TheOdds.ScheduledRefresh.Targets", "TheOddsScheduledRefresh:Targets", AppConfigValueTypes.Json, "The Odds Provider Data", "Scheduled refresh target topology is structured provider/domain data and should move to a dedicated target table/editor.", ["TheOddsScheduledRefreshOptions"]),
 
+        Move("PublicMarkets.ColdStartGraceMinutes", "PublicMarkets:ColdStartGraceMinutes", AppConfigValueTypes.Integer, "PublicMarkets", "Grace window for public market readiness after API startup before missing sport boards are treated as hard issues.", "5", ["PublicMarketReadinessOptions"]),
+
         Move("TheOdds.RefreshPlanner.Enabled", "TheOddsRefreshPlanner:Enabled", AppConfigValueTypes.Boolean, "TheOddsRefreshPlanner", "Enables refresh planner decisions.", "true", ["TheOddsRefreshPlannerOptions"]),
         Move("TheOdds.RefreshPlanner.EnforcementEnabled", "TheOddsRefreshPlanner:EnforcementEnabled", AppConfigValueTypes.Boolean, "TheOddsRefreshPlanner", "Enables hard planner enforcement.", "false", ["TheOddsRefreshPlannerOptions"]),
         Move("TheOdds.RefreshPlanner.DefaultBookmakerPreset", "TheOddsRefreshPlanner:DefaultBookmakerPreset", AppConfigValueTypes.String, "TheOddsRefreshPlanner", "Default bookmaker preset for planner estimates.", "dfsOnly", ["TheOddsRefreshPlannerOptions"]),

@@ -47,6 +47,7 @@ builder.Services.Configure<TheOddsIngestionWorkerOptions>(builder.Configuration.
 builder.Services.Configure<TheOddsScheduledRefreshOptions>(builder.Configuration.GetSection(TheOddsScheduledRefreshOptions.SectionName));
 builder.Services.Configure<TheOddsRefreshPlannerOptions>(builder.Configuration.GetSection(TheOddsRefreshPlannerOptions.SectionName));
 builder.Services.Configure<ProviderLineLifecycleOptions>(builder.Configuration.GetSection(ProviderLineLifecycleOptions.SectionName));
+builder.Services.Configure<PublicMarketReadinessOptions>(builder.Configuration.GetSection(PublicMarketReadinessOptions.SectionName));
 builder.Services.Configure<MlbResultImportWorkerOptions>(builder.Configuration.GetSection(MlbResultImportWorkerOptions.SectionName));
 builder.Services.Configure<SoccerResultImportWorkerOptions>(builder.Configuration.GetSection(SoccerResultImportWorkerOptions.SectionName));
 builder.Services.Configure<SoccerIdentityResolutionOptions>(builder.Configuration.GetSection(SoccerIdentityResolutionOptions.SectionName));
@@ -65,6 +66,7 @@ builder.Services.AddSingleton<IConfigureOptions<TheOddsIngestionWorkerOptions>, 
 builder.Services.AddSingleton<IConfigureOptions<TheOddsScheduledRefreshOptions>, AppConfigOptionsOverrides>();
 builder.Services.AddSingleton<IConfigureOptions<TheOddsRefreshPlannerOptions>, AppConfigOptionsOverrides>();
 builder.Services.AddSingleton<IConfigureOptions<ProviderLineLifecycleOptions>, AppConfigOptionsOverrides>();
+builder.Services.AddSingleton<IConfigureOptions<PublicMarketReadinessOptions>, AppConfigOptionsOverrides>();
 builder.Services.AddSingleton<IConfigureOptions<MlbResultImportWorkerOptions>, AppConfigOptionsOverrides>();
 builder.Services.AddSingleton<IConfigureOptions<SoccerResultImportWorkerOptions>, AppConfigOptionsOverrides>();
 builder.Services.AddSingleton<IConfigureOptions<SoccerIdentityResolutionOptions>, AppConfigOptionsOverrides>();
@@ -126,6 +128,7 @@ builder.Services.AddSingleton<ITheOddsLiveRefreshGate, TheOddsLiveRefreshGate>()
 builder.Services.AddScoped<ITheOddsMlbRefreshService, TheOddsApiDebugEndpoints.TheOddsMlbRefreshService>();
 builder.Services.AddSingleton<IPlayerResolutionStats, PlayerResolutionStats>();
 builder.Services.AddSingleton<IPlayerMergeExecutionState, PlayerMergeExecutionState>();
+builder.Services.AddSingleton<IApplicationStartupClock, ApplicationStartupClock>();
 builder.Services.AddSingleton<IUnderdogIngestionWorkerState, UnderdogIngestionWorkerState>();
 builder.Services.AddSingleton<ITheOddsMlbIngestionWorkerState, TheOddsMlbIngestionWorkerState>();
 builder.Services.AddSingleton<ITheOddsScheduledRefreshState, TheOddsScheduledRefreshState>();

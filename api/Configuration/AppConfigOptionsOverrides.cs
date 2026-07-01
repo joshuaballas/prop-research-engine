@@ -15,6 +15,7 @@ public sealed class AppConfigOptionsOverrides(
     IConfigureOptions<TheOddsScheduledRefreshOptions>,
     IConfigureOptions<TheOddsRefreshPlannerOptions>,
     IConfigureOptions<ProviderLineLifecycleOptions>,
+    IConfigureOptions<PublicMarketReadinessOptions>,
     IConfigureOptions<MlbResultImportWorkerOptions>,
     IConfigureOptions<SoccerResultImportWorkerOptions>,
     IConfigureOptions<SoccerIdentityResolutionOptions>,
@@ -108,6 +109,11 @@ public sealed class AppConfigOptionsOverrides(
         options.PulledAfterSuccessfulMissingRefreshes = Value("ProviderLineLifecycle.PulledAfterSuccessfulMissingRefreshes", options.PulledAfterSuccessfulMissingRefreshes);
         options.ExpireAfterHours = Value("ProviderLineLifecycle.ExpireAfterHours", options.ExpireAfterHours);
         options.RecordSeenUnchangedEvents = Value("ProviderLineLifecycle.RecordSeenUnchangedEvents", options.RecordSeenUnchangedEvents);
+    }
+
+    public void Configure(PublicMarketReadinessOptions options)
+    {
+        options.ColdStartGraceMinutes = Value("PublicMarkets.ColdStartGraceMinutes", options.ColdStartGraceMinutes);
     }
 
     public void Configure(MlbResultImportWorkerOptions options)
