@@ -289,9 +289,9 @@ function YesterdayResultsSection({
 
 function YesterdaySummaryCards({ summary, isMobile }: { summary?: NonNullable<ReturnType<typeof usePerformanceResults>['data']>['summary']; isMobile: boolean }) {
   const cards = [
-    { label: isMobile ? 'W-L-P' : 'Yesterday W-L-P', value: `${summary?.won ?? 0}-${summary?.lost ?? 0}-${summary?.pushed ?? 0}`, helper: isMobile ? formatShortRecord(summary?.won ?? 0, summary?.lost ?? 0, summary?.pushed ?? 0) : formatRecord(summary?.won ?? 0, summary?.lost ?? 0, summary?.pushed ?? 0) },
-    { label: isMobile ? 'Hit Rate' : 'Yesterday Hit Rate', value: summary?.hitRate == null ? '-' : formatPercent(summary.hitRate), helper: 'Pushes excluded' },
-    { label: isMobile ? 'Simulated ROI' : 'Yesterday Simulated ROI', value: summary?.simulatedRoi == null ? '-' : formatPercent(summary.simulatedRoi, { signed: true }), helper: 'Flat 1-unit tracking', tone: (summary?.simulatedRoi ?? 0) >= 0 ? 'good' : 'bad' },
+    { label: isMobile ? 'W-L-P' : 'Latest Slate W-L-P', value: `${summary?.won ?? 0}-${summary?.lost ?? 0}-${summary?.pushed ?? 0}`, helper: isMobile ? formatShortRecord(summary?.won ?? 0, summary?.lost ?? 0, summary?.pushed ?? 0) : formatRecord(summary?.won ?? 0, summary?.lost ?? 0, summary?.pushed ?? 0) },
+    { label: isMobile ? 'Hit Rate' : 'Latest Slate Hit Rate', value: summary?.hitRate == null ? '-' : formatPercent(summary.hitRate), helper: 'Pushes excluded' },
+    { label: isMobile ? 'Simulated ROI' : 'Latest Slate Simulated ROI', value: summary?.simulatedRoi == null ? '-' : formatPercent(summary.simulatedRoi, { signed: true }), helper: 'Flat 1-unit tracking', tone: (summary?.simulatedRoi ?? 0) >= 0 ? 'good' : 'bad' },
     { label: 'Graded Picks', value: `${summary?.gradedPicks ?? 0}`, helper: 'Opportunity-level' },
     { label: 'Excluded', value: `${summary?.noResultExcluded ?? 0}`, helper: 'No player result found' }
   ].filter((card) => !isMobile || card.label !== 'Excluded');

@@ -58,7 +58,7 @@ export function EntryBuilderTray({
           <Box>
             <Typography variant="h5">Current entry</Typography>
             <Typography variant="body2" color="text.secondary">
-              {legs.length ? 'Provider locked. Add compatible legs only.' : 'No legs selected'}
+              {legs.length ? 'Provider locked. Add compatible legs only.' : 'No legs added yet'}
             </Typography>
           </Box>
           {onClose ? (
@@ -102,9 +102,9 @@ export function EntryBuilderTray({
                 background: palette.cardSurface
               }}
             >
-              <Typography fontWeight={950}>No legs selected</Typography>
+              <Typography fontWeight={950}>No legs added yet.</Typography>
               <Typography variant="body2" color="text.secondary">
-                Add a DFS candidate to start an entry.
+                Add playable rows from Top Picks, Prop Scanner, or Line Shopping.
               </Typography>
               <Typography variant="body2" color="text.secondary">
                 The first leg locks the provider.

@@ -5,6 +5,7 @@ import { PublicLayout } from '../layouts/PublicLayout';
 import { AccountPage } from '../pages/app/AccountPage';
 import { BillingPage } from '../pages/app/BillingPage';
 import { DashboardPage } from '../pages/app/DashboardPage';
+import { EntryBuilderPage } from '../pages/app/EntryBuilderPage';
 import { EntryTrackerPage } from '../pages/app/EntryTrackerPage';
 import { LineShoppingPage } from '../pages/app/LineShoppingPage';
 import { MarketsPage } from '../pages/app/MarketsPage';
@@ -43,7 +44,7 @@ export function AppRoutes() {
         <Route path="line-shopping" element={<LineShoppingPage />} />
         <Route path="player-research" element={<PlayerResearchPage />} />
         <Route path="entry-tracker" element={<EntryTrackerPage />} />
-        <Route path="entry-builder" element={<Navigate to="/app/entry-tracker" replace />} />
+        <Route path="entry-builder" element={<EntryBuilderPage />} />
         <Route path="performance" element={<PerformancePage />} />
         <Route path="account" element={<AccountPage />} />
         <Route path="billing" element={<BillingPage />} />
