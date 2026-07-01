@@ -1,5 +1,5 @@
 import ExpandMoreRoundedIcon from '@mui/icons-material/ExpandMoreRounded';
-import { Accordion, AccordionDetails, AccordionSummary, Box, ButtonBase, Collapse, IconButton, Stack, TableBody, TableCell, TableHead, TableRow, Typography } from '@mui/material';
+import { Accordion, AccordionDetails, AccordionSummary, Box, ButtonBase, Collapse, IconButton, MenuItem, Stack, TableBody, TableCell, TableHead, TableRow, TextField, Typography } from '@mui/material';
 import { PerformanceMobileAccordion } from '../../components/performance/PerformanceMobileAccordion';
 import { PerformanceSummaryCards } from '../../components/performance/PerformanceSummaryCards';
 import { PerformanceTable } from '../../components/performance/PerformanceTable';
@@ -11,6 +11,7 @@ import { AppTableEvValue, AppTableMetricValue, AppTablePrimaryText, AppTableSeco
 import { PerformanceBreakdownSkeleton, PerformanceSummarySkeleton } from '../../components/ui/LoadingSkeletons';
 import { PageHeader } from '../../components/ui/PageHeader';
 import { usePerformanceData, usePerformanceResults } from '../../hooks/useMarketData';
+import type { MarketReadSport } from '../../hooks/useMarketData';
 import { useResponsiveView } from '../../hooks/useResponsiveView';
 import { palette } from '../../theme/palette';
 import type { PerformanceResultRowDto } from '../../api/types';
@@ -26,6 +27,11 @@ const breakdownTabs = [
 const yesterdayDesktopPageSize = 10;
 const yesterdayMobilePageSize = 10;
 const overallHistoryPageSize = 10;
+const performanceSportOptions: { label: string; value: MarketReadSport }[] = [
+  { label: 'All', value: 'All' },
+  { label: 'MLB', value: 'MLB' },
+  { label: 'Soccer', value: 'SOCCER' }
+];
 
 type YesterdayResultGroup = {
   id: string;
@@ -41,15 +47,16 @@ type YesterdayResultGroup = {
 
 export function PerformancePage() {
   const { isMobile } = useResponsiveView();
+  const [selectedSport, setSelectedSport] = useState<MarketReadSport>('All');
   const [selectedTab, setSelectedTab] = useState(breakdownTabs[0].label);
   const [historyPage, setHistoryPage] = useState(1);
-  const performanceQuery = usePerformanceData('allHistory');
-  const latestGradedQuery = usePerformanceData('latestGraded');
-  const selectedResultsDate = latestGradedQuery.summary?.dataAvailability?.selectedGradedDate
-    ?? latestGradedQuery.summary?.dataAvailability?.latestGradedDate
-    ?? latestGradedQuery.summary?.dataAvailability?.usedDateRange?.fromDate
+  const performanceQuery = usePerformanceData('allHistory', selectedSport);
+  const selectedResultsDate = performanceQuery.summary?.performanceGrainDiagnostics?.latestGradedDate
+    ?? performanceQuery.summary?.dataAvailability?.latestGradedDate
+    ?? performanceQuery.summary?.dataAvailability?.selectedGradedDate
+    ?? performanceQuery.summary?.dataAvailability?.usedDateRange?.fromDate
     ?? undefined;
-  const resultsQuery = usePerformanceResults(selectedResultsDate, Boolean(selectedResultsDate));
+  const resultsQuery = usePerformanceResults(selectedResultsDate, Boolean(selectedResultsDate), selectedSport);
   const performanceRows = performanceQuery.rows;
   const overallDateRangeLabel = formatDisplayDateRange(
     performanceQuery.summary?.overall?.dateRange ?? performanceQuery.summary?.performanceGrainDiagnostics?.overallDateRange
@@ -66,11 +73,44 @@ export function PerformancePage() {
 
   useEffect(() => {
     setHistoryPage(1);
-  }, [activeTab.label, visibleRows.length]);
+  }, [activeTab.label, selectedSport, visibleRows.length]);
 
   return (
     <Stack spacing={3} sx={{ pb: { xs: 'calc(92px + env(safe-area-inset-bottom))', lg: 0 } }}>
       <PageHeader title="Model Performance" description="Review how model-tracked picks performed after games were graded." />
+
+      <Box
+        aria-label="Performance filters"
+        sx={{
+          pb: 1.35,
+          borderBottom: `1px solid ${palette.border}`
+        }}
+      >
+        <Stack
+          direction={{ xs: 'column', md: 'row' }}
+          spacing={{ xs: 1.25, md: 1 }}
+          alignItems={{ xs: 'stretch', md: 'center' }}
+          useFlexGap
+          sx={{ flexWrap: { md: 'wrap' } }}
+        >
+          <TextField
+            id="performance-sport-filter"
+            name="performance-sport-filter"
+            label="Sport"
+            size="small"
+            select
+            value={selectedSport}
+            onChange={(event) => setSelectedSport(toPerformanceReadSport(event.target.value))}
+            sx={{ width: { xs: '100%', md: 122 } }}
+          >
+            {performanceSportOptions.map((option) => (
+              <MenuItem key={option.value} value={option.value}>
+                {option.label}
+              </MenuItem>
+            ))}
+          </TextField>
+        </Stack>
+      </Box>
 
       <Stack spacing={1.5}>
         <Stack spacing={0.4}>
@@ -81,7 +121,7 @@ export function PerformancePage() {
             Picks from the latest graded slate{selectedResultsDate ? ` (${formatDisplayDate(selectedResultsDate)})` : ''}.
           </Typography>
         </Stack>
-        <YesterdayResultsSection isMobile={isMobile} loading={latestGradedQuery.loading || resultsQuery.loading} error={Boolean(latestGradedQuery.error || resultsQuery.error)} data={resultsQuery.data} />
+        <YesterdayResultsSection isMobile={isMobile} loading={performanceQuery.loading || resultsQuery.loading} error={Boolean(performanceQuery.error || resultsQuery.error)} data={resultsQuery.data} />
       </Stack>
 
       <Stack spacing={1.5}>
@@ -178,6 +218,10 @@ export function PerformancePage() {
 
     </Stack>
   );
+}
+
+function toPerformanceReadSport(value: string): MarketReadSport {
+  return value === 'MLB' || value === 'SOCCER' ? value : 'All';
 }
 
 function YesterdayResultsSection({

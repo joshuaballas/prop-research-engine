@@ -12,11 +12,11 @@ import type {
 
 export type PerformanceGradingMode = 'allHistory' | 'latestGraded' | 'latestCompleted' | 'currentSlate' | 'rollingWindow';
 
-function competitionForSport(sport: string) {
-  return sport.toUpperCase() === 'SOCCER' ? 'World Cup' : undefined;
+function competitionForSport(sport?: string) {
+  return sport?.toUpperCase() === 'SOCCER' ? 'World Cup' : undefined;
 }
 
-export function getMarketFreshness(signal?: AbortSignal, sport = 'MLB') {
+export function getMarketFreshness(signal?: AbortSignal, sport?: string) {
   return apiGet<MarketFreshnessDto>(`/api/markets/freshness${buildQuery({ sport, competition: competitionForSport(sport) })}`, signal);
 }
 
@@ -55,16 +55,16 @@ export function getLineShopping(signal?: AbortSignal, take = 50, topOnly = true,
   ).then(normalizeLineShoppingResponse);
 }
 
-export function getPerformanceSummary(signal?: AbortSignal, gradingMode: PerformanceGradingMode = 'latestGraded') {
+export function getPerformanceSummary(signal?: AbortSignal, gradingMode: PerformanceGradingMode = 'latestGraded', sport = 'All') {
   return apiGet<MarketPerformanceSummaryDto>(
-    `/api/markets/performance-summary${buildQuery({ sport: 'MLB', candidateOnly: true, gradingMode })}`,
+    `/api/markets/performance-summary${buildQuery({ sport, competition: competitionForSport(sport), candidateOnly: true, gradingMode })}`,
     signal
   );
 }
 
-export function getPerformanceResults(signal?: AbortSignal, date?: string) {
+export function getPerformanceResults(signal?: AbortSignal, date?: string, sport = 'All') {
   return apiGet<MarketPerformanceResultsDto>(
-    `/api/markets/performance-results${buildQuery({ sport: 'MLB', date })}`,
+    `/api/markets/performance-results${buildQuery({ sport, competition: competitionForSport(sport), date })}`,
     signal
   );
 }

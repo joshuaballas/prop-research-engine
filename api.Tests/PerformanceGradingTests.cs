@@ -1692,6 +1692,60 @@ public sealed class PerformanceGradingTests
     }
 
     [Fact]
+    public async Task PerformanceSummary_CacheKeySeparatesSportAndGradingMode()
+    {
+        await using var factory = new SafetyTestApplicationFactory();
+        using var client = factory.CreateClient();
+        var olderDate = new DateOnly(2026, 6, 28);
+        var latestDate = new DateOnly(2026, 6, 29);
+        await SeedPerformanceScenarioAsync(
+            factory,
+            olderDate,
+            "Pitcher Strikeouts",
+            "Under",
+            6.5m,
+            4m,
+            provider: "FanDuel",
+            bookmaker: "FanDuel",
+            providerCategory: "Sportsbook",
+            isActionableForUser: false);
+        await SeedPerformanceScenarioAsync(
+            factory,
+            latestDate,
+            "Total Bases",
+            "Over",
+            1.5m,
+            2m,
+            provider: "DraftKings",
+            bookmaker: "DraftKings",
+            providerCategory: "Sportsbook",
+            isActionableForUser: false,
+            resetDatabase: false);
+
+        var allHistoryResponse = await client.GetAsync("/api/markets/performance-summary?sport=MLB&candidateOnly=true&gradingMode=allHistory");
+        var latestCompletedResponse = await client.GetAsync("/api/markets/performance-summary?sport=MLB&candidateOnly=true&gradingMode=latestCompleted");
+        var soccerResponse = await client.GetAsync("/api/markets/performance-summary?sport=SOCCER&candidateOnly=true&gradingMode=allHistory");
+        var repeatedAllHistoryResponse = await client.GetAsync("/api/markets/performance-summary?sport=MLB&candidateOnly=true&gradingMode=allHistory");
+
+        await EnsureSuccessWithBodyAsync(allHistoryResponse);
+        await EnsureSuccessWithBodyAsync(latestCompletedResponse);
+        await EnsureSuccessWithBodyAsync(soccerResponse);
+        await EnsureSuccessWithBodyAsync(repeatedAllHistoryResponse);
+        var allHistory = await allHistoryResponse.Content.ReadFromJsonAsync<JsonElement>();
+        var latestCompleted = await latestCompletedResponse.Content.ReadFromJsonAsync<JsonElement>();
+        var soccer = await soccerResponse.Content.ReadFromJsonAsync<JsonElement>();
+        var repeatedAllHistory = await repeatedAllHistoryResponse.Content.ReadFromJsonAsync<JsonElement>();
+
+        Assert.Equal(2, allHistory.GetProperty("summary").GetProperty("gradedPicks").GetInt32());
+        Assert.Equal(1, latestCompleted.GetProperty("summary").GetProperty("gradedPicks").GetInt32());
+        Assert.Equal(0, soccer.GetProperty("summary").GetProperty("gradedPicks").GetInt32());
+        Assert.Equal(
+            allHistory.GetProperty("summary").GetProperty("gradedPicks").GetInt32(),
+            repeatedAllHistory.GetProperty("summary").GetProperty("gradedPicks").GetInt32());
+        Assert.Equal("SOCCER", soccer.GetProperty("effectiveSport").GetString());
+    }
+
+    [Fact]
     public async Task PerformanceSummary_SoccerWithoutRows_ReturnsDiagnosticsInsteadOfUnsupportedResponse()
     {
         await using var factory = new SafetyTestApplicationFactory();

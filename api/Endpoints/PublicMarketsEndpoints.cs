@@ -6,6 +6,7 @@ using SportsBetting.Api.Integrations.TheOddsApi;
 using SportsBetting.Api.Models;
 using SportsBetting.Api.Predictions;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Options;
 using System.Diagnostics;
 using System.Globalization;
@@ -22,6 +23,7 @@ public static class PublicMarketsEndpoints
     private const int TopPicksDefaultTake = 25;
     private const int TopPicksMaxTake = 500;
     private const int TopPicksInternalEvaluationTake = 500;
+    private const int PerformanceSummaryCacheTtlMinutes = 15;
     private const string SoccerCompetitionName = "World Cup";
     private const string DfsExpectedValueUnavailableReason = "EV is hidden for DFS props because sportsbook odds/break-even pricing is not available.";
     private const string SportsbookExpectedValueUnavailableReason = "Sportsbook EV requires odds/break-even pricing.";
@@ -452,6 +454,7 @@ public static class PublicMarketsEndpoints
             ILikelyHitModelService likelyHitModel,
             IOptions<PredictionGenerationOptions> predictionGenerationOptions,
             IOptions<TopPicksModelOptions> topPicksModelOptions,
+            IMemoryCache performanceSummaryCache,
             ApplicationDbContext dbContext,
             CancellationToken cancellationToken) =>
         {
@@ -463,7 +466,17 @@ public static class PublicMarketsEndpoints
                 return marketSport.UnsupportedResponse;
             }
 
-            var response = await BuildMarketPerformanceSummaryResponseAsync(
+            var effectiveCandidateOnly = ResolveEffectiveCandidateOnly(candidateOnly, includeWatchlist, includeResearch);
+            var effectiveTopPickOnly = topPickOnly ?? false;
+            var effectiveIncludeWatchlist = includeWatchlist ?? false;
+            var effectiveIncludeResearch = includeResearch ?? false;
+            var effectiveIncludeStale = includeStale ?? false;
+            var effectiveIncludeExcluded = includeExcluded ?? false;
+            var effectiveIncludeNoResultDiagnostics = includeNoResultDiagnostics ?? false;
+            var effectiveIncludeDiagnostics = includeDiagnostics ?? false;
+            var effectiveIncludeLegacy = includeLegacy ?? false;
+            var performanceMutationStamp = await BuildPerformanceSummaryCacheMutationStampAsync(dbContext, cancellationToken);
+            var cacheKey = BuildPerformanceSummaryCacheKey(
                 marketSport.RequestedSport,
                 marketSport.EffectiveSport!,
                 providerCategory,
@@ -472,31 +485,64 @@ public static class PublicMarketsEndpoints
                 propType,
                 strategyClassification,
                 strategyTier,
-                ResolveEffectiveCandidateOnly(candidateOnly, includeWatchlist, includeResearch),
+                effectiveCandidateOnly,
                 effectiveFromDate,
                 effectiveToDate,
                 startDate,
                 endDate,
                 minSampleSize,
                 gradingMode,
-                topPickOnly ?? false,
-                includeWatchlist ?? false,
-                includeResearch ?? false,
-                includeStale ?? false,
-                includeExcluded ?? false,
-                includeNoResultDiagnostics ?? false,
-                includeDiagnostics ?? false,
+                effectiveTopPickOnly,
+                effectiveIncludeWatchlist,
+                effectiveIncludeResearch,
+                effectiveIncludeStale,
+                effectiveIncludeExcluded,
+                effectiveIncludeNoResultDiagnostics,
+                effectiveIncludeDiagnostics,
                 diagnosticSampleSize,
                 modelEra,
-                includeLegacy ?? false,
-                playerIdentityAliasService,
-                mlbCoverageService,
-                probabilityService,
-                likelyHitModel,
-                predictionGenerationOptions.Value,
-                topPicksModelOptions.Value,
-                dbContext,
-                cancellationToken);
+                effectiveIncludeLegacy,
+                performanceMutationStamp);
+
+            var response = await performanceSummaryCache.GetOrCreateAsync(cacheKey, async entry =>
+            {
+                entry.AbsoluteExpirationRelativeToNow = TimeSpan.FromMinutes(PerformanceSummaryCacheTtlMinutes);
+
+                return await BuildMarketPerformanceSummaryResponseAsync(
+                    marketSport.RequestedSport,
+                    marketSport.EffectiveSport!,
+                    providerCategory,
+                    provider,
+                    bookmaker,
+                    propType,
+                    strategyClassification,
+                    strategyTier,
+                    effectiveCandidateOnly,
+                    effectiveFromDate,
+                    effectiveToDate,
+                    startDate,
+                    endDate,
+                    minSampleSize,
+                    gradingMode,
+                    effectiveTopPickOnly,
+                    effectiveIncludeWatchlist,
+                    effectiveIncludeResearch,
+                    effectiveIncludeStale,
+                    effectiveIncludeExcluded,
+                    effectiveIncludeNoResultDiagnostics,
+                    effectiveIncludeDiagnostics,
+                    diagnosticSampleSize,
+                    modelEra,
+                    effectiveIncludeLegacy,
+                    playerIdentityAliasService,
+                    mlbCoverageService,
+                    probabilityService,
+                    likelyHitModel,
+                    predictionGenerationOptions.Value,
+                    topPicksModelOptions.Value,
+                    dbContext,
+                    cancellationToken);
+            });
 
             return Results.Ok(response);
         })
@@ -3934,6 +3980,93 @@ public static class PublicMarketsEndpoints
         };
     }
 
+    private static string BuildPerformanceSummaryCacheKey(
+        string? requestedSport,
+        string effectiveSport,
+        string? providerCategory,
+        string? provider,
+        string? bookmaker,
+        string? propType,
+        string? strategyClassification,
+        string? strategyTier,
+        bool candidateOnly,
+        DateOnly? fromDate,
+        DateOnly? toDate,
+        DateOnly? startDate,
+        DateOnly? endDate,
+        int? minSampleSize,
+        string? gradingMode,
+        bool topPickOnly,
+        bool includeWatchlist,
+        bool includeResearch,
+        bool includeStale,
+        bool includeExcluded,
+        bool includeNoResultDiagnostics,
+        bool includeDiagnostics,
+        int? diagnosticSampleSize,
+        string? modelEra,
+        bool includeLegacy,
+        string performanceMutationStamp)
+    {
+        return string.Join('|',
+            "performance-summary:v1",
+            BuildPerformanceCacheKeyPart(performanceMutationStamp),
+            BuildPerformanceCacheKeyPart(requestedSport),
+            BuildPerformanceCacheKeyPart(effectiveSport),
+            BuildPerformanceCacheKeyPart(providerCategory),
+            BuildPerformanceCacheKeyPart(provider),
+            BuildPerformanceCacheKeyPart(bookmaker),
+            BuildPerformanceCacheKeyPart(propType),
+            BuildPerformanceCacheKeyPart(strategyClassification),
+            BuildPerformanceCacheKeyPart(strategyTier),
+            candidateOnly ? "true" : "false",
+            BuildPerformanceCacheKeyPart(fromDate),
+            BuildPerformanceCacheKeyPart(toDate),
+            BuildPerformanceCacheKeyPart(startDate),
+            BuildPerformanceCacheKeyPart(endDate),
+            BuildPerformanceCacheKeyPart(minSampleSize),
+            BuildPerformanceCacheKeyPart(NormalizePerformanceGradingMode(gradingMode)),
+            topPickOnly ? "true" : "false",
+            includeWatchlist ? "true" : "false",
+            includeResearch ? "true" : "false",
+            includeStale ? "true" : "false",
+            includeExcluded ? "true" : "false",
+            includeNoResultDiagnostics ? "true" : "false",
+            includeDiagnostics ? "true" : "false",
+            BuildPerformanceCacheKeyPart(diagnosticSampleSize),
+            BuildPerformanceCacheKeyPart(modelEra),
+            includeLegacy ? "true" : "false");
+    }
+
+    private static async Task<string> BuildPerformanceSummaryCacheMutationStampAsync(
+        ApplicationDbContext dbContext,
+        CancellationToken cancellationToken)
+    {
+        var excludedCount = await dbContext.RecommendationSnapshots
+            .AsNoTracking()
+            .CountAsync(row => row.IsExcludedFromPerformance, cancellationToken);
+        var latestExclusionAt = await dbContext.RecommendationSnapshots
+            .AsNoTracking()
+            .Where(row => row.IsExcludedFromPerformance)
+            .Select(row => row.PerformanceExcludedAtUtc)
+            .MaxAsync(cancellationToken);
+
+        return string.Create(
+            CultureInfo.InvariantCulture,
+            $"{excludedCount}:{latestExclusionAt?.ToUnixTimeMilliseconds() ?? 0}");
+    }
+
+    private static string BuildPerformanceCacheKeyPart(object? value)
+    {
+        return Uri.EscapeDataString(value switch
+        {
+            null => "<null>",
+            DateOnly date => date.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
+            IFormattable formattable => formattable.ToString(null, CultureInfo.InvariantCulture),
+            _ => value.ToString() ?? "<null>"
+        });
+    }
+
     private static object BuildUnsupportedPerformanceSummaryResponse(
         DateTimeOffset generatedAtUtc,
         string? requestedSport,
@@ -4513,8 +4646,10 @@ public static class PublicMarketsEndpoints
                     row.PropType != null ? row.PropType.Name : string.Empty,
                     row.ActualResultValue))
                 .ToArrayAsync(cancellationToken);
+        var resultLookup = LedgerResultLookup.Create(resultRows);
+        var diagnosticResultLookup = LedgerDiagnosticResultLookup.Create(diagnosticResultRows);
         var gradedRows = selectedRows
-            .Select(row => GradeLedgerPerformanceRow(row, resultRows, diagnosticResultRows))
+            .Select(row => GradeLedgerPerformanceRow(row, resultLookup, diagnosticResultLookup))
             .ToArray();
         var overallGradedRows = selectedDate.HasValue
             ? await GradeLedgerRowsAsync(overallGradeableRows, dbContext, cancellationToken)
@@ -5326,8 +5461,11 @@ public static class PublicMarketsEndpoints
                     row.ActualResultValue))
                 .ToArrayAsync(cancellationToken);
 
+        var resultLookup = LedgerResultLookup.Create(resultRows);
+        var diagnosticResultLookup = LedgerDiagnosticResultLookup.Create(diagnosticResultRows);
+
         return selectedRows
-            .Select(row => GradeLedgerPerformanceRow(row, resultRows, diagnosticResultRows))
+            .Select(row => GradeLedgerPerformanceRow(row, resultLookup, diagnosticResultLookup))
             .ToArray();
     }
 
@@ -6824,8 +6962,8 @@ public static class PublicMarketsEndpoints
 
     private static LedgerPerformanceRow GradeLedgerPerformanceRow(
         RecommendationSnapshot row,
-        IReadOnlyCollection<LedgerActualResultLookupRow> actualResults,
-        IReadOnlyCollection<LedgerDiagnosticResultRow> diagnosticResultRows)
+        LedgerResultLookup actualResults,
+        LedgerDiagnosticResultLookup diagnosticResultRows)
     {
         decimal? actualResult = null;
         string? matchFailureReason = null;
@@ -6853,25 +6991,17 @@ public static class PublicMarketsEndpoints
                 var normalizedPlayerName = string.IsNullOrWhiteSpace(row.NormalizedPlayerName)
                     ? NormalizePerformanceKey(row.PlayerName)
                     : NormalizePerformanceKey(row.NormalizedPlayerName);
-                var matches = actualResults
-                .Where(result => result.EventDate == row.ExpectedResultDate
-                    && result.PlayerId == row.CanonicalPlayerId.Value
-                    && (result.PropTypeId == row.PropTypeId.Value ||
-                        string.Equals(
-                            NormalizePerformancePropTypeKey(result.PropType),
-                            normalizedPropType,
-                            StringComparison.OrdinalIgnoreCase)))
-                .ToArray();
+                var matches = actualResults.FindByPlayerAndProp(
+                    row.ExpectedResultDate,
+                    row.CanonicalPlayerId.Value,
+                    row.PropTypeId.Value,
+                    normalizedPropType);
                 var normalizedNameMatches = matches.Length == 0 && !string.IsNullOrWhiteSpace(normalizedPlayerName)
-                    ? actualResults
-                        .Where(result => result.EventDate == row.ExpectedResultDate
-                            && string.Equals(result.NormalizedPlayerName, normalizedPlayerName, StringComparison.OrdinalIgnoreCase)
-                            && (result.PropTypeId == row.PropTypeId.Value ||
-                                string.Equals(
-                                    NormalizePerformancePropTypeKey(result.PropType),
-                                    normalizedPropType,
-                                    StringComparison.OrdinalIgnoreCase)))
-                        .ToArray()
+                    ? actualResults.FindByPlayerNameAndProp(
+                        row.ExpectedResultDate,
+                        normalizedPlayerName,
+                        row.PropTypeId.Value,
+                        normalizedPropType)
                     : [];
 
                 if (matches.Length == 1)
@@ -6913,7 +7043,12 @@ public static class PublicMarketsEndpoints
 
     private static string BuildLedgerMatchFailureReason(
         RecommendationSnapshot row,
-        IReadOnlyCollection<LedgerDiagnosticResultRow> diagnosticResultRows)
+        IReadOnlyCollection<LedgerDiagnosticResultRow> diagnosticResultRows) =>
+        BuildLedgerMatchFailureReason(row, LedgerDiagnosticResultLookup.Create(diagnosticResultRows));
+
+    private static string BuildLedgerMatchFailureReason(
+        RecommendationSnapshot row,
+        LedgerDiagnosticResultLookup diagnosticResultRows)
     {
         if (!row.CanonicalPlayerId.HasValue)
         {
@@ -6932,9 +7067,7 @@ public static class PublicMarketsEndpoints
             ? NormalizePerformancePropTypeKey(row.PropType)
             : NormalizePerformancePropTypeKey(row.NormalizedPropType);
         var nearbyDates = new[] { row.ExpectedResultDate.AddDays(-1), row.ExpectedResultDate, row.ExpectedResultDate.AddDays(1) };
-        var nearbyRows = diagnosticResultRows
-            .Where(result => nearbyDates.Contains(result.EventDate))
-            .ToArray();
+        var nearbyRows = diagnosticResultRows.GetRowsForDates(nearbyDates);
         var sameDateRows = nearbyRows
             .Where(result => result.EventDate == row.ExpectedResultDate)
             .ToArray();
@@ -8333,6 +8466,124 @@ public static class PublicMarketsEndpoints
         public string NormalizedPlayerName { get; } = NormalizePerformanceKey(PlayerName);
         public string NormalizedPropType { get; } = NormalizePerformancePropTypeKey(PropType);
     }
+
+    private sealed class LedgerResultLookup
+    {
+        private static readonly LedgerActualResultLookupRow[] EmptyRows = [];
+        private readonly IReadOnlyDictionary<LedgerPlayerPropTypeIdKey, LedgerActualResultLookupRow[]> _byPlayerAndPropTypeId;
+        private readonly IReadOnlyDictionary<LedgerPlayerNormalizedPropKey, LedgerActualResultLookupRow[]> _byPlayerAndNormalizedProp;
+        private readonly IReadOnlyDictionary<LedgerPlayerNamePropTypeIdKey, LedgerActualResultLookupRow[]> _byPlayerNameAndPropTypeId;
+        private readonly IReadOnlyDictionary<LedgerPlayerNameNormalizedPropKey, LedgerActualResultLookupRow[]> _byPlayerNameAndNormalizedProp;
+
+        private LedgerResultLookup(
+            IReadOnlyDictionary<LedgerPlayerPropTypeIdKey, LedgerActualResultLookupRow[]> byPlayerAndPropTypeId,
+            IReadOnlyDictionary<LedgerPlayerNormalizedPropKey, LedgerActualResultLookupRow[]> byPlayerAndNormalizedProp,
+            IReadOnlyDictionary<LedgerPlayerNamePropTypeIdKey, LedgerActualResultLookupRow[]> byPlayerNameAndPropTypeId,
+            IReadOnlyDictionary<LedgerPlayerNameNormalizedPropKey, LedgerActualResultLookupRow[]> byPlayerNameAndNormalizedProp)
+        {
+            _byPlayerAndPropTypeId = byPlayerAndPropTypeId;
+            _byPlayerAndNormalizedProp = byPlayerAndNormalizedProp;
+            _byPlayerNameAndPropTypeId = byPlayerNameAndPropTypeId;
+            _byPlayerNameAndNormalizedProp = byPlayerNameAndNormalizedProp;
+        }
+
+        public static LedgerResultLookup Create(IReadOnlyCollection<LedgerActualResultLookupRow> rows)
+        {
+            return new LedgerResultLookup(
+                rows.GroupBy(row => new LedgerPlayerPropTypeIdKey(row.EventDate, row.PlayerId, row.PropTypeId)).ToDictionary(group => group.Key, group => group.ToArray()),
+                rows.Where(row => !string.IsNullOrWhiteSpace(row.NormalizedPropType))
+                    .GroupBy(row => new LedgerPlayerNormalizedPropKey(row.EventDate, row.PlayerId, row.NormalizedPropType))
+                    .ToDictionary(group => group.Key, group => group.ToArray()),
+                rows.Where(row => !string.IsNullOrWhiteSpace(row.NormalizedPlayerName))
+                    .GroupBy(row => new LedgerPlayerNamePropTypeIdKey(row.EventDate, row.NormalizedPlayerName, row.PropTypeId))
+                    .ToDictionary(group => group.Key, group => group.ToArray()),
+                rows.Where(row => !string.IsNullOrWhiteSpace(row.NormalizedPlayerName) && !string.IsNullOrWhiteSpace(row.NormalizedPropType))
+                    .GroupBy(row => new LedgerPlayerNameNormalizedPropKey(row.EventDate, row.NormalizedPlayerName, row.NormalizedPropType))
+                    .ToDictionary(group => group.Key, group => group.ToArray()));
+        }
+
+        public LedgerActualResultLookupRow[] FindByPlayerAndProp(
+            DateOnly eventDate,
+            Guid playerId,
+            Guid propTypeId,
+            string normalizedPropType)
+        {
+            var exactRows = _byPlayerAndPropTypeId.GetValueOrDefault(new LedgerPlayerPropTypeIdKey(eventDate, playerId, propTypeId)) ?? EmptyRows;
+            var normalizedRows = string.IsNullOrWhiteSpace(normalizedPropType)
+                ? EmptyRows
+                : _byPlayerAndNormalizedProp.GetValueOrDefault(new LedgerPlayerNormalizedPropKey(eventDate, playerId, normalizedPropType)) ?? EmptyRows;
+            return MergeDistinctResultRows(exactRows, normalizedRows);
+        }
+
+        public LedgerActualResultLookupRow[] FindByPlayerNameAndProp(
+            DateOnly eventDate,
+            string normalizedPlayerName,
+            Guid propTypeId,
+            string normalizedPropType)
+        {
+            var exactRows = _byPlayerNameAndPropTypeId.GetValueOrDefault(new LedgerPlayerNamePropTypeIdKey(eventDate, normalizedPlayerName, propTypeId)) ?? EmptyRows;
+            var normalizedRows = string.IsNullOrWhiteSpace(normalizedPropType)
+                ? EmptyRows
+                : _byPlayerNameAndNormalizedProp.GetValueOrDefault(new LedgerPlayerNameNormalizedPropKey(eventDate, normalizedPlayerName, normalizedPropType)) ?? EmptyRows;
+            return MergeDistinctResultRows(exactRows, normalizedRows);
+        }
+    }
+
+    private sealed class LedgerDiagnosticResultLookup
+    {
+        private static readonly LedgerDiagnosticResultRow[] EmptyRows = [];
+        private readonly IReadOnlyDictionary<DateOnly, LedgerDiagnosticResultRow[]> _byDate;
+
+        private LedgerDiagnosticResultLookup(IReadOnlyDictionary<DateOnly, LedgerDiagnosticResultRow[]> byDate)
+        {
+            _byDate = byDate;
+        }
+
+        public static LedgerDiagnosticResultLookup Create(IReadOnlyCollection<LedgerDiagnosticResultRow> rows)
+        {
+            return new LedgerDiagnosticResultLookup(rows
+                .GroupBy(row => row.EventDate)
+                .ToDictionary(group => group.Key, group => group.ToArray()));
+        }
+
+        public LedgerDiagnosticResultRow[] GetRowsForDates(IReadOnlyCollection<DateOnly> dates)
+        {
+            if (dates.Count == 0)
+            {
+                return EmptyRows;
+            }
+
+            return dates
+                .SelectMany(date => _byDate.GetValueOrDefault(date) ?? EmptyRows)
+                .ToArray();
+        }
+    }
+
+    private static LedgerActualResultLookupRow[] MergeDistinctResultRows(
+        IReadOnlyCollection<LedgerActualResultLookupRow> first,
+        IReadOnlyCollection<LedgerActualResultLookupRow> second)
+    {
+        if (first.Count == 0)
+        {
+            return second.ToArray();
+        }
+
+        if (second.Count == 0)
+        {
+            return first.ToArray();
+        }
+
+        return first
+            .Concat(second)
+            .GroupBy(row => row.PropResultId)
+            .Select(group => group.First())
+            .ToArray();
+    }
+
+    private readonly record struct LedgerPlayerPropTypeIdKey(DateOnly EventDate, Guid PlayerId, Guid PropTypeId);
+    private readonly record struct LedgerPlayerNormalizedPropKey(DateOnly EventDate, Guid PlayerId, string NormalizedPropType);
+    private readonly record struct LedgerPlayerNamePropTypeIdKey(DateOnly EventDate, string NormalizedPlayerName, Guid PropTypeId);
+    private readonly record struct LedgerPlayerNameNormalizedPropKey(DateOnly EventDate, string NormalizedPlayerName, string NormalizedPropType);
 
     private sealed record LedgerPerformanceRow(
         RecommendationSnapshot Snapshot,

@@ -45,7 +45,7 @@ export function DashboardPage() {
   const freshnessQuery = useMarketFreshnessData();
   const topPicksQuery = useTopPicksData(10, 'dashboard-top-pick', marketReadSport);
   const lineShoppingQuery = useLineShoppingData(12, true, 'dashboard-line-shopping', marketReadSport);
-  const performanceQuery = usePerformanceData('latestCompleted');
+  const performanceQuery = usePerformanceData('latestCompleted', marketReadSport);
   const topPicks = topPicksQuery.markets;
   const lineShoppingMarkets = lineShoppingQuery.markets;
   const performanceRows = performanceQuery.rows;

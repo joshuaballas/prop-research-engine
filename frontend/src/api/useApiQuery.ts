@@ -8,6 +8,7 @@ export interface ApiQueryState<T> {
 
 export interface ApiQueryOptions {
   refetchIntervalMs?: number;
+  refetchOnWindowFocus?: boolean;
 }
 
 export function useApiQuery<T>(
@@ -17,6 +18,7 @@ export function useApiQuery<T>(
 ): ApiQueryState<T> {
   const [state, setState] = useState<ApiQueryState<T>>({ loading: true });
   const [pollTick, setPollTick] = useState(0);
+  const [focusTick, setFocusTick] = useState(0);
 
   useEffect(() => {
     if (!options.refetchIntervalMs || options.refetchIntervalMs <= 0) {
@@ -31,6 +33,21 @@ export function useApiQuery<T>(
       window.clearInterval(timer);
     };
   }, [options.refetchIntervalMs]);
+
+  useEffect(() => {
+    if (!options.refetchOnWindowFocus) {
+      return;
+    }
+
+    const onFocus = () => {
+      setFocusTick((value) => value + 1);
+    };
+
+    window.addEventListener('focus', onFocus);
+    return () => {
+      window.removeEventListener('focus', onFocus);
+    };
+  }, [options.refetchOnWindowFocus]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -50,7 +67,7 @@ export function useApiQuery<T>(
 
     return () => controller.abort();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [...deps, pollTick]);
+  }, [...deps, pollTick, focusTick]);
 
   return state;
 }

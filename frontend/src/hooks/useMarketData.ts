@@ -19,11 +19,16 @@ import { useMarketDataRefreshVersion } from './useMarketDataRefresh';
 
 const MARKET_DATA_POLL_INTERVAL_MS = 15000;
 const MARKET_QUERY_OPTIONS = { refetchIntervalMs: MARKET_DATA_POLL_INTERVAL_MS };
+const PERFORMANCE_QUERY_OPTIONS = { refetchOnWindowFocus: true };
 export type MarketReadSport = 'All' | 'MLB' | 'SOCCER';
 
-export function useMarketFreshnessData(deps: readonly unknown[] = []) {
+export function useMarketFreshnessData(deps: readonly unknown[] = [], sport?: MarketReadSport) {
   const refreshVersion = useMarketDataRefreshVersion();
-  return useApiQuery((signal) => (isDemoDataMode ? Promise.resolve(demoMarketFreshness) : getMarketFreshness(signal)), [...deps, refreshVersion], MARKET_QUERY_OPTIONS);
+  return useApiQuery(
+    (signal) => (isDemoDataMode ? Promise.resolve(demoMarketFreshness) : getMarketFreshness(signal, normalizeFreshnessReadSport(sport))),
+    [...deps, sport, refreshVersion],
+    MARKET_QUERY_OPTIONS
+  );
 }
 
 export function useProviderStatusData(deps: readonly unknown[] = []) {
@@ -113,7 +118,7 @@ export function useEntryCandidateData(take = 40) {
   return { ...query, markets };
 }
 
-export function usePerformanceData(gradingMode: PerformanceGradingMode = 'latestGraded') {
+export function usePerformanceData(gradingMode: PerformanceGradingMode = 'latestGraded', sport: MarketReadSport = 'All') {
   const refreshVersion = useMarketDataRefreshVersion();
   const query = useApiQuery(
     async (signal) => {
@@ -121,11 +126,11 @@ export function usePerformanceData(gradingMode: PerformanceGradingMode = 'latest
         return { rows: demoPerformance, summary: undefined };
       }
 
-      const response = await getPerformanceSummary(signal, gradingMode);
+      const response = await getPerformanceSummary(signal, gradingMode, sport);
       return { rows: mapPerformanceSummaryToGroups(response), summary: response };
     },
-    [gradingMode, refreshVersion],
-    MARKET_QUERY_OPTIONS
+    [gradingMode, sport, refreshVersion],
+    PERFORMANCE_QUERY_OPTIONS
   );
   const rows = useMemo(
     () => query.data?.rows ?? [],
@@ -135,7 +140,7 @@ export function usePerformanceData(gradingMode: PerformanceGradingMode = 'latest
   return { ...query, rows, summary: query.data?.summary };
 }
 
-export function usePerformanceResults(date?: string, enabled = true) {
+export function usePerformanceResults(date?: string, enabled = true, sport: MarketReadSport = 'All') {
   const refreshVersion = useMarketDataRefreshVersion();
   return useApiQuery(
     async (signal) => {
@@ -143,10 +148,10 @@ export function usePerformanceResults(date?: string, enabled = true) {
         return undefined;
       }
 
-      return getPerformanceResults(signal, date);
+      return getPerformanceResults(signal, date, sport);
     },
-    [date, enabled, refreshVersion],
-    MARKET_QUERY_OPTIONS
+    [date, enabled, sport, refreshVersion],
+    PERFORMANCE_QUERY_OPTIONS
   );
 }
 
@@ -156,6 +161,10 @@ function normalizeLineShoppingReadSport(sport: MarketReadSport) {
 
 function normalizeTopPicksReadSport(sport: MarketReadSport) {
   return sport === 'All' ? undefined : sport;
+}
+
+function normalizeFreshnessReadSport(sport?: MarketReadSport) {
+  return !sport || sport === 'All' ? undefined : sport;
 }
 
 function mapDemoMarketsToOpportunities(markets: MarketOpportunity[] | undefined, sourcePrefix: string) {
