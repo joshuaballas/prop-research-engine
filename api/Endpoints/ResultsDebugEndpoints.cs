@@ -882,10 +882,15 @@ public static class ResultsDebugEndpoints
                     workerEnabled = soccerWorkerOptions.Enabled,
                     scheduledEnabled = soccerScheduledEnabled,
                     intervalMinutes = Math.Max(1, soccerWorkerOptions.IntervalMinutes),
+                    latestRunCompetition = latestSoccerState?.Competition,
                     lastRunStartedAtUtc = latestSoccerState?.LastStartedAt,
                     lastRunCompletedAtUtc = latestSoccerState?.LastCompletedAt,
                     lastRunSucceeded = latestSoccerState is not null
                         && IsSuccessfulSoccerResultWorkerStatus(latestSoccerState.LastStatus),
+                    lastRunFailed = latestSoccerState is not null
+                        && IsFailedSoccerResultWorkerStatus(latestSoccerState.LastStatus),
+                    lastRunSkipped = latestSoccerState is not null
+                        && IsSkippedSoccerResultWorkerStatus(latestSoccerState.LastStatus),
                     lastSuccessfulRunAtUtc = latestSoccerState?.LastSuccessfulRunAt,
                     lastStatus = latestSoccerState?.LastStatus ?? "never_run",
                     lastErrorMessage = FirstNonBlank(latestSoccerState?.LastErrorMessage, soccerConfigError),
@@ -4198,6 +4203,9 @@ public static class ResultsDebugEndpoints
                     ["lastRunStartedAtUtc"] = importState?.LastStartedAt,
                     ["lastRunCompletedAtUtc"] = importState?.LastCompletedAt,
                     ["lastRunSucceeded"] = importState is not null && IsSuccessfulSoccerResultWorkerStatus(importState.LastStatus),
+                    ["lastRunFailed"] = importState is not null && IsFailedSoccerResultWorkerStatus(importState.LastStatus),
+                    ["lastRunSkipped"] = importState is not null && IsSkippedSoccerResultWorkerStatus(importState.LastStatus),
+                    ["lastStatus"] = importState?.LastStatus ?? "never_run",
                     ["lastSuccessfulRunAtUtc"] = importState?.LastSuccessfulRunAt,
                     ["latestCompletedFixtureDetected"] = importState is null || importState.LatestCompletedFixtureDetectedId is null
                         ? null
@@ -5098,9 +5106,14 @@ public static class ResultsDebugEndpoints
                     lastRunStartedAtUtc = importState?.LastStartedAt,
                     lastRunCompletedAtUtc = importState?.LastCompletedAt,
                     lastRunSucceeded = importState is not null && IsSuccessfulSoccerResultWorkerStatus(importState.LastStatus),
+                    lastRunFailed = importState is not null && IsFailedSoccerResultWorkerStatus(importState.LastStatus),
+                    lastRunSkipped = importState is not null && IsSkippedSoccerResultWorkerStatus(importState.LastStatus),
+                    lastStatus = importState?.LastStatus ?? "never_run",
                     nextRunEstimateUtc,
                     lastImportAttemptAtUtc = importState?.LastStartedAt,
                     lastImportAttemptSucceeded = importState is not null && IsSuccessfulSoccerResultWorkerStatus(importState.LastStatus),
+                    lastImportAttemptFailed = importState is not null && IsFailedSoccerResultWorkerStatus(importState.LastStatus),
+                    lastImportAttemptSkipped = importState is not null && IsSkippedSoccerResultWorkerStatus(importState.LastStatus),
                     lastSuccessfulImportAtUtc = persisted.LatestImportedAtUtc,
                     lastSuccessfulRunAtUtc = importState?.LastSuccessfulRunAt,
                     latestCompletedFixtureDetected = importState is null || importState.LatestCompletedFixtureDetectedId is null
@@ -11241,7 +11254,8 @@ public static class ResultsDebugEndpoints
             "running" => "Running",
             "failed" or "partial_failure" => "Failed",
             "not_configured" => "NotConfigured",
-            "succeeded" or "completed_with_pending_fixtures" or "skipped" => "Idle",
+            "skipped" or "skippedoutsideseasonwindow" or "skippedseasonmetadataunavailable" or "skippednoeligiblecompetitions" or "nocompletedfixtures" => "Skipped",
+            "succeeded" or "completed_with_pending_fixtures" => "Idle",
             _ => "Idle"
         };
     }
@@ -11249,8 +11263,22 @@ public static class ResultsDebugEndpoints
     private static bool IsSuccessfulSoccerResultWorkerStatus(string? status)
     {
         return string.Equals(status, "succeeded", StringComparison.OrdinalIgnoreCase)
-            || string.Equals(status, "completed_with_pending_fixtures", StringComparison.OrdinalIgnoreCase)
-            || string.Equals(status, "skipped", StringComparison.OrdinalIgnoreCase);
+            || string.Equals(status, "completed_with_pending_fixtures", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsSkippedSoccerResultWorkerStatus(string? status)
+    {
+        return status?.Trim().ToLowerInvariant() switch
+        {
+            "skipped" or "skippedoutsideseasonwindow" or "skippedseasonmetadataunavailable" or "skippednoeligiblecompetitions" or "nocompletedfixtures" => true,
+            _ => false
+        };
+    }
+
+    private static bool IsFailedSoccerResultWorkerStatus(string? status)
+    {
+        return string.Equals(status, "failed", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(status, "partial_failure", StringComparison.OrdinalIgnoreCase);
     }
 
     private static string BuildSoccerResultWorkerStatusReason(string status, string? apiSportsConfigError)
@@ -11261,6 +11289,7 @@ public static class ResultsDebugEndpoints
             "NotConfigured" => $"Soccer API-Sports result/stat import worker is registered but cannot run because {apiSportsConfigError}",
             "Running" => "Soccer API-Sports result/stat import worker is currently running.",
             "Failed" => "Soccer API-Sports result/stat import worker recorded a failed or partially failed run. Inspect latestErrorSummary and fixture states.",
+            "Skipped" => "Soccer API-Sports result/stat import worker recorded an intentional no-work skip. This is not a failed run unless latestErrorSummary is populated.",
             _ => "Soccer API-Sports result/stat import worker is registered and waiting for the next scheduled cycle."
         };
     }
@@ -11273,6 +11302,7 @@ public static class ResultsDebugEndpoints
             "NotConfigured" => "Configure ApiSports:Enabled, ApiSports:ApiKey, and ApiSports:Football:BaseUrl before enabling scheduled Soccer result import.",
             "Failed" => "Review failed fixture states and application logs before rerunning the worker or manual backfill.",
             "Running" => "Wait for the active Soccer result import cycle to complete, then recheck this status endpoint.",
+            "Skipped" => "No action required when this is an expected outside-season or no-work skip and World Cup coverage is current.",
             _ => "No action required if recent completed World Cup fixtures are being imported; use manual backfill for targeted recovery."
         };
     }

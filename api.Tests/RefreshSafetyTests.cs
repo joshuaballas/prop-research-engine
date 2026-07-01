@@ -2527,6 +2527,10 @@ public sealed class RefreshSafetyTests
 
         Assert.True(soccer.GetProperty("workerEnabled").GetBoolean());
         Assert.True(soccer.GetProperty("scheduledEnabled").GetBoolean());
+        Assert.Equal(SoccerResultImportWorker.Competition, soccer.GetProperty("latestRunCompetition").GetString());
+        Assert.True(soccer.GetProperty("lastRunSucceeded").GetBoolean());
+        Assert.False(soccer.GetProperty("lastRunFailed").GetBoolean());
+        Assert.False(soccer.GetProperty("lastRunSkipped").GetBoolean());
         Assert.Equal(1, soccer.GetProperty("pendingCompletedFixtureCount").GetInt32());
         Assert.Equal(1, soccer.GetProperty("pendingCompletedDateCount").GetInt32());
         Assert.Contains("pending", soccer.GetProperty("staleOrDisabledWarning").GetString(), StringComparison.OrdinalIgnoreCase);
@@ -2534,6 +2538,164 @@ public sealed class RefreshSafetyTests
         Assert.Equal(0, factory.ApiSportsFootballClient.FixturesCallCount);
         Assert.Equal(0, factory.ApiSportsFootballClient.FixturePlayerStatsCallCount);
         Assert.Equal(0, factory.MlbResultsProvider.CallCount);
+    }
+
+    [Fact]
+    public async Task ResultImportStatus_ReportsSoccerOutsideSeasonSkipAsSkippedNotFailed()
+    {
+        var config = ApiSportsLiveConfig();
+        config["SoccerResultImportWorker:Enabled"] = "true";
+        await using var factory = new SafetyTestApplicationFactory(config);
+        using var client = factory.CreateClient();
+        await factory.EnsureDatabaseAsync();
+        var now = DateTimeOffset.UtcNow;
+
+        using (var scope = factory.Services.CreateScope())
+        {
+            var dbContext = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+            dbContext.SoccerResultImportStates.Add(new SoccerResultImportState
+            {
+                Id = Guid.NewGuid(),
+                Source = SoccerResultImportWorker.Source,
+                Competition = "EPL",
+                LastStartedAt = now.AddMinutes(-5),
+                LastCompletedAt = now.AddMinutes(-4),
+                LastStatus = "SkippedOutsideSeasonWindow",
+                LastErrorMessage = null,
+                LastApiCallsUsed = 0,
+                UpdatedAt = now.AddMinutes(-4)
+            });
+            await dbContext.SaveChangesAsync();
+        }
+
+        var response = await client.GetAsync("/api/debug/results/import/status");
+
+        await EnsureSuccessWithBodyAsync(response);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        var soccer = json
+            .GetProperty("workflows")
+            .EnumerateArray()
+            .Single(row => row.GetProperty("sport").GetString() == "SOCCER");
+        Assert.Equal("EPL", soccer.GetProperty("latestRunCompetition").GetString());
+        Assert.Equal("SkippedOutsideSeasonWindow", soccer.GetProperty("lastStatus").GetString());
+        Assert.False(soccer.GetProperty("lastRunSucceeded").GetBoolean());
+        Assert.False(soccer.GetProperty("lastRunFailed").GetBoolean());
+        Assert.True(soccer.GetProperty("lastRunSkipped").GetBoolean());
+        Assert.Equal(JsonValueKind.Null, soccer.GetProperty("lastErrorMessage").ValueKind);
+        Assert.Equal(JsonValueKind.Null, soccer.GetProperty("staleOrDisabledWarning").ValueKind);
+        Assert.Equal(0, factory.ApiSportsFootballClient.FixturesCallCount);
+        Assert.Equal(0, factory.ApiSportsFootballClient.FixturePlayerStatsCallCount);
+    }
+
+    [Fact]
+    public async Task ResultImportStatus_DoesNotFailSoccerWhenWorldCupCoverageHealthyAndDomesticSkipIsLatest()
+    {
+        var config = ApiSportsLiveConfig();
+        config["SoccerResultImportWorker:Enabled"] = "true";
+        await using var factory = new SafetyTestApplicationFactory(config);
+        using var client = factory.CreateClient();
+        await factory.EnsureDatabaseAsync();
+        var now = DateTimeOffset.UtcNow;
+        var latestCompletedDate = DateOnly.FromDateTime(now.UtcDateTime.AddDays(-1));
+
+        using (var scope = factory.Services.CreateScope())
+        {
+            var dbContext = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+            dbContext.SoccerResultImportStates.AddRange(
+                new SoccerResultImportState
+                {
+                    Id = Guid.NewGuid(),
+                    Source = SoccerResultImportWorker.Source,
+                    Competition = SoccerResultImportWorker.Competition,
+                    LastSuccessfulRunAt = now.AddMinutes(-50),
+                    LastStartedAt = now.AddMinutes(-51),
+                    LastCompletedAt = now.AddMinutes(-50),
+                    LastStatus = "succeeded",
+                    LastErrorMessage = null,
+                    LatestCompletedFixtureDetectedId = "wc-fixture",
+                    LatestCompletedFixtureDetectedDate = latestCompletedDate,
+                    LatestCompletedFixtureImportedId = "wc-fixture",
+                    LatestCompletedFixtureImportedDate = latestCompletedDate,
+                    UpdatedAt = now.AddMinutes(-50)
+                },
+                new SoccerResultImportState
+                {
+                    Id = Guid.NewGuid(),
+                    Source = SoccerResultImportWorker.Source,
+                    Competition = "EPL",
+                    LastStartedAt = now.AddMinutes(-5),
+                    LastCompletedAt = now.AddMinutes(-4),
+                    LastStatus = "SkippedOutsideSeasonWindow",
+                    LastErrorMessage = null,
+                    LastApiCallsUsed = 0,
+                    UpdatedAt = now.AddMinutes(-4)
+                });
+            await dbContext.SaveChangesAsync();
+        }
+
+        var response = await client.GetAsync("/api/debug/results/import/status");
+
+        await EnsureSuccessWithBodyAsync(response);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        var soccer = json
+            .GetProperty("workflows")
+            .EnumerateArray()
+            .Single(row => row.GetProperty("sport").GetString() == "SOCCER");
+        Assert.Equal("EPL", soccer.GetProperty("latestRunCompetition").GetString());
+        Assert.Equal("SkippedOutsideSeasonWindow", soccer.GetProperty("lastStatus").GetString());
+        Assert.False(soccer.GetProperty("lastRunSucceeded").GetBoolean());
+        Assert.False(soccer.GetProperty("lastRunFailed").GetBoolean());
+        Assert.True(soccer.GetProperty("lastRunSkipped").GetBoolean());
+        Assert.Equal(latestCompletedDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture), soccer.GetProperty("latestCompletedCoverageDate").GetString());
+        Assert.Equal(JsonValueKind.Null, soccer.GetProperty("lastErrorMessage").ValueKind);
+        Assert.Equal(JsonValueKind.Null, soccer.GetProperty("staleOrDisabledWarning").ValueKind);
+        Assert.Equal(0, factory.ApiSportsFootballClient.FixturesCallCount);
+        Assert.Equal(0, factory.ApiSportsFootballClient.FixturePlayerStatsCallCount);
+    }
+
+    [Fact]
+    public async Task ResultImportStatus_ReportsRealSoccerFailureWithErrorMessage()
+    {
+        var config = ApiSportsLiveConfig();
+        config["SoccerResultImportWorker:Enabled"] = "true";
+        await using var factory = new SafetyTestApplicationFactory(config);
+        using var client = factory.CreateClient();
+        await factory.EnsureDatabaseAsync();
+        var now = DateTimeOffset.UtcNow;
+
+        using (var scope = factory.Services.CreateScope())
+        {
+            var dbContext = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+            dbContext.SoccerResultImportStates.Add(new SoccerResultImportState
+            {
+                Id = Guid.NewGuid(),
+                Source = SoccerResultImportWorker.Source,
+                Competition = SoccerResultImportWorker.Competition,
+                LastStartedAt = now.AddMinutes(-5),
+                LastCompletedAt = now.AddMinutes(-4),
+                LastStatus = "failed",
+                LastErrorMessage = "Provider boom",
+                UpdatedAt = now.AddMinutes(-4)
+            });
+            await dbContext.SaveChangesAsync();
+        }
+
+        var response = await client.GetAsync("/api/debug/results/import/status");
+
+        await EnsureSuccessWithBodyAsync(response);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        var soccer = json
+            .GetProperty("workflows")
+            .EnumerateArray()
+            .Single(row => row.GetProperty("sport").GetString() == "SOCCER");
+        Assert.Equal(SoccerResultImportWorker.Competition, soccer.GetProperty("latestRunCompetition").GetString());
+        Assert.Equal("failed", soccer.GetProperty("lastStatus").GetString());
+        Assert.False(soccer.GetProperty("lastRunSucceeded").GetBoolean());
+        Assert.True(soccer.GetProperty("lastRunFailed").GetBoolean());
+        Assert.False(soccer.GetProperty("lastRunSkipped").GetBoolean());
+        Assert.Equal("Provider boom", soccer.GetProperty("lastErrorMessage").GetString());
+        Assert.Equal(0, factory.ApiSportsFootballClient.FixturesCallCount);
+        Assert.Equal(0, factory.ApiSportsFootballClient.FixturePlayerStatsCallCount);
     }
 
     [Fact]

@@ -1747,6 +1747,10 @@ public static partial class TheOddsApiDebugEndpoints
                 soccerResultWorkerOptions.Value,
                 soccerResultConfigError,
                 soccerResultImportState);
+            var soccerResultLastStatus = soccerResultImportState?.LastStatus;
+            var soccerResultLastRunSucceeded = IsSuccessfulSoccerResultImportStatus(soccerResultLastStatus);
+            var soccerResultLastRunSkipped = IsSkippedSoccerResultImportStatus(soccerResultLastStatus);
+            var soccerResultLastRunFailed = IsFailedSoccerResultImportStatus(soccerResultLastStatus);
             var soccerResultNextRunEstimateUtc = soccerResultWorkerOptions.Value.Enabled && soccerResultConfigError is null
                 ? soccerResultImportState?.LastStartedAt?.AddMinutes(Math.Max(1, soccerResultWorkerOptions.Value.IntervalMinutes)) ?? DateTimeOffset.UtcNow
                 : (DateTimeOffset?)null;
@@ -1927,10 +1931,15 @@ public static partial class TheOddsApiDebugEndpoints
                         soccerResultWorkerOptions.Value.RecentWindowDays,
                         soccerResultWorkerOptions.Value.ImportCompletedFixturesOnly,
                         lastImportAttemptAtUtc = soccerResultImportState?.LastStartedAt,
-                        lastImportAttemptSucceeded = soccerResultImportState is not null && IsSuccessfulSoccerResultImportStatus(soccerResultImportState.LastStatus),
+                        lastImportAttemptSucceeded = soccerResultImportState is not null && soccerResultLastRunSucceeded,
+                        lastImportAttemptSkipped = soccerResultImportState is not null && soccerResultLastRunSkipped,
+                        lastImportAttemptFailed = soccerResultImportState is not null && soccerResultLastRunFailed,
                         lastRunStartedAtUtc = soccerResultImportState?.LastStartedAt,
                         lastRunCompletedAtUtc = soccerResultImportState?.LastCompletedAt,
-                        lastRunSucceeded = soccerResultImportState is not null && IsSuccessfulSoccerResultImportStatus(soccerResultImportState.LastStatus),
+                        lastRunSucceeded = soccerResultImportState is not null && soccerResultLastRunSucceeded,
+                        lastRunSkipped = soccerResultImportState is not null && soccerResultLastRunSkipped,
+                        lastRunFailed = soccerResultImportState is not null && soccerResultLastRunFailed,
+                        lastStatus = soccerResultLastStatus ?? "never_run",
                         lastSuccessfulRunAtUtc = soccerResultImportState?.LastSuccessfulRunAt,
                         nextRunEstimateUtc = soccerResultNextRunEstimateUtc,
                         latestCompletedFixtureDetected = soccerResultImportState is null || soccerResultImportState.LatestCompletedFixtureDetectedId is null
@@ -4825,6 +4834,7 @@ public static partial class TheOddsApiDebugEndpoints
             "running" => "Running",
             "failed" or "partial_failure" => "Failed",
             "not_configured" => "NotConfigured",
+            "skipped" or "skippedoutsideseasonwindow" or "skippedseasonmetadataunavailable" or "skippednoeligiblecompetitions" or "nocompletedfixtures" => "Skipped",
             "succeeded" or "completed_with_pending_fixtures" => "Idle",
             _ => "Idle"
         };
@@ -4836,6 +4846,21 @@ public static partial class TheOddsApiDebugEndpoints
             || string.Equals(status, "completed_with_pending_fixtures", StringComparison.OrdinalIgnoreCase);
     }
 
+    private static bool IsSkippedSoccerResultImportStatus(string? status)
+    {
+        return status?.Trim().ToLowerInvariant() switch
+        {
+            "skipped" or "skippedoutsideseasonwindow" or "skippedseasonmetadataunavailable" or "skippednoeligiblecompetitions" or "nocompletedfixtures" => true,
+            _ => false
+        };
+    }
+
+    private static bool IsFailedSoccerResultImportStatus(string? status)
+    {
+        return string.Equals(status, "failed", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(status, "partial_failure", StringComparison.OrdinalIgnoreCase);
+    }
+
     private static string BuildSoccerResultImportStatusReason(string status, string? apiSportsConfigError)
     {
         return status switch
@@ -4844,6 +4869,7 @@ public static partial class TheOddsApiDebugEndpoints
             "NotConfigured" => $"Soccer World Cup API-Sports result/stat import worker is registered but cannot run because {apiSportsConfigError}",
             "Running" => "Soccer World Cup API-Sports result/stat import worker is currently running.",
             "Failed" => "Soccer World Cup API-Sports result/stat import worker recorded a failed or partially failed run. Inspect the Soccer scheduled import status endpoint for fixture-level details.",
+            "Skipped" => "Soccer World Cup API-Sports result/stat import worker recorded an intentional no-work skip. This is not a failed run unless latestErrorSummary is populated.",
             _ => "Soccer World Cup API-Sports result/stat import worker is registered and waiting for the next scheduled cycle."
         };
     }
