@@ -575,7 +575,9 @@ public sealed class MlbResultImportWorker(
                 operation,
                 exception,
                 CorrelationId: Guid.NewGuid().ToString("N"),
-                Metadata: metadata), CancellationToken.None);
+                Metadata: metadata,
+                Sport: "MLB",
+                Provider: Source), CancellationToken.None);
         }
         catch (Exception loggingException)
         {

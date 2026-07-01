@@ -120,7 +120,9 @@ public sealed class TheOddsMlbIngestionWorker(
                     duration = duration.ToString(),
                     options.Value.DryRun,
                     options.Value.Enabled
-                }), CancellationToken.None);
+                },
+                Sport: "MLB",
+                Provider: "The Odds API"), CancellationToken.None);
         }
         catch (Exception loggingException)
         {

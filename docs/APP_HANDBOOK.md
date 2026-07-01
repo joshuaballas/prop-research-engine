@@ -69,6 +69,7 @@ Useful URLs:
 - Production-safe market performance: `http://localhost:5299/api/markets/performance-summary`
 - Production-safe DFS entry rules: `http://localhost:5299/api/dfs/entry-rules` exposes explicitly supported DFS pick'em entry providers separately from sportsbook context-only rows. Sportsbook lines are comparison/reference data only. Optional payout multiplier tables are app-maintained configured data keyed by provider, entry type, and leg count. PrizePicks standard Player Pick top-payout multipliers are configured for Power 2-6 picks and Flex 3-6 picks and marked standard-only; partial-hit Flex payouts and special/unknown projection variations are not modeled as estimated payout rows. Underdog, DraftKings Pick6, and Betr Picks currently expose payout-model notes but no configured multiplier rows because exact official payout tables were not verified. Market rows expose projection-safety metadata from The Odds persisted fields, including alternate-market and payout-may-differ flags. If a multiplier is missing or the selected legs include special/alternate/unknown projection types, Entry Builder shows payout unavailable. Final entry availability, terms, and payout must be confirmed in the provider app.
 - System health JSON: `http://localhost:5299/api/debug/system/health`
+- Persistent application error logs: `http://localhost:5299/api/debug/application-errors`
 
 Do not commit real API keys. Keep local secrets in `api/appsettings.Local.json` or environment variables. Environment variables override local JSON.
 
@@ -142,7 +143,7 @@ Automatic:
 - The Odds scheduled refresh worker when explicitly enabled by config.
 - MLB result import worker.
 - Database migrations are applied during startup when pending migrations exist.
-- Application errors are persisted through middleware and worker logging.
+- Unexpected API and worker/job errors are persisted through middleware and targeted worker logging. Error-log debug endpoints are read-only and do not call providers.
 
 Manual:
 

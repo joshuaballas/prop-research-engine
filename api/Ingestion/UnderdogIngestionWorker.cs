@@ -227,7 +227,8 @@ public sealed class UnderdogIngestionWorker(
                     failedAt,
                     duration = duration.ToString(),
                     platform = "Underdog"
-                }), CancellationToken.None);
+                },
+                Provider: "Underdog"), CancellationToken.None);
         }
         catch (Exception loggingException)
         {

@@ -531,7 +531,9 @@ public sealed class SoccerResultImportWorker(
                 nameof(SoccerResultImportWorker),
                 "RunImportCycle",
                 exception,
-                Metadata: new { startedAt }));
+                Metadata: new { startedAt },
+                Sport: "SOCCER",
+                Provider: Source));
 
             var state = await GetOrCreateStateAsync(dbContext, CancellationToken.None);
             state.LastCompletedAt = DateTimeOffset.UtcNow;

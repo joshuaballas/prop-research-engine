@@ -287,13 +287,17 @@ Persistent error log for API and worker exceptions:
 - component,
 - operation,
 - request path/method/status,
+- user agent and remote IP hash when available,
 - message,
 - exception type,
 - stack trace,
 - correlation id,
-- metadata JSON.
+- optional run id,
+- sport/provider context,
+- sanitized metadata JSON,
+- created timestamp.
 
-Client request cancellations should not be treated as real application failures.
+The logger caps large strings and metadata before persistence. Metadata keys that look like API keys, tokens, secrets, passwords, authorization headers, connection strings, or credentials are redacted. Client request cancellations should not be treated as real application failures.
 
 ### `player_merge_audits`
 

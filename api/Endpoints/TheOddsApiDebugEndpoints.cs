@@ -4510,7 +4510,7 @@ public static partial class TheOddsApiDebugEndpoints
                 Operation: operation,
                 Exception: exception,
                 RequestPath: httpContext?.Request.Path,
-                HttpMethod: httpContext?.Request.Method,
+                RequestMethod: httpContext?.Request.Method,
                 StatusCode: exception.StatusCodeNumber,
                 CorrelationId: httpContext?.TraceIdentifier ?? Guid.NewGuid().ToString("N"),
                 Metadata: new
@@ -4524,7 +4524,8 @@ public static partial class TheOddsApiDebugEndpoints
                     exception.RecommendedAction,
                     exception.CreditUsage,
                     request = requestMetadata
-                }),
+                },
+                Provider: exception.ProviderName),
             cancellationToken);
     }
 

@@ -18,8 +18,8 @@ public sealed class ApplicationErrorMiddleware(RequestDelegate next)
             {
                 await errorLogger.LogAsync(new ApplicationErrorLogRequest(
                     "Information",
-                    "api",
-                    "GlobalExceptionMiddleware",
+                    context.Request.Path.Value ?? "unknown",
+                    "Middleware",
                     "ClientRequestCanceled",
                     exception,
                     context.Request.Path.Value,
@@ -31,16 +31,18 @@ public sealed class ApplicationErrorMiddleware(RequestDelegate next)
                         queryString = context.Request.QueryString.Value,
                         traceIdentifier = context.TraceIdentifier,
                         requestAborted = true
-                    }), CancellationToken.None);
+                    },
+                    UserAgent: context.Request.Headers.UserAgent.ToString(),
+                    RemoteIpAddress: context.Connection.RemoteIpAddress?.ToString()), CancellationToken.None);
 
                 return;
             }
 
             await errorLogger.LogAsync(new ApplicationErrorLogRequest(
                 "Error",
-                "api",
-                "GlobalExceptionMiddleware",
-                "UnhandledApiException",
+                context.Request.Path.Value ?? "unknown",
+                "Middleware",
+                $"{context.Request.Method} {context.Request.Path}",
                 exception,
                 context.Request.Path.Value,
                 context.Request.Method,
@@ -51,7 +53,9 @@ public sealed class ApplicationErrorMiddleware(RequestDelegate next)
                         queryString = context.Request.QueryString.Value,
                         traceIdentifier = context.TraceIdentifier,
                         providerException = BuildProviderExceptionMetadata(exception, correlationId)
-                    }), CancellationToken.None);
+                    },
+                    UserAgent: context.Request.Headers.UserAgent.ToString(),
+                    RemoteIpAddress: context.Connection.RemoteIpAddress?.ToString()), CancellationToken.None);
 
             if (!context.Response.HasStarted)
             {

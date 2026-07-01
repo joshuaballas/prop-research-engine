@@ -219,16 +219,15 @@ namespace SportsBetting.Api.Migrations
                         .HasColumnType("character varying(100)")
                         .HasColumnName("correlation_id");
 
+                    b.Property<DateTimeOffset>("CreatedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at_utc");
+
                     b.Property<string>("ExceptionType")
                         .IsRequired()
                         .HasMaxLength(500)
                         .HasColumnType("character varying(500)")
                         .HasColumnName("exception_type");
-
-                    b.Property<string>("HttpMethod")
-                        .HasMaxLength(20)
-                        .HasColumnType("character varying(20)")
-                        .HasColumnName("http_method");
 
                     b.Property<string>("InnerException")
                         .HasColumnType("text")
@@ -248,15 +247,33 @@ namespace SportsBetting.Api.Migrations
                         .HasColumnName("occurred_at_utc");
 
                     b.Property<string>("Operation")
-                        .IsRequired()
                         .HasMaxLength(200)
                         .HasColumnType("character varying(200)")
                         .HasColumnName("operation");
+
+                    b.Property<string>("Provider")
+                        .HasMaxLength(150)
+                        .HasColumnType("character varying(150)")
+                        .HasColumnName("provider");
+
+                    b.Property<string>("RemoteIpHash")
+                        .HasMaxLength(128)
+                        .HasColumnType("character varying(128)")
+                        .HasColumnName("remote_ip_hash");
+
+                    b.Property<string>("RequestMethod")
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)")
+                        .HasColumnName("request_method");
 
                     b.Property<string>("RequestPath")
                         .HasMaxLength(1000)
                         .HasColumnType("character varying(1000)")
                         .HasColumnName("request_path");
+
+                    b.Property<Guid?>("RunId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("run_id");
 
                     b.Property<string>("Severity")
                         .IsRequired()
@@ -270,6 +287,11 @@ namespace SportsBetting.Api.Migrations
                         .HasColumnType("character varying(150)")
                         .HasColumnName("source");
 
+                    b.Property<string>("Sport")
+                        .HasMaxLength(50)
+                        .HasColumnType("character varying(50)")
+                        .HasColumnName("sport");
+
                     b.Property<string>("StackTrace")
                         .HasColumnType("text")
                         .HasColumnName("stack_trace");
@@ -277,6 +299,11 @@ namespace SportsBetting.Api.Migrations
                     b.Property<int?>("StatusCode")
                         .HasColumnType("integer")
                         .HasColumnName("status_code");
+
+                    b.Property<string>("UserAgent")
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)")
+                        .HasColumnName("user_agent");
 
                     b.HasKey("Id")
                         .HasName("pk_application_errors");
@@ -290,11 +317,17 @@ namespace SportsBetting.Api.Migrations
                     b.HasIndex("OccurredAtUtc")
                         .HasDatabaseName("ix_application_errors_occurred_at_utc");
 
+                    b.HasIndex("RunId")
+                        .HasDatabaseName("ix_application_errors_run_id");
+
                     b.HasIndex("Severity")
                         .HasDatabaseName("ix_application_errors_severity");
 
                     b.HasIndex("Source")
                         .HasDatabaseName("ix_application_errors_source");
+
+                    b.HasIndex("Sport", "Provider")
+                        .HasDatabaseName("ix_application_errors_sport_provider");
 
                     b.ToTable("application_errors", (string)null);
                 });

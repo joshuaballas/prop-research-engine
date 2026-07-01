@@ -1075,6 +1075,27 @@ public static partial class TheOddsApiDebugEndpoints
                     exception.Message
                 });
                 await dbContext.SaveChangesAsync(CancellationToken.None);
+                await errorLogger.LogAsync(new ApplicationErrorLogRequest(
+                    "Error",
+                    "TheOddsScheduledFinalization",
+                    "TheOddsRefresh",
+                    "FinalizeScheduledCycle",
+                    exception,
+                    CorrelationId: request.ScheduledCycleId.ToString(),
+                    Metadata: new
+                    {
+                        request.ScheduledCycleId,
+                        slateDate,
+                        providerCategoriesIncluded,
+                        scopedBookmakerKeys,
+                        request.TargetRefreshRunIds,
+                        refreshRun.Id,
+                        startedAtUtc,
+                        completedAtUtc
+                    },
+                    RunId: refreshRun.Id,
+                    Sport: "MLB",
+                    Provider: "The Odds API"), CancellationToken.None);
 
                 return new TheOddsScheduledMlbFinalizationResult(
                     false,

@@ -1047,17 +1047,23 @@ public sealed class ApplicationError
 {
     public Guid Id { get; set; }
     public DateTimeOffset OccurredAtUtc { get; set; }
+    public DateTimeOffset CreatedAtUtc { get; set; }
     public string Severity { get; set; } = "Error";
     public string Source { get; set; } = string.Empty;
     public string Component { get; set; } = string.Empty;
-    public string Operation { get; set; } = string.Empty;
+    public string? Operation { get; set; }
     public string? RequestPath { get; set; }
-    public string? HttpMethod { get; set; }
+    public string? RequestMethod { get; set; }
+    public string? UserAgent { get; set; }
+    public string? RemoteIpHash { get; set; }
     public int? StatusCode { get; set; }
     public string Message { get; set; } = string.Empty;
     public string ExceptionType { get; set; } = string.Empty;
     public string? StackTrace { get; set; }
     public string? InnerException { get; set; }
     public string CorrelationId { get; set; } = string.Empty;
+    public Guid? RunId { get; set; }
+    public string? Sport { get; set; }
+    public string? Provider { get; set; }
     public JsonDocument? MetadataJson { get; set; }
 }

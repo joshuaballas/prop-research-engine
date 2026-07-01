@@ -170,10 +170,7 @@ if (app.Environment.IsDevelopment())
 
 app.UseCors();
 app.UseHttpsRedirection();
-if (!app.Environment.IsEnvironment("Testing"))
-{
-    app.UseMiddleware<ApplicationErrorMiddleware>();
-}
+app.UseMiddleware<ApplicationErrorMiddleware>();
 app.UseMiddleware<DebugAdminProtectionMiddleware>();
 app.UseStaticFiles();
 
@@ -185,6 +182,15 @@ app.MapGet("/research", () => Results.Redirect("/research/index.html"))
 
 app.MapHealthChecks("/health")
     .WithName("Health");
+
+if (app.Environment.IsEnvironment("Testing"))
+{
+    app.MapGet("/api/debug/test/throw-application-error", () =>
+    {
+        throw new InvalidOperationException("Testing application error middleware persistence.");
+    })
+        .WithName("TestingApplicationErrorThrow");
+}
 
 app.MapGet("/health/ready", async (ApplicationDbContext dbContext, CancellationToken cancellationToken) =>
 {

@@ -1078,21 +1078,28 @@ public sealed class ApplicationDbContext(DbContextOptions<ApplicationDbContext> 
         {
             entity.ToTable("application_errors");
             entity.HasKey(x => x.Id);
+            entity.Property(x => x.CreatedAtUtc).IsRequired();
             entity.Property(x => x.Severity).HasMaxLength(50).IsRequired();
             entity.Property(x => x.Source).HasMaxLength(150).IsRequired();
             entity.Property(x => x.Component).HasMaxLength(200).IsRequired();
-            entity.Property(x => x.Operation).HasMaxLength(200).IsRequired();
+            entity.Property(x => x.Operation).HasMaxLength(200);
             entity.Property(x => x.RequestPath).HasMaxLength(1000);
-            entity.Property(x => x.HttpMethod).HasMaxLength(20);
+            entity.Property(x => x.RequestMethod).HasMaxLength(20);
+            entity.Property(x => x.UserAgent).HasMaxLength(500);
+            entity.Property(x => x.RemoteIpHash).HasMaxLength(128);
             entity.Property(x => x.Message).IsRequired();
             entity.Property(x => x.ExceptionType).HasMaxLength(500).IsRequired();
             entity.Property(x => x.CorrelationId).HasMaxLength(100).IsRequired();
+            entity.Property(x => x.Sport).HasMaxLength(50);
+            entity.Property(x => x.Provider).HasMaxLength(150);
             ConfigureJsonDocumentProperty(entity.Property(x => x.MetadataJson), jsonColumnType);
             entity.HasIndex(x => x.OccurredAtUtc);
             entity.HasIndex(x => x.Source);
             entity.HasIndex(x => x.Component);
             entity.HasIndex(x => x.Severity);
             entity.HasIndex(x => x.CorrelationId);
+            entity.HasIndex(x => x.RunId);
+            entity.HasIndex(x => new { x.Sport, x.Provider });
         });
     }
 }

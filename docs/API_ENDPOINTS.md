@@ -34,9 +34,12 @@ Invoke-RestMethod -Uri "http://localhost:5299/health/ready"
 | Method | Path | Purpose | Writes | External API | Credits |
 | --- | --- | --- | --- | --- | --- |
 | GET | `/api/debug/system/health` | Consolidated application, sportsbook, MLB import, and prediction health. | No | No | No |
-| GET | `/api/debug/errors/recent` | Recent persisted application errors. Supports `take`, `source`, `component`, `severity`. | No | No | No |
-| GET | `/api/debug/errors/summary` | Error counts and recent error timestamp. | No | No | No |
-| GET | `/api/debug/errors/{id}` | Full persisted error detail by id. | No | No | No |
+| GET | `/api/debug/application-errors` | Canonical persistent application error log list. Supports `severity`, `component`, `sport`, `provider`, `correlationId`, `runId`, `fromUtc`, `toUtc`, `source`, `includeCanceled=true`, and `take` (default 100, max 500). Default list output excludes benign client cancellations (`ClientRequestCanceled` / 499 / operation-canceled exceptions) so real failures are not buried. Returns `readOnly=true` and `callsExternalApis=false`. List rows include capped stack previews only. | No | No | No |
+| GET | `/api/debug/application-errors/summary` | Persistent error counts by severity/component/sport/provider over a recent window. Supports the same filters plus `hours`. Summary root fields include `totalRecords`, `errorRecords`, and `canceledRequests` so canceled diagnostics stay visible without dominating the default list. | No | No | No |
+| GET | `/api/debug/application-errors/{id}` | Full persisted error detail by id, including full stack trace and sanitized metadata. Detail fields are returned at the response root. | No | No | No |
+| GET | `/api/debug/errors/recent` | Compatibility alias for `/api/debug/application-errors`. | No | No | No |
+| GET | `/api/debug/errors/summary` | Compatibility alias for `/api/debug/application-errors/summary`. | No | No | No |
+| GET | `/api/debug/errors/{id}` | Compatibility alias for `/api/debug/application-errors/{id}`. | No | No | No |
 | GET | `/api/debug/app-configs/status` | Read-only DB-backed `AppConfigs` cache/status summary. Shows cache timestamp, load status, global/default row count, environment override row count, advanced/hidden counts, source counts, default audit classification counts, and validation issue counts. Sensitive values are never returned. | No | No | No |
 | GET | `/api/debug/app-configs` | Read-only effective scalar AppConfigs values. By default returns visible, non-sensitive `MoveToAppConfigs` rows only. Supports `includeAuditCandidates`, `includeHidden`, `includeAdvanced`, `includeSecrets`, `classification`, and `category`; `includeSecrets=true` returns masked/null metadata only, never raw secrets. Value fields are `configuredValue`, `effectiveValue`, `defaultValue`, `displayValue`, and `isValueMasked`. Includes operator metadata such as display name, short display name, section, help text, input type, unit, min/max, advanced/hidden flags, and impact level. Effective source is environment override, global/default, appsettings fallback, code default, missing, or invalid fallback. | No | No | No |
 | GET | `/api/debug/app-configs/audit` | Read-only appsettings/AppConfigs migration audit. Classifies settings as `KeepInBootstrapConfig`, `KeepInSecretProvider`, `MoveToAppConfigs`, `MoveToDomainTable`, `MovedToDomainTable`, `MovedToModelConfig`, `RemoveRedundant`, or `NeedsDecision`; masks secret-like values and reports proposed AppConfigs keys for migrated scalar settings. Default classification counts exclude child audit rows. Use `includeChildren=true` to include model/structured child rows with `isChildAuditItem=true`; `countsByClassification` remains parent/default counts, with child and total counts also reported. Structured provider arrays are reported as moved domain data and model thresholds are reported as model config data instead of exploded into AppConfig leaf rows. | No | No | No |
@@ -52,9 +55,13 @@ Example:
 
 ```powershell
 Invoke-RestMethod -Uri "http://localhost:5299/api/debug/system/health"
-Invoke-RestMethod -Uri "http://localhost:5299/api/debug/errors/recent?take=5"
+Invoke-RestMethod -Uri "http://localhost:5299/api/debug/application-errors?take=5"
+Invoke-RestMethod -Uri "http://localhost:5299/api/debug/application-errors?take=5&includeCanceled=true"
+Invoke-RestMethod -Uri "http://localhost:5299/api/debug/application-errors/summary"
 Invoke-RestMethod -Uri "http://localhost:5299/api/debug/app-configs/status"
 ```
+
+Application errors are persisted to the `application_errors` table by global API exception middleware and targeted worker/job catch blocks. Stored rows include severity, component, source, operation, request context, correlation id, optional run id, sport/provider context, exception type, stack trace, and sanitized/capped metadata JSON. Metadata keys that look like API keys, tokens, secrets, passwords, authorization headers, connection strings, or credentials are redacted before persistence. Public/customer `/api/markets/*` reads are not error-log write endpoints; the debug error routes are read-only inspection routes.
 
 ## Underdog
 

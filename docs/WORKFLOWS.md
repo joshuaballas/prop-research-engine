@@ -24,6 +24,41 @@ Invoke-RestMethod -Uri "http://localhost:5299/health/ready"
 Invoke-RestMethod -Uri "http://localhost:5299/api/debug/system/health"
 ```
 
+## Persistent Application Error Logs
+
+Unexpected API exceptions and selected worker/job failures are persisted to the `application_errors` table so failures remain inspectable after terminal output or browser history is gone. The global API exception middleware logs unhandled server exceptions with the request path, method, status code, correlation id, user agent, remote IP hash, exception type, stack trace, and sanitized metadata. Worker catch blocks log the obvious long-running failure paths for scheduled The Odds refreshes, The Odds ingestion, MLB result import, Soccer/API-Sports result import, and direct Underdog debug ingestion.
+
+The application error logger is defensive: if persistence fails, it writes to normal structured logs and never throws back to the caller. Large messages, stack traces, and metadata are capped before storage. Metadata keys that look like API keys, tokens, secrets, passwords, authorization headers, connection strings, or credentials are redacted. Normal validation/not-found responses are not logged as application errors; client request cancellations may be recorded as informational diagnostics and are excluded from error counts.
+
+Read-only inspection:
+
+```powershell
+$base = "http://localhost:5299"
+
+"`n=== Recent application errors, excluding benign request cancellations by default ==="
+Invoke-RestMethod "$base/api/debug/application-errors?take=25" |
+  ConvertTo-Json -Depth 80
+
+"`n=== Recent application errors including canceled requests ==="
+Invoke-RestMethod "$base/api/debug/application-errors?take=25&includeCanceled=true" |
+  ConvertTo-Json -Depth 80
+
+"`n=== Application error summary ==="
+Invoke-RestMethod "$base/api/debug/application-errors/summary?hours=24" |
+  ConvertTo-Json -Depth 80
+
+"`n=== One application error detail, if any exist ==="
+$errors = Invoke-RestMethod "$base/api/debug/application-errors?take=1"
+if ($errors.errors.Count -gt 0) {
+  Invoke-RestMethod "$base/api/debug/application-errors/$($errors.errors[0].id)" |
+    ConvertTo-Json -Depth 80
+}
+```
+
+The older `/api/debug/errors/recent`, `/api/debug/errors/summary`, and `/api/debug/errors/{id}` routes remain compatibility aliases for the same persisted rows.
+
+Summary responses return root fields such as `totalRecords`, `errorRecords`, and `canceledRequests`. Detail responses return the selected error fields at the response root rather than nested under an `error` object.
+
 ## DB-Backed App Configuration
 
 `AppConfigs` is the DB-backed configuration layer for non-secret scalar operational/runtime knobs. It is not a secret store. Connection strings, The Odds/API-Sports keys, auth/debug admin API keys, payment credentials, webhook signing secrets, encryption keys, passwords, tokens, and other credentials stay in user-secrets, environment variables, deployment-time app settings, or future Azure Key Vault-linked variable groups. Do not store plaintext secrets in `AppConfigs`.

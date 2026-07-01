@@ -294,6 +294,18 @@ public sealed class TheOddsMlbScheduledRefreshWorker(
         {
             state.MarkFailed(DateTimeOffset.UtcNow, exception.Message);
             logger.LogError(exception, "The Odds API scheduled refresh failed.");
+            await PersistScheduledRefreshExceptionAsync(
+                exception,
+                "RunRefreshCycle",
+                runId: null,
+                sport: null,
+                provider: "The Odds API",
+                metadata: new
+                {
+                    plan.ShouldRefresh,
+                    targetCount = plan.Targets.Count,
+                    eligibleTargetCount = plan.Targets.Count(target => target.ShouldRefresh)
+                });
         }
     }
 
@@ -352,6 +364,23 @@ public sealed class TheOddsMlbScheduledRefreshWorker(
                 target.Competition,
                 target.ProviderCategory,
                 target.BookmakerPreset);
+            await PersistScheduledRefreshExceptionAsync(
+                exception,
+                "RunTargetIngest",
+                runId: scheduledCycleId,
+                sport: target.Sport,
+                provider: "The Odds API",
+                metadata: new
+                {
+                    scheduledCycleId,
+                    target.Key,
+                    target.Sport,
+                    target.Competition,
+                    target.ProviderCategory,
+                    target.BookmakerPreset,
+                    startedAtUtc,
+                    completedAtUtc
+                });
 
             return ScheduledTargetExecutionResult.Failed(target, startedAtUtc, completedAtUtc, exception.Message);
         }
@@ -716,6 +745,36 @@ public sealed class TheOddsMlbScheduledRefreshWorker(
             run?.ActualApiCalls,
             run?.PlatformPropsUpserted,
             Math.Round((completedAtUtc - startedAtUtc).TotalSeconds, 3));
+    }
+
+    private async Task PersistScheduledRefreshExceptionAsync(
+        Exception exception,
+        string operation,
+        Guid? runId,
+        string? sport,
+        string? provider,
+        object metadata)
+    {
+        try
+        {
+            await using var scope = scopeFactory.CreateAsyncScope();
+            var errorLogger = scope.ServiceProvider.GetRequiredService<IApplicationErrorLogger>();
+            await errorLogger.LogAsync(new ApplicationErrorLogRequest(
+                "Error",
+                nameof(TheOddsMlbScheduledRefreshWorker),
+                "ScheduledWorker",
+                operation,
+                exception,
+                CorrelationId: Guid.NewGuid().ToString("N"),
+                Metadata: metadata,
+                RunId: runId,
+                Sport: sport,
+                Provider: provider), CancellationToken.None);
+        }
+        catch (Exception loggingException)
+        {
+            logger.LogError(loggingException, "Failed to persist The Odds API scheduled refresh worker exception.");
+        }
     }
 
     private sealed record ScheduledTargetExecutionResult(
