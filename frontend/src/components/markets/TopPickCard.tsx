@@ -134,6 +134,14 @@ function TopPickActions({
 }) {
   const entryDisabled = isEntryBuilderDisabled(market) && !selected;
   const locked = incompatible || entryDisabled;
+  if (entryDisabled) {
+    return (
+      <Button variant="outlined" size="small" onClick={onDetails} title={entryDisabledReason(market)} sx={compareButtonSx}>
+        Details
+      </Button>
+    );
+  }
+
   return (
     <>
       <Button
@@ -169,6 +177,14 @@ function TopPickMobileActions({
 }) {
   const entryDisabled = isEntryBuilderDisabled(market) && !selected;
   const locked = incompatible || entryDisabled;
+  if (entryDisabled) {
+    return (
+      <Button variant="outlined" size="small" onClick={onDetails} title={entryDisabledReason(market)} sx={mobileCardDetailsButtonSx}>
+        Details
+      </Button>
+    );
+  }
+
   return (
     <>
       <Button

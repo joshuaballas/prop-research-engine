@@ -67,10 +67,10 @@ export function AppSidebar() {
           </Box>
           <Box>
             <Typography variant="h6" lineHeight={1} fontWeight={950}>
-              EdgeScope
+              SportsBetting
             </Typography>
             <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.25 }}>
-              DFS research workspace
+              Prop market workspace
             </Typography>
           </Box>
         </Stack>

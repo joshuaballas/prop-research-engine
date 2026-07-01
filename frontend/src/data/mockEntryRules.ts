@@ -103,6 +103,6 @@ export const mockEntryRules: EntryRule[] = [
     supportsModifiers: false,
     sameGameAllowed: false,
     sourceConfidence: 'Assumed',
-    notes: 'Sportsbook rows are reference lines only for DFS research.'
+    notes: 'Sportsbook rows are recommendation and comparison context, not DFS entry-builder legs.'
   }
 ];

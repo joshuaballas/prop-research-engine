@@ -19,7 +19,7 @@ export function PricingPage() {
     {
       icon: <ShieldOutlinedIcon />,
       title: 'Entry compatibility',
-      body: 'Entry tools are designed around DFS provider compatibility so incompatible legs stay separated before review.'
+      body: 'DFS entry tools keep incompatible legs separated, while sportsbook rows remain recommendation and comparison context.'
     },
     {
       icon: <LockOutlinedIcon />,
@@ -33,10 +33,10 @@ export function PricingPage() {
       <Stack spacing={{ xs: 4, md: 5 }}>
         <Stack spacing={1.35} textAlign="center" alignItems="center">
           <Typography variant="h2" maxWidth={860}>
-            Choose your DFS research workflow.
+            Choose your prop research workflow.
           </Typography>
           <Typography color="text.secondary" maxWidth={760} fontSize={{ md: 18 }}>
-            Start with provider-safe line shopping, top candidates, and modifier-aware entry research.
+            Start with sportsbook and DFS line shopping, top candidates, and modifier-aware entry review.
           </Typography>
           <MetadataText sx={{ mt: 1 }}>Monthly pricing. Annual plans coming later.</MetadataText>
         </Stack>
@@ -93,7 +93,7 @@ export function PricingPage() {
             Prices are shown monthly. Secure checkout and billing management will be connected before accepting paid subscriptions.
           </Typography>
           <Typography color="text.secondary" variant="body2" maxWidth={820}>
-            EdgeScope is a research tool. Projections, payouts, and availability should be confirmed in the provider app before submitting entries.
+            This is a research tool. Odds, projections, payouts, and availability should be confirmed in the provider app before submitting.
           </Typography>
         </Stack>
       </Stack>

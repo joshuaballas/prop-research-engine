@@ -94,7 +94,7 @@ export function AccountPage() {
                 <SectionTitle
                   icon={<SaveOutlinedIcon fontSize="small" />}
                   title="Profile"
-                  description="Keep the account details used across your research workspace current."
+                  description="Keep the account details used across your prop workspace current."
                 />
                 <Box
                   sx={{
@@ -123,7 +123,7 @@ export function AccountPage() {
                 <SectionTitle
                   icon={<PaletteOutlinedIcon fontSize="small" />}
                   title="Preferences"
-                  description="Choose how the app should present your research workspace."
+                  description="Choose how the app should present your prop workspace."
                 />
                 <Stack spacing={1}>
                   <Typography variant="caption" color="text.secondary" fontWeight={850} textTransform="uppercase">

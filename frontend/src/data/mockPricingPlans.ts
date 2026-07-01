@@ -4,18 +4,18 @@ export const mockPricingPlans: PricingPlan[] = [
   {
     code: 'starter',
     name: 'Starter',
-    description: 'Track top DFS opportunities with basic market context.',
+    description: 'Track top prop opportunities with basic market context.',
     priceCents: 1900,
     currency: 'USD',
     billingInterval: 'month',
-    features: ['Top picks board', 'DFS provider filters', 'Basic performance summaries', 'Freshness status'],
+    features: ['Top picks board', 'Provider filters', 'Basic performance summaries', 'Freshness status'],
     entitlements: ['1 seat', '10 saved entries', 'Daily snapshot history'],
     checkoutPlanCode: 'starter_monthly'
   },
   {
     code: 'research-pro',
     name: 'Research Pro',
-    description: 'Best for individual DFS researchers who want full line shopping, candidate review, and provider-scoped entry building.',
+    description: 'Best for individual prop researchers who want full line shopping, candidate review, and provider-scoped entry building.',
     priceCents: 4900,
     currency: 'USD',
     billingInterval: 'month',

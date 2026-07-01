@@ -92,10 +92,10 @@ export function HomePage() {
             <Grid size={{ xs: 12, lg: 5 }}>
               <Stack spacing={3}>
                 <Typography variant="h1" fontSize={{ xs: 38, sm: 56, md: 72 }} maxWidth={760}>
-                  DFS research that sees the market before you build.
+                  Prop research that sees the market before you act.
                 </Typography>
                 <Typography color="text.secondary" fontSize={{ xs: 17, md: 19 }} lineHeight={1.75} maxWidth={680}>
-                  Compare DFS projections, see sportsbook context, spot model edges, and avoid mixing incompatible providers before you open the provider app.
+                  Compare sportsbook and DFS prop lines, spot model edges, and avoid mixing incompatible provider types before you open the provider app.
                 </Typography>
                 <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.5}>
                   <Button component={RouterLink} to="/pricing" variant="contained" size="large">
@@ -106,7 +106,7 @@ export function HomePage() {
                   </Button>
                 </Stack>
                 <Typography variant="caption" color="text.secondary" maxWidth={640}>
-                  Research tools only. Confirm projections, final payout, and entry availability in the provider app before submitting.
+                  Research tools only. Confirm odds, projections, final payout, and availability in the provider app before submitting.
                 </Typography>
               </Stack>
             </Grid>
@@ -120,11 +120,11 @@ export function HomePage() {
         </Container>
       </Box>
 
-      <LandingSection id="how-it-works" eyebrow="How it works" title="Compare projections, rank opportunities, then build by provider.">
+      <LandingSection id="how-it-works" eyebrow="How it works" title="Compare lines, rank opportunities, then act by provider.">
         <WorkflowTimeline />
       </LandingSection>
 
-      <LandingSection eyebrow="Coverage" title="Actionable DFS platforms with sportsbook reference lines.">
+      <LandingSection eyebrow="Coverage" title="Sportsbook and DFS provider coverage.">
         <CoverageBoard />
       </LandingSection>
 
@@ -136,14 +136,14 @@ export function HomePage() {
         <MarketSignalsPanel />
       </LandingSection>
 
-      <LandingSection eyebrow="Line shopping preview" title="Scan the best DFS line beside sportsbook reference lines.">
+      <LandingSection eyebrow="Line shopping preview" title="Scan the best current lines across supported providers.">
         <AppCard sx={{ overflow: 'hidden', position: 'relative' }}>
           <Stack spacing={2.5}>
             <Stack direction={{ xs: 'column', md: 'row' }} justifyContent="space-between" gap={2}>
               <Stack spacing={0.5}>
                 <Typography variant="h5">Market comparison board</Typography>
                 <Typography color="text.secondary">
-                  Rows show the DFS provider, provider entry group, sportsbook context, model edge, and caution labels in one pass.
+                  Rows show the provider, product type, sportsbook context, model edge, and caution labels in one pass.
                 </Typography>
               </Stack>
               <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
@@ -182,7 +182,7 @@ export function HomePage() {
                   Ready to compare your next slate?
                 </Typography>
                 <Typography color="rgba(226,232,240,.82)" maxWidth={680}>
-                  Start with provider-safe entries, reference lines, and modifier-aware payout context.
+                  Start with provider-safe picks, current lines, and modifier-aware payout context.
                 </Typography>
                 <Stack direction="row" spacing={1.3} flexWrap="wrap" useFlexGap>
                   {['Provider-safe entries', 'Reference lines', 'Modifier-aware payouts', 'Freshness labels'].map((label) => (
@@ -446,7 +446,7 @@ function WorkflowTimeline() {
     {
       icon: <StackedLineChartOutlinedIcon />,
       title: 'Compare lines',
-      body: 'Scan DFS projections beside sportsbook reference lines, line movement shape, freshness, and provider coverage.'
+      body: 'Scan sportsbook and DFS prop lines, line movement shape, freshness, and provider coverage.'
     },
     {
       icon: <AutoGraphOutlinedIcon />,
@@ -456,7 +456,7 @@ function WorkflowTimeline() {
     {
       icon: <AccountTreeOutlinedIcon />,
       title: 'Build safely',
-      body: 'Keep selected legs grouped by provider so PrizePicks, Underdog, Pick6, and Betr Picks stay in their own entry paths.'
+      body: 'Keep DFS legs grouped by provider while sportsbook picks stay separate from entry-builder workflows.'
     }
   ];
 
@@ -523,7 +523,7 @@ function CoverageBoard() {
               borderBottom: { xs: `1px solid ${palette.border}`, md: 0 }
             }}
           >
-            <CoverageHeader icon={<FactCheckOutlinedIcon />} title="Actionable DFS platforms" subtitle="Use these for provider-scoped entry building." accent={palette.primary} />
+            <CoverageHeader icon={<FactCheckOutlinedIcon />} title="Entry-compatible DFS providers" subtitle="Use these for provider-scoped entry building." accent={palette.primary} />
             <Grid container spacing={1.25}>
               {dfsPlatforms.map((platform) => (
                 <Grid key={platform.name} size={{ xs: 12, sm: 6, md: 12 }}>
@@ -538,7 +538,7 @@ function CoverageBoard() {
         </Grid>
         <Grid size={{ xs: 12, md: 7 }}>
           <Stack spacing={2.25} sx={{ height: '100%', pl: { md: 3 }, pt: { xs: 2.5, md: 0 } }}>
-            <CoverageHeader icon={<GridViewOutlinedIcon />} title="Sportsbook reference lines" subtitle="Use these to compare price, line, and consensus." accent={palette.secondary} />
+            <CoverageHeader icon={<GridViewOutlinedIcon />} title="Sportsbook picks and lines" subtitle="Use these to compare price, line, and consensus." accent={palette.secondary} />
             <Grid container spacing={1}>
               {sportsbookContext.map((book) => (
                 <Grid key={book.name} size={{ xs: 12, sm: 6, lg: 4 }}>
@@ -547,7 +547,7 @@ function CoverageBoard() {
               ))}
             </Grid>
             <Typography variant="body2" color="text.secondary">
-              Sportsbook reference lines are for comparison only. They are not used to build DFS entries.
+              Sportsbook rows can surface as picks or comparison context, but they are not used to build DFS entries.
             </Typography>
           </Stack>
         </Grid>

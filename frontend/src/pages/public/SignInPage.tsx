@@ -1,5 +1,6 @@
 import LockOutlinedIcon from '@mui/icons-material/LockOutlined';
 import { Box, Button, Link, Stack, TextField, Typography } from '@mui/material';
+import type { FormEvent } from 'react';
 import { Link as RouterLink } from 'react-router-dom';
 import { AppCard } from '../../components/ui/AppCard';
 import { palette } from '../../theme/palette';
@@ -19,6 +20,10 @@ const authFieldSx = {
 };
 
 export function SignInPage() {
+  const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+  };
+
   return (
     <AppCard
       sx={{
@@ -29,21 +34,21 @@ export function SignInPage() {
         boxShadow: '0 24px 80px rgba(0,0,0,.35)'
       }}
     >
-      <Stack spacing={2.4}>
+      <Stack component="form" spacing={2.4} onSubmit={handleSubmit}>
         <Stack spacing={0.8}>
           <Typography variant="h4">Welcome back</Typography>
           <Typography color="text.secondary">
-            Sign in to continue your DFS research workflow.
+            Sign in to continue your prop research workflow.
           </Typography>
         </Stack>
 
         <Stack spacing={1.6}>
-          <TextField label="Email" placeholder="you@example.com" fullWidth sx={authFieldSx} />
-          <TextField label="Password" type="password" placeholder="Enter your password" fullWidth sx={authFieldSx} />
+          <TextField id="sign-in-email" name="email" label="Email" type="email" placeholder="you@example.com" autoComplete="email" fullWidth sx={authFieldSx} />
+          <TextField id="sign-in-password" name="password" label="Password" type="password" placeholder="Enter your password" autoComplete="current-password" fullWidth sx={authFieldSx} />
         </Stack>
 
         <Stack spacing={1.2}>
-          <Button variant="contained" size="large" startIcon={<LockOutlinedIcon />}>
+          <Button type="submit" variant="contained" size="large" startIcon={<LockOutlinedIcon />}>
             Continue
           </Button>
           <Box display="flex" justifyContent="space-between" alignItems="center" gap={2} flexWrap="wrap">
@@ -51,7 +56,7 @@ export function SignInPage() {
               Forgot password
             </Link>
             <Typography variant="body2" color="text.secondary">
-              New to EdgeScope?{' '}
+              New here?{' '}
               <Typography component={RouterLink} to="/create-account" color="primary" sx={{ textDecoration: 'none', fontWeight: 900 }}>
                 Create account
               </Typography>

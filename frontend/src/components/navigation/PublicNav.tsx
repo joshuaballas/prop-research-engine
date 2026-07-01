@@ -14,10 +14,10 @@ export function PublicNav() {
             </Box>
             <Box>
               <Typography variant="h6" lineHeight={1} sx={{ fontWeight: 950 }}>
-                EdgeScope
+                SportsBetting
               </Typography>
               <Typography variant="caption" color="text.secondary" sx={{ display: { xs: 'none', md: 'block' } }}>
-                DFS research platform
+                Prop research platform
               </Typography>
             </Box>
           </Stack>

@@ -58,6 +58,7 @@ start-dev.bat
 /mapping-coverage-after-autoapprove*.json
 /research-*.json
 /system-health*.json
+/.playwright-mcp
 
 # Frontend prototype dependencies, builds, caches, and local env.
 /frontend/node_modules/

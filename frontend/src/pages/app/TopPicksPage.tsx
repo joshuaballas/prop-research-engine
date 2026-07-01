@@ -452,17 +452,18 @@ function RankedPicksTable({ markets, builder }: { markets: MarketOpportunity[]; 
                 <TableCell align="right"><AppTableMetricValue>{formatPercent(market.modelProbability)}</AppTableMetricValue></TableCell>
                 <TableCell data-sticky-action="true" align="center" sx={{ ...stickyActionCellSx, minWidth: 130 }}>
                   <AppRowActions sx={{ mx: 'auto' }}>
-                    <Button
-                      startIcon={selected ? <RemoveCircleOutlineRoundedIcon /> : locked ? <LockRoundedIcon /> : <AddCircleOutlineRoundedIcon />}
-                      size="small"
-                      variant="contained"
-                      disabled={locked || !market.canAddToEntry}
-                      onClick={() => (locked || !market.canAddToEntry ? undefined : builder.toggleLeg(market))}
-                      title={entryDisabled ? entryDisabledReason(market) : undefined}
-                      sx={entryButtonSx(selected, locked)}
-                    >
-                      {selected ? 'Remove' : 'Add leg'}
-                    </Button>
+                    {entryDisabled ? null : (
+                      <Button
+                        startIcon={selected ? <RemoveCircleOutlineRoundedIcon /> : locked ? <LockRoundedIcon /> : <AddCircleOutlineRoundedIcon />}
+                        size="small"
+                        variant="contained"
+                        disabled={locked || !market.canAddToEntry}
+                        onClick={() => (locked || !market.canAddToEntry ? undefined : builder.toggleLeg(market))}
+                        sx={entryButtonSx(selected, locked)}
+                      >
+                        {selected ? 'Remove' : 'Add leg'}
+                      </Button>
+                    )}
                     <Button size="small" variant="outlined" onClick={() => setDetailsMarket(market)} sx={compareButtonSx}>
                       Details
                     </Button>
@@ -480,10 +481,6 @@ function RankedPicksTable({ markets, builder }: { markets: MarketOpportunity[]; 
 
 function isEntryBuilderDisabled(market: MarketOpportunity) {
   return !market.canAddToEntry;
-}
-
-function entryDisabledReason(market: MarketOpportunity) {
-  return market.entryRuleWarning ?? market.entryUnavailableReason ?? (market.providerCategory === 'Sportsbook' ? 'Entry Builder is available only for DFS entries.' : 'Entry Builder unavailable for this row.');
 }
 
 const actionButtonSx = desktopRowActionButtonSx;

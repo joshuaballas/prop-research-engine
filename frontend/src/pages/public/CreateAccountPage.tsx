@@ -1,5 +1,6 @@
 import WorkspacePremiumOutlinedIcon from '@mui/icons-material/WorkspacePremiumOutlined';
 import { Box, Button, Stack, TextField, Typography } from '@mui/material';
+import type { FormEvent } from 'react';
 import { Link as RouterLink, useSearchParams } from 'react-router-dom';
 import { planSelectionCode } from '../../components/billing/PlanCard';
 import { AppCard } from '../../components/ui/AppCard';
@@ -24,6 +25,9 @@ export function CreateAccountPage() {
   const [searchParams] = useSearchParams();
   const selectedPlanCode = searchParams.get('plan') ?? '';
   const selectedPlan = mockPricingPlans.find((plan) => planSelectionCode(plan) === selectedPlanCode);
+  const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+  };
 
   if (!selectedPlan) {
     return (
@@ -69,9 +73,9 @@ export function CreateAccountPage() {
     >
       <Stack spacing={2.2}>
         <Stack spacing={0.8}>
-          <Typography variant="h4">Create your EdgeScope account</Typography>
+          <Typography variant="h4">Create your account</Typography>
           <Typography color="text.secondary">
-            Start with DFS research, reference lines, and modifier-aware entry building.
+            Start with prop research, provider line context, and modifier-aware entry review.
           </Typography>
         </Stack>
 
@@ -94,16 +98,16 @@ export function CreateAccountPage() {
           </Stack>
         </Box>
 
-        <Stack spacing={1.6}>
-          <TextField label="Email" placeholder="you@example.com" fullWidth sx={authFieldSx} />
-          <TextField label="Password" type="password" placeholder="Create a password" fullWidth sx={authFieldSx} />
-          <TextField label="Confirm password" type="password" placeholder="Confirm your password" fullWidth sx={authFieldSx} />
+        <Stack component="form" spacing={1.6} onSubmit={handleSubmit}>
+          <TextField id="create-account-email" name="email" label="Email" type="email" placeholder="you@example.com" autoComplete="email" fullWidth sx={authFieldSx} />
+          <TextField id="create-account-password" name="new-password" label="Password" type="password" placeholder="Create a password" autoComplete="new-password" fullWidth sx={authFieldSx} />
+          <TextField id="create-account-confirm-password" name="confirm-password" label="Confirm password" type="password" placeholder="Confirm your password" autoComplete="new-password" fullWidth sx={authFieldSx} />
+          <Button type="submit" variant="contained" size="large">
+            Continue to Checkout
+          </Button>
         </Stack>
 
         <Stack spacing={1.2}>
-          <Button variant="contained" size="large">
-            Continue to Checkout
-          </Button>
           <Typography variant="body2" color="text.secondary">
             Already have an account?{' '}
             <Typography component={RouterLink} to="/sign-in" color="primary" sx={{ textDecoration: 'none', fontWeight: 900 }}>

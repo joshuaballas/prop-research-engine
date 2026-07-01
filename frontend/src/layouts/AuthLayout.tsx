@@ -20,9 +20,9 @@ export function AuthLayout() {
         <Grid container spacing={{ xs: 3, md: 5 }} alignItems="center" sx={{ position: 'relative', zIndex: 1 }}>
           <Grid size={{ xs: 12, md: 6 }}>
             <Stack spacing={{ xs: 2, md: 2.5 }}>
-              <Typography variant="h2">Your DFS research stays organized.</Typography>
+              <Typography variant="h2">Your prop research stays organized.</Typography>
               <Typography color="text.secondary" fontSize={{ md: 18 }}>
-                Compare top candidates, reference lines, modifiers, and freshness signals before you build entries.
+                Compare top candidates, sportsbook and DFS lines, modifiers, and freshness signals before you act.
               </Typography>
 
               <AppCard
@@ -63,7 +63,7 @@ export function AuthLayout() {
               <Grid container spacing={1.5}>
                 {[
                   { icon: <StackedLineChartOutlinedIcon color="primary" />, title: 'Freshness labels', body: 'See stale-data and provider availability states before comparing.' },
-                  { icon: <VerifiedUserOutlinedIcon color="primary" />, title: 'Provider-safe entries', body: 'Avoid combining legs across incompatible DFS platforms.' }
+                  { icon: <VerifiedUserOutlinedIcon color="primary" />, title: 'Provider-safe entries', body: 'Avoid mixing incompatible providers and entry types.' }
                 ].map((item) => (
                   <Grid key={item.title} size={{ xs: 12, sm: 4, md: 12 }}>
                     <AppCard sx={{ backgroundColor: palette.cardSurface }}>
