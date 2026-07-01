@@ -2,6 +2,7 @@ import CloseRoundedIcon from '@mui/icons-material/CloseRounded';
 import { useEffect, useState } from 'react';
 import { Box, Button, IconButton, Stack, TextField, Typography } from '@mui/material';
 import { palette } from '../../theme/palette';
+import { radius } from '../../theme/radius';
 import type { EntryLeg, EntryRule } from '../../types/entryBuilder';
 import { buildEntryReview, resolveEntryType } from '../../utils/entryReview';
 import { EntryReceiptDialog } from './EntryReceiptDialog';
@@ -96,7 +97,7 @@ export function EntryBuilderTray({
               spacing={0.75}
               sx={{
                 border: '1px dashed rgba(148,163,184,.28)',
-                borderRadius: 3,
+                borderRadius: radius.card,
                 p: 1.75,
                 background: palette.cardSurface
               }}

@@ -8,6 +8,7 @@ import { MetricCard } from '../../components/ui/MetricCard';
 import { PageHeader } from '../../components/ui/PageHeader';
 import { useEntryBuilder } from '../../hooks/useEntryBuilder';
 import { palette } from '../../theme/palette';
+import { radius } from '../../theme/radius';
 
 const trackedItems = [
   'Submitted entries',
@@ -185,7 +186,7 @@ function FilterPreview() {
           key={label}
           sx={{
             border: `1px solid ${palette.border}`,
-            borderRadius: 999,
+            borderRadius: radius.pill,
             px: 1.15,
             py: 0.55,
             color: 'text.secondary',
@@ -210,7 +211,7 @@ function DesktopEntryHistoryTable({ expandedId, onToggle }: { expandedId: string
       sx={{
         display: { xs: 'none', md: 'block' },
         border: `1px solid ${palette.border}`,
-        borderRadius: 2,
+        borderRadius: radius.featuredCard,
         overflow: 'hidden',
         bgcolor: '#081321'
       }}
@@ -271,7 +272,7 @@ function MobileEntryHistoryCards({ expandedId, onToggle }: { expandedId: string;
   return (
     <Stack spacing={1} sx={{ display: { xs: 'flex', md: 'none' } }}>
       {exampleEntries.map((entry) => (
-        <Box key={entry.id} sx={{ border: `1px solid ${palette.border}`, borderRadius: 2, bgcolor: '#081321', overflow: 'hidden' }}>
+        <Box key={entry.id} sx={{ border: `1px solid ${palette.border}`, borderRadius: radius.featuredCard, bgcolor: '#081321', overflow: 'hidden' }}>
           <Stack spacing={1} sx={{ p: 1.15 }}>
             <Stack direction="row" justifyContent="space-between" gap={1} alignItems="flex-start">
               <Box minWidth={0}>
@@ -321,7 +322,7 @@ function LegDetailTable({ legs }: { legs: ExampleLeg[] }) {
           display: 'grid',
           gridTemplateColumns: '1.15fr 0.8fr 1fr 0.65fr 0.7fr',
           border: `1px solid ${palette.border}`,
-          borderRadius: 2,
+          borderRadius: radius.featuredCard,
           overflow: 'hidden'
         }}
       >
@@ -409,7 +410,7 @@ function HowItWorksCard() {
                 sx={{
                   width: 28,
                   height: 28,
-                  borderRadius: '50%',
+                  borderRadius: radius.circle,
                   display: 'grid',
                   placeItems: 'center',
                   flexShrink: 0,
@@ -441,7 +442,7 @@ function ExampleBadge() {
     <Box
       sx={{
         border: '1px solid rgba(148,163,184,.22)',
-        borderRadius: 999,
+        borderRadius: radius.pill,
         px: 0.8,
         py: 0.25,
         color: 'text.secondary',
@@ -512,7 +513,7 @@ function IconDot() {
       sx={{
         width: 26,
         height: 26,
-        borderRadius: '50%',
+        borderRadius: radius.circle,
         display: 'grid',
         placeItems: 'center',
         color: 'primary.main',

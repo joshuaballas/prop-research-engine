@@ -1,4 +1,5 @@
 import { Button, Stack, Typography } from '@mui/material';
+import { radius } from '../../theme/radius';
 
 type AppTablePaginationProps = {
   count: number;
@@ -102,7 +103,7 @@ function PaginationButton({
         width: 34,
         height: 32,
         px: 0,
-        borderRadius: 2,
+        borderRadius: radius.control,
         color: active ? 'text.primary' : 'text.secondary',
         borderColor: active ? 'rgba(34,211,238,.52)' : 'rgba(148,163,184,.18)',
         bgcolor: active ? 'rgba(8,145,178,.22)' : 'rgba(15,23,42,.48)',

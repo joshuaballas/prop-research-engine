@@ -21,6 +21,7 @@ import { MarketCardSkeletonGrid, PropHistorySkeleton } from '../../components/ui
 import { PageHeader } from '../../components/ui/PageHeader';
 import { StatusPill } from '../../components/ui/StatusPill';
 import { palette } from '../../theme/palette';
+import { radius } from '../../theme/radius';
 import type { MarketOpportunity } from '../../types/markets';
 
 export function PlayerResearchPage() {
@@ -201,7 +202,7 @@ function PlayerSearch({
         maxWidth: 760,
         '& .MuiOutlinedInput-root': {
           minHeight: 58,
-          borderRadius: 3,
+          borderRadius: radius.card,
           bgcolor: palette.cardSurface,
           border: `1px solid ${palette.border}`
         }
@@ -248,7 +249,7 @@ function EmptyResearchState() {
                 sx={{
                   height: '100%',
                   p: 1.45,
-                  borderRadius: 3,
+                  borderRadius: radius.card,
                   border: '1px solid rgba(148,163,184,.14)',
                   bgcolor: palette.cardSurface
                 }}
@@ -307,7 +308,7 @@ function PlayerProfile({
             spacing={0.35}
             sx={{
               p: { xs: 1.1, md: 1.7 },
-              borderRadius: 3,
+              borderRadius: radius.card,
               border: `1px solid ${palette.border}`,
               bgcolor: palette.cardSurface
             }}
@@ -476,11 +477,11 @@ function CurrentLinesTile({
           },
           '&::-webkit-scrollbar-track': {
             background: 'rgba(15,23,42,.34)',
-            borderRadius: 999
+            borderRadius: radius.pill
           },
           '&::-webkit-scrollbar-thumb': {
             background: 'rgba(148,163,184,.42)',
-            borderRadius: 999
+            borderRadius: radius.pill
           },
           '&::-webkit-scrollbar-thumb:hover': {
             background: 'rgba(148,163,184,.56)'
@@ -526,7 +527,7 @@ function ProviderFilter({
               flexShrink: 0,
               minHeight: 28,
               px: 1.15,
-              borderRadius: 2,
+              borderRadius: radius.featuredCard,
               fontSize: 11,
               fontWeight: 800,
               color: active ? palette.text : palette.textMuted,
@@ -568,7 +569,7 @@ function CurrentLineCard({ line, active, onSelect }: { line: MarketOpportunity; 
       sx={{
         px: 1.35,
         py: 1.35,
-        borderRadius: 3,
+        borderRadius: radius.card,
         border: active ? '1px solid rgba(34,211,238,.5)' : '1px solid rgba(148,163,184,.16)',
         bgcolor: active ? 'rgba(11,74,94,.26)' : palette.cardSurface,
         cursor: 'pointer',

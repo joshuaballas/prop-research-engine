@@ -11,6 +11,7 @@ import { entryBuilderUnavailableReason, isEntryBuilderAddableMarket } from '../.
 import { marketDisplayLabel } from '../../utils/marketDisplay';
 import { renderOpportunityCautionText } from '../../utils/warnings';
 import { palette } from '../../theme/palette';
+import { radius } from '../../theme/radius';
 import { MetricLabelWithHelp } from '../metrics/MetricLabelWithHelp';
 import { PropDetailsModal } from '../prop-history/PropDetailsModal';
 import { ProviderLabel } from '../providers/ProviderLabel';
@@ -39,7 +40,7 @@ export interface LineShoppingGroup {
 
 const lineShoppingMobileCardShellSx = {
   border: '1px solid rgba(148,163,184,.16)',
-  borderRadius: '16px',
+  borderRadius: radius.card,
   bgcolor: palette.cardSurface,
   p: 1.6
 };

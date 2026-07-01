@@ -1,6 +1,7 @@
 import { Box, Button, Stack, Typography } from '@mui/material';
 import type { SportCode, SportOption } from '../../types/sports';
 import { palette } from '../../theme/palette';
+import { radius } from '../../theme/radius';
 
 interface SportToggleRailProps {
   selectedSports: SportCode[];
@@ -26,7 +27,7 @@ export function SportToggleRail({ selectedSports, onToggle, compact = false, spo
                 px: compact ? 1.15 : 1.4,
                 py: compact ? 0.72 : 1,
                 justifyContent: 'flex-start',
-                borderRadius: compact ? 1.75 : 2.25,
+                borderRadius: compact ? radius.card : radius.featuredCard,
                 borderColor: active ? 'rgba(34,211,238,.58)' : palette.border,
                 bgcolor: active ? 'rgba(34,211,238,.12)' : 'rgba(15,23,42,.55)',
                 color: active ? 'primary.main' : 'text.secondary',
@@ -43,7 +44,7 @@ export function SportToggleRail({ selectedSports, onToggle, compact = false, spo
                   sx={{
                     width: compact ? 22 : 26,
                     height: compact ? 22 : 26,
-                    borderRadius: 1.5,
+                    borderRadius: radius.card,
                     display: 'grid',
                     placeItems: 'center',
                     bgcolor: active ? 'rgba(34,211,238,.16)' : 'rgba(148,163,184,.08)'

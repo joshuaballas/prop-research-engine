@@ -5,10 +5,11 @@ import { planSelectionCode } from '../../components/billing/PlanCard';
 import { AppCard } from '../../components/ui/AppCard';
 import { mockPricingPlans } from '../../data/mockPricingPlans';
 import { palette } from '../../theme/palette';
+import { radius } from '../../theme/radius';
 
 const authFieldSx = {
   '& .MuiOutlinedInput-root': {
-    borderRadius: 2,
+    borderRadius: radius.featuredCard,
     backgroundColor: 'rgba(8,13,26,.48)',
     '& fieldset': { borderColor: 'rgba(148,163,184,.18)' },
     '&:hover fieldset': { borderColor: 'rgba(125,211,252,.34)' },
@@ -77,7 +78,7 @@ export function CreateAccountPage() {
         <Box
           sx={{
             p: 1.5,
-            borderRadius: 2.5,
+            borderRadius: radius.featuredCard,
             border: '1px solid rgba(34,211,238,.2)',
             bgcolor: 'rgba(34,211,238,.06)'
           }}

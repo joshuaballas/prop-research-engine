@@ -7,6 +7,7 @@ import { isDemoDataMode } from '../../config/dataMode';
 import { mockUser } from '../../data/mockUser';
 import { useMarketFreshnessData } from '../../hooks/useMarketData';
 import { palette } from '../../theme/palette';
+import { radius } from '../../theme/radius';
 
 export function AppTopBar() {
   const [glossaryOpen, setGlossaryOpen] = useState(false);
@@ -31,7 +32,7 @@ export function AppTopBar() {
           sx={{
             minHeight: 34,
             px: 1.2,
-            borderRadius: 1.5,
+            borderRadius: radius.card,
             borderColor: 'rgba(148,163,184,.18)',
             bgcolor: 'rgba(15,23,42,.52)',
             color: 'text.secondary',
@@ -99,7 +100,7 @@ function LiveDataIndicator({ state }: { state: LiveDataState }) {
           sx={{
             width: 8,
             height: 8,
-            borderRadius: '999px',
+            borderRadius: radius.pill,
             bgcolor: color,
             boxShadow: isHealthy ? `0 0 0 0 ${palette.success}66` : `0 0 0 2px ${color}22`,
             animation: isHealthy ? 'live-data-pulse 1.8s ease-out infinite' : 'none',

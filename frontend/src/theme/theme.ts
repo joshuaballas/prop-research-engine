@@ -1,6 +1,7 @@
 import { createTheme } from '@mui/material/styles';
 import { components } from './components';
 import { palette } from './palette';
+import { themeShapeBorderRadius } from './radius';
 import { fontFamily } from './typography';
 
 export const theme = createTheme({
@@ -38,7 +39,7 @@ export const theme = createTheme({
     button: { letterSpacing: 0 }
   },
   shape: {
-    borderRadius: 5
+    borderRadius: themeShapeBorderRadius
   },
   components
 });

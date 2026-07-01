@@ -9,6 +9,7 @@ import { PageHeader } from '../../components/ui/PageHeader';
 import { mockUser } from '../../data/mockUser';
 import { useToast } from '../../hooks/useToast';
 import { palette } from '../../theme/palette';
+import { radius } from '../../theme/radius';
 
 const inputSx = {
   '& .MuiOutlinedInput-root': {
@@ -25,7 +26,7 @@ function SectionTitle({ icon, title, description }: { icon: React.ReactNode; tit
         sx={{
           width: 34,
           height: 34,
-          borderRadius: 2.25,
+          borderRadius: radius.featuredCard,
           display: 'grid',
           placeItems: 'center',
           color: palette.primary,
@@ -143,7 +144,7 @@ export function AccountPage() {
                           sx={{
                             px: 1.5,
                             py: 1.1,
-                            borderRadius: 2.25,
+                            borderRadius: radius.featuredCard,
                             border: `1px solid ${selected ? palette.borderStrong : palette.border}`,
                             backgroundColor: selected ? 'rgba(34, 211, 238, 0.09)' : palette.cardSurface
                           }}

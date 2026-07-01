@@ -1,5 +1,6 @@
 import type { Components, Theme } from '@mui/material/styles';
 import { palette } from './palette';
+import { radius, themeRadius } from './radius';
 
 export const components: Components<Omit<Theme, 'components'>> = {
   MuiCssBaseline: {
@@ -17,7 +18,7 @@ export const components: Components<Omit<Theme, 'components'>> = {
       },
       '*::-webkit-scrollbar-thumb': {
         backgroundColor: palette.textSubtle,
-        borderRadius: 999,
+        borderRadius: themeRadius(radius.pill),
         border: `2px solid ${palette.bg}`
       },
       '*::-webkit-scrollbar-thumb:hover': {
@@ -40,7 +41,7 @@ export const components: Components<Omit<Theme, 'components'>> = {
   MuiButton: {
     styleOverrides: {
       root: {
-        borderRadius: 10,
+        borderRadius: themeRadius(radius.control),
         textTransform: 'none',
         fontWeight: 800,
         boxShadow: 'none',
@@ -106,7 +107,7 @@ export const components: Components<Omit<Theme, 'components'>> = {
     },
     styleOverrides: {
       root: {
-        borderRadius: 20,
+        borderRadius: themeRadius(radius.card),
         border: `1px solid ${palette.border}`,
         backgroundColor: palette.cardSurface,
         backgroundImage: 'none',
@@ -117,7 +118,7 @@ export const components: Components<Omit<Theme, 'components'>> = {
   MuiChip: {
     styleOverrides: {
       root: {
-        borderRadius: 8,
+        borderRadius: themeRadius(radius.pill),
         fontWeight: 800,
         letterSpacing: 0,
         height: 26
@@ -130,7 +131,7 @@ export const components: Components<Omit<Theme, 'components'>> = {
         backgroundColor: palette.surfaceRaised,
         color: palette.text,
         border: `1px solid ${palette.border}`,
-        borderRadius: 8,
+        borderRadius: themeRadius(radius.control),
         boxShadow: '0 14px 34px rgba(0,0,0,.34)',
         padding: '8px 10px',
         fontSize: 12,
@@ -163,7 +164,7 @@ export const components: Components<Omit<Theme, 'components'>> = {
   MuiOutlinedInput: {
     styleOverrides: {
       root: {
-        borderRadius: 10,
+        borderRadius: themeRadius(radius.control),
         backgroundColor: 'rgba(15, 23, 42, 0.72)',
         '& fieldset': { borderColor: palette.border },
         '&:hover fieldset': { borderColor: palette.borderStrong },

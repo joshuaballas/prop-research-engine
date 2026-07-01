@@ -25,6 +25,7 @@ import { StatusPill } from '../../components/ui/StatusPill';
 import { mockMarkets } from '../../data/mockMarkets';
 import { mockTopPicks } from '../../data/mockTopPicks';
 import { palette } from '../../theme/palette';
+import { radius } from '../../theme/radius';
 
 const backgroundTerms = [
   'PrizePicks',
@@ -161,7 +162,7 @@ export function HomePage() {
           sx={{
             position: 'relative',
             overflow: 'hidden',
-            borderRadius: 4,
+            borderRadius: radius.featuredCard,
             maxWidth: 1120,
             mx: 'auto',
             borderColor: 'rgba(125,211,252,.24)',
@@ -262,7 +263,7 @@ function HeroProductPreview({ children }: { children: ReactNode }) {
       <Box
         sx={{
           display: { xs: 'block', sm: 'none' },
-          borderRadius: 4,
+          borderRadius: radius.featuredCard,
           p: 2,
           pt: 2.25,
           border: '1px solid rgba(125,211,252,.22)',
@@ -288,7 +289,7 @@ function HeroProductPreview({ children }: { children: ReactNode }) {
         sx={{
           display: { xs: 'none', sm: 'block' },
           position: 'relative',
-          borderRadius: 4,
+          borderRadius: radius.featuredCard,
           p: { sm: 2, md: 2.2 },
           border: '1px solid rgba(125,211,252,.22)',
           backgroundColor: palette.cardSurface,
@@ -360,7 +361,7 @@ function SportRailPreview() {
             sx={{
               px: 1,
               py: 0.75,
-              borderRadius: 1.5,
+              borderRadius: radius.card,
               bgcolor: index === 0 ? 'rgba(34,211,238,.14)' : 'rgba(148,163,184,.08)',
               color: index === 0 ? palette.primary : palette.textMuted,
               border: `1px solid ${index === 0 ? 'rgba(34,211,238,.28)' : 'rgba(148,163,184,.12)'}`,
@@ -475,7 +476,7 @@ function WorkflowTimeline() {
                     sx={{
                       width: 54,
                       height: 54,
-                      borderRadius: 999,
+                      borderRadius: radius.pill,
                       display: 'grid',
                       placeItems: 'center',
                       color: 'primary.main',
@@ -562,7 +563,7 @@ function CoverageHeader({ icon, title, subtitle, accent }: { icon: ReactNode; ti
         sx={{
           width: 44,
           height: 44,
-          borderRadius: 2,
+          borderRadius: radius.featuredCard,
           display: 'grid',
           placeItems: 'center',
           color: accent,
@@ -590,7 +591,7 @@ function PlatformBadge({ platform, mark }: { platform: string; mark: string }) {
       spacing={1.2}
       sx={{
         p: 1.1,
-        borderRadius: 2.5,
+        borderRadius: radius.featuredCard,
         border: '1px solid rgba(34,211,238,.18)',
         bgcolor: 'rgba(8,13,26,.5)'
       }}
@@ -615,7 +616,7 @@ function SportsbookTile({ book, mark }: { book: string; mark: string }) {
       sx={{
         p: 1,
         minHeight: 58,
-        borderRadius: 2.25,
+        borderRadius: radius.featuredCard,
         border: '1px solid rgba(148,163,184,.14)',
         bgcolor: 'rgba(8,13,26,.34)'
       }}
@@ -678,7 +679,7 @@ function ModifierIntelligence() {
                 ['Discounted Line', 'Reduced projection context', '+12.6% Edge']
               ].map(([label, detail, value]) => (
                 <Grid key={label} size={{ xs: 12, sm: 6 }}>
-                  <Box sx={{ p: 1.4, borderRadius: 2, bgcolor: 'rgba(8,13,26,.55)', border: `1px solid ${palette.border}` }}>
+                  <Box sx={{ p: 1.4, borderRadius: radius.featuredCard, bgcolor: 'rgba(8,13,26,.55)', border: `1px solid ${palette.border}` }}>
                     <Stack direction="row" justifyContent="space-between" gap={1}>
                       <Stack spacing={0.25}>
                         <Typography fontWeight={950}>{label}</Typography>
@@ -708,7 +709,7 @@ function ModifierBadge({ modifier }: { modifier: (typeof modifiers)[number] }) {
       sx={{
         p: 1.25,
         minHeight: 116,
-        borderRadius: 2.5,
+        borderRadius: radius.featuredCard,
         border: `1px solid ${modifier.color}44`,
         bgcolor: `${modifier.color}12`
       }}
@@ -717,7 +718,7 @@ function ModifierBadge({ modifier }: { modifier: (typeof modifiers)[number] }) {
         sx={{
           width: 38,
           height: 38,
-          borderRadius: 2,
+          borderRadius: radius.featuredCard,
           display: 'grid',
           placeItems: 'center',
           color: modifier.color,
@@ -754,10 +755,10 @@ function MarketSignalsPanel() {
             </Typography>
             <Stack spacing={1}>
               {statuses.map((status) => (
-                <Box key={status.label} sx={{ p: 1.2, borderRadius: 2, bgcolor: 'rgba(8,13,26,.5)', border: `1px solid ${palette.border}` }}>
+                <Box key={status.label} sx={{ p: 1.2, borderRadius: radius.featuredCard, bgcolor: 'rgba(8,13,26,.5)', border: `1px solid ${palette.border}` }}>
                   <Stack direction="row" justifyContent="space-between" alignItems="center" gap={1}>
                     <Stack direction="row" spacing={1} alignItems="center">
-                      <Box sx={{ width: 9, height: 9, borderRadius: 999, bgcolor: status.tone }} />
+                      <Box sx={{ width: 9, height: 9, borderRadius: radius.pill, bgcolor: status.tone }} />
                       <Typography fontWeight={950}>{status.label}</Typography>
                     </Stack>
                     <Typography variant="caption" color="text.secondary">
@@ -820,10 +821,10 @@ function MiniBar({ label, value }: { label: string; value: number }) {
         value={value}
         sx={{
           height: 6,
-          borderRadius: 99,
+          borderRadius: radius.pill,
           bgcolor: 'rgba(148,163,184,.12)',
           '& .MuiLinearProgress-bar': {
-            borderRadius: 99,
+            borderRadius: radius.pill,
             backgroundColor: '#22D3EE'
           }
         }}

@@ -4,6 +4,7 @@ import { getEntryRules } from '../../api/entryRules';
 import { mockEntryRules } from '../../data/mockEntryRules';
 import { useEntryBuilder } from '../../hooks/useEntryBuilder';
 import { palette } from '../../theme/palette';
+import { radius } from '../../theme/radius';
 import type { EntryRule } from '../../types/entryBuilder';
 import { EntryBuilderTray } from './EntryBuilderTray';
 
@@ -42,8 +43,8 @@ export function SharedEntryBuilderDrawer() {
             top: { md: 0 },
             height: { xs: '82dvh', md: '100vh' },
             maxHeight: { xs: 680, md: 'none' },
-            borderTopLeftRadius: { xs: 4, md: 0 },
-            borderTopRightRadius: { xs: 4, md: 0 },
+            borderTopLeftRadius: { xs: radius.modal, md: radius.none },
+            borderTopRightRadius: { xs: radius.modal, md: radius.none },
             borderLeft: { md: '1px solid rgba(125,211,252,.22)' },
             borderTop: { xs: '1px solid rgba(125,211,252,.22)', md: 'none' },
             backgroundColor: palette.bg,

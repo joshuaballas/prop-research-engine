@@ -3,10 +3,11 @@ import { Box, Button, Link, Stack, TextField, Typography } from '@mui/material';
 import { Link as RouterLink } from 'react-router-dom';
 import { AppCard } from '../../components/ui/AppCard';
 import { palette } from '../../theme/palette';
+import { radius } from '../../theme/radius';
 
 const authFieldSx = {
   '& .MuiOutlinedInput-root': {
-    borderRadius: 2,
+    borderRadius: radius.featuredCard,
     backgroundColor: 'rgba(8,13,26,.48)',
     '& fieldset': { borderColor: 'rgba(148,163,184,.18)' },
     '&:hover fieldset': { borderColor: 'rgba(125,211,252,.34)' },

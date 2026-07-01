@@ -2,6 +2,7 @@ import ExpandMoreRoundedIcon from '@mui/icons-material/ExpandMoreRounded';
 import { Accordion, AccordionDetails, AccordionSummary, Box, Stack, Typography } from '@mui/material';
 import type { PerformanceGroup } from '../../types/performance';
 import { palette } from '../../theme/palette';
+import { radius } from '../../theme/radius';
 import { formatPercent } from '../../utils/formatters';
 
 export function PerformanceMobileAccordion({ rows, category }: { rows: PerformanceGroup[]; category: string }) {
@@ -27,25 +28,25 @@ export function PerformanceMobileAccordion({ rows, category }: { rows: Performan
             disableGutters
             sx={{
               border: `1px solid ${palette.border}`,
-              borderRadius: 3,
+              borderRadius: radius.card,
               backgroundColor: palette.cardSurface,
               overflow: 'hidden',
               margin: '0 !important',
               '&:before': { display: 'none' },
               '&.Mui-expanded': {
                 margin: '0 !important',
-                borderRadius: 3
+                borderRadius: radius.card
               },
               '&:first-of-type': {
-                borderTopLeftRadius: 12,
-                borderTopRightRadius: 12
+                borderTopLeftRadius: radius.card,
+                borderTopRightRadius: radius.card
               }
             }}
           >
             <AccordionSummary
               expandIcon={<ExpandMoreRoundedIcon />}
               sx={{
-                borderRadius: 3,
+                borderRadius: radius.card,
                 '&.Mui-expanded': {
                   minHeight: 48
                 },
@@ -74,7 +75,7 @@ export function PerformanceMobileAccordion({ rows, category }: { rows: Performan
                     key={label}
                     sx={{
                       border: `1px solid ${palette.border}`,
-                      borderRadius: 2,
+                      borderRadius: radius.featuredCard,
                       backgroundColor: 'rgba(15, 23, 42, 0.48)',
                       p: 0.85
                     }}

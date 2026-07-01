@@ -2,6 +2,7 @@ import CheckRoundedIcon from '@mui/icons-material/CheckRounded';
 import TuneRoundedIcon from '@mui/icons-material/TuneRounded';
 import { Box, Button, Checkbox, Collapse, FormControlLabel, MenuItem, Stack, TextField } from '@mui/material';
 import { type ChangeEvent, useState } from 'react';
+import { radius } from '../../theme/radius';
 
 export interface MarketFilterOption {
   label: string;
@@ -234,7 +235,7 @@ export function MarketFilters({
       sx={{
         border: { xs: '1px solid rgba(148,163,184,.14)', md: 0 },
         borderBottom: { md: '1px solid rgba(148,163,184,.14)' },
-        borderRadius: { xs: 3, md: 0 },
+        borderRadius: { xs: radius.card, md: radius.none },
         bgcolor: { xs: 'rgba(15,23,42,.42)', md: 'transparent' },
         p: { xs: 1, md: 0 },
         pb: { md: 1.35 }
@@ -318,7 +319,7 @@ function FilterToggleButton({ label, active, onToggle }: { label: string; active
       sx={{
         height: 34,
         px: 1.25,
-        borderRadius: 999,
+        borderRadius: radius.pill,
         border: active ? '1px solid rgba(34,211,238,.34)' : '1px solid rgba(148,163,184,.2)',
         bgcolor: active ? 'rgba(34,211,238,.13)' : 'rgba(148,163,184,.06)',
         color: active ? 'primary.main' : 'text.secondary',
@@ -391,7 +392,7 @@ function FilterToggleGroup({
           sx={{
             height: 34,
             px: 1.25,
-            borderRadius: 999,
+            borderRadius: radius.pill,
             border: filter.active ? '1px solid rgba(34,211,238,.34)' : '1px solid rgba(148,163,184,.2)',
             bgcolor: filter.active ? 'rgba(34,211,238,.13)' : 'rgba(148,163,184,.06)',
             color: filter.active ? 'primary.main' : 'text.secondary',

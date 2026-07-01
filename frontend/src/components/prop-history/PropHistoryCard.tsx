@@ -12,6 +12,7 @@ import {
 } from 'recharts';
 import type { PlayerResearchStat } from '../../data/mockPlayerResearch';
 import { palette } from '../../theme/palette';
+import { radius } from '../../theme/radius';
 import type { PropHistoryResponseDto } from '../../api/types';
 import type { MarketOpportunity } from '../../types/markets';
 import { renderWarningText } from '../../utils/warnings';
@@ -195,7 +196,7 @@ function PropHistoryTooltip({ active, payload }: { active?: boolean; payload?: A
     <Box
       sx={{
         p: 1.15,
-        borderRadius: 2,
+        borderRadius: radius.featuredCard,
         border: '1px solid rgba(148,163,184,.22)',
         bgcolor: 'rgba(2,6,23,.94)',
         boxShadow: 'none'
@@ -285,7 +286,7 @@ function StatSummary({
           columnGap: { xs: 0.95, sm: 0 },
           rowGap: { xs: 0.65, sm: 0.85 },
           border: '1px solid rgba(148,163,184,.16)',
-          borderRadius: 3,
+          borderRadius: radius.card,
           bgcolor: palette.cardSurface,
           boxShadow: 'none',
           '& > div': {
@@ -312,7 +313,7 @@ function StatSummary({
       <Box
         sx={{
           p: 1.05,
-          borderRadius: 3,
+          borderRadius: radius.card,
           border: hasWarning ? '1px solid rgba(245,158,11,.28)' : '1px solid rgba(148,163,184,.12)',
           bgcolor: hasWarning ? 'rgba(54, 38, 13, 0.18)' : palette.cardSurface
         }}

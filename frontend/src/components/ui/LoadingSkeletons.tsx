@@ -3,6 +3,7 @@ import { AppCard } from './AppCard';
 import { AppDataTable } from './AppDataTable';
 import { appTableRowSx, stickyActionCellSx, stickyActionHeaderCellSx } from './appTableStyles';
 import { palette } from '../../theme/palette';
+import { radius } from '../../theme/radius';
 
 export function MetricCardSkeleton({ count = 3 }: { count?: number }) {
   return (
@@ -43,10 +44,10 @@ export function MarketCardSkeleton() {
             <Skeleton width="62%" height={22} />
             <Skeleton width="46%" height={16} />
           </Stack>
-          <Skeleton variant="rounded" width={74} height={28} sx={{ borderRadius: 999 }} />
+          <Skeleton variant="rounded" width={74} height={28} sx={{ borderRadius: radius.pill }} />
         </Stack>
         <Stack direction="row" spacing={1} alignItems="center">
-          <Skeleton variant="rounded" width={28} height={28} sx={{ borderRadius: 1.5 }} />
+          <Skeleton variant="rounded" width={28} height={28} sx={{ borderRadius: radius.card }} />
           <Skeleton width="38%" height={18} />
         </Stack>
         <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 1 }}>
@@ -58,8 +59,8 @@ export function MarketCardSkeleton() {
           ))}
         </Box>
         <Stack direction="row" spacing={1}>
-          <Skeleton variant="rounded" width={94} height={34} sx={{ borderRadius: 2 }} />
-          <Skeleton variant="rounded" width={84} height={34} sx={{ borderRadius: 2 }} />
+          <Skeleton variant="rounded" width={94} height={34} sx={{ borderRadius: radius.featuredCard }} />
+          <Skeleton variant="rounded" width={84} height={34} sx={{ borderRadius: radius.featuredCard }} />
         </Stack>
       </Stack>
     </AppCard>
@@ -113,7 +114,7 @@ export function TopPickCardSkeleton() {
     <AppCard sx={{ width: '100%' }} contentSx={{ p: { xs: 1.45, md: 1.7 }, '&:last-child': { pb: { xs: 1.45, md: 1.7 } } }}>
       <Stack spacing={1.35} aria-hidden="true">
         <Stack direction="row" justifyContent="space-between" gap={1.4}>
-          <Skeleton variant="rounded" width={88} height={28} sx={{ borderRadius: 999 }} />
+          <Skeleton variant="rounded" width={88} height={28} sx={{ borderRadius: radius.pill }} />
           <Skeleton width={56} height={18} />
         </Stack>
         <Stack spacing={0.55}>
@@ -121,7 +122,7 @@ export function TopPickCardSkeleton() {
           <Skeleton width="48%" height={18} />
         </Stack>
         <Stack direction="row" spacing={1} alignItems="center">
-          <Skeleton variant="rounded" width={30} height={30} sx={{ borderRadius: 1.5 }} />
+          <Skeleton variant="rounded" width={30} height={30} sx={{ borderRadius: radius.card }} />
           <Skeleton width="34%" height={18} />
         </Stack>
         <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 1 }}>
@@ -133,8 +134,8 @@ export function TopPickCardSkeleton() {
           ))}
         </Box>
         <Stack direction="row" spacing={1}>
-          <Skeleton variant="rounded" width={92} height={34} sx={{ borderRadius: 2 }} />
-          <Skeleton variant="rounded" width={82} height={34} sx={{ borderRadius: 2 }} />
+          <Skeleton variant="rounded" width={92} height={34} sx={{ borderRadius: radius.featuredCard }} />
+          <Skeleton variant="rounded" width={82} height={34} sx={{ borderRadius: radius.featuredCard }} />
         </Stack>
       </Stack>
     </AppCard>
@@ -154,7 +155,7 @@ export function PerformanceBreakdownSkeleton({ mobile = false }: { mobile?: bool
             <Stack spacing={1}>
               <Stack direction="row" justifyContent="space-between">
                 <Skeleton width="48%" height={22} />
-                <Skeleton variant="rounded" width={66} height={24} sx={{ borderRadius: 999 }} />
+                <Skeleton variant="rounded" width={66} height={24} sx={{ borderRadius: radius.pill }} />
               </Stack>
               <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 1 }}>
                 {Array.from({ length: 4 }).map((__, metricIndex) => (
@@ -183,10 +184,10 @@ export function PropHistorySkeleton() {
             <Skeleton width={142} height={24} />
             <Skeleton width={220} height={16} />
           </Stack>
-          <Skeleton variant="rounded" width={92} height={28} sx={{ borderRadius: 999 }} />
+          <Skeleton variant="rounded" width={92} height={28} sx={{ borderRadius: radius.pill }} />
         </Stack>
-        <Box sx={{ height: 180, borderRadius: 2, border: `1px solid ${palette.border}`, p: 1.2 }}>
-          <Skeleton width="100%" height="100%" variant="rounded" sx={{ borderRadius: 1.5 }} />
+        <Box sx={{ height: 180, borderRadius: radius.featuredCard, border: `1px solid ${palette.border}`, p: 1.2 }}>
+          <Skeleton width="100%" height="100%" variant="rounded" sx={{ borderRadius: radius.card }} />
         </Box>
         <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', gap: 1 }}>
           {Array.from({ length: 4 }).map((_, index) => (

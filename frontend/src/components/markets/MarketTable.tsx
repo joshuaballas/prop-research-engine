@@ -26,7 +26,7 @@ export function MarketTable({ markets }: { markets: MarketOpportunity[] }) {
 
   return (
     <>
-      <AppDataTable minWidth={minWidth} sx={{ borderRadius: 3 }} tableSx={{ tableLayout: 'fixed' }}>
+      <AppDataTable minWidth={minWidth} tableSx={{ tableLayout: 'fixed' }}>
         <colgroup>
           <col style={{ width: '28%' }} />
           {showSportColumn ? <col style={{ width: 100 }} /> : null}

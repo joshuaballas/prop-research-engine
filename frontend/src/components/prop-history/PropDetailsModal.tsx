@@ -6,6 +6,7 @@ import type { PropHistoryResponseDto } from '../../api/types';
 import { isDemoDataMode } from '../../config/dataMode';
 import { mockPlayerResearchPlayers } from '../../data/mockPlayerResearch';
 import { palette } from '../../theme/palette';
+import { radius } from '../../theme/radius';
 import { formatPercent } from '../../utils/formatters';
 import { MetricLabelWithHelp } from '../metrics/MetricLabelWithHelp';
 import { ProviderLabel } from '../providers/ProviderLabel';
@@ -39,7 +40,7 @@ export function PropDetailsModal({ market, open, onClose }: PropDetailsModalProp
       aria-labelledby="prop-details-title"
       PaperProps={{
         sx: {
-          borderRadius: 2.5,
+          borderRadius: radius.modal,
           border: '1px solid rgba(148,163,184,.18)',
           bgcolor: 'rgba(8,13,25,.98)',
           backgroundImage: 'none',
@@ -183,7 +184,7 @@ function MetricStrip({ market, maxWidth }: { market: MarketOpportunity; maxWidth
         gap: { xs: 1.05, md: 1.25 },
         px: { xs: 1.35, md: 1.6 },
         py: { xs: 1.25, md: 1.45 },
-        borderRadius: 2.5,
+        borderRadius: radius.card,
         border: '1px solid rgba(148,163,184,.14)',
         bgcolor: palette.cardSurface,
         ...historyCardSx(maxWidth)

@@ -8,6 +8,7 @@ import { ProjectionModifierBadge } from '../markets/ProjectionModifierBadge';
 import { mobileCardActionButtonSx } from '../ui/AppRowActions';
 import { removeActionButtonSx } from '../ui/buttonStyles';
 import { OpportunityCardLayout, OpportunityMetricGrid, OpportunityMetricItem, OpportunityPickText, OpportunityProviderRow } from '../ui/OpportunityCard';
+import { radius } from '../../theme/radius';
 
 export function EntryLegCard({ leg, onRemove }: { leg: EntryLeg; onRemove?: (id: string) => void }) {
   const warning = renderOpportunityCautionText(leg.warnings);
@@ -15,7 +16,7 @@ export function EntryLegCard({ leg, onRemove }: { leg: EntryLeg; onRemove?: (id:
   return (
     <OpportunityCardLayout
       compact
-      shellSx={{ borderRadius: 3 }}
+      shellSx={{ borderRadius: radius.card }}
       contentSx={{ p: 1.35, '&:last-child': { pb: 1.35 } }}
       title={leg.player}
       value={

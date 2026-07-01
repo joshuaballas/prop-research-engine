@@ -1,5 +1,6 @@
 import { Box, type SxProps, type Theme } from '@mui/material';
 import type { ProviderCategory } from '../../types/markets';
+import { radius } from '../../theme/radius';
 
 type LogoModule = { default: string } | string;
 
@@ -98,7 +99,7 @@ export function ProviderLogo({ provider, category = 'DFS', mark, size = 38, sx }
         sx={{
           width: size,
           height: size,
-          borderRadius: '12px',
+          borderRadius: radius.card,
           objectFit: 'cover',
           display: 'block',
           flexShrink: 0,
@@ -114,7 +115,7 @@ export function ProviderLogo({ provider, category = 'DFS', mark, size = 38, sx }
       sx={{
         width: size,
         height: size,
-        borderRadius: 2,
+        borderRadius: radius.card,
         display: 'grid',
         placeItems: 'center',
         flexShrink: 0,

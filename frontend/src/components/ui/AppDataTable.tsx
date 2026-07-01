@@ -1,5 +1,6 @@
 import { Box, Table, type TableProps, type SxProps, type Theme } from '@mui/material';
 import type { ReactNode } from 'react';
+import { radius } from '../../theme/radius';
 
 type AppDataTableProps = {
   children: ReactNode;
@@ -15,7 +16,7 @@ export function AppDataTable({ children, minWidth, tableSx, sx, size = 'small', 
         {
           overflowX: 'auto',
           border: '1px solid rgba(148,163,184,.16)',
-          borderRadius: 4,
+          borderRadius: radius.table,
           bgcolor: 'rgba(8,13,26,.28)'
         },
         ...(Array.isArray(sx) ? sx : sx ? [sx] : [])

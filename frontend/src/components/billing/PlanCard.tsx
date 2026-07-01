@@ -3,6 +3,7 @@ import { Button, Card, CardContent, Chip, Divider, Stack, Typography } from '@mu
 import { Link as RouterLink } from 'react-router-dom';
 import type { PricingPlan } from '../../types/billing';
 import { palette } from '../../theme/palette';
+import { radius } from '../../theme/radius';
 import { formatCurrency } from '../../utils/formatters';
 import { StatusPill } from '../ui/StatusPill';
 
@@ -23,7 +24,7 @@ export function PlanCard({ plan }: { plan: PricingPlan }) {
         flexDirection: 'column',
         position: 'relative',
         overflow: 'hidden',
-        borderRadius: 4,
+        borderRadius: radius.featuredCard,
         border: `1px solid ${isFeatured ? 'rgba(34,211,238,.62)' : 'rgba(148,163,184,.18)'}`,
         backgroundColor: palette.cardSurface,
         backgroundImage: 'none',
@@ -99,7 +100,7 @@ export function PlanCard({ plan }: { plan: PricingPlan }) {
               size="small"
               sx={{
                 height: 26,
-                borderRadius: 1.5,
+                borderRadius: radius.card,
                 color: 'text.secondary',
                 bgcolor: 'rgba(8,13,26,.46)',
                 border: '1px solid rgba(148,163,184,.14)',

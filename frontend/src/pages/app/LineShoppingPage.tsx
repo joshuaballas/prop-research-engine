@@ -11,6 +11,7 @@ import { useLineShoppingData } from '../../hooks/useMarketData';
 import type { MarketReadSport } from '../../hooks/useMarketData';
 import { useResponsiveView } from '../../hooks/useResponsiveView';
 import { palette } from '../../theme/palette';
+import { radius } from '../../theme/radius';
 import type { MarketOpportunity } from '../../types/markets';
 import { formatPercent } from '../../utils/formatters';
 import { isEntryBuilderAddableMarket, isLineNoLongerAvailable } from '../../utils/marketCautions';
@@ -244,7 +245,7 @@ function ApiStateCard({ message, tone = 'default' }: { message: string; tone?: '
     <Box
       sx={{
         border: `1px solid ${tone === 'error' ? 'rgba(244,63,94,.32)' : 'rgba(148,163,184,.16)'}`,
-        borderRadius: 4,
+        borderRadius: radius.featuredCard,
         bgcolor: palette.cardSurface,
         p: 2
       }}

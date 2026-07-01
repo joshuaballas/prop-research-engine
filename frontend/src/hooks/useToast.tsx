@@ -1,5 +1,6 @@
 import { Alert, Snackbar, useMediaQuery, useTheme } from '@mui/material';
 import { createContext, useContext, useMemo, useState, type PropsWithChildren } from 'react';
+import { radius } from '../theme/radius';
 
 type ToastSeverity = 'success' | 'error' | 'warning' | 'info';
 
@@ -51,7 +52,7 @@ export function ToastProvider({ children }: PropsWithChildren) {
             onClose={() => setToast(null)}
             sx={{
               ...toastSeveritySx[toast.severity],
-              borderRadius: 2,
+              borderRadius: radius.featuredCard,
               border: `1px solid ${toastSeveritySx[toast.severity].borderColor}`,
               boxShadow: 'none',
               alignItems: 'center',

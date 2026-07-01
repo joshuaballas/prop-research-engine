@@ -10,6 +10,7 @@ import StackedLineChartOutlinedIcon from '@mui/icons-material/StackedLineChartOu
 import { Box, List, ListItemButton, ListItemIcon, ListItemText, Stack, Typography } from '@mui/material';
 import { Link as RouterLink, useLocation } from 'react-router-dom';
 import { palette } from '../../theme/palette';
+import { radius } from '../../theme/radius';
 
 const navItems = [
   { label: 'Dashboard', to: '/app/dashboard', icon: <DashboardOutlinedIcon /> },
@@ -53,7 +54,7 @@ export function AppSidebar() {
             sx={{
               width: 36,
               height: 36,
-              borderRadius: 1.75,
+              borderRadius: radius.card,
               display: 'grid',
               placeItems: 'center',
               color: 'primary.main',
@@ -90,7 +91,7 @@ export function AppSidebar() {
                   minHeight: 42,
                   px: 1.25,
                   py: 0.8,
-                  borderRadius: 1.35,
+                  borderRadius: radius.control,
                   color: active ? activeTextColor : inactiveColor,
                   border: '1px solid transparent',
                   position: 'relative',
@@ -103,7 +104,7 @@ export function AppSidebar() {
                     top: 10,
                     bottom: 10,
                     width: 2,
-                    borderRadius: 999,
+                    borderRadius: radius.pill,
                     backgroundColor: active ? 'rgba(34,211,238,.86)' : 'transparent'
                   },
                   '& .MuiSvgIcon-root': {

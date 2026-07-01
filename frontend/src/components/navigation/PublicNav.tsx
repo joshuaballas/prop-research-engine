@@ -1,6 +1,7 @@
 import AutoGraphOutlinedIcon from '@mui/icons-material/AutoGraphOutlined';
 import { AppBar, Box, Button, Container, Stack, Toolbar, Typography } from '@mui/material';
 import { Link as RouterLink } from 'react-router-dom';
+import { radius } from '../../theme/radius';
 
 export function PublicNav() {
   return (
@@ -8,7 +9,7 @@ export function PublicNav() {
       <Container maxWidth="xl">
         <Toolbar disableGutters sx={{ gap: 2, minHeight: 72 }}>
           <Stack component={RouterLink} to="/" direction="row" spacing={1.1} alignItems="center" sx={{ color: 'text.primary', textDecoration: 'none' }}>
-            <Box sx={{ width: 34, height: 34, borderRadius: 2, display: 'grid', placeItems: 'center', bgcolor: 'rgba(34,211,238,.14)', color: 'primary.main', border: '1px solid rgba(34,211,238,.28)' }}>
+            <Box sx={{ width: 34, height: 34, borderRadius: radius.featuredCard, display: 'grid', placeItems: 'center', bgcolor: 'rgba(34,211,238,.14)', color: 'primary.main', border: '1px solid rgba(34,211,238,.28)' }}>
               <AutoGraphOutlinedIcon fontSize="small" />
             </Box>
             <Box>

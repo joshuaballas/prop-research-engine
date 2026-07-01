@@ -1,5 +1,6 @@
 import { Box, Stack, Typography } from '@mui/material';
 import { palette } from '../../theme/palette';
+import { radius } from '../../theme/radius';
 import { MetadataText } from './MetadataText';
 
 interface DataStateBannerProps {
@@ -15,7 +16,7 @@ export function DataStateBanner({ title, message, status }: DataStateBannerProps
     <Box
       sx={{
         border: `1px solid ${status === 'Unavailable' ? 'rgba(244,63,94,.35)' : palette.borderStrong}`,
-        borderRadius: 4,
+        borderRadius: radius.featuredCard,
         p: 2,
         backgroundColor: status === 'Unavailable' ? 'rgba(76, 5, 25, 0.34)' : palette.surfaceGlow
       }}

@@ -18,6 +18,7 @@ import {
 } from '@mui/material';
 import { useEffect, useMemo, useState } from 'react';
 import { palette } from '../../theme/palette';
+import { radius } from '../../theme/radius';
 import type { EntryLeg } from '../../types/entryBuilder';
 import type { buildEntryReview } from '../../utils/entryReview';
 import { formatPercent } from '../../utils/formatters';
@@ -59,7 +60,7 @@ export function EntryReceiptDialog({ open, onClose, legs, review, amount }: Entr
       aria-labelledby="entry-receipt-title"
       PaperProps={{
         sx: {
-          borderRadius: 2.5,
+          borderRadius: radius.modal,
           border: `1px solid ${palette.border}`,
           bgcolor: 'rgba(8,13,25,.98)',
           backgroundImage: 'none',
@@ -189,7 +190,7 @@ export function EntryReceiptDialog({ open, onClose, legs, review, amount }: Entr
                     spacing={0.75}
                     sx={{
                       border: `1px solid ${palette.border}`,
-                      borderRadius: 2,
+                      borderRadius: radius.card,
                       p: 1,
                       bgcolor: 'rgba(15,23,42,.34)'
                     }}
@@ -256,7 +257,7 @@ function ReceiptMetric({ label, value, tone = 'text.primary', sx }: { label: str
       sx={{
         minWidth: 0,
         border: `1px solid ${palette.border}`,
-        borderRadius: 2,
+        borderRadius: radius.card,
         p: 1,
         bgcolor: palette.cardSurface,
         ...sx

@@ -1,6 +1,7 @@
 import { Box, Stack, Tooltip, Typography } from '@mui/material';
 import type { SxProps, Theme } from '@mui/material/styles';
 import { metricHelp, type MetricHelpKey } from './metricHelp';
+import { radius } from '../../theme/radius';
 
 interface MetricLabelWithHelpProps {
   metric: MetricHelpKey;
@@ -25,7 +26,7 @@ export function MetricLabelWithHelp({ metric, align = 'left', label: labelOverri
           width: 15,
           height: 15,
           flex: '0 0 auto',
-          borderRadius: '50%',
+          borderRadius: radius.circle,
           border: '1px solid rgba(148, 163, 184, 0.34)',
           color: 'text.secondary',
           display: 'inline-flex',

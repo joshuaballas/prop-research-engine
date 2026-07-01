@@ -1,5 +1,6 @@
 import { Box, Stack, Tooltip, Typography } from '@mui/material';
 import { marketTagTextColors } from '../../utils/marketTags';
+import { radius } from '../../theme/radius';
 
 const tagDefinitions = [
   ['Top Pick', 'Higher-priority opportunity based on hit chance, edge, and line context.'],
@@ -43,7 +44,7 @@ export function TagsLabelWithHelp() {
             width: 15,
             height: 15,
             flex: '0 0 auto',
-            borderRadius: '50%',
+            borderRadius: radius.circle,
             border: '1px solid rgba(148, 163, 184, 0.34)',
             color: 'text.secondary',
             display: 'inline-flex',

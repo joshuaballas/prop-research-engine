@@ -7,6 +7,7 @@ import { AppCard } from '../../components/ui/AppCard';
 import { MetadataText } from '../../components/ui/MetadataText';
 import { mockPricingPlans } from '../../data/mockPricingPlans';
 import { palette } from '../../theme/palette';
+import { radius } from '../../theme/radius';
 
 export function PricingPage() {
   const trustNotes = [
@@ -64,7 +65,7 @@ export function PricingPage() {
                     sx={{
                       width: 42,
                       height: 42,
-                      borderRadius: 2,
+                      borderRadius: radius.featuredCard,
                       display: 'grid',
                       placeItems: 'center',
                       color: 'primary.main',

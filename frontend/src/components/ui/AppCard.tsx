@@ -1,5 +1,6 @@
 import { Card, CardContent, type CardProps, type SxProps, type Theme } from '@mui/material';
 import { palette } from '../../theme/palette';
+import { radius } from '../../theme/radius';
 
 interface AppCardProps extends CardProps {
   contentSx?: SxProps<Theme>;
@@ -12,7 +13,7 @@ export function AppCard({ children, sx, contentSx, ...props }: AppCardProps) {
       {...props}
       sx={[
         {
-          borderRadius: 4,
+          borderRadius: radius.card,
           border: `1px solid ${palette.border}`,
           backgroundColor: palette.cardSurface
         },

@@ -14,6 +14,7 @@ import { usePerformanceData, usePerformanceResults } from '../../hooks/useMarket
 import type { MarketReadSport } from '../../hooks/useMarketData';
 import { useResponsiveView } from '../../hooks/useResponsiveView';
 import { palette } from '../../theme/palette';
+import { radius } from '../../theme/radius';
 import type { PerformanceResultRowDto } from '../../api/types';
 import { formatPercent } from '../../utils/formatters';
 import { Fragment, useEffect, useMemo, useState } from 'react';
@@ -180,7 +181,7 @@ export function PerformancePage() {
                   px: 1.6,
                   py: { xs: 0.8, md: 0.95 },
                   flex: '0 0 auto',
-                  borderRadius: 2,
+                  borderRadius: radius.featuredCard,
                   border: `1px solid ${selected ? palette.borderStrong : palette.border}`,
                   color: selected ? palette.text : palette.textMuted,
                   background: selected ? 'rgba(34, 211, 238, 0.09)' : 'transparent',
@@ -413,7 +414,7 @@ function ProviderResultDetails({ rows }: { rows: PerformanceResultRowDto[] }) {
           sx={{
             maxWidth: 720,
             border: `1px solid ${palette.border}`,
-            borderRadius: 2,
+            borderRadius: radius.featuredCard,
             overflow: 'hidden',
             backgroundColor: 'rgba(15, 23, 42, 0.34)'
           }}
@@ -493,18 +494,18 @@ function YesterdayResultsMobileCards({ groups }: { groups: YesterdayResultGroup[
           disableGutters
           sx={{
             border: `1px solid ${palette.border}`,
-            borderRadius: 3,
+            borderRadius: radius.card,
             backgroundColor: palette.cardSurface,
             overflow: 'hidden',
             margin: '0 !important',
             '&:before': { display: 'none' },
             '&.Mui-expanded': {
               margin: '0 !important',
-              borderRadius: 3
+              borderRadius: radius.card
             },
             '&:first-of-type': {
-              borderTopLeftRadius: 12,
-              borderTopRightRadius: 12
+              borderTopLeftRadius: radius.card,
+              borderTopRightRadius: radius.card
             }
           }}
         >
@@ -513,7 +514,7 @@ function YesterdayResultsMobileCards({ groups }: { groups: YesterdayResultGroup[
               position: 'relative',
               minHeight: 'auto',
               p: 1.35,
-              borderRadius: 3,
+              borderRadius: radius.card,
               '&.Mui-expanded': {
                 minHeight: 'auto'
               },
@@ -624,7 +625,7 @@ function MobileInlineMetric({ label, value, tone }: { label: string; value: stri
 function ResultBadge({ result }: { result: string }) {
   const color = result === 'Won' ? palette.success : result === 'Lost' ? palette.danger : palette.textMuted;
   return (
-    <Box sx={{ display: 'inline-flex', alignItems: 'center', border: `1px solid ${color}`, color, borderRadius: 999, px: 1, py: 0.35, fontSize: 12, fontWeight: 950 }}>
+    <Box sx={{ display: 'inline-flex', alignItems: 'center', border: `1px solid ${color}`, color, borderRadius: radius.pill, px: 1, py: 0.35, fontSize: 12, fontWeight: 950 }}>
       {result}
     </Box>
   );
@@ -634,7 +635,7 @@ function CompactResultLabel({ result }: { result: string }) {
   const color = getResultColor(result);
   return (
     <Box sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.55, color, fontSize: 12, fontWeight: 900 }}>
-      <Box component="span" sx={{ width: 6, height: 6, borderRadius: 999, backgroundColor: color, flex: '0 0 auto' }} />
+      <Box component="span" sx={{ width: 6, height: 6, borderRadius: radius.pill, backgroundColor: color, flex: '0 0 auto' }} />
       {result}
     </Box>
   );

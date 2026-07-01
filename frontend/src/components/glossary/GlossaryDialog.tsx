@@ -1,6 +1,7 @@
 import CloseRoundedIcon from '@mui/icons-material/CloseRounded';
 import { Box, Dialog, DialogContent, DialogTitle, IconButton, Stack, Typography } from '@mui/material';
 import { palette } from '../../theme/palette';
+import { radius } from '../../theme/radius';
 import { glossaryTerms } from './glossaryTerms';
 
 interface GlossaryDialogProps {
@@ -18,7 +19,7 @@ export function GlossaryDialog({ open, onClose }: GlossaryDialogProps) {
       aria-labelledby="market-glossary-title"
       PaperProps={{
         sx: {
-          borderRadius: 2.5,
+          borderRadius: radius.modal,
           border: '1px solid rgba(148,163,184,.18)',
           bgcolor: palette.bg,
           backgroundImage: 'none',
@@ -60,7 +61,7 @@ export function GlossaryDialog({ open, onClose }: GlossaryDialogProps) {
               key={term.label}
               sx={{
                 p: 1.5,
-                borderRadius: 2,
+                borderRadius: radius.card,
                 border: '1px solid rgba(148,163,184,.14)',
                 bgcolor: palette.cardSurface
               }}

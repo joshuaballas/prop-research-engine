@@ -1,4 +1,5 @@
 import { palette } from '../../theme/palette';
+import { radius } from '../../theme/radius';
 
 export const primaryActionButtonSx = {
   color: palette.text,
@@ -42,7 +43,7 @@ const compactButtonBaseSx = {
   fontSize: 12,
   fontWeight: 900,
   whiteSpace: 'nowrap',
-  borderRadius: 2,
+  borderRadius: radius.control,
   position: 'relative',
   overflow: 'visible',
   '& .MuiButton-startIcon': {
@@ -97,7 +98,7 @@ export const compactActionButtonSx = {
     content: '""',
     position: 'absolute',
     inset: -4,
-    borderRadius: 'inherit',
+    borderRadius: radius.control,
     border: '1px solid rgba(125, 211, 252, 0.45)',
     animation: 'edgeScopeAddPulse 360ms ease-out'
   },
