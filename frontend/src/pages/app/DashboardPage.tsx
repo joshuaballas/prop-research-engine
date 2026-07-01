@@ -1,4 +1,4 @@
-import { Box, Button, Grid, Stack, TableBody, TableCell, TableHead, TableRow, Typography } from '@mui/material';
+import { Box, Button, Grid, Skeleton, Stack, TableBody, TableCell, TableHead, TableRow, Typography } from '@mui/material';
 import { useEffect, useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
 import { Link as RouterLink } from 'react-router-dom';
@@ -18,6 +18,7 @@ import { AppTableMetricValue, AppTablePrimaryText, AppTableSecondaryText } from 
 import { appTableRowSx, stickyActionCellSx, stickyActionHeaderCellSx } from '../../components/ui/appTableStyles';
 import { useLineShoppingData, useMarketFreshnessData, usePerformanceData, useTopPicksData } from '../../hooks/useMarketData';
 import type { MarketReadSport } from '../../hooks/useMarketData';
+import { useResponsiveView } from '../../hooks/useResponsiveView';
 import { useSelectedSports } from '../../hooks/useSelectedSports';
 import { radius } from '../../theme/radius';
 import type { MarketOpportunity } from '../../types/markets';
@@ -31,6 +32,7 @@ const LINE_EDGE_LIMIT = 5;
 
 export function DashboardPage() {
   const sports = useSelectedSports();
+  const { isMobile } = useResponsiveView();
   const marketReadSport = resolveDashboardMarketReadSport(sports.selectedSports);
   const freshnessQuery = useMarketFreshnessData();
   const topPicksQuery = useTopPicksData(10, 'dashboard-top-pick', marketReadSport);
@@ -56,9 +58,12 @@ export function DashboardPage() {
   );
   const freshness = freshnessQuery.data;
   const dataStatus = freshness?.hasUsableMarketData ? 'Fresh' : freshness?.isStale ? 'Stale' : 'No data';
-  const isDataHealthy = !freshnessQuery.error && freshness?.hasUsableMarketData && !freshness?.isStale;
+  const hasFreshnessResult = freshness !== undefined;
+  const freshnessSettled = !freshnessQuery.loading && hasFreshnessResult;
+  const isDataHealthy = !freshnessQuery.error && Boolean(freshness?.hasUsableMarketData) && !freshness?.isStale;
   const hasLatestGradedSlate = Boolean(latestGradedDateLabel && overall && overall.gradedPicks > 0);
   const anyPrimaryLoading = topPicksQuery.loading || lineShoppingQuery.loading || performanceQuery.loading;
+  const showDataStateBanner = !anyPrimaryLoading && (Boolean(freshnessQuery.error) || (freshnessSettled && !isDataHealthy));
 
   useEffect(() => {
     const selectedSpecificSports = sports.selectedSports.filter((sport): sport is Exclude<SportCode, 'ALL'> => sport !== 'ALL');
@@ -82,7 +87,7 @@ export function DashboardPage() {
         sports={dashboardSports}
       />
 
-      {!isDataHealthy ? (
+      {showDataStateBanner ? (
         <DataStateBanner
           title={freshnessQuery.error ? 'Market data is unavailable' : freshness?.hasUsableMarketData ? 'Market data needs attention' : 'No usable market data yet'}
           message={freshnessQuery.error ? 'Market data could not be reached.' : freshness?.usabilityWarning ?? 'Current market availability may be limited.'}
@@ -91,16 +96,23 @@ export function DashboardPage() {
       ) : null}
 
       {anyPrimaryLoading ? (
-        <MetricCardSkeleton count={3} />
+        <MetricCardSkeleton count={4} />
       ) : (
         <DashboardMetricCards
           items={[
             { label: 'Top opportunities', value: `${filteredTopPicks.length}`, helper: 'Current board' },
             { label: 'Best edge', value: formatPercent(bestEdgeMarket?.probabilityEdge, { signed: true }), helper: bestEdgeMarket?.player ?? 'No active prop', valueColor: 'success.main' },
             {
-              label: 'Latest graded slate',
-              value: hasLatestGradedSlate ? latestGradedDateLabel ?? 'Pending' : 'Pending',
-              helper: hasLatestGradedSlate && overall ? formatLatestGradedHelper(overall) : 'Awaiting graded slate'
+              label: 'Latest slate',
+              value: hasLatestGradedSlate && overall ? `${overall.wins}-${overall.losses}-${overall.pushes}` : 'Pending',
+              helper: hasLatestGradedSlate && latestGradedDateLabel ? `${latestGradedDateLabel} - W-L-P` : 'Awaiting graded slate',
+              valueVariant: 'compactNumeric'
+            },
+            {
+              label: 'Latest ROI',
+              value: hasLatestGradedSlate && overall ? formatPercent(overall.roi, { signed: true }) : '-',
+              helper: hasLatestGradedSlate && overall ? `${formatPercent(overall.hitRate)} hit rate` : 'Awaiting graded slate',
+              valueColor: hasLatestGradedSlate && overall && overall.roi > 0 ? 'success.main' : undefined
             }
           ]}
         />
@@ -114,7 +126,7 @@ export function DashboardPage() {
           to="/app/top-picks"
         >
           {topPicksQuery.loading ? (
-            <MarketTableSkeleton rows={6} columns={6} minWidth={0} />
+            isMobile ? <DashboardMobileListSkeleton rows={6} ranked /> : <MarketTableSkeleton rows={6} columns={6} minWidth={0} />
           ) : topPicksQuery.error ? (
             <InlineState tone="error" message="Top opportunities could not be loaded." />
           ) : filteredTopPicks.length ? (
@@ -131,7 +143,7 @@ export function DashboardPage() {
           to="/app/line-shopping"
         >
           {lineShoppingQuery.loading ? (
-            <MarketTableSkeleton rows={5} columns={5} minWidth={0} />
+            isMobile ? <DashboardMobileListSkeleton rows={5} showProviderCount /> : <MarketTableSkeleton rows={5} columns={5} minWidth={0} />
           ) : lineShoppingQuery.error ? (
             <InlineState tone="error" message="Line-shopping edges could not be loaded." />
           ) : filteredLineMarkets.length ? (
@@ -152,12 +164,12 @@ function resolveDashboardMarketReadSport(selectedSports: SportCode[]): MarketRea
     : 'All';
 }
 
-function DashboardMetricCards({ items }: { items: Array<{ label: string; value: string; helper: string; valueColor?: string }> }) {
+function DashboardMetricCards({ items }: { items: Array<{ label: string; value: string; helper: string; valueColor?: string; valueVariant?: 'default' | 'compactNumeric' }> }) {
   return (
     <Grid container spacing={2}>
       {items.map((item) => (
-        <Grid key={item.label} size={{ xs: 6, sm: 6, lg: 4 }}>
-          <MetricCard label={item.label} value={item.value} helper={item.helper} valueColor={item.valueColor} />
+        <Grid key={item.label} size={{ xs: 6, sm: 6, lg: 3 }}>
+          <MetricCard label={item.label} value={item.value} helper={item.helper} valueColor={item.valueColor} valueVariant={item.valueVariant} />
         </Grid>
       ))}
     </Grid>
@@ -380,6 +392,62 @@ function DashboardLineShoppingRow({
   );
 }
 
+function DashboardMobileListSkeleton({
+  rows,
+  ranked = false,
+  showProviderCount = false
+}: {
+  rows: number;
+  ranked?: boolean;
+  showProviderCount?: boolean;
+}) {
+  return (
+    <Box
+      aria-busy="true"
+      sx={{
+        display: { xs: 'block', md: 'none' },
+        border: '1px solid rgba(148,163,184,.16)',
+        borderRadius: radius.table,
+        bgcolor: 'rgba(8,13,26,.28)',
+        overflow: 'hidden'
+      }}
+    >
+      {Array.from({ length: rows }).map((_, index) => (
+        <Box
+          key={index}
+          sx={{
+            p: 1.15,
+            borderBottom: index === rows - 1 ? 0 : '1px solid rgba(148,163,184,.12)'
+          }}
+        >
+          <Stack spacing={1}>
+            <Stack direction="row" justifyContent="space-between" gap={1.4} alignItems="flex-start">
+              <Box sx={{ flex: 1, minWidth: 0 }}>
+                <Stack direction="row" spacing={0.7} alignItems="center">
+                  {ranked ? <Skeleton width={24} height={18} /> : null}
+                  <Skeleton width="58%" height={22} />
+                </Stack>
+                <Skeleton width="74%" height={18} />
+              </Box>
+              <Stack spacing={0.25} alignItems="flex-end" flexShrink={0} sx={{ width: 76 }}>
+                <Skeleton width="100%" height={22} />
+                <Skeleton width="72%" height={16} />
+              </Stack>
+            </Stack>
+
+            <Stack direction="row" justifyContent="space-between" alignItems="center" gap={1}>
+              <Skeleton width={120} height={24} />
+              {showProviderCount ? <Skeleton width={78} height={16} /> : null}
+            </Stack>
+
+            <Skeleton variant="rounded" width="100%" height={32} sx={{ borderRadius: radius.control }} />
+          </Stack>
+        </Box>
+      ))}
+    </Box>
+  );
+}
+
 function DashboardMobileList({
   markets,
   ranked = false,
@@ -526,10 +594,6 @@ function getProviderCount(market: MarketOpportunity) {
 
 function formatPrice(value?: number | null) {
   return value && Number.isFinite(value) ? formatAmericanOdds(value) : 'Price n/a';
-}
-
-function formatLatestGradedHelper(row: { wins: number; losses: number; pushes: number; hitRate: number; roi: number }) {
-  return `${row.wins}-${row.losses}-${row.pushes} - ${formatPercent(row.hitRate)} - ${formatPercent(row.roi, { signed: true })}`;
 }
 
 function formatDateShort(value?: string | null) {

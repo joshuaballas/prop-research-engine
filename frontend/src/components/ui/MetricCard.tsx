@@ -6,9 +6,12 @@ interface MetricCardProps {
   value: string;
   helper?: string;
   valueColor?: string;
+  valueVariant?: 'default' | 'compactNumeric';
 }
 
-export function MetricCard({ label, value, helper, valueColor }: MetricCardProps) {
+export function MetricCard({ label, value, helper, valueColor, valueVariant = 'default' }: MetricCardProps) {
+  const compactNumeric = valueVariant === 'compactNumeric';
+
   return (
     <AppCard
       sx={{
@@ -43,11 +46,16 @@ export function MetricCard({ label, value, helper, valueColor }: MetricCardProps
           fontWeight={950}
           color={valueColor}
           sx={{
-            fontSize: { xs: 'clamp(1.45rem, 8vw, 2rem)', sm: 'clamp(1.65rem, 4vw, 2.125rem)' },
+            fontSize: compactNumeric
+              ? { xs: 'clamp(1.05rem, 5.3vw, 1.45rem)', sm: 'clamp(1.3rem, 3vw, 1.7rem)', md: 'clamp(1.35rem, 2vw, 1.85rem)' }
+              : { xs: 'clamp(1.45rem, 8vw, 2rem)', sm: 'clamp(1.65rem, 4vw, 2.125rem)' },
             lineHeight: 1.08,
             letterSpacing: 0,
-            whiteSpace: 'nowrap',
+            fontVariantNumeric: compactNumeric ? 'tabular-nums' : undefined,
+            whiteSpace: compactNumeric ? 'normal' : 'nowrap',
+            overflowWrap: compactNumeric ? 'anywhere' : undefined,
             overflow: 'visible',
+            minWidth: 0,
             maxWidth: '100%',
             pr: 0.5
           }}

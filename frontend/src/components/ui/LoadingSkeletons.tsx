@@ -9,7 +9,7 @@ export function MetricCardSkeleton({ count = 3 }: { count?: number }) {
   return (
     <Grid container spacing={2} aria-busy="true">
       {Array.from({ length: count }).map((_, index) => (
-        <Grid key={index} size={{ xs: 6, sm: 6, lg: count >= 5 ? 2.4 : 4 }}>
+        <Grid key={index} size={{ xs: 6, sm: 6, lg: count >= 5 ? 2.4 : count === 4 ? 3 : 4 }}>
           <AppCard contentSx={{ minHeight: 118, p: { xs: 1.4, md: 1.7 }, '&:last-child': { pb: { xs: 1.4, md: 1.7 } } }}>
             <Stack spacing={1.25} sx={{ height: '100%', justifyContent: 'space-between' }}>
               <Skeleton width="52%" height={16} />
