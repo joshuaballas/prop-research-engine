@@ -1,6 +1,10 @@
 import HelpOutlineRoundedIcon from '@mui/icons-material/HelpOutlineRounded';
-import { Avatar, Box, Button, Stack, Tooltip, Typography } from '@mui/material';
+import LogoutRoundedIcon from '@mui/icons-material/LogoutRounded';
+import ManageAccountsOutlinedIcon from '@mui/icons-material/ManageAccountsOutlined';
+import PaymentOutlinedIcon from '@mui/icons-material/PaymentOutlined';
+import { Avatar, Box, Button, Divider, IconButton, ListItemIcon, Menu, MenuItem, Stack, Tooltip, Typography } from '@mui/material';
 import { useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { GlossaryDialog } from '../glossary/GlossaryDialog';
 import type { MarketReadinessDto } from '../../api/types';
 import { useAppAuth } from '../../auth/AppAuthProvider';
@@ -11,11 +15,30 @@ import { radius } from '../../theme/radius';
 
 export function AppTopBar() {
   const [glossaryOpen, setGlossaryOpen] = useState(false);
+  const [profileAnchorEl, setProfileAnchorEl] = useState<HTMLElement | null>(null);
+  const navigate = useNavigate();
   const auth = useAppAuth();
   const freshnessQuery = useMarketFreshnessData(['app-top-bar-live-data']);
   const freshness = freshnessQuery.data;
   const liveDataState = resolveLiveDataState(freshness, Boolean(freshnessQuery.error));
   const userInitial = (auth.user?.displayName || auth.user?.email || 'U').trim()[0]?.toUpperCase() ?? 'U';
+  const profileMenuOpen = Boolean(profileAnchorEl);
+  const displayName = auth.user?.displayName?.trim();
+  const email = auth.user?.email?.trim();
+  const accountLabel = displayName || email || 'Account';
+  const secondaryAccountLabel = displayName && email ? email : undefined;
+
+  const closeProfileMenu = () => setProfileAnchorEl(null);
+
+  const navigateFromProfileMenu = (path: string) => {
+    closeProfileMenu();
+    navigate(path);
+  };
+
+  const handleSignOut = async () => {
+    closeProfileMenu();
+    await auth.signOut();
+  };
 
   return (
     <>
@@ -62,17 +85,82 @@ export function AppTopBar() {
               Demo data
             </Typography>
           ) : null}
-          <Avatar sx={{ width: 34, height: 34 }}>{userInitial}</Avatar>
-          <Button
-            variant="text"
-            size="small"
-            onClick={() => void auth.signOut()}
-            sx={{ color: 'text.secondary', fontWeight: 850, minWidth: 0, px: { xs: 0.5, sm: 1 } }}
-          >
-            Sign out
-          </Button>
+          <Tooltip title="Account menu" arrow>
+            <IconButton
+              aria-label="Open account menu"
+              aria-controls={profileMenuOpen ? 'top-bar-profile-menu' : undefined}
+              aria-haspopup="menu"
+              aria-expanded={profileMenuOpen ? 'true' : undefined}
+              onClick={(event) => setProfileAnchorEl(event.currentTarget)}
+              size="small"
+              sx={{
+                p: 0.25,
+                borderRadius: radius.circle,
+                color: 'text.primary',
+                '&:hover': { bgcolor: 'rgba(148,163,184,.12)' },
+                '&:focus-visible': {
+                  outline: `2px solid ${palette.primary}`,
+                  outlineOffset: 2
+                }
+              }}
+            >
+              <Avatar sx={{ width: 34, height: 34 }}>{userInitial}</Avatar>
+            </IconButton>
+          </Tooltip>
         </Stack>
       </Stack>
+      <Menu
+        id="top-bar-profile-menu"
+        anchorEl={profileAnchorEl}
+        open={profileMenuOpen}
+        onClose={closeProfileMenu}
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
+        transformOrigin={{ vertical: 'top', horizontal: 'right' }}
+        PaperProps={{
+          sx: {
+            mt: 1,
+            minWidth: 240,
+            borderRadius: radius.card,
+            border: `1px solid ${palette.border}`,
+            bgcolor: '#080D1A',
+            backgroundImage: 'none',
+            color: 'text.primary',
+            boxShadow: '0 22px 60px rgba(0,0,0,.45)'
+          }
+        }}
+        MenuListProps={{ 'aria-label': 'Account menu' }}
+      >
+        <Box sx={{ px: 1.75, py: 1.4, maxWidth: 280 }}>
+          <Typography fontWeight={950} noWrap>
+            {accountLabel}
+          </Typography>
+          {secondaryAccountLabel ? (
+            <Typography variant="body2" color="text.secondary" noWrap>
+              {secondaryAccountLabel}
+            </Typography>
+          ) : null}
+        </Box>
+        <Divider sx={{ borderColor: palette.border }} />
+        <MenuItem onClick={() => navigateFromProfileMenu('/app/account')}>
+          <ListItemIcon sx={{ color: 'text.secondary', minWidth: 34 }}>
+            <ManageAccountsOutlinedIcon fontSize="small" />
+          </ListItemIcon>
+          Account
+        </MenuItem>
+        <MenuItem onClick={() => navigateFromProfileMenu('/app/billing')}>
+          <ListItemIcon sx={{ color: 'text.secondary', minWidth: 34 }}>
+            <PaymentOutlinedIcon fontSize="small" />
+          </ListItemIcon>
+          Billing
+        </MenuItem>
+        <Divider sx={{ borderColor: palette.border }} />
+        <MenuItem onClick={() => void handleSignOut()} sx={{ color: palette.danger }}>
+          <ListItemIcon sx={{ color: 'inherit', minWidth: 34 }}>
+            <LogoutRoundedIcon fontSize="small" />
+          </ListItemIcon>
+          Sign out
+        </MenuItem>
+      </Menu>
       <GlossaryDialog open={glossaryOpen} onClose={() => setGlossaryOpen(false)} />
     </>
   );
