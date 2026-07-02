@@ -9,7 +9,6 @@ export const mockPricingPlans: PricingPlan[] = [
     currency: 'USD',
     billingInterval: 'month',
     features: ['Top picks board', 'Provider filters', 'Basic performance summaries', 'Freshness status'],
-    entitlements: ['1 seat', '10 saved entries', 'Daily snapshot history'],
     checkoutPlanCode: 'starter_monthly'
   },
   {
@@ -19,7 +18,6 @@ export const mockPricingPlans: PricingPlan[] = [
     priceCents: 4900,
     currency: 'USD',
     billingInterval: 'month',
-    badgeText: 'Most popular',
     isFeatured: true,
     features: [
       'Multi-sport market scanner',
@@ -28,7 +26,6 @@ export const mockPricingPlans: PricingPlan[] = [
       'Line-shopping comparison views',
       'Performance breakdowns'
     ],
-    entitlements: ['3 seats', 'Unlimited saved entries', 'Advanced filters', 'Priority freshness alerts'],
     checkoutPlanCode: 'research_pro_monthly'
   },
   {
@@ -39,7 +36,6 @@ export const mockPricingPlans: PricingPlan[] = [
     currency: 'USD',
     billingInterval: 'month',
     features: ['Team workspaces', 'Exportable performance views', 'Provider coverage reports', 'Advanced support'],
-    entitlements: ['10 seats', 'Shared watchlists', 'Custom provider presets'],
     checkoutPlanCode: 'studio_monthly'
   }
 ];

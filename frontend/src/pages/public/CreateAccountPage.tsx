@@ -1,14 +1,74 @@
-import WorkspacePremiumOutlinedIcon from '@mui/icons-material/WorkspacePremiumOutlined';
 import { SignUp } from '@clerk/clerk-react';
 import { Box, Button, Stack, Typography } from '@mui/material';
+import { useMemo } from 'react';
 import { Link as RouterLink, Navigate, useSearchParams } from 'react-router-dom';
+import { getPublicPlans } from '../../api/billing';
+import { mapPlanDtoToPricingPlan } from '../../api/planMappers';
+import { useApiQuery } from '../../api/useApiQuery';
 import { AuthSetupState } from '../../auth/AuthSetupState';
 import { AuthFormSkeleton, authFormSlotMinHeight } from '../../auth/AuthFormSkeleton';
 import { clerkSignInUrl, useAppAuth } from '../../auth/AppAuthProvider';
 import { clerkAppearance } from '../../auth/clerkAppearance';
-import { AppCard } from '../../components/ui/AppCard';
-import { palette } from '../../theme/palette';
-import { radius } from '../../theme/radius';
+import { planSelectionCode } from '../../components/billing/PlanCard';
+import { AccountFunnelCard } from '../../components/auth/AccountFunnelCard';
+import { formatCurrency } from '../../utils/formatters';
+
+const accountFormRailMaxWidth = 440;
+const signUpRailAppearance = {
+  ...clerkAppearance,
+  elements: {
+    ...clerkAppearance.elements,
+    rootBox: {
+      ...clerkAppearance.elements.rootBox,
+      width: '100%',
+      maxWidth: '100%',
+      marginInline: 'auto'
+    },
+    cardBox: {
+      ...clerkAppearance.elements.cardBox,
+      width: '100%',
+      maxWidth: '100%'
+    },
+    card: {
+      ...clerkAppearance.elements.card,
+      width: '100%',
+      maxWidth: '100%',
+      padding: '0'
+    },
+    main: {
+      ...clerkAppearance.elements.main,
+      width: '100%',
+      maxWidth: '100%',
+      padding: '0'
+    },
+    form: {
+      ...clerkAppearance.elements.form,
+      width: '100%',
+      maxWidth: '100%'
+    },
+    formField: {
+      ...clerkAppearance.elements.formField,
+      width: '100%',
+      maxWidth: '100%'
+    },
+    formFieldRow: {
+      ...clerkAppearance.elements.formFieldRow,
+      width: '100%',
+      maxWidth: '100%'
+    },
+    formButtonPrimary: {
+      ...clerkAppearance.elements.formButtonPrimary,
+      width: '100%',
+      maxWidth: '100%'
+    },
+    footer: {
+      ...clerkAppearance.elements.footer,
+      width: '100%',
+      maxWidth: '100%',
+      paddingInline: '0'
+    }
+  }
+} as const;
 
 export function CreateAccountPage() {
   const auth = useAppAuth();
@@ -18,7 +78,23 @@ export function CreateAccountPage() {
   const selectedPlanLabel = formatSelectedPlanLabel(selectedPlan);
   const billingReturnPath = buildBillingReturnPath(selectedPlan, selectedInterval);
   const returnTo = readSafeAppRedirect(searchParams) ?? billingReturnPath;
-
+  const plansQuery = useApiQuery(getPublicPlans);
+  const plans = useMemo(() => plansQuery.data?.plans.map(mapPlanDtoToPricingPlan) ?? [], [plansQuery.data?.plans]);
+  const selectedPlanDetails = useMemo(() => {
+    const normalized = selectedPlan.trim().toLowerCase();
+    return plans.find((plan) => [plan.code, plan.slug, plan.checkoutPlanCode, planSelectionCode(plan)]
+      .filter(Boolean)
+      .some((value) => value?.toLowerCase() === normalized));
+  }, [plans, selectedPlan]);
+  const selectedPlanPrice = selectedPlanDetails
+    ? selectedPlanDetails.priceCents > 0
+      ? `${formatCurrency(selectedPlanDetails.priceCents)}/${formatBillingIntervalForPrice(selectedPlanDetails.billingInterval)}`
+      : '$0/month'
+    : selectedPlanLabel.toLowerCase() === 'free'
+      ? '$0/month'
+      : selectedPlanLabel.toLowerCase() === 'pro'
+        ? '$29/month'
+        : null;
   if (!auth.authConfigured) {
     return <AuthSetupState title="Account setup needed" />;
   }
@@ -28,42 +104,15 @@ export function CreateAccountPage() {
   }
 
   return (
-    <AppCard
-      sx={{
-        maxWidth: 540,
-        ml: { md: 'auto' },
-        backgroundColor: palette.cardSurface,
-        borderColor: 'rgba(125,211,252,.22)',
-        boxShadow: '0 24px 80px rgba(0,0,0,.35)'
-      }}
-    >
-      <Stack spacing={2.2}>
-        <Stack spacing={0.8}>
-          <Typography variant="h4">Create your account</Typography>
-          <Typography color="text.secondary">Start with prop research, provider line context, and entry review.</Typography>
-        </Stack>
-
+    <AccountFunnelCard maxWidth={560} contentMaxWidth={accountFormRailMaxWidth}>
+      <Stack spacing={2.1} sx={{ width: '100%' }}>
         {selectedPlan ? (
-          <Box
-            sx={{
-              p: 1.5,
-              borderRadius: radius.featuredCard,
-              border: '1px solid rgba(34,211,238,.2)',
-              bgcolor: 'rgba(34,211,238,.06)'
-            }}
-          >
-            <Stack direction="row" spacing={1.3} alignItems="flex-start">
-              <WorkspacePremiumOutlinedIcon color="primary" />
-              <Box>
-                <Typography fontWeight={950}>Selected plan: {selectedPlanLabel}</Typography>
-                <Typography variant="body2" color="text.secondary">
-                  You can review plan setup after sign-up.
-                </Typography>
-              </Box>
-            </Stack>
-          </Box>
+          <SelectedPlanSummary
+            planName={selectedPlanDetails?.name ?? selectedPlanLabel}
+            price={selectedPlanPrice}
+          />
         ) : (
-          <Button component={RouterLink} to="/pricing" variant="outlined">
+          <Button component={RouterLink} to="/pricing" variant="outlined" fullWidth>
             View plans
           </Button>
         )}
@@ -75,14 +124,55 @@ export function CreateAccountPage() {
               path="/create-account"
               signInUrl={clerkSignInUrl}
               fallbackRedirectUrl={billingReturnPath}
-              appearance={clerkAppearance}
+              appearance={signUpRailAppearance}
             />
           ) : (
             <AuthFormSkeleton variant="signUp" />
           )}
         </Box>
       </Stack>
-    </AppCard>
+    </AccountFunnelCard>
+  );
+}
+
+function SelectedPlanSummary({ planName, price }: { planName: string; price: string | null }) {
+  return (
+    <Box
+      sx={{
+        width: '100%',
+        py: 1.25,
+        borderTop: '1px solid rgba(148,163,184,.18)',
+        borderBottom: '1px solid rgba(148,163,184,.18)'
+      }}
+    >
+      <Stack spacing={0.65}>
+        <Stack direction="row" justifyContent="space-between" gap={1.5} alignItems="flex-start">
+          <Box>
+            <Typography variant="caption" color="text.secondary" fontWeight={900}>
+              SELECTED PLAN
+            </Typography>
+            <Typography fontWeight={950}>{planName}</Typography>
+          </Box>
+          <Box sx={{ textAlign: 'right', flexShrink: 0 }}>
+            <Typography fontWeight={950}>{price ?? 'Selected'}</Typography>
+          </Box>
+        </Stack>
+        <Typography
+          component={RouterLink}
+          to="/pricing"
+          variant="body2"
+          sx={{
+            color: 'primary.main',
+            fontWeight: 850,
+            textDecoration: 'none',
+            width: 'fit-content',
+            '&:hover': { textDecoration: 'underline' }
+          }}
+        >
+          Change plan
+        </Typography>
+      </Stack>
+    </Box>
   );
 }
 
@@ -110,6 +200,20 @@ function buildBillingReturnPath(plan: string, interval: string) {
 
   const query = new URLSearchParams({ plan, interval });
   return `/app/billing?${query.toString()}`;
+}
+
+function formatBillingIntervalForPrice(interval: string) {
+  const normalized = interval.trim().toLowerCase();
+
+  if (normalized === 'monthly') {
+    return 'month';
+  }
+
+  if (normalized === 'yearly' || normalized === 'annual' || normalized === 'annually') {
+    return 'year';
+  }
+
+  return normalized || 'month';
 }
 
 function readSafeAppRedirect(searchParams: URLSearchParams) {

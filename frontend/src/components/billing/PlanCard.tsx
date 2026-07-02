@@ -1,12 +1,11 @@
 import CheckCircleRoundedIcon from '@mui/icons-material/CheckCircleRounded';
-import { Button, Card, CardContent, Chip, Divider, Stack, Typography } from '@mui/material';
+import { Box, Button, Card, CardContent, Divider, Stack, Typography } from '@mui/material';
 import { Link as RouterLink } from 'react-router-dom';
 import { useAppAuth } from '../../auth/AppAuthProvider';
 import type { PricingPlan } from '../../types/billing';
 import { palette } from '../../theme/palette';
 import { radius } from '../../theme/radius';
 import { formatCurrency } from '../../utils/formatters';
-import { StatusPill } from '../ui/StatusPill';
 
 export function planSelectionCode(plan: PricingPlan) {
   return plan.checkoutPlanCode || plan.slug || plan.code || plan.name.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '');
@@ -28,7 +27,6 @@ export function PlanCard({ plan }: { plan: PricingPlan }) {
         width: '100%',
         display: 'flex',
         flexDirection: 'column',
-        position: 'relative',
         overflow: 'hidden',
         borderRadius: radius.featuredCard,
         border: `1px solid ${isFeatured ? 'rgba(34,211,238,.62)' : 'rgba(148,163,184,.18)'}`,
@@ -39,10 +37,8 @@ export function PlanCard({ plan }: { plan: PricingPlan }) {
     >
       <CardContent
         sx={{
-          position: 'relative',
-          zIndex: 1,
           p: 2.25,
-          pb: '150px !important',
+          '&:last-child': { pb: 2.25 },
           display: 'flex',
           flex: 1,
           flexDirection: 'column',
@@ -51,28 +47,21 @@ export function PlanCard({ plan }: { plan: PricingPlan }) {
       >
         <Stack spacing={2} sx={{ flex: 1, minHeight: 0 }}>
           <Stack spacing={1.2}>
-            <Stack direction="row" justifyContent="space-between" alignItems="center" gap={1}>
-              <Typography variant="h5">{plan.name}</Typography>
-              {plan.badgeText ? <StatusPill label={plan.badgeText} /> : null}
-            </Stack>
+            <Typography variant="h5">{plan.name}</Typography>
             <Typography color="text.secondary" minHeight={48}>
               {plan.description}
             </Typography>
           </Stack>
 
-          <Stack spacing={0.5}>
-            <Typography variant="h3" lineHeight={1}>
-              {formatCurrency(plan.priceCents)}
-              <Typography component="span" color="text.secondary" variant="body2" fontWeight={800}>
-                /{plan.billingInterval}
-              </Typography>
+          <Typography variant="h3" lineHeight={1}>
+            {formatCurrency(plan.priceCents)}
+            <Typography component="span" color="text.secondary" variant="body2" fontWeight={800}>
+              /{plan.billingInterval}
             </Typography>
-            <Typography variant="caption" color="text.secondary">
-              Plan structure shown for future billing.
-            </Typography>
-          </Stack>
+          </Typography>
 
           <Divider />
+
           <Stack spacing={1.05}>
             {plan.features.map((feature) => (
               <Stack key={feature} direction="row" spacing={1.1} alignItems="flex-start">
@@ -84,48 +73,22 @@ export function PlanCard({ plan }: { plan: PricingPlan }) {
             ))}
           </Stack>
 
+          <Box sx={{ flex: 1 }} />
+
+          <Stack spacing={1.5}>
+            <Divider />
+            <Button
+              component={RouterLink}
+              to={targetPath}
+              variant={isFeatured ? 'contained' : 'outlined'}
+              size="large"
+              fullWidth
+            >
+              Select {plan.name}
+            </Button>
+          </Stack>
         </Stack>
       </CardContent>
-
-      <Stack
-        spacing={1.5}
-        sx={{
-          position: 'absolute',
-          left: 18,
-          right: 18,
-          bottom: 18,
-          zIndex: 2
-        }}
-      >
-        <Divider />
-        <Stack direction="row" flexWrap="wrap" gap={0.8} useFlexGap>
-          {plan.entitlements.map((entitlement) => (
-            <Chip
-              key={entitlement}
-              label={entitlement}
-              size="small"
-              sx={{
-                height: 26,
-                borderRadius: radius.card,
-                color: 'text.secondary',
-                bgcolor: 'rgba(8,13,26,.46)',
-                border: '1px solid rgba(148,163,184,.14)',
-                '& .MuiChip-label': { px: 1, fontWeight: 800 }
-              }}
-            />
-          ))}
-        </Stack>
-
-        <Button
-          component={RouterLink}
-          to={targetPath}
-          variant={isFeatured ? 'contained' : 'outlined'}
-          size="large"
-          fullWidth
-        >
-          Select {plan.name}
-        </Button>
-      </Stack>
     </Card>
   );
 }

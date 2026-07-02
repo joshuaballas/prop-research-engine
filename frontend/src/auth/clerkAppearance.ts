@@ -103,13 +103,26 @@ export const clerkAppearance = {
       color: palette.textMuted
     },
     main: {
+      width: '100%',
       color: palette.text
+    },
+    form: {
+      width: '100%'
+    },
+    formField: {
+      width: '100%'
+    },
+    formFieldRow: {
+      width: '100%',
+      gap: '0.75rem'
     },
     formFieldLabel: {
       color: palette.textMuted,
       fontWeight: 850
     },
     formFieldInput: {
+      width: '100%',
+      boxSizing: 'border-box',
       minHeight: '42px',
       backgroundColor: 'rgba(8,13,26,.76)',
       border: subtleBorder,
@@ -142,6 +155,7 @@ export const clerkAppearance = {
       fontWeight: 850
     },
     formButtonPrimary: {
+      width: '100%',
       minHeight: '38px',
       paddingInline: '18px',
       backgroundColor: appPrimaryButtonBackground,
@@ -198,6 +212,7 @@ export const clerkAppearance = {
       fontWeight: 800
     },
     footer: {
+      width: '100%',
       background: 'transparent',
       borderTop: subtleBorder
     },

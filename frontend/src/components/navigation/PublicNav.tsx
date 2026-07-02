@@ -1,9 +1,12 @@
 import AutoGraphOutlinedIcon from '@mui/icons-material/AutoGraphOutlined';
 import { AppBar, Box, Button, Container, Stack, Toolbar, Typography } from '@mui/material';
-import { Link as RouterLink } from 'react-router-dom';
+import { Link as RouterLink, useLocation } from 'react-router-dom';
 import { radius } from '../../theme/radius';
 
 export function PublicNav() {
+  const location = useLocation();
+  const isPricingRoute = location.pathname === '/pricing';
+
   return (
     <AppBar position="sticky" elevation={0} color="transparent" sx={{ bgcolor: '#070B14', borderBottom: '1px solid rgba(148,163,184,.12)' }}>
       <Container maxWidth="xl">
@@ -16,19 +19,18 @@ export function PublicNav() {
               <Typography variant="h6" lineHeight={1} sx={{ fontWeight: 950 }}>
                 SportsBetting
               </Typography>
-              <Typography variant="caption" color="text.secondary" sx={{ display: { xs: 'none', md: 'block' } }}>
-                Prop research platform
-              </Typography>
             </Box>
           </Stack>
           <Box flex={1} />
-          <Stack direction="row" spacing={1} sx={{ display: { xs: 'none', sm: 'flex' } }}>
-            <Button component={RouterLink} to="/sign-in" color="inherit">
+          <Stack direction="row" spacing={1.5} alignItems="center" sx={{ display: { xs: 'none', sm: 'flex' } }}>
+            <Button component={RouterLink} to="/sign-in" color="inherit" variant="text">
               Sign in
             </Button>
-            <Button component={RouterLink} to="/pricing" variant="contained">
-              View Plans
-            </Button>
+            {!isPricingRoute ? (
+              <Button component={RouterLink} to="/pricing" variant="contained">
+                View Plans
+              </Button>
+            ) : null}
           </Stack>
         </Toolbar>
       </Container>

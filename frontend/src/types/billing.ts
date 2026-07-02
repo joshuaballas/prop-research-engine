@@ -6,9 +6,7 @@ export interface PricingPlan {
   priceCents: number;
   currency: 'USD';
   billingInterval: 'month' | 'year';
-  badgeText?: string;
   isFeatured?: boolean;
   features: string[];
-  entitlements: string[];
   checkoutPlanCode: string;
 }
