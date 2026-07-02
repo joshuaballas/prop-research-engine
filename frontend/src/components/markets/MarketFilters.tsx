@@ -94,11 +94,31 @@ export function MarketFilters({
     name: `${idPrefix}-${variant}-${key}`
   });
 
+  const selectAccessibilityProps = (key: keyof MarketFilterValues, variant: 'mobile' | 'desktop') => {
+    const inputId = `${idPrefix}-${variant}-${key}`;
+    const labelId = `${inputId}-label`;
+    return {
+      id: `${inputId}-select`,
+      name: inputId,
+      InputLabelProps: {
+        id: labelId,
+        htmlFor: inputId
+      },
+      SelectProps: {
+        labelId,
+        inputProps: {
+          id: inputId,
+          name: inputId
+        }
+      }
+    };
+  };
+
   const renderSelectControls = (variant: 'mobile' | 'desktop') => (
     <>
       {scannerFields ? (
         <TextField
-          {...accessibilityProps('sport', variant)}
+          {...selectAccessibilityProps('sport', variant)}
           label="Sport"
           size="small"
           select
@@ -114,7 +134,7 @@ export function MarketFilters({
       ) : null}
       {scannerFields ? (
         <TextField
-          {...accessibilityProps('provider', variant)}
+          {...selectAccessibilityProps('provider', variant)}
           label="Provider"
           size="small"
           select
@@ -130,7 +150,7 @@ export function MarketFilters({
       ) : null}
       {(providerCategoryOptions?.length ?? 0) > 2 || !controlled ? (
         <TextField
-          {...accessibilityProps('providerCategory', variant)}
+          {...selectAccessibilityProps('providerCategory', variant)}
           label="Provider category"
           size="small"
           select
@@ -146,7 +166,7 @@ export function MarketFilters({
       ) : null}
       {showClassificationFilter ? (
         <TextField
-          {...accessibilityProps('trust', variant)}
+          {...selectAccessibilityProps('trust', variant)}
           label={classificationLabel}
           size="small"
           select
@@ -164,7 +184,7 @@ export function MarketFilters({
         <>
           {showOpportunityFilter && ((opportunityOptions?.length ?? 0) > 1 || !controlled) ? (
             <TextField
-              {...accessibilityProps('opportunity', variant)}
+              {...selectAccessibilityProps('opportunity', variant)}
               label="Opportunity"
               size="small"
               select
@@ -179,7 +199,7 @@ export function MarketFilters({
             </TextField>
           ) : null}
           <TextField
-            {...accessibilityProps('sort', variant)}
+            {...selectAccessibilityProps('sort', variant)}
             label="Sort"
             size="small"
             select
