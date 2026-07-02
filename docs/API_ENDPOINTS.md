@@ -6,7 +6,7 @@ Base URL for local examples:
 http://localhost:5299
 ```
 
-Most endpoints below are debug/admin endpoints. They are available by default in Development. Outside Development, `/api/debug/*` requires `DebugAdmin` to be enabled and may require `X-Debug-Admin-Key`.
+Most endpoints below are debug/admin or signed-in member endpoints. Clerk-backed member routes require `Authorization: Bearer <Clerk session JWT>`. `/api/debug/*` and `/research` require Owner/Admin, except in Development when `Auth:AllowAnonymousDebugInDevelopment=true`.
 
 Legend:
 
@@ -28,6 +28,27 @@ Example:
 ```powershell
 Invoke-RestMethod -Uri "http://localhost:5299/health/ready"
 ```
+
+## Auth, Plans, And Billing
+
+Public plans are anonymous and read from local DB plan tables. Member/account/billing/checkout routes require a valid Clerk JWT. Admin plan-management routes require local app role `Owner` or `Admin`.
+
+| Method | Path | Purpose | Writes | External API | Credits |
+| --- | --- | --- | --- | --- | --- |
+| GET | `/api/plans` | Public active DB-backed plans and features for Pricing. | No | No | No |
+| GET | `/api/me` | Syncs the authenticated Clerk subject to `app_users` and returns local user/billing state. | Yes | No | No |
+| GET | `/api/account` | Authenticated local app user profile. | No | No | No |
+| GET | `/api/billing` | Authenticated current plan state, available plans, and checkout intents. | No | No | No |
+| POST | `/api/billing/select-plan` | Selects a local plan; free plans can activate, paid plans become pending checkout. | Yes | No | No |
+| POST | `/api/checkout/intents` | Creates a local checkout intent. Paid plans return `RequiresExternalProcessor` for future Stripe handoff. | Yes | No | No |
+| GET | `/api/checkout/intents/{id}` | Reads one checkout intent for the same user or admin/owner. | No | No | No |
+| GET | `/api/admin/plans` | Owner/Admin local plan catalog management. | No | No | No |
+| POST | `/api/admin/plans` | Owner/Admin creates a local plan row. | Yes | No | No |
+| PUT | `/api/admin/plans/{id}` | Owner/Admin updates a local plan row. | Yes | No | No |
+| POST | `/api/admin/plans/{id}/features` | Owner/Admin adds a plan feature. | Yes | No | No |
+| PUT | `/api/admin/plan-features/{id}` | Owner/Admin updates a plan feature. | Yes | No | No |
+
+See [AUTH_AND_BILLING.md](AUTH_AND_BILLING.md) for Clerk configuration, roles/status, local plan tables, checkout intent semantics, and verification commands.
 
 ## System Health And Errors
 
@@ -119,7 +140,7 @@ The Odds API is a data provider/aggregator. Persist actual bookmakers as platfor
 
 ## Production-Safe Market Read Endpoints
 
-These routes are intended for the customer frontend/public surface. They never call The Odds API, never call direct Underdog, and never write rows. They read the latest persisted odds, prediction, line-shopping, top-pick, and refresh metadata populated by controlled backend refreshes.
+These routes are intended for the signed-in customer frontend surface. They require Clerk bearer auth, never call The Odds API, never call direct Underdog, and never write rows. They read the latest persisted odds, prediction, line-shopping, top-pick, and refresh metadata populated by controlled backend refreshes.
 
 Prefer `/api/markets/*` for frontend work. `/api/mlb/*` remains as compatibility wrappers around the same implementation with `sport=MLB`. Do not add separate duplicated endpoint families such as `/api/nba/*` or `/api/ufc/*` unless there is a specific reason; add new sports behind `/api/markets/*` with sport filters instead.
 

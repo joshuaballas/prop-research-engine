@@ -1,20 +1,24 @@
 # Architecture
 
-SportsBetting is an ASP.NET Core API with a PostgreSQL persistence layer and a static internal research dashboard. The app is currently MLB-first, but the platform/provider model is designed to support additional sports and books later.
+SportsBetting is an ASP.NET Core API with a PostgreSQL persistence layer, a Clerk-backed customer frontend, and a static internal research dashboard. The app supports persisted MLB and Soccer / World Cup market workflows, with plan/billing state scaffolded locally for later Stripe integration.
 
 ## Runtime Shape
 
 ```text
 Browser
+  -> public marketing/auth pages
+  -> signed-in /app customer routes with Clerk session JWTs
   -> /research static dashboard
   -> /api/debug/* internal/admin endpoints
 
 ASP.NET Core API
+  -> Clerk JWT validation
   -> EF Core / PostgreSQL
   -> background workers
   -> provider HTTP clients
 
 External providers
+  -> Clerk
   -> The Odds API
   -> Underdog Fantasy
   -> MLB Stats API
@@ -33,6 +37,7 @@ Important folders:
 - `Ingestion`: shared ingestion/player resolution worker infrastructure.
 - `Predictions`: feature generation, baseline prediction generation, probability prototype, alias lookup.
 - `Diagnostics`: debug/admin protection and persistent error logging support.
+- `Auth`: Clerk JWT options, local app-user sync, path authorization, local plan/billing services, and testing auth.
 - `wwwroot/research`: static internal research dashboard.
 
 ## Database
@@ -45,6 +50,7 @@ Important table families:
 - market storage: `platforms`, `props`, `platform_props`, `prop_line_snapshots`, `raw_ingestion_payloads`
 - result storage: `prop_results`, `mlb_result_import_states`, `mlb_result_import_date_states`
 - prediction storage: `prediction_runs`, `predictions`, `prediction_run_skip_counts`
+- auth/billing: `app_users`, `plans`, `plan_features`, `user_plan_states`, `checkout_intents`
 - operations: `application_errors`, `ingestion_runs`
 
 See [DATA_MODEL.md](DATA_MODEL.md) for details.
@@ -72,20 +78,15 @@ Dashboard sections include:
 
 The dashboard must not call The Odds API on page load. Buttons that call The Odds API should be explicit and labeled because they spend credits.
 
-## Debug/Admin Protection
+## Auth And API Protection
 
-`DebugAdminProtectionMiddleware` protects:
+Clerk session JWTs are validated by ASP.NET Core JWT bearer authentication. The backend maps trusted token claims to local `app_users` rows by `(external_auth_provider, external_subject_id)`, updates `last_seen_at_utc`, and uses local role/status for application authorization. Disabled local users receive 403 from member endpoints even when Clerk authentication succeeds.
 
-- `/research`
-- `/api/debug/*`
+Anonymous API surface is intentionally small: health and `GET /api/plans`. Signed-in member endpoints include `/api/me`, `/api/account`, `/api/billing`, `/api/checkout/*`, `/api/markets/*`, `/api/mlb/*`, `/api/dfs/*`, and `/api/players/*`. Owner/Admin endpoints include `/api/admin/*`, `/api/debug/*`, and `/research`. In Development, debug/research can be anonymous only when `Auth:AllowAnonymousDebugInDevelopment=true`.
 
-In Development, behavior stays open for local work. Outside Development:
+Local plan data lives in `plans` and `plan_features`; user state lives in `user_plan_states`; checkout handoff records live in `checkout_intents`. Stripe is not integrated yet, so paid checkout intents return `RequiresExternalProcessor` and do not activate paid access.
 
-- if `DebugAdmin.Enabled=false`, protected routes return 404;
-- if `DebugAdmin.Enabled=true` and `RequireApiKey=true`, requests must include `X-Debug-Admin-Key`;
-- the key must not be logged or returned.
-
-Normal public/future API routes are not meant to be protected by this middleware unless they use `/api/debug/*`.
+See [AUTH_AND_BILLING.md](AUTH_AND_BILLING.md) for configuration and verification details.
 
 ## Provider Integrations
 

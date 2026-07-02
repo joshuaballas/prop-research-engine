@@ -1,6 +1,7 @@
 import CheckCircleRoundedIcon from '@mui/icons-material/CheckCircleRounded';
 import { Button, Card, CardContent, Chip, Divider, Stack, Typography } from '@mui/material';
 import { Link as RouterLink } from 'react-router-dom';
+import { useAppAuth } from '../../auth/AppAuthProvider';
 import type { PricingPlan } from '../../types/billing';
 import { palette } from '../../theme/palette';
 import { radius } from '../../theme/radius';
@@ -8,11 +9,16 @@ import { formatCurrency } from '../../utils/formatters';
 import { StatusPill } from '../ui/StatusPill';
 
 export function planSelectionCode(plan: PricingPlan) {
-  return plan.name.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '');
+  return plan.checkoutPlanCode || plan.slug || plan.code || plan.name.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '');
 }
 
 export function PlanCard({ plan }: { plan: PricingPlan }) {
   const isFeatured = Boolean(plan.isFeatured);
+  const auth = useAppAuth();
+  const selectedPlanCode = planSelectionCode(plan);
+  const targetPath = auth.isLoaded && auth.isSignedIn
+    ? `/app/billing?plan=${encodeURIComponent(selectedPlanCode)}&interval=Monthly`
+    : `/create-account?plan=${encodeURIComponent(selectedPlanCode)}&interval=Monthly`;
 
   return (
     <Card
@@ -112,7 +118,7 @@ export function PlanCard({ plan }: { plan: PricingPlan }) {
 
         <Button
           component={RouterLink}
-          to={`/create-account?plan=${encodeURIComponent(planSelectionCode(plan))}`}
+          to={targetPath}
           variant={isFeatured ? 'contained' : 'outlined'}
           size="large"
           fullWidth

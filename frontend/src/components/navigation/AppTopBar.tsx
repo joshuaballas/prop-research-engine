@@ -3,17 +3,19 @@ import { Avatar, Box, Button, Stack, Tooltip, Typography } from '@mui/material';
 import { useState } from 'react';
 import { GlossaryDialog } from '../glossary/GlossaryDialog';
 import type { MarketReadinessDto } from '../../api/types';
+import { useAppAuth } from '../../auth/AppAuthProvider';
 import { isDemoDataMode } from '../../config/dataMode';
-import { mockUser } from '../../data/mockUser';
 import { useMarketFreshnessData } from '../../hooks/useMarketData';
 import { palette } from '../../theme/palette';
 import { radius } from '../../theme/radius';
 
 export function AppTopBar() {
   const [glossaryOpen, setGlossaryOpen] = useState(false);
+  const auth = useAppAuth();
   const freshnessQuery = useMarketFreshnessData(['app-top-bar-live-data']);
   const freshness = freshnessQuery.data;
   const liveDataState = resolveLiveDataState(freshness, Boolean(freshnessQuery.error));
+  const userInitial = (auth.user?.displayName || auth.user?.email || 'U').trim()[0]?.toUpperCase() ?? 'U';
 
   return (
     <>
@@ -60,7 +62,15 @@ export function AppTopBar() {
               Demo data
             </Typography>
           ) : null}
-          <Avatar sx={{ width: 34, height: 34 }}>{mockUser.name[0]}</Avatar>
+          <Avatar sx={{ width: 34, height: 34 }}>{userInitial}</Avatar>
+          <Button
+            variant="text"
+            size="small"
+            onClick={() => void auth.signOut()}
+            sx={{ color: 'text.secondary', fontWeight: 850, minWidth: 0, px: { xs: 0.5, sm: 1 } }}
+          >
+            Sign out
+          </Button>
         </Stack>
       </Stack>
       <GlossaryDialog open={glossaryOpen} onClose={() => setGlossaryOpen(false)} />

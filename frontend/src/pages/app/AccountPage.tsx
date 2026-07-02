@@ -1,13 +1,11 @@
 import CreditCardOutlinedIcon from '@mui/icons-material/CreditCardOutlined';
-import PaletteOutlinedIcon from '@mui/icons-material/PaletteOutlined';
-import SaveOutlinedIcon from '@mui/icons-material/SaveOutlined';
 import SecurityOutlinedIcon from '@mui/icons-material/SecurityOutlined';
-import { Box, Button, Grid, Stack, TextField, Typography } from '@mui/material';
+import { Box, Button, Grid, Skeleton, Stack, TextField, Typography } from '@mui/material';
 import { Link as RouterLink } from 'react-router-dom';
+import { getAccount } from '../../api/billing';
+import { useApiQuery } from '../../api/useApiQuery';
 import { AppCard } from '../../components/ui/AppCard';
 import { PageHeader } from '../../components/ui/PageHeader';
-import { mockUser } from '../../data/mockUser';
-import { useToast } from '../../hooks/useToast';
 import { palette } from '../../theme/palette';
 import { radius } from '../../theme/radius';
 
@@ -16,8 +14,6 @@ const inputSx = {
     backgroundColor: 'rgba(15, 23, 42, 0.56)'
   }
 };
-
-const themeOptions = ['Dark', 'Light', 'System'];
 
 function SectionTitle({ icon, title, description }: { icon: React.ReactNode; title: string; description?: string }) {
   return (
@@ -67,11 +63,7 @@ function DetailRow({ label, value, tone }: { label: string; value: string; tone?
       }}
     >
       <Typography color="text.secondary">{label}</Typography>
-      <Typography
-        fontWeight={900}
-        textAlign="right"
-        sx={{ color: valueColor }}
-      >
+      <Typography fontWeight={900} textAlign="right" sx={{ color: valueColor }}>
         {value}
       </Typography>
     </Box>
@@ -79,137 +71,83 @@ function DetailRow({ label, value, tone }: { label: string; value: string; tone?
 }
 
 export function AccountPage() {
-  const { showToast } = useToast();
-  const selectedTheme = mockUser.themePreference;
+  const accountQuery = useApiQuery(getAccount);
+  const user = accountQuery.data?.user;
 
   return (
     <Stack spacing={3} sx={{ pb: { xs: 'calc(92px + env(safe-area-inset-bottom))', lg: 0 } }}>
       <PageHeader title="Account" description="Manage profile details, preferences, and plan access." />
 
-      <Grid container spacing={2} alignItems="stretch">
-        <Grid size={{ xs: 12, lg: 7 }}>
-          <Stack spacing={2}>
-            <AppCard>
-              <Stack spacing={2.25}>
-                <SectionTitle
-                  icon={<SaveOutlinedIcon fontSize="small" />}
-                  title="Profile"
-                  description="Keep the account details used across your prop workspace current."
-                />
-                <Box
-                  sx={{
-                    display: 'grid',
-                    gridTemplateColumns: { xs: '1fr', sm: 'repeat(2, minmax(0, 1fr))' },
-                    gap: 2
-                  }}
-                >
-                  <TextField label="Name" defaultValue={mockUser.name} sx={inputSx} />
-                  <TextField label="Email" defaultValue={mockUser.email} sx={inputSx} />
-                </Box>
-                <Box>
-                  <Button
-                    variant="contained"
-                    startIcon={<SaveOutlinedIcon />}
-                    onClick={() => showToast('Account changes saved.', 'success')}
-                  >
-                    Save changes
-                  </Button>
-                </Box>
-              </Stack>
-            </AppCard>
-
-            <AppCard sx={{ flex: 1 }}>
-              <Stack spacing={2}>
-                <SectionTitle
-                  icon={<PaletteOutlinedIcon fontSize="small" />}
-                  title="Preferences"
-                  description="Choose how the app should present your prop workspace."
-                />
-                <Stack spacing={1}>
-                  <Typography variant="caption" color="text.secondary" fontWeight={850} textTransform="uppercase">
-                    Theme preference
-                  </Typography>
+      {accountQuery.loading ? (
+        <Stack spacing={2}>
+          <Skeleton variant="rounded" height={240} />
+          <Skeleton variant="rounded" height={220} />
+        </Stack>
+      ) : (
+        <Grid container spacing={2} alignItems="stretch">
+          <Grid size={{ xs: 12, lg: 7 }}>
+            <Stack spacing={2}>
+              <AppCard>
+                <Stack spacing={2.25}>
+                  <SectionTitle
+                    icon={<SecurityOutlinedIcon fontSize="small" />}
+                    title="Profile"
+                    description="Account details are synced from your signed-in identity."
+                  />
                   <Box
                     sx={{
                       display: 'grid',
-                      gridTemplateColumns: { xs: '1fr', sm: 'repeat(3, minmax(0, 1fr))' },
-                      gap: 1
+                      gridTemplateColumns: { xs: '1fr', sm: 'repeat(2, minmax(0, 1fr))' },
+                      gap: 2
                     }}
                   >
-                    {themeOptions.map((option) => {
-                      const selected = option === selectedTheme;
-                      return (
-                        <Box
-                          key={option}
-                          sx={{
-                            px: 1.5,
-                            py: 1.1,
-                            borderRadius: radius.featuredCard,
-                            border: `1px solid ${selected ? palette.borderStrong : palette.border}`,
-                            backgroundColor: selected ? 'rgba(34, 211, 238, 0.09)' : palette.cardSurface
-                          }}
-                        >
-                          <Typography fontWeight={900}>{option}</Typography>
-                          <Typography variant="body2" color="text.secondary">
-                            {selected ? 'Current setting' : 'Available option'}
-                          </Typography>
-                        </Box>
-                      );
-                    })}
+                    <TextField label="Name" value={user?.displayName ?? ''} InputProps={{ readOnly: true }} sx={inputSx} />
+                    <TextField label="Email" value={user?.email ?? ''} InputProps={{ readOnly: true }} sx={inputSx} />
                   </Box>
                 </Stack>
-              </Stack>
-            </AppCard>
-          </Stack>
-        </Grid>
+              </AppCard>
+            </Stack>
+          </Grid>
 
-        <Grid size={{ xs: 12, lg: 5 }}>
-          <Stack spacing={2} sx={{ height: '100%' }}>
-            <AppCard>
-              <Stack spacing={2}>
-                <SectionTitle
-                  icon={<SecurityOutlinedIcon fontSize="small" />}
-                  title="Security"
-                  description="Review account protection settings for the connected workspace."
-                />
-                <Stack spacing={0.5}>
-                  <DetailRow label="Email sign-in" value="Enabled" tone="success" />
-                  <DetailRow label="MFA status" value="Not connected" tone="warning" />
-                  <DetailRow label="Recovery controls" value="Not connected" tone="warning" />
+          <Grid size={{ xs: 12, lg: 5 }}>
+            <Stack spacing={2} sx={{ height: '100%' }}>
+              <AppCard>
+                <Stack spacing={2}>
+                  <SectionTitle
+                    icon={<SecurityOutlinedIcon fontSize="small" />}
+                    title="Access"
+                    description="Local app role and account status."
+                  />
+                  <Stack spacing={0.5}>
+                    <DetailRow label="Role" value={user?.role ?? 'Member'} />
+                    <DetailRow label="Status" value={user?.status ?? 'Active'} tone={user?.status === 'Active' ? 'success' : 'warning'} />
+                    <DetailRow label="Auth provider" value={user?.externalAuthProvider ?? 'Clerk'} />
+                  </Stack>
                 </Stack>
-                <Typography variant="body2" color="text.secondary">
-                  Account security can support authenticator-app MFA once connected. Password changes and recovery will be
-                  handled by the connected account security flow.
-                </Typography>
-              </Stack>
-            </AppCard>
+              </AppCard>
 
-            <AppCard sx={{ flex: 1 }}>
-              <Stack spacing={2} sx={{ height: '100%' }}>
-                <SectionTitle
-                  icon={<CreditCardOutlinedIcon fontSize="small" />}
-                  title="Plan access"
-                  description="Review current workspace access and billing setup."
-                />
-                <Stack spacing={0.5}>
-                  <DetailRow label="Current plan" value={mockUser.planName} />
-                  <DetailRow label="Workspace access" value={mockUser.subscriptionStatus} tone="success" />
-                  <DetailRow label="Billing" value="Not connected" tone="warning" />
+              <AppCard sx={{ flex: 1 }}>
+                <Stack spacing={2} sx={{ height: '100%' }}>
+                  <SectionTitle
+                    icon={<CreditCardOutlinedIcon fontSize="small" />}
+                    title="Plan access"
+                    description="Review current workspace access and billing setup."
+                  />
+                  <Button
+                    component={RouterLink}
+                    to="/app/billing"
+                    variant="outlined"
+                    startIcon={<CreditCardOutlinedIcon />}
+                    sx={{ mt: 'auto', alignSelf: { xs: 'stretch', sm: 'flex-start' } }}
+                  >
+                    Open billing setup
+                  </Button>
                 </Stack>
-                <Button
-                  component={RouterLink}
-                  to="/app/billing"
-                  variant="outlined"
-                  startIcon={<CreditCardOutlinedIcon />}
-                  sx={{ mt: 'auto', alignSelf: { xs: 'stretch', sm: 'flex-start' } }}
-                >
-                  Open billing setup
-                </Button>
-              </Stack>
-            </AppCard>
-          </Stack>
+              </AppCard>
+            </Stack>
+          </Grid>
         </Grid>
-      </Grid>
+      )}
     </Stack>
   );
 }

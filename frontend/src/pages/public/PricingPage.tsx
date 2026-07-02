@@ -1,15 +1,19 @@
 import LockOutlinedIcon from '@mui/icons-material/LockOutlined';
 import ShieldOutlinedIcon from '@mui/icons-material/ShieldOutlined';
 import TrendingUpOutlinedIcon from '@mui/icons-material/TrendingUpOutlined';
-import { Box, Container, Grid, Stack, Typography } from '@mui/material';
+import { Box, Container, Grid, Skeleton, Stack, Typography } from '@mui/material';
+import { getPublicPlans } from '../../api/billing';
+import { mapPlanDtoToPricingPlan } from '../../api/planMappers';
+import { useApiQuery } from '../../api/useApiQuery';
 import { PlanCard } from '../../components/billing/PlanCard';
 import { AppCard } from '../../components/ui/AppCard';
 import { MetadataText } from '../../components/ui/MetadataText';
-import { mockPricingPlans } from '../../data/mockPricingPlans';
 import { palette } from '../../theme/palette';
 import { radius } from '../../theme/radius';
 
 export function PricingPage() {
+  const plansQuery = useApiQuery(getPublicPlans);
+  const plans = plansQuery.data?.plans.map(mapPlanDtoToPricingPlan) ?? [];
   const trustNotes = [
     {
       icon: <TrendingUpOutlinedIcon />,
@@ -49,12 +53,19 @@ export function PricingPage() {
             alignItems: 'stretch'
           }}
         >
-          {mockPricingPlans.map((plan) => (
+          {plansQuery.loading ? Array.from({ length: 2 }).map((_, index) => (
+            <Skeleton key={index} variant="rounded" height={420} />
+          )) : plans.map((plan) => (
             <Box key={plan.code} sx={{ display: 'flex', minWidth: 0 }}>
               <PlanCard plan={plan} />
             </Box>
           ))}
         </Box>
+        {!plansQuery.loading && plans.length === 0 ? (
+          <Typography color="text.secondary" textAlign="center">
+            Plans are not available right now.
+          </Typography>
+        ) : null}
 
         <Grid container spacing={2.5}>
           {trustNotes.map((note) => (

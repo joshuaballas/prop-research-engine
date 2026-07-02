@@ -24,6 +24,55 @@ Invoke-RestMethod -Uri "http://localhost:5299/health/ready"
 Invoke-RestMethod -Uri "http://localhost:5299/api/debug/system/health"
 ```
 
+## Clerk Auth And Local Billing Scaffold
+
+The customer app uses Clerk for sign-in/sign-up and the API validates Clerk session JWTs. Do not commit Clerk keys. Use ignored frontend env files and backend user-secrets/environment variables. In Development, backend user-secrets are loaded automatically and can still be overridden by ignored local appsettings or environment variables.
+
+Local frontend setup:
+
+```powershell
+$repo = "D:\Documents\Programs\Web\SportsBetting"
+Set-Location $repo
+
+@"
+VITE_CLERK_PUBLISHABLE_KEY=pk_test_REPLACE_ME
+"@ | Set-Content .\frontend\.env.local
+```
+
+Local backend setup:
+
+```powershell
+$repo = "D:\Documents\Programs\Web\SportsBetting"
+Set-Location $repo
+
+dotnet user-secrets init --project .\api
+dotnet user-secrets set "Authentication:Provider" "Clerk" --project .\api
+dotnet user-secrets set "Clerk:Issuer" "https://REPLACE_ME.clerk.accounts.dev" --project .\api
+dotnet user-secrets set "Clerk:JwksUrl" "https://REPLACE_ME.clerk.accounts.dev/.well-known/jwks.json" --project .\api
+dotnet user-secrets set "Clerk:AuthorizedParties:0" "http://localhost:5173" --project .\api
+```
+
+Public plan reads stay anonymous:
+
+```powershell
+$base = "http://localhost:5299"
+Invoke-RestMethod "$base/api/plans" | ConvertTo-Json -Depth 80
+```
+
+Member app APIs require a Clerk bearer token:
+
+```powershell
+$token = "<paste Clerk session JWT here>"
+$headers = @{ Authorization = "Bearer $token" }
+
+Invoke-RestMethod "$base/api/me" -Headers $headers | ConvertTo-Json -Depth 80
+Invoke-RestMethod "$base/api/billing" -Headers $headers | ConvertTo-Json -Depth 80
+```
+
+Checkout intent creation stops before Stripe. Paid plans return `RequiresExternalProcessor`, keep `paymentProcessorConnected=false`, and leave the local user plan state as `PendingCheckout`.
+
+See [AUTH_AND_BILLING.md](AUTH_AND_BILLING.md) for endpoint and table semantics.
+
 ## Persistent Application Error Logs
 
 Unexpected API exceptions and selected worker/job failures are persisted to the `application_errors` table so failures remain inspectable after terminal output or browser history is gone. The global API exception middleware logs unhandled server exceptions with the request path, method, status code, correlation id, user agent, remote IP hash, exception type, stack trace, and sanitized metadata. Worker catch blocks log the obvious long-running failure paths for scheduled The Odds refreshes, The Odds ingestion, MLB result import, Soccer/API-Sports result import, and direct Underdog debug ingestion.

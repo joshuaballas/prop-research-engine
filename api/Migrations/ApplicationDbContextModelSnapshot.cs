@@ -200,6 +200,87 @@ namespace SportsBetting.Api.Migrations
                     b.ToTable("AppConfigs", (string)null);
                 });
 
+            modelBuilder.Entity("SportsBetting.Api.Models.AppUser", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<DateTimeOffset>("CreatedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at_utc");
+
+                    b.Property<string>("DisplayName")
+                        .HasMaxLength(250)
+                        .HasColumnType("character varying(250)")
+                        .HasColumnName("display_name");
+
+                    b.Property<string>("Email")
+                        .HasMaxLength(320)
+                        .HasColumnType("character varying(320)")
+                        .HasColumnName("email");
+
+                    b.Property<string>("ExternalAuthProvider")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("character varying(50)")
+                        .HasColumnName("external_auth_provider");
+
+                    b.Property<string>("ExternalSubjectId")
+                        .IsRequired()
+                        .HasMaxLength(250)
+                        .HasColumnType("character varying(250)")
+                        .HasColumnName("external_subject_id");
+
+                    b.Property<DateTimeOffset?>("LastSeenAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("last_seen_at_utc");
+
+                    b.Property<string>("LastSessionId")
+                        .HasMaxLength(250)
+                        .HasColumnType("character varying(250)")
+                        .HasColumnName("last_session_id");
+
+                    b.Property<JsonDocument>("MetadataJson")
+                        .HasColumnType("jsonb")
+                        .HasColumnName("metadata_json");
+
+                    b.Property<string>("Role")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("character varying(50)")
+                        .HasColumnName("role");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("character varying(50)")
+                        .HasColumnName("status");
+
+                    b.Property<DateTimeOffset>("UpdatedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at_utc");
+
+                    b.HasKey("Id")
+                        .HasName("pk_app_users");
+
+                    b.HasIndex("Email")
+                        .HasDatabaseName("ix_app_users_email");
+
+                    b.HasIndex("Role")
+                        .HasDatabaseName("ix_app_users_role");
+
+                    b.HasIndex("Status")
+                        .HasDatabaseName("ix_app_users_status");
+
+                    b.HasIndex("ExternalAuthProvider", "ExternalSubjectId")
+                        .IsUnique()
+                        .HasDatabaseName("ix_app_users_external_auth_provider_external_subject_id");
+
+                    b.ToTable("app_users", (string)null);
+                });
+
             modelBuilder.Entity("SportsBetting.Api.Models.ApplicationError", b =>
                 {
                     b.Property<Guid>("Id")
@@ -330,6 +411,89 @@ namespace SportsBetting.Api.Migrations
                         .HasDatabaseName("ix_application_errors_sport_provider");
 
                     b.ToTable("application_errors", (string)null);
+                });
+
+            modelBuilder.Entity("SportsBetting.Api.Models.CheckoutIntent", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<int>("AmountCents")
+                        .HasColumnType("integer")
+                        .HasColumnName("amount_cents");
+
+                    b.Property<Guid>("AppUserId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("app_user_id");
+
+                    b.Property<string>("BillingInterval")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("character varying(50)")
+                        .HasColumnName("billing_interval");
+
+                    b.Property<DateTimeOffset?>("CompletedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("completed_at_utc");
+
+                    b.Property<DateTimeOffset>("CreatedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at_utc");
+
+                    b.Property<string>("Currency")
+                        .IsRequired()
+                        .HasMaxLength(3)
+                        .HasColumnType("character varying(3)")
+                        .HasColumnName("currency");
+
+                    b.Property<DateTimeOffset>("ExpiresAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("expires_at_utc");
+
+                    b.Property<string>("ExternalBillingProvider")
+                        .HasMaxLength(50)
+                        .HasColumnType("character varying(50)")
+                        .HasColumnName("external_billing_provider");
+
+                    b.Property<string>("ExternalCheckoutSessionId")
+                        .HasMaxLength(250)
+                        .HasColumnType("character varying(250)")
+                        .HasColumnName("external_checkout_session_id");
+
+                    b.Property<JsonDocument>("MetadataJson")
+                        .HasColumnType("jsonb")
+                        .HasColumnName("metadata_json");
+
+                    b.Property<Guid>("PlanId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("plan_id");
+
+                    b.Property<string>("ReturnUrl")
+                        .HasMaxLength(1000)
+                        .HasColumnType("character varying(1000)")
+                        .HasColumnName("return_url");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("character varying(50)")
+                        .HasColumnName("status");
+
+                    b.HasKey("Id")
+                        .HasName("pk_checkout_intents");
+
+                    b.HasIndex("PlanId")
+                        .HasDatabaseName("ix_checkout_intents_plan_id");
+
+                    b.HasIndex("Status")
+                        .HasDatabaseName("ix_checkout_intents_status");
+
+                    b.HasIndex("AppUserId", "CreatedAtUtc")
+                        .HasDatabaseName("ix_checkout_intents_app_user_id_created_at_utc");
+
+                    b.ToTable("checkout_intents", (string)null);
                 });
 
             modelBuilder.Entity("SportsBetting.Api.Models.CorrelationPair", b =>
@@ -1819,6 +1983,234 @@ namespace SportsBetting.Api.Migrations
                         .HasDatabaseName("ix_optimized_entry_legs_optimized_entry_id_leg_order");
 
                     b.ToTable("optimized_entry_legs", (string)null);
+                });
+
+            modelBuilder.Entity("SportsBetting.Api.Models.Plan", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<int?>("AnnualPriceCents")
+                        .HasColumnType("integer")
+                        .HasColumnName("annual_price_cents");
+
+                    b.Property<DateTimeOffset>("CreatedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at_utc");
+
+                    b.Property<string>("Currency")
+                        .IsRequired()
+                        .HasMaxLength(3)
+                        .HasColumnType("character varying(3)")
+                        .HasColumnName("currency");
+
+                    b.Property<string>("Description")
+                        .HasMaxLength(1000)
+                        .HasColumnType("character varying(1000)")
+                        .HasColumnName("description");
+
+                    b.Property<bool>("IsPublic")
+                        .HasColumnType("boolean")
+                        .HasColumnName("is_public");
+
+                    b.Property<int?>("MonthlyPriceCents")
+                        .HasColumnType("integer")
+                        .HasColumnName("monthly_price_cents");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(120)
+                        .HasColumnType("character varying(120)")
+                        .HasColumnName("name");
+
+                    b.Property<string>("Slug")
+                        .IsRequired()
+                        .HasMaxLength(80)
+                        .HasColumnType("character varying(80)")
+                        .HasColumnName("slug");
+
+                    b.Property<int>("SortOrder")
+                        .HasColumnType("integer")
+                        .HasColumnName("sort_order");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("character varying(50)")
+                        .HasColumnName("status");
+
+                    b.Property<string>("Summary")
+                        .IsRequired()
+                        .HasMaxLength(300)
+                        .HasColumnType("character varying(300)")
+                        .HasColumnName("summary");
+
+                    b.Property<int?>("TrialDays")
+                        .HasColumnType("integer")
+                        .HasColumnName("trial_days");
+
+                    b.Property<DateTimeOffset>("UpdatedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at_utc");
+
+                    b.HasKey("Id")
+                        .HasName("pk_plans");
+
+                    b.HasIndex("Slug")
+                        .IsUnique()
+                        .HasDatabaseName("ix_plans_slug");
+
+                    b.HasIndex("Status", "IsPublic", "SortOrder")
+                        .HasDatabaseName("ix_plans_status_is_public_sort_order");
+
+                    b.ToTable("plans", (string)null);
+
+                    b.HasData(
+                        new
+                        {
+                            Id = new Guid("10000000-0000-0000-0000-000000000001"),
+                            AnnualPriceCents = 0,
+                            CreatedAtUtc = new DateTimeOffset(new DateTime(2026, 7, 1, 0, 0, 0, 0, DateTimeKind.Unspecified), new TimeSpan(0, 0, 0, 0, 0)),
+                            Currency = "USD",
+                            Description = "Basic access for trying the prop research workflow before paid billing is connected.",
+                            IsPublic = true,
+                            MonthlyPriceCents = 0,
+                            Name = "Free",
+                            Slug = "free",
+                            SortOrder = 10,
+                            Status = "Active",
+                            Summary = "Starter prop research access.",
+                            UpdatedAtUtc = new DateTimeOffset(new DateTime(2026, 7, 1, 0, 0, 0, 0, DateTimeKind.Unspecified), new TimeSpan(0, 0, 0, 0, 0))
+                        },
+                        new
+                        {
+                            Id = new Guid("10000000-0000-0000-0000-000000000002"),
+                            AnnualPriceCents = 29000,
+                            CreatedAtUtc = new DateTimeOffset(new DateTime(2026, 7, 1, 0, 0, 0, 0, DateTimeKind.Unspecified), new TimeSpan(0, 0, 0, 0, 0)),
+                            Currency = "USD",
+                            Description = "Expanded access for top picks, line shopping, performance views, and entry review workflows. Payment processing is not connected yet.",
+                            IsPublic = true,
+                            MonthlyPriceCents = 2900,
+                            Name = "Pro",
+                            Slug = "pro",
+                            SortOrder = 20,
+                            Status = "Active",
+                            Summary = "Full prop research workflow access.",
+                            UpdatedAtUtc = new DateTimeOffset(new DateTime(2026, 7, 1, 0, 0, 0, 0, DateTimeKind.Unspecified), new TimeSpan(0, 0, 0, 0, 0))
+                        });
+                });
+
+            modelBuilder.Entity("SportsBetting.Api.Models.PlanFeature", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<string>("Description")
+                        .HasMaxLength(1000)
+                        .HasColumnType("character varying(1000)")
+                        .HasColumnName("description");
+
+                    b.Property<string>("FeatureKey")
+                        .IsRequired()
+                        .HasMaxLength(120)
+                        .HasColumnType("character varying(120)")
+                        .HasColumnName("feature_key");
+
+                    b.Property<bool>("Included")
+                        .HasColumnType("boolean")
+                        .HasColumnName("included");
+
+                    b.Property<string>("Label")
+                        .IsRequired()
+                        .HasMaxLength(250)
+                        .HasColumnType("character varying(250)")
+                        .HasColumnName("label");
+
+                    b.Property<Guid>("PlanId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("plan_id");
+
+                    b.Property<int>("SortOrder")
+                        .HasColumnType("integer")
+                        .HasColumnName("sort_order");
+
+                    b.Property<string>("Value")
+                        .HasMaxLength(250)
+                        .HasColumnType("character varying(250)")
+                        .HasColumnName("value");
+
+                    b.HasKey("Id")
+                        .HasName("pk_plan_features");
+
+                    b.HasIndex("PlanId", "FeatureKey")
+                        .IsUnique()
+                        .HasDatabaseName("ix_plan_features_plan_id_feature_key");
+
+                    b.HasIndex("PlanId", "SortOrder")
+                        .HasDatabaseName("ix_plan_features_plan_id_sort_order");
+
+                    b.ToTable("plan_features", (string)null);
+
+                    b.HasData(
+                        new
+                        {
+                            Id = new Guid("20000000-0000-0000-0000-000000000001"),
+                            Description = "Top-level market view for current props.",
+                            FeatureKey = "market_overview",
+                            Included = true,
+                            Label = "Market overview",
+                            PlanId = new Guid("10000000-0000-0000-0000-000000000001"),
+                            SortOrder = 10,
+                            Value = "Included"
+                        },
+                        new
+                        {
+                            Id = new Guid("20000000-0000-0000-0000-000000000002"),
+                            Description = "Current provider line context.",
+                            FeatureKey = "basic_line_context",
+                            Included = true,
+                            Label = "Basic line context",
+                            PlanId = new Guid("10000000-0000-0000-0000-000000000001"),
+                            SortOrder = 20,
+                            Value = "Included"
+                        },
+                        new
+                        {
+                            Id = new Guid("20000000-0000-0000-0000-000000000003"),
+                            Description = "Access to curated top opportunities.",
+                            FeatureKey = "top_picks",
+                            Included = true,
+                            Label = "Curated Top Picks",
+                            PlanId = new Guid("10000000-0000-0000-0000-000000000002"),
+                            SortOrder = 10,
+                            Value = "Included"
+                        },
+                        new
+                        {
+                            Id = new Guid("20000000-0000-0000-0000-000000000004"),
+                            Description = "Compare provider lines and prices.",
+                            FeatureKey = "line_shopping",
+                            Included = true,
+                            Label = "Line shopping",
+                            PlanId = new Guid("10000000-0000-0000-0000-000000000002"),
+                            SortOrder = 20,
+                            Value = "Included"
+                        },
+                        new
+                        {
+                            Id = new Guid("20000000-0000-0000-0000-000000000005"),
+                            Description = "Review latest graded model results.",
+                            FeatureKey = "performance",
+                            Included = true,
+                            Label = "Model performance",
+                            PlanId = new Guid("10000000-0000-0000-0000-000000000002"),
+                            SortOrder = 30,
+                            Value = "Included"
+                        });
                 });
 
             modelBuilder.Entity("SportsBetting.Api.Models.Platform", b =>
@@ -4493,6 +4885,101 @@ namespace SportsBetting.Api.Migrations
                     b.ToTable("the_odds_refresh_runs", (string)null);
                 });
 
+            modelBuilder.Entity("SportsBetting.Api.Models.UserPlanState", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<Guid>("AppUserId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("app_user_id");
+
+                    b.Property<string>("BillingInterval")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("character varying(50)")
+                        .HasColumnName("billing_interval");
+
+                    b.Property<DateTimeOffset>("CreatedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at_utc");
+
+                    b.Property<DateTimeOffset?>("CurrentPeriodEndUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("current_period_end_utc");
+
+                    b.Property<DateTimeOffset?>("CurrentPeriodStartUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("current_period_start_utc");
+
+                    b.Property<string>("ExternalBillingProvider")
+                        .HasMaxLength(50)
+                        .HasColumnType("character varying(50)")
+                        .HasColumnName("external_billing_provider");
+
+                    b.Property<string>("ExternalCustomerId")
+                        .HasMaxLength(250)
+                        .HasColumnType("character varying(250)")
+                        .HasColumnName("external_customer_id");
+
+                    b.Property<string>("ExternalSubscriptionId")
+                        .HasMaxLength(250)
+                        .HasColumnType("character varying(250)")
+                        .HasColumnName("external_subscription_id");
+
+                    b.Property<Guid?>("PlanId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("plan_id");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("character varying(50)")
+                        .HasColumnName("status");
+
+                    b.Property<DateTimeOffset>("UpdatedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at_utc");
+
+                    b.HasKey("Id")
+                        .HasName("pk_user_plan_states");
+
+                    b.HasIndex("AppUserId")
+                        .IsUnique()
+                        .HasDatabaseName("ix_user_plan_states_app_user_id");
+
+                    b.HasIndex("PlanId")
+                        .HasDatabaseName("ix_user_plan_states_plan_id");
+
+                    b.HasIndex("Status")
+                        .HasDatabaseName("ix_user_plan_states_status");
+
+                    b.ToTable("user_plan_states", (string)null);
+                });
+
+            modelBuilder.Entity("SportsBetting.Api.Models.CheckoutIntent", b =>
+                {
+                    b.HasOne("SportsBetting.Api.Models.AppUser", "AppUser")
+                        .WithMany("CheckoutIntents")
+                        .HasForeignKey("AppUserId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
+                        .HasConstraintName("fk_checkout_intents_app_users_app_user_id");
+
+                    b.HasOne("SportsBetting.Api.Models.Plan", "Plan")
+                        .WithMany("CheckoutIntents")
+                        .HasForeignKey("PlanId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
+                        .HasConstraintName("fk_checkout_intents_plans_plan_id");
+
+                    b.Navigation("AppUser");
+
+                    b.Navigation("Plan");
+                });
+
             modelBuilder.Entity("SportsBetting.Api.Models.CorrelationPair", b =>
                 {
                     b.HasOne("SportsBetting.Api.Models.Prop", "PropA")
@@ -4718,6 +5205,18 @@ namespace SportsBetting.Api.Migrations
                     b.Navigation("OptimizedEntry");
 
                     b.Navigation("PlatformProp");
+                });
+
+            modelBuilder.Entity("SportsBetting.Api.Models.PlanFeature", b =>
+                {
+                    b.HasOne("SportsBetting.Api.Models.Plan", "Plan")
+                        .WithMany("Features")
+                        .HasForeignKey("PlanId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
+                        .HasConstraintName("fk_plan_features_plans_plan_id");
+
+                    b.Navigation("Plan");
                 });
 
             modelBuilder.Entity("SportsBetting.Api.Models.PlatformProp", b =>
@@ -5056,6 +5555,33 @@ namespace SportsBetting.Api.Migrations
                     b.Navigation("League");
                 });
 
+            modelBuilder.Entity("SportsBetting.Api.Models.UserPlanState", b =>
+                {
+                    b.HasOne("SportsBetting.Api.Models.AppUser", "AppUser")
+                        .WithMany("PlanStates")
+                        .HasForeignKey("AppUserId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
+                        .HasConstraintName("fk_user_plan_states_app_users_app_user_id");
+
+                    b.HasOne("SportsBetting.Api.Models.Plan", "Plan")
+                        .WithMany("UserPlanStates")
+                        .HasForeignKey("PlanId")
+                        .OnDelete(DeleteBehavior.SetNull)
+                        .HasConstraintName("fk_user_plan_states_plans_plan_id");
+
+                    b.Navigation("AppUser");
+
+                    b.Navigation("Plan");
+                });
+
+            modelBuilder.Entity("SportsBetting.Api.Models.AppUser", b =>
+                {
+                    b.Navigation("CheckoutIntents");
+
+                    b.Navigation("PlanStates");
+                });
+
             modelBuilder.Entity("SportsBetting.Api.Models.Game", b =>
                 {
                     b.Navigation("Props");
@@ -5085,6 +5611,15 @@ namespace SportsBetting.Api.Migrations
             modelBuilder.Entity("SportsBetting.Api.Models.OptimizedEntry", b =>
                 {
                     b.Navigation("Legs");
+                });
+
+            modelBuilder.Entity("SportsBetting.Api.Models.Plan", b =>
+                {
+                    b.Navigation("CheckoutIntents");
+
+                    b.Navigation("Features");
+
+                    b.Navigation("UserPlanStates");
                 });
 
             modelBuilder.Entity("SportsBetting.Api.Models.Platform", b =>

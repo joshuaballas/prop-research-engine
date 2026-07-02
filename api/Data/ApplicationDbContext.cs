@@ -56,6 +56,11 @@ public sealed class ApplicationDbContext(DbContextOptions<ApplicationDbContext> 
     public DbSet<OptimizedEntry> OptimizedEntries => Set<OptimizedEntry>();
     public DbSet<OptimizedEntryLeg> OptimizedEntryLegs => Set<OptimizedEntryLeg>();
     public DbSet<ApplicationError> ApplicationErrors => Set<ApplicationError>();
+    public DbSet<AppUser> AppUsers => Set<AppUser>();
+    public DbSet<Plan> Plans => Set<Plan>();
+    public DbSet<PlanFeature> PlanFeatures => Set<PlanFeature>();
+    public DbSet<UserPlanState> UserPlanStates => Set<UserPlanState>();
+    public DbSet<CheckoutIntent> CheckoutIntents => Set<CheckoutIntent>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -79,6 +84,7 @@ public sealed class ApplicationDbContext(DbContextOptions<ApplicationDbContext> 
         ConfigureCorrelationTables(modelBuilder);
         ConfigureOptimizationTables(modelBuilder);
         ConfigureApplicationErrorTables(modelBuilder);
+        ConfigureAuthBillingTables(modelBuilder);
         ConfigureAppConfigTables(modelBuilder);
 
         if (isSqlite)
@@ -1101,5 +1107,151 @@ public sealed class ApplicationDbContext(DbContextOptions<ApplicationDbContext> 
             entity.HasIndex(x => x.RunId);
             entity.HasIndex(x => new { x.Sport, x.Provider });
         });
+    }
+
+    private static void ConfigureAuthBillingTables(ModelBuilder modelBuilder)
+    {
+        var jsonColumnType = GetJsonColumnType(modelBuilder);
+
+        modelBuilder.Entity<AppUser>(entity =>
+        {
+            entity.ToTable("app_users");
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.ExternalAuthProvider).HasMaxLength(50).IsRequired();
+            entity.Property(x => x.ExternalSubjectId).HasMaxLength(250).IsRequired();
+            entity.Property(x => x.Email).HasMaxLength(320);
+            entity.Property(x => x.DisplayName).HasMaxLength(250);
+            entity.Property(x => x.Role).HasMaxLength(50).IsRequired();
+            entity.Property(x => x.Status).HasMaxLength(50).IsRequired();
+            entity.Property(x => x.LastSessionId).HasMaxLength(250);
+            ConfigureJsonDocumentProperty(entity.Property(x => x.MetadataJson), jsonColumnType);
+            entity.HasIndex(x => new { x.ExternalAuthProvider, x.ExternalSubjectId }).IsUnique();
+            entity.HasIndex(x => x.Email);
+            entity.HasIndex(x => x.Role);
+            entity.HasIndex(x => x.Status);
+        });
+
+        modelBuilder.Entity<Plan>(entity =>
+        {
+            entity.ToTable("plans");
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.Slug).HasMaxLength(80).IsRequired();
+            entity.Property(x => x.Name).HasMaxLength(120).IsRequired();
+            entity.Property(x => x.Summary).HasMaxLength(300).IsRequired();
+            entity.Property(x => x.Description).HasMaxLength(1000);
+            entity.Property(x => x.Status).HasMaxLength(50).IsRequired();
+            entity.Property(x => x.Currency).HasMaxLength(3).IsRequired();
+            entity.HasIndex(x => x.Slug).IsUnique();
+            entity.HasIndex(x => new { x.Status, x.IsPublic, x.SortOrder });
+            entity.HasData(
+                new Plan
+                {
+                    Id = Guid.Parse("10000000-0000-0000-0000-000000000001"),
+                    Slug = "free",
+                    Name = "Free",
+                    Summary = "Starter prop research access.",
+                    Description = "Basic access for trying the prop research workflow before paid billing is connected.",
+                    Status = PlanStatuses.Active,
+                    IsPublic = true,
+                    SortOrder = 10,
+                    MonthlyPriceCents = 0,
+                    AnnualPriceCents = 0,
+                    Currency = "USD",
+                    TrialDays = null,
+                    CreatedAtUtc = new DateTimeOffset(2026, 7, 1, 0, 0, 0, TimeSpan.Zero),
+                    UpdatedAtUtc = new DateTimeOffset(2026, 7, 1, 0, 0, 0, TimeSpan.Zero)
+                },
+                new Plan
+                {
+                    Id = Guid.Parse("10000000-0000-0000-0000-000000000002"),
+                    Slug = "pro",
+                    Name = "Pro",
+                    Summary = "Full prop research workflow access.",
+                    Description = "Expanded access for top picks, line shopping, performance views, and entry review workflows. Payment processing is not connected yet.",
+                    Status = PlanStatuses.Active,
+                    IsPublic = true,
+                    SortOrder = 20,
+                    MonthlyPriceCents = 2900,
+                    AnnualPriceCents = 29000,
+                    Currency = "USD",
+                    TrialDays = null,
+                    CreatedAtUtc = new DateTimeOffset(2026, 7, 1, 0, 0, 0, TimeSpan.Zero),
+                    UpdatedAtUtc = new DateTimeOffset(2026, 7, 1, 0, 0, 0, TimeSpan.Zero)
+                });
+        });
+
+        modelBuilder.Entity<PlanFeature>(entity =>
+        {
+            entity.ToTable("plan_features");
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.FeatureKey).HasMaxLength(120).IsRequired();
+            entity.Property(x => x.Label).HasMaxLength(250).IsRequired();
+            entity.Property(x => x.Description).HasMaxLength(1000);
+            entity.Property(x => x.Value).HasMaxLength(250);
+            entity.HasOne(x => x.Plan).WithMany(x => x.Features).HasForeignKey(x => x.PlanId);
+            entity.HasIndex(x => new { x.PlanId, x.FeatureKey }).IsUnique();
+            entity.HasIndex(x => new { x.PlanId, x.SortOrder });
+            entity.HasData(
+                SeedPlanFeature("20000000-0000-0000-0000-000000000001", "10000000-0000-0000-0000-000000000001", "market_overview", "Market overview", "Top-level market view for current props.", "Included", true, 10),
+                SeedPlanFeature("20000000-0000-0000-0000-000000000002", "10000000-0000-0000-0000-000000000001", "basic_line_context", "Basic line context", "Current provider line context.", "Included", true, 20),
+                SeedPlanFeature("20000000-0000-0000-0000-000000000003", "10000000-0000-0000-0000-000000000002", "top_picks", "Curated Top Picks", "Access to curated top opportunities.", "Included", true, 10),
+                SeedPlanFeature("20000000-0000-0000-0000-000000000004", "10000000-0000-0000-0000-000000000002", "line_shopping", "Line shopping", "Compare provider lines and prices.", "Included", true, 20),
+                SeedPlanFeature("20000000-0000-0000-0000-000000000005", "10000000-0000-0000-0000-000000000002", "performance", "Model performance", "Review latest graded model results.", "Included", true, 30));
+        });
+
+        modelBuilder.Entity<UserPlanState>(entity =>
+        {
+            entity.ToTable("user_plan_states");
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.Status).HasMaxLength(50).IsRequired();
+            entity.Property(x => x.BillingInterval).HasMaxLength(50).IsRequired();
+            entity.Property(x => x.ExternalBillingProvider).HasMaxLength(50);
+            entity.Property(x => x.ExternalCustomerId).HasMaxLength(250);
+            entity.Property(x => x.ExternalSubscriptionId).HasMaxLength(250);
+            entity.HasOne(x => x.AppUser).WithMany(x => x.PlanStates).HasForeignKey(x => x.AppUserId);
+            entity.HasOne(x => x.Plan).WithMany(x => x.UserPlanStates).HasForeignKey(x => x.PlanId).OnDelete(DeleteBehavior.SetNull);
+            entity.HasIndex(x => x.AppUserId).IsUnique();
+            entity.HasIndex(x => x.Status);
+        });
+
+        modelBuilder.Entity<CheckoutIntent>(entity =>
+        {
+            entity.ToTable("checkout_intents");
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.BillingInterval).HasMaxLength(50).IsRequired();
+            entity.Property(x => x.Currency).HasMaxLength(3).IsRequired();
+            entity.Property(x => x.Status).HasMaxLength(50).IsRequired();
+            entity.Property(x => x.ExternalBillingProvider).HasMaxLength(50);
+            entity.Property(x => x.ExternalCheckoutSessionId).HasMaxLength(250);
+            entity.Property(x => x.ReturnUrl).HasMaxLength(1000);
+            ConfigureJsonDocumentProperty(entity.Property(x => x.MetadataJson), jsonColumnType);
+            entity.HasOne(x => x.AppUser).WithMany(x => x.CheckoutIntents).HasForeignKey(x => x.AppUserId);
+            entity.HasOne(x => x.Plan).WithMany(x => x.CheckoutIntents).HasForeignKey(x => x.PlanId);
+            entity.HasIndex(x => new { x.AppUserId, x.CreatedAtUtc });
+            entity.HasIndex(x => x.Status);
+        });
+    }
+
+    private static PlanFeature SeedPlanFeature(
+        string id,
+        string planId,
+        string featureKey,
+        string label,
+        string description,
+        string value,
+        bool included,
+        int sortOrder)
+    {
+        return new PlanFeature
+        {
+            Id = Guid.Parse(id),
+            PlanId = Guid.Parse(planId),
+            FeatureKey = featureKey,
+            Label = label,
+            Description = description,
+            Value = value,
+            Included = included,
+            SortOrder = sortOrder
+        };
     }
 }

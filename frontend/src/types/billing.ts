@@ -1,5 +1,6 @@
 export interface PricingPlan {
   code: string;
+  slug?: string;
   name: string;
   description: string;
   priceCents: number;

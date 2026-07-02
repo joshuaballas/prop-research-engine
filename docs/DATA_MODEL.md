@@ -278,6 +278,26 @@ Expected result dates should be the actual MLB game date. Because late MLB games
 
 ## Operations
 
+### `app_users`
+
+Local application users synced from authenticated Clerk JWT claims. The stable identity is `(external_auth_provider, external_subject_id)`, where the provider is `Clerk` and the subject id is the token `sub`. Local rows hold app role (`Owner`, `Admin`, `Member`), status (`Active`, `Disabled`), optional email/display name, last seen timestamp, and last Clerk session id. Disabled users are blocked by app authorization even if Clerk authentication succeeds.
+
+### `plans`
+
+Local product plan catalog. Plans have stable lowercase slugs, public/status flags, sort order, optional monthly/annual prices, currency, and description fields. Plan rows are domain data and should not be moved into AppConfigs.
+
+### `plan_features`
+
+Feature rows attached to `plans`. Pricing and Billing read these rows for customer-facing plan details. Features are ordered, can be included/excluded, and may carry a short value string for compact display.
+
+### `user_plan_states`
+
+One current local plan state per app user. Paid plan selection remains `PendingCheckout` until a future payment processor integration confirms activation. Free/no-payment states can be `Active`.
+
+### `checkout_intents`
+
+Local checkout handoff records. Paid plans currently return `RequiresExternalProcessor` with future `external_billing_provider=Stripe` semantics and no fake checkout URL. Stripe sessions/customer/subscriptions are not created by this scaffold.
+
 ### `application_errors`
 
 Persistent error log for API and worker exceptions:

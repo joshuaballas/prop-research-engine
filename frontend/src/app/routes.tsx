@@ -2,6 +2,7 @@ import { Navigate, Route, Routes } from 'react-router-dom';
 import { AppLayout } from '../layouts/AppLayout';
 import { AuthLayout } from '../layouts/AuthLayout';
 import { PublicLayout } from '../layouts/PublicLayout';
+import { ProtectedAppRoute } from '../auth/ProtectedAppRoute';
 import { AccountPage } from '../pages/app/AccountPage';
 import { BillingPage } from '../pages/app/BillingPage';
 import { DashboardPage } from '../pages/app/DashboardPage';
@@ -26,15 +27,17 @@ export function AppRoutes() {
         <Route path="/pricing" element={<PricingPage />} />
       </Route>
       <Route element={<AuthLayout />}>
-        <Route path="/sign-in" element={<SignInPage />} />
-        <Route path="/create-account" element={<CreateAccountPage />} />
+        <Route path="/sign-in/*" element={<SignInPage />} />
+        <Route path="/create-account/*" element={<CreateAccountPage />} />
       </Route>
       <Route
         path="/app"
         element={
-          <EntryBuilderProvider>
-            <AppLayout />
-          </EntryBuilderProvider>
+          <ProtectedAppRoute>
+            <EntryBuilderProvider>
+              <AppLayout />
+            </EntryBuilderProvider>
+          </ProtectedAppRoute>
         }
       >
         <Route index element={<Navigate to="/app/dashboard" replace />} />

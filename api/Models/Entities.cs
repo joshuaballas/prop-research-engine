@@ -245,6 +245,148 @@ public sealed class ProviderRefreshTarget
     public DateTimeOffset UpdatedAtUtc { get; set; } = DateTimeOffset.UtcNow;
 }
 
+public sealed class AppUser
+{
+    public Guid Id { get; set; }
+    public string ExternalAuthProvider { get; set; } = "Clerk";
+    public string ExternalSubjectId { get; set; } = string.Empty;
+    public string? Email { get; set; }
+    public string? DisplayName { get; set; }
+    public string Role { get; set; } = AppUserRoles.Member;
+    public string Status { get; set; } = AppUserStatuses.Active;
+    public DateTimeOffset CreatedAtUtc { get; set; } = DateTimeOffset.UtcNow;
+    public DateTimeOffset UpdatedAtUtc { get; set; } = DateTimeOffset.UtcNow;
+    public DateTimeOffset? LastSeenAtUtc { get; set; }
+    public string? LastSessionId { get; set; }
+    public JsonDocument? MetadataJson { get; set; }
+
+    public ICollection<UserPlanState> PlanStates { get; set; } = [];
+    public ICollection<CheckoutIntent> CheckoutIntents { get; set; } = [];
+}
+
+public static class AppUserRoles
+{
+    public const string Owner = "Owner";
+    public const string Admin = "Admin";
+    public const string Member = "Member";
+}
+
+public static class AppUserStatuses
+{
+    public const string Active = "Active";
+    public const string Disabled = "Disabled";
+}
+
+public sealed class Plan
+{
+    public Guid Id { get; set; }
+    public string Slug { get; set; } = string.Empty;
+    public string Name { get; set; } = string.Empty;
+    public string Summary { get; set; } = string.Empty;
+    public string? Description { get; set; }
+    public string Status { get; set; } = PlanStatuses.Draft;
+    public bool IsPublic { get; set; }
+    public int SortOrder { get; set; }
+    public int? MonthlyPriceCents { get; set; }
+    public int? AnnualPriceCents { get; set; }
+    public string Currency { get; set; } = "USD";
+    public int? TrialDays { get; set; }
+    public DateTimeOffset CreatedAtUtc { get; set; } = DateTimeOffset.UtcNow;
+    public DateTimeOffset UpdatedAtUtc { get; set; } = DateTimeOffset.UtcNow;
+
+    public ICollection<PlanFeature> Features { get; set; } = [];
+    public ICollection<UserPlanState> UserPlanStates { get; set; } = [];
+    public ICollection<CheckoutIntent> CheckoutIntents { get; set; } = [];
+}
+
+public static class PlanStatuses
+{
+    public const string Draft = "Draft";
+    public const string Active = "Active";
+    public const string Archived = "Archived";
+}
+
+public sealed class PlanFeature
+{
+    public Guid Id { get; set; }
+    public Guid PlanId { get; set; }
+    public string FeatureKey { get; set; } = string.Empty;
+    public string Label { get; set; } = string.Empty;
+    public string? Description { get; set; }
+    public string? Value { get; set; }
+    public bool Included { get; set; } = true;
+    public int SortOrder { get; set; }
+
+    public Plan? Plan { get; set; }
+}
+
+public sealed class UserPlanState
+{
+    public Guid Id { get; set; }
+    public Guid AppUserId { get; set; }
+    public Guid? PlanId { get; set; }
+    public string Status { get; set; } = UserPlanStatuses.None;
+    public string BillingInterval { get; set; } = BillingIntervals.None;
+    public DateTimeOffset? CurrentPeriodStartUtc { get; set; }
+    public DateTimeOffset? CurrentPeriodEndUtc { get; set; }
+    public string? ExternalBillingProvider { get; set; }
+    public string? ExternalCustomerId { get; set; }
+    public string? ExternalSubscriptionId { get; set; }
+    public DateTimeOffset CreatedAtUtc { get; set; } = DateTimeOffset.UtcNow;
+    public DateTimeOffset UpdatedAtUtc { get; set; } = DateTimeOffset.UtcNow;
+
+    public AppUser? AppUser { get; set; }
+    public Plan? Plan { get; set; }
+}
+
+public static class UserPlanStatuses
+{
+    public const string None = "None";
+    public const string PendingCheckout = "PendingCheckout";
+    public const string Trialing = "Trialing";
+    public const string Active = "Active";
+    public const string Canceled = "Canceled";
+    public const string PastDue = "PastDue";
+    public const string Incomplete = "Incomplete";
+}
+
+public static class BillingIntervals
+{
+    public const string None = "None";
+    public const string Monthly = "Monthly";
+    public const string Annual = "Annual";
+}
+
+public sealed class CheckoutIntent
+{
+    public Guid Id { get; set; }
+    public Guid AppUserId { get; set; }
+    public Guid PlanId { get; set; }
+    public string BillingInterval { get; set; } = BillingIntervals.Monthly;
+    public int AmountCents { get; set; }
+    public string Currency { get; set; } = "USD";
+    public string Status { get; set; } = CheckoutIntentStatuses.Created;
+    public string? ExternalBillingProvider { get; set; }
+    public string? ExternalCheckoutSessionId { get; set; }
+    public string? ReturnUrl { get; set; }
+    public DateTimeOffset CreatedAtUtc { get; set; } = DateTimeOffset.UtcNow;
+    public DateTimeOffset ExpiresAtUtc { get; set; } = DateTimeOffset.UtcNow.AddHours(1);
+    public DateTimeOffset? CompletedAtUtc { get; set; }
+    public JsonDocument? MetadataJson { get; set; }
+
+    public AppUser? AppUser { get; set; }
+    public Plan? Plan { get; set; }
+}
+
+public static class CheckoutIntentStatuses
+{
+    public const string Created = "Created";
+    public const string RequiresExternalProcessor = "RequiresExternalProcessor";
+    public const string Canceled = "Canceled";
+    public const string Completed = "Completed";
+    public const string Expired = "Expired";
+}
+
 public sealed class ModelConfigSet
 {
     public Guid Id { get; set; }

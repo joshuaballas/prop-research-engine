@@ -1,5 +1,9 @@
+using Microsoft.AspNetCore.Authentication;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
+using Microsoft.IdentityModel.Tokens;
+using SportsBetting.Api.Auth;
 using SportsBetting.Api.Configuration;
 using SportsBetting.Api.Data;
 using SportsBetting.Api.Diagnostics;
@@ -17,7 +21,14 @@ var builder = WebApplication.CreateBuilder(args);
 builder.Configuration.Sources.Clear();
 builder.Configuration
     .AddJsonFile("appsettings.json", optional: false, reloadOnChange: true)
-    .AddJsonFile($"appsettings.{builder.Environment.EnvironmentName}.json", optional: true, reloadOnChange: true)
+    .AddJsonFile($"appsettings.{builder.Environment.EnvironmentName}.json", optional: true, reloadOnChange: true);
+
+if (builder.Environment.IsDevelopment())
+{
+    builder.Configuration.AddUserSecrets<Program>(optional: true, reloadOnChange: true);
+}
+
+builder.Configuration
     .AddJsonFile("appsettings.Local.json", optional: true, reloadOnChange: true)
     .AddCommandLine(args)
     .AddEnvironmentVariables();
@@ -57,6 +68,9 @@ builder.Services.Configure<SoccerTopPicksOptions>(builder.Configuration.GetSecti
 builder.Services.Configure<TopPicksModelOptions>(builder.Configuration.GetSection(TopPicksModelOptions.SectionName));
 builder.Services.Configure<PredictionGenerationOptions>(builder.Configuration.GetSection(PredictionGenerationOptions.LegacySectionName));
 builder.Services.Configure<PredictionGenerationOptions>(builder.Configuration.GetSection(PredictionGenerationOptions.SectionName));
+builder.Services.Configure<AppAuthenticationOptions>(builder.Configuration.GetSection(AppAuthenticationOptions.SectionName));
+builder.Services.Configure<ClerkOptions>(builder.Configuration.GetSection(ClerkOptions.SectionName));
+builder.Services.Configure<AuthRuntimeOptions>(builder.Configuration.GetSection(AuthRuntimeOptions.SectionName));
 builder.Services.AddSingleton<AppConfigService>();
 builder.Services.AddSingleton<IAppConfigService>(services => services.GetRequiredService<AppConfigService>());
 builder.Services.AddSingleton<IAppConfigAuditService>(services => services.GetRequiredService<AppConfigService>());
@@ -121,6 +135,8 @@ builder.Services.AddScoped<IPlayerExternalRefRepository, PlayerExternalRefReposi
 builder.Services.AddScoped<IPlayerResolutionService, PlayerResolutionService>();
 builder.Services.AddScoped<IApplicationErrorLogger, ApplicationErrorLogger>();
 builder.Services.AddScoped<IProviderLineLifecycleService, ProviderLineLifecycleService>();
+builder.Services.AddScoped<IAppUserService, AppUserService>();
+builder.Services.AddScoped<IPlanBillingService, PlanBillingService>();
 builder.Services.AddScoped<ISoccerPlayerIdentityResolutionService, SoccerPlayerIdentityResolutionService>();
 builder.Services.AddScoped<ISoccerWorldCupPredictionService, SoccerWorldCupPredictionService>();
 builder.Services.AddScoped<IApiSportsSoccerSeasonResolver, ApiSportsSoccerSeasonResolver>();
@@ -137,6 +153,97 @@ builder.Services.AddHostedService<MlbResultImportWorker>();
 builder.Services.AddHostedService<SoccerResultImportWorker>();
 builder.Services.AddHostedService<TheOddsMlbIngestionWorker>();
 builder.Services.AddHostedService<TheOddsMlbScheduledRefreshWorker>();
+builder.Services.AddSingleton(TimeProvider.System);
+
+if (builder.Environment.IsEnvironment("Testing"))
+{
+    builder.Services
+        .AddAuthentication(TestingAuthHandler.SchemeName)
+        .AddScheme<AuthenticationSchemeOptions, TestingAuthHandler>(TestingAuthHandler.SchemeName, _ => { });
+}
+else
+{
+    var clerkOptions = builder.Configuration.GetSection(ClerkOptions.SectionName).Get<ClerkOptions>() ?? new ClerkOptions();
+    var issuer = NormalizeAuthority(clerkOptions.Issuer);
+    var metadataAddress = BuildOpenIdConfigurationAddress(clerkOptions);
+    var authorizedParties = clerkOptions.AuthorizedParties
+        .Where(value => !string.IsNullOrWhiteSpace(value))
+        .Select(value => value.Trim().TrimEnd('/'))
+        .ToArray();
+
+    builder.Services
+        .AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
+        .AddJwtBearer(options =>
+        {
+            if (!string.IsNullOrWhiteSpace(issuer))
+            {
+                options.Authority = issuer;
+                options.RequireHttpsMetadata = !issuer.StartsWith("http://localhost", StringComparison.OrdinalIgnoreCase);
+            }
+
+            if (!string.IsNullOrWhiteSpace(metadataAddress))
+            {
+                options.MetadataAddress = metadataAddress;
+            }
+
+            options.TokenValidationParameters = new TokenValidationParameters
+            {
+                ValidateIssuer = !string.IsNullOrWhiteSpace(issuer),
+                ValidIssuer = issuer,
+                ValidateAudience = false,
+                ValidateLifetime = true,
+                ValidateIssuerSigningKey = true,
+                ClockSkew = TimeSpan.FromMinutes(2),
+                NameClaimType = "sub"
+            };
+
+            options.Events = new JwtBearerEvents
+            {
+                OnAuthenticationFailed = context =>
+                {
+                    LogClerkJwtAuthenticationFailure(
+                        context.HttpContext,
+                        context.Exception,
+                        issuer,
+                        metadataAddress,
+                        authorizedParties.Length);
+
+                    return Task.CompletedTask;
+                },
+                OnChallenge = context =>
+                {
+                    LogClerkJwtChallenge(
+                        context.HttpContext,
+                        context.Error,
+                        context.AuthenticateFailure,
+                        issuer,
+                        metadataAddress,
+                        authorizedParties.Length);
+
+                    return Task.CompletedTask;
+                },
+                OnTokenValidated = context =>
+                {
+                    var authorizedParty = context.Principal?.Claims.FirstOrDefault(claim => string.Equals(claim.Type, "azp", StringComparison.OrdinalIgnoreCase))?.Value;
+                    if (authorizedParties.Length > 0
+                        && !string.IsNullOrWhiteSpace(authorizedParty)
+                        && !authorizedParties.Any(value => string.Equals(value, authorizedParty.Trim().TrimEnd('/'), StringComparison.OrdinalIgnoreCase)))
+                    {
+                        context.Fail("Token authorized party is not allowed.");
+                    }
+
+                    return Task.CompletedTask;
+                }
+            };
+        });
+}
+
+builder.Services.AddAuthorization(options =>
+{
+    options.AddPolicy(AuthPolicies.AuthenticatedMember, policy => policy.RequireAuthenticatedUser());
+    options.AddPolicy(AuthPolicies.OwnerOrAdmin, policy => policy.RequireAuthenticatedUser());
+    options.AddPolicy(AuthPolicies.DebugAccess, policy => policy.RequireAuthenticatedUser());
+});
 
 var connectionString = builder.Configuration.GetConnectionString("SportsBettingDb")
     ?? throw new InvalidOperationException("Connection string 'SportsBettingDb' is not configured.");
@@ -171,7 +278,9 @@ if (app.Environment.IsDevelopment())
 app.UseCors();
 app.UseHttpsRedirection();
 app.UseMiddleware<ApplicationErrorMiddleware>();
-app.UseMiddleware<DebugAdminProtectionMiddleware>();
+app.UseAuthentication();
+app.UseAuthorization();
+app.UseMiddleware<AppApiAuthorizationMiddleware>();
 app.UseStaticFiles();
 
 app.MapGet("/", () => Results.Redirect("/health"))
@@ -211,6 +320,7 @@ app.MapFeatureDebugEndpoints();
 app.MapPlayerMappingDebugEndpoints();
 app.MapMarketClassificationDebugEndpoints();
 app.MapApplicationErrorDebugEndpoints();
+app.MapAuthBillingEndpoints();
 app.MapAppConfigDebugEndpoints();
 app.MapProviderDomainConfigDebugEndpoints();
 app.MapModelConfigDebugEndpoints();
@@ -241,6 +351,78 @@ static bool IsAllowedFrontendDevOrigin(string origin)
     var isVitePort = uri.Port is >= 5173 and <= 5179;
 
     return isLocalHost && isVitePort && (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps);
+}
+
+static string NormalizeAuthority(string value)
+{
+    return string.IsNullOrWhiteSpace(value) ? string.Empty : value.Trim().TrimEnd('/');
+}
+
+static string BuildOpenIdConfigurationAddress(ClerkOptions options)
+{
+    if (!string.IsNullOrWhiteSpace(options.JwksUrl)
+        && options.JwksUrl.Contains("/.well-known/jwks.json", StringComparison.OrdinalIgnoreCase))
+    {
+        return options.JwksUrl.Trim().Replace("/.well-known/jwks.json", "/.well-known/openid-configuration", StringComparison.OrdinalIgnoreCase);
+    }
+
+    var issuer = NormalizeAuthority(options.Issuer);
+    return string.IsNullOrWhiteSpace(issuer) ? string.Empty : $"{issuer}/.well-known/openid-configuration";
+}
+
+static void LogClerkJwtAuthenticationFailure(
+    HttpContext context,
+    Exception exception,
+    string issuer,
+    string metadataAddress,
+    int authorizedPartyCount)
+{
+    if (!context.RequestServices.GetRequiredService<IHostEnvironment>().IsDevelopment())
+    {
+        return;
+    }
+
+    var logger = context.RequestServices
+        .GetRequiredService<ILoggerFactory>()
+        .CreateLogger("ClerkJwtAuthentication");
+
+    logger.LogWarning(
+        exception,
+        "Clerk JWT authentication failed for {Path}. IssuerConfigured: {IssuerConfigured}; MetadataConfigured: {MetadataConfigured}; AuthorizedPartyCount: {AuthorizedPartyCount}; FailureType: {FailureType}; FailureMessage: {FailureMessage}.",
+        context.Request.Path.Value,
+        !string.IsNullOrWhiteSpace(issuer),
+        !string.IsNullOrWhiteSpace(metadataAddress),
+        authorizedPartyCount,
+        exception.GetType().Name,
+        exception.Message);
+}
+
+static void LogClerkJwtChallenge(
+    HttpContext context,
+    string? error,
+    Exception? failure,
+    string issuer,
+    string metadataAddress,
+    int authorizedPartyCount)
+{
+    if (!context.RequestServices.GetRequiredService<IHostEnvironment>().IsDevelopment())
+    {
+        return;
+    }
+
+    var logger = context.RequestServices
+        .GetRequiredService<ILoggerFactory>()
+        .CreateLogger("ClerkJwtAuthentication");
+
+    logger.LogWarning(
+        "Clerk JWT challenge for {Path}. Error: {Error}; IssuerConfigured: {IssuerConfigured}; MetadataConfigured: {MetadataConfigured}; AuthorizedPartyCount: {AuthorizedPartyCount}; FailureType: {FailureType}; FailureMessage: {FailureMessage}.",
+        context.Request.Path.Value,
+        error,
+        !string.IsNullOrWhiteSpace(issuer),
+        !string.IsNullOrWhiteSpace(metadataAddress),
+        authorizedPartyCount,
+        failure?.GetType().Name,
+        failure?.Message);
 }
 
 static async Task ApplyDatabaseMigrationsAsync(WebApplication app)

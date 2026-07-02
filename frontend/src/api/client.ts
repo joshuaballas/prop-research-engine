@@ -15,14 +15,28 @@ export class ApiError extends Error {
 }
 
 export async function apiGet<T>(path: string, signal?: AbortSignal): Promise<T> {
+  return apiRequest<T>('GET', path, undefined, signal);
+}
+
+export async function apiPost<T>(path: string, body?: unknown, signal?: AbortSignal): Promise<T> {
+  return apiRequest<T>('POST', path, body, signal);
+}
+
+export async function apiPut<T>(path: string, body?: unknown, signal?: AbortSignal): Promise<T> {
+  return apiRequest<T>('PUT', path, body, signal);
+}
+
+async function apiRequest<T>(method: string, path: string, body?: unknown, signal?: AbortSignal): Promise<T> {
   const token = await getAccessToken();
   const response = await fetch(`${API_BASE_URL}${path}`, {
-    method: 'GET',
+    method,
     signal,
     headers: {
       Accept: 'application/json',
+      ...(body !== undefined ? { 'Content-Type': 'application/json' } : {}),
       ...(token ? { Authorization: `Bearer ${token}` } : {})
-    }
+    },
+    ...(body !== undefined ? { body: JSON.stringify(body) } : {})
   });
 
   const contentType = response.headers.get('content-type') ?? '';
