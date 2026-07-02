@@ -14,10 +14,12 @@ export function AppLayout() {
       direction="row"
       minHeight="100vh"
       sx={{
+        height: { xs: '100dvh', lg: 'auto' },
         position: 'relative',
         isolation: 'isolate',
         bgcolor: palette.bg,
         background: palette.bg,
+        overflow: { xs: 'hidden', lg: 'visible' },
         // Keep the app shell background solid so component state changes cannot shift page-level color.
       }}
     >
@@ -25,14 +27,31 @@ export function AppLayout() {
       <Box
         flex={1}
         minWidth={0}
-        pb={{ xs: builder.legs.length && !builder.isDrawerOpen ? 18 : 9, lg: 0 }}
         mr={builder.isDrawerOpen ? { xs: 0, md: '360px' } : 0}
-        sx={{ transition: 'margin-right 180ms ease, padding-bottom 180ms ease' }}
+        sx={{
+          height: { xs: '100dvh', lg: 'auto' },
+          minHeight: 0,
+          display: 'flex',
+          flexDirection: 'column',
+          overflow: { xs: 'hidden', lg: 'visible' },
+          transition: 'margin-right 180ms ease'
+        }}
       >
         <AppTopBar />
-        <Container maxWidth="xl" sx={{ py: { xs: 2.5, md: 4 } }}>
-          <Outlet />
-        </Container>
+        <Box
+          component="main"
+          sx={{
+            flex: 1,
+            minHeight: 0,
+            overflowY: { xs: 'auto', lg: 'visible' },
+            overflowX: { xs: 'hidden', lg: 'visible' },
+            pb: { xs: builder.legs.length && !builder.isDrawerOpen ? 18 : 9, lg: 0 }
+          }}
+        >
+          <Container maxWidth="xl" sx={{ py: { xs: 2.5, md: 4 } }}>
+            <Outlet />
+          </Container>
+        </Box>
         <MobileNav />
       </Box>
       <SharedEntryBuilderDrawer />

@@ -55,7 +55,7 @@ export function AppTopBar() {
         alignItems="center"
         justifyContent="space-between"
         gap={2}
-        sx={{ py: 1.1, px: { xs: 2, md: 3 }, borderBottom: '1px solid rgba(148,163,184,.12)', bgcolor: '#070B14', position: 'sticky', top: 0, zIndex: 10 }}
+        sx={{ py: 1.1, px: { xs: 2, md: 3 }, borderBottom: '1px solid rgba(148,163,184,.12)', bgcolor: '#070B14', position: 'sticky', top: 0, zIndex: 10, flexShrink: 0 }}
       >
         <Button
           variant="outlined"
@@ -93,86 +93,90 @@ export function AppTopBar() {
               Demo data
             </Typography>
           ) : null}
-          <Box aria-hidden="true" sx={{ display: { xs: 'flex', lg: 'none' }, alignItems: 'center', flexShrink: 0 }}>
-            <Avatar sx={{ width: 34, height: 34 }}>{userInitial}</Avatar>
-          </Box>
-          <Tooltip title="Account menu" arrow>
-            <IconButton
-              aria-label="Open account menu"
-              aria-controls={profileMenuOpen ? 'top-bar-profile-menu' : undefined}
-              aria-haspopup="menu"
-              aria-expanded={profileMenuOpen ? 'true' : undefined}
-              onClick={(event) => setProfileAnchorEl(event.currentTarget)}
-              size="small"
-              sx={{
-                display: { xs: 'none', lg: 'inline-flex' },
-                p: 0.25,
-                borderRadius: radius.circle,
-                color: 'text.primary',
-                '&:hover': { bgcolor: 'rgba(148,163,184,.12)' },
-                '&:focus-visible': {
-                  outline: `2px solid ${palette.primary}`,
-                  outlineOffset: 2
-                }
-              }}
-            >
-              <Avatar sx={{ width: 34, height: 34 }}>{userInitial}</Avatar>
-            </IconButton>
-          </Tooltip>
+          {desktopProfileMenuEnabled ? (
+            <Tooltip title="Account menu" arrow>
+              <IconButton
+                aria-label="Open account menu"
+                aria-controls={profileMenuOpen ? 'top-bar-profile-menu' : undefined}
+                aria-haspopup="menu"
+                aria-expanded={profileMenuOpen ? 'true' : undefined}
+                onClick={(event) => setProfileAnchorEl(event.currentTarget)}
+                size="small"
+                sx={{
+                  p: 0.25,
+                  borderRadius: radius.circle,
+                  color: 'text.primary',
+                  '&:hover': { bgcolor: 'rgba(148,163,184,.12)' },
+                  '&:focus-visible': {
+                    outline: `2px solid ${palette.primary}`,
+                    outlineOffset: 2
+                  }
+                }}
+              >
+                <Avatar sx={{ width: 34, height: 34 }}>{userInitial}</Avatar>
+              </IconButton>
+            </Tooltip>
+          ) : (
+            <Avatar aria-hidden="true" sx={{ width: 34, height: 34, flexShrink: 0 }}>
+              {userInitial}
+            </Avatar>
+          )}
         </Stack>
       </Stack>
-      <Menu
-        id="top-bar-profile-menu"
-        anchorEl={profileAnchorEl}
-        open={profileMenuOpen}
-        onClose={closeProfileMenu}
-        anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
-        transformOrigin={{ vertical: 'top', horizontal: 'right' }}
-        PaperProps={{
-          sx: {
-            mt: 1,
-            minWidth: 240,
-            borderRadius: radius.card,
-            border: `1px solid ${palette.border}`,
-            bgcolor: '#080D1A',
-            backgroundImage: 'none',
-            color: 'text.primary',
-            boxShadow: '0 22px 60px rgba(0,0,0,.45)'
-          }
-        }}
-        MenuListProps={{ 'aria-label': 'Account menu' }}
-      >
-        <Box sx={{ px: 1.75, py: 1.4, maxWidth: 280 }}>
-          <Typography fontWeight={950} noWrap>
-            {accountLabel}
-          </Typography>
-          {secondaryAccountLabel ? (
-            <Typography variant="body2" color="text.secondary" noWrap>
-              {secondaryAccountLabel}
+      {desktopProfileMenuEnabled ? (
+        <Menu
+          id="top-bar-profile-menu"
+          anchorEl={profileAnchorEl}
+          open={profileMenuOpen}
+          onClose={closeProfileMenu}
+          anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
+          transformOrigin={{ vertical: 'top', horizontal: 'right' }}
+          PaperProps={{
+            sx: {
+              mt: 1,
+              minWidth: 240,
+              borderRadius: radius.card,
+              border: `1px solid ${palette.border}`,
+              bgcolor: '#080D1A',
+              backgroundImage: 'none',
+              color: 'text.primary',
+              boxShadow: '0 22px 60px rgba(0,0,0,.45)'
+            }
+          }}
+          MenuListProps={{ 'aria-label': 'Account menu' }}
+        >
+          <Box sx={{ px: 1.75, py: 1.4, maxWidth: 280 }}>
+            <Typography fontWeight={950} noWrap>
+              {accountLabel}
             </Typography>
-          ) : null}
-        </Box>
-        <Divider sx={{ borderColor: palette.border }} />
-        <MenuItem onClick={() => navigateFromProfileMenu('/app/account')}>
-          <ListItemIcon sx={{ color: 'text.secondary', minWidth: 34 }}>
-            <ManageAccountsOutlinedIcon fontSize="small" />
-          </ListItemIcon>
-          Account
-        </MenuItem>
-        <MenuItem onClick={() => navigateFromProfileMenu('/app/billing')}>
-          <ListItemIcon sx={{ color: 'text.secondary', minWidth: 34 }}>
-            <PaymentOutlinedIcon fontSize="small" />
-          </ListItemIcon>
-          Billing
-        </MenuItem>
-        <Divider sx={{ borderColor: palette.border }} />
-        <MenuItem onClick={() => void handleSignOut()} sx={{ color: palette.danger }}>
-          <ListItemIcon sx={{ color: 'inherit', minWidth: 34 }}>
-            <LogoutRoundedIcon fontSize="small" />
-          </ListItemIcon>
-          Sign out
-        </MenuItem>
-      </Menu>
+            {secondaryAccountLabel ? (
+              <Typography variant="body2" color="text.secondary" noWrap>
+                {secondaryAccountLabel}
+              </Typography>
+            ) : null}
+          </Box>
+          <Divider sx={{ borderColor: palette.border }} />
+          <MenuItem onClick={() => navigateFromProfileMenu('/app/account')}>
+            <ListItemIcon sx={{ color: 'text.secondary', minWidth: 34 }}>
+              <ManageAccountsOutlinedIcon fontSize="small" />
+            </ListItemIcon>
+            Account
+          </MenuItem>
+          <MenuItem onClick={() => navigateFromProfileMenu('/app/billing')}>
+            <ListItemIcon sx={{ color: 'text.secondary', minWidth: 34 }}>
+              <PaymentOutlinedIcon fontSize="small" />
+            </ListItemIcon>
+            Billing
+          </MenuItem>
+          <Divider sx={{ borderColor: palette.border }} />
+          <MenuItem onClick={() => void handleSignOut()} sx={{ color: palette.danger }}>
+            <ListItemIcon sx={{ color: 'inherit', minWidth: 34 }}>
+              <LogoutRoundedIcon fontSize="small" />
+            </ListItemIcon>
+            Sign out
+          </MenuItem>
+        </Menu>
+      ) : null}
       <GlossaryDialog open={glossaryOpen} onClose={() => setGlossaryOpen(false)} />
     </>
   );
