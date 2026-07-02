@@ -107,10 +107,8 @@ export function AccountPage() {
                     width: 58,
                     height: 58,
                     flex: '0 0 auto',
-                    bgcolor: 'rgba(34, 211, 238, 0.16)',
                     color: palette.text,
                     fontWeight: 950,
-                    border: `1px solid ${palette.borderStrong}`
                   }}
                 >
                   {avatarInitial}

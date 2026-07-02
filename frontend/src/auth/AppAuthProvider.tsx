@@ -9,6 +9,7 @@ import { clerkLocalization } from './clerkLocalization';
 export interface AppAuthUser {
   displayName?: string;
   email?: string;
+  imageUrl?: string;
 }
 
 export interface AppAuthState {
@@ -80,7 +81,8 @@ function ClerkAuthBridge({ children }: PropsWithChildren) {
       isSignedIn: Boolean(isSignedIn),
       user: {
         displayName: user?.fullName ?? user?.username ?? undefined,
-        email: user?.primaryEmailAddress?.emailAddress
+        email: user?.primaryEmailAddress?.emailAddress,
+        imageUrl: user?.imageUrl
       },
       getToken: async () => {
         if (!isLoaded || !isSignedIn) {
@@ -94,7 +96,7 @@ function ClerkAuthBridge({ children }: PropsWithChildren) {
         navigate('/', { replace: true });
       }
     }),
-    [getToken, isLoaded, isSignedIn, navigate, signOut, user?.fullName, user?.primaryEmailAddress?.emailAddress, user?.username]
+    [getToken, isLoaded, isSignedIn, navigate, signOut, user?.fullName, user?.imageUrl, user?.primaryEmailAddress?.emailAddress, user?.username]
   );
 
   return <AppAuthContext.Provider value={value}>{children}</AppAuthContext.Provider>;

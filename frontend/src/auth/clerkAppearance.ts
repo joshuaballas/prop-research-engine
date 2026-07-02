@@ -484,6 +484,9 @@ export const clerkUserProfileAppearance = {
       }
     },
     profileSection__profile: {
+      '& .cl-avatarImageActions, & .cl-avatarImageActions + p': {
+        display: 'none'
+      },
       '@media (max-width: 767.95px)': {
         '& .cl-profileSectionItem__profile': {
           flexDirection: 'column',

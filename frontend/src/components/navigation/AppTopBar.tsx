@@ -25,6 +25,7 @@ export function AppTopBar() {
   const freshness = freshnessQuery.data;
   const marketDataStatus = resolveMarketDataStatus(freshness, freshnessQuery.loading, Boolean(freshnessQuery.error));
   const userInitial = (auth.user?.displayName || auth.user?.email || 'U').trim()[0]?.toUpperCase() ?? 'U';
+  const userImageUrl = auth.user?.imageUrl?.trim();
   const profileMenuOpen = desktopProfileMenuEnabled && Boolean(profileAnchorEl);
   const displayName = auth.user?.displayName?.trim();
   const email = auth.user?.email?.trim();
@@ -157,7 +158,7 @@ export function AppTopBar() {
                   }
                 }}
               >
-                <AvatarWithStatusBadge initial={userInitial} status={marketDataStatus} />
+                <AvatarWithStatusBadge initial={userInitial} imageUrl={userImageUrl} status={marketDataStatus} />
               </IconButton>
             </Tooltip>
           ) : (
@@ -216,7 +217,7 @@ export function AppTopBar() {
                       }
                     }}
                   >
-                    <AvatarWithStatusBadge initial={userInitial} status={marketDataStatus} />
+                    <AvatarWithStatusBadge initial={userInitial} imageUrl={userImageUrl} status={marketDataStatus} />
                   </IconButton>
                 </Tooltip>
               </Box>
@@ -292,10 +293,10 @@ interface MarketDataStatusView {
   detailLabel: string;
 }
 
-function AvatarWithStatusBadge({ initial, status }: { initial: string; status: MarketDataStatusView }) {
+function AvatarWithStatusBadge({ initial, imageUrl, status }: { initial: string; imageUrl?: string; status: MarketDataStatusView }) {
   return (
     <Box sx={{ position: 'relative', width: 34, height: 34, flexShrink: 0 }}>
-      <Avatar sx={{ width: 34, height: 34 }}>{initial}</Avatar>
+      <Avatar src={imageUrl} sx={{ width: 34, height: 34 }}>{initial}</Avatar>
       <Box
         component="span"
         sx={{
