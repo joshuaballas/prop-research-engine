@@ -2,11 +2,11 @@ import HelpOutlineRoundedIcon from '@mui/icons-material/HelpOutlineRounded';
 import LogoutRoundedIcon from '@mui/icons-material/LogoutRounded';
 import ManageAccountsOutlinedIcon from '@mui/icons-material/ManageAccountsOutlined';
 import PaymentOutlinedIcon from '@mui/icons-material/PaymentOutlined';
-import { Avatar, Box, Button, Divider, IconButton, ListItemIcon, Menu, MenuItem, Stack, Tooltip, Typography, useMediaQuery, useTheme } from '@mui/material';
+import { Avatar, Box, Button, ClickAwayListener, Divider, IconButton, ListItemIcon, Menu, MenuItem, Stack, Tooltip, Typography, useMediaQuery, useTheme } from '@mui/material';
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { GlossaryDialog } from '../glossary/GlossaryDialog';
-import type { MarketReadinessDto } from '../../api/types';
+import type { MarketFreshnessDto, MarketReadinessDto } from '../../api/types';
 import { useAppAuth } from '../../auth/AppAuthProvider';
 import { isDemoDataMode } from '../../config/dataMode';
 import { useMarketFreshnessData } from '../../hooks/useMarketData';
@@ -16,13 +16,14 @@ import { radius } from '../../theme/radius';
 export function AppTopBar() {
   const [glossaryOpen, setGlossaryOpen] = useState(false);
   const [profileAnchorEl, setProfileAnchorEl] = useState<HTMLElement | null>(null);
+  const [statusPopoverOpen, setStatusPopoverOpen] = useState(false);
   const navigate = useNavigate();
   const theme = useTheme();
   const desktopProfileMenuEnabled = useMediaQuery(theme.breakpoints.up('lg'));
   const auth = useAppAuth();
   const freshnessQuery = useMarketFreshnessData(['app-top-bar-live-data']);
   const freshness = freshnessQuery.data;
-  const liveDataState = resolveLiveDataState(freshness, Boolean(freshnessQuery.error));
+  const marketDataStatus = resolveMarketDataStatus(freshness, freshnessQuery.loading, Boolean(freshnessQuery.error));
   const userInitial = (auth.user?.displayName || auth.user?.email || 'U').trim()[0]?.toUpperCase() ?? 'U';
   const profileMenuOpen = desktopProfileMenuEnabled && Boolean(profileAnchorEl);
   const displayName = auth.user?.displayName?.trim();
@@ -35,6 +36,12 @@ export function AppTopBar() {
       setProfileAnchorEl(null);
     }
   }, [desktopProfileMenuEnabled]);
+
+  useEffect(() => {
+    if (profileMenuOpen) {
+      setStatusPopoverOpen(false);
+    }
+  }, [profileMenuOpen]);
 
   const closeProfileMenu = () => setProfileAnchorEl(null);
 
@@ -81,7 +88,6 @@ export function AppTopBar() {
           Glossary
         </Button>
         <Stack direction="row" spacing={{ xs: 1, sm: 2 }} alignItems="center" minWidth={0} sx={{ flex: { xs: 1, sm: '0 1 auto' }, justifyContent: 'flex-end' }}>
-          {liveDataState ? <LiveDataIndicator state={liveDataState} /> : null}
           {isDemoDataMode ? (
             <Typography
               variant="caption"
@@ -94,13 +100,51 @@ export function AppTopBar() {
             </Typography>
           ) : null}
           {desktopProfileMenuEnabled ? (
-            <Tooltip title="Account menu" arrow>
+            <Tooltip
+              title={<MarketDataStatusPopover status={marketDataStatus} />}
+              arrow
+              placement="bottom-end"
+              open={statusPopoverOpen && !profileMenuOpen}
+              disableFocusListener
+              disableHoverListener
+              disableTouchListener
+              slotProps={{
+                tooltip: {
+                  sx: {
+                    mt: 1,
+                    maxWidth: 280,
+                    p: 1.25,
+                    borderRadius: radius.card,
+                    border: `1px solid ${palette.border}`,
+                    bgcolor: '#080D1A',
+                    backgroundImage: 'none',
+                    color: 'text.primary',
+                    boxShadow: '0 16px 42px rgba(0,0,0,.42)'
+                  }
+                },
+                arrow: {
+                  sx: {
+                    color: '#080D1A',
+                    '&:before': {
+                      border: `1px solid ${palette.border}`
+                    }
+                  }
+                }
+              }}
+            >
               <IconButton
                 aria-label="Open account menu"
                 aria-controls={profileMenuOpen ? 'top-bar-profile-menu' : undefined}
                 aria-haspopup="menu"
                 aria-expanded={profileMenuOpen ? 'true' : undefined}
-                onClick={(event) => setProfileAnchorEl(event.currentTarget)}
+                onMouseEnter={() => setStatusPopoverOpen(true)}
+                onMouseLeave={() => setStatusPopoverOpen(false)}
+                onFocus={() => setStatusPopoverOpen(true)}
+                onBlur={() => setStatusPopoverOpen(false)}
+                onClick={(event) => {
+                  setStatusPopoverOpen(false);
+                  setProfileAnchorEl(event.currentTarget);
+                }}
                 size="small"
                 sx={{
                   p: 0.25,
@@ -113,13 +157,70 @@ export function AppTopBar() {
                   }
                 }}
               >
-                <Avatar sx={{ width: 34, height: 34 }}>{userInitial}</Avatar>
+                <AvatarWithStatusBadge initial={userInitial} status={marketDataStatus} />
               </IconButton>
             </Tooltip>
           ) : (
-            <Avatar aria-hidden="true" sx={{ width: 34, height: 34, flexShrink: 0 }}>
-              {userInitial}
-            </Avatar>
+            <ClickAwayListener onClickAway={() => setStatusPopoverOpen(false)}>
+              <Box sx={{ flexShrink: 0 }}>
+                <Tooltip
+                  title={<MarketDataStatusPopover status={marketDataStatus} />}
+                  arrow
+                  placement="bottom-end"
+                  open={statusPopoverOpen}
+                  disableFocusListener
+                  disableHoverListener
+                  disableTouchListener
+                  slotProps={{
+                    tooltip: {
+                      sx: {
+                        mt: 1,
+                        maxWidth: 260,
+                        p: 1.25,
+                        borderRadius: radius.card,
+                        border: `1px solid ${palette.border}`,
+                        bgcolor: '#080D1A',
+                        backgroundImage: 'none',
+                        color: 'text.primary',
+                        boxShadow: '0 16px 42px rgba(0,0,0,.42)'
+                      }
+                    },
+                    arrow: {
+                      sx: {
+                        color: '#080D1A',
+                        '&:before': {
+                          border: `1px solid ${palette.border}`
+                        }
+                      }
+                    }
+                  }}
+                >
+                  <IconButton
+                    aria-label={`Show market data status: ${marketDataStatus.label}`}
+                    aria-expanded={statusPopoverOpen ? 'true' : undefined}
+                    onClick={() => setStatusPopoverOpen((open) => !open)}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Escape') {
+                        setStatusPopoverOpen(false);
+                      }
+                    }}
+                    size="small"
+                    sx={{
+                      p: 0.25,
+                      borderRadius: radius.circle,
+                      color: 'text.primary',
+                      '&:hover': { bgcolor: 'rgba(148,163,184,.08)' },
+                      '&:focus-visible': {
+                        outline: `2px solid ${palette.primary}`,
+                        outlineOffset: 2
+                      }
+                    }}
+                  >
+                    <AvatarWithStatusBadge initial={userInitial} status={marketDataStatus} />
+                  </IconButton>
+                </Tooltip>
+              </Box>
+            </ClickAwayListener>
           )}
         </Stack>
       </Stack>
@@ -182,112 +283,217 @@ export function AppTopBar() {
   );
 }
 
-type LiveDataState = 'healthy' | 'syncing' | 'issue';
+type MarketDataStatusTone = 'fresh' | 'syncing' | 'issue' | 'unknown';
 
-function LiveDataIndicator({ state }: { state: LiveDataState }) {
-  const isHealthy = state === 'healthy';
-  const isIssue = state === 'issue';
-  const label = isHealthy ? 'Auto refresh' : isIssue ? 'Refresh issue' : 'Syncing market data';
-  const tooltip = isHealthy
-    ? 'Market data refreshes automatically in the background. No page reload needed.'
-    : isIssue
-      ? 'Market data could not refresh. The current board may be stale.'
-      : 'Market data is updating in the background. No page reload needed.';
-  const color = isHealthy ? palette.success : isIssue ? palette.danger : palette.warning;
+interface MarketDataStatusView {
+  tone: MarketDataStatusTone;
+  label: string;
+  badgeColor: string;
+  detailLabel: string;
+}
 
+function AvatarWithStatusBadge({ initial, status }: { initial: string; status: MarketDataStatusView }) {
   return (
-    <Tooltip title={tooltip} arrow>
-      <Stack
+    <Box sx={{ position: 'relative', width: 34, height: 34, flexShrink: 0 }}>
+      <Avatar sx={{ width: 34, height: 34 }}>{initial}</Avatar>
+      <Box
         component="span"
-        direction="row"
-        alignItems="center"
-        spacing={0.75}
-        aria-label={`${label}. ${tooltip}`}
         sx={{
-          color,
-          flexShrink: 0,
-          cursor: 'default'
+          position: 'absolute',
+          top: 1,
+          right: 1,
+          width: 10,
+          height: 10,
+          borderRadius: radius.circle,
+          bgcolor: status.badgeColor,
+          border: '2px solid #070B14',
+          boxShadow: `0 0 0 1px ${status.badgeColor}55`
         }}
-      >
+      />
+    </Box>
+  );
+}
+
+function MarketDataStatusPopover({ status }: { status: MarketDataStatusView }) {
+  return (
+    <Stack spacing={0.55}>
+      <Stack direction="row" spacing={0.75} alignItems="center">
         <Box
           component="span"
           sx={{
             width: 8,
             height: 8,
-            borderRadius: radius.pill,
-            bgcolor: color,
-            boxShadow: isHealthy ? `0 0 0 0 ${palette.success}66` : `0 0 0 2px ${color}22`,
-            animation: isHealthy ? 'live-data-pulse 1.8s ease-out infinite' : 'none',
-            '@keyframes live-data-pulse': {
-              '0%': { boxShadow: `0 0 0 0 ${palette.success}66` },
-              '70%': { boxShadow: `0 0 0 7px ${palette.success}00` },
-              '100%': { boxShadow: `0 0 0 0 ${palette.success}00` }
-            }
+            borderRadius: radius.circle,
+            bgcolor: status.badgeColor,
+            flexShrink: 0
           }}
         />
-        <Typography
-          component="span"
-          variant="caption"
-          sx={{
-            color: 'inherit',
-            fontWeight: 900,
-            lineHeight: 1,
-            whiteSpace: 'nowrap',
-            letterSpacing: 0
-          }}
-        >
-          {label}
+        <Typography variant="body2" fontWeight={850} lineHeight={1.2}>
+          {status.label}
         </Typography>
       </Stack>
-    </Tooltip>
+      <Typography variant="caption" color="text.secondary" sx={{ display: 'block', lineHeight: 1.35 }}>
+        {status.detailLabel}
+      </Typography>
+    </Stack>
   );
 }
 
-function resolveLiveDataState(
-  freshness: ReturnType<typeof useMarketFreshnessData>['data'],
-  hasPollingError: boolean
-): LiveDataState | null {
-  if (!freshness && !hasPollingError) {
-    return null;
+function resolveMarketDataStatus(freshness: MarketFreshnessDto | undefined, isLoading: boolean, hasPollingError: boolean): MarketDataStatusView {
+  if (hasPollingError && !freshness) {
+    return {
+      tone: 'issue',
+      label: 'Refresh issue',
+      badgeColor: palette.danger,
+      detailLabel: 'Market data is unavailable'
+    };
   }
 
+  if (isLoading && !freshness) {
+    return {
+      tone: 'unknown',
+      label: 'Checking',
+      badgeColor: palette.textSubtle,
+      detailLabel: 'Market status is loading'
+    };
+  }
+
+  const readiness = freshness?.marketReadiness;
+  const label = resolveMarketDataStatusLabel(readiness, freshness, hasPollingError);
+  const tone = resolveMarketDataStatusTone(readiness, freshness, hasPollingError);
+
+  return {
+    tone,
+    label,
+    badgeColor: resolveMarketDataBadgeColor(tone),
+    detailLabel: resolveMarketDataDetail(label)
+  };
+}
+
+function resolveMarketDataStatusTone(
+  readiness: MarketReadinessDto | null | undefined,
+  freshness: MarketFreshnessDto | undefined,
+  hasPollingError: boolean
+): MarketDataStatusTone {
   if (hasPollingError) {
     return 'issue';
   }
 
-  const readinessState = resolveReadinessState(freshness?.marketReadiness);
-  if (readinessState) {
-    return readinessState;
+  const status = readiness?.status?.trim().toLowerCase();
+  const severity = readiness?.severity?.trim().toLowerCase();
+
+  if (severity === 'error' || status === 'failed' || status === 'providerunavailable') {
+    return 'issue';
   }
 
   if (freshness?.hasUsableMarketData === false || freshness?.providerRejectedKeyDetected === true || hasProviderIssue(freshness?.providerStatus?.status, freshness?.hasUsableMarketData)) {
     return 'issue';
   }
 
-  return 'healthy';
-}
-
-function resolveReadinessState(readiness: MarketReadinessDto | null | undefined): LiveDataState | null {
-  const status = readiness?.status?.trim().toLowerCase();
-  const severity = readiness?.severity?.trim().toLowerCase();
-
-  if (!status && !severity) {
-    return null;
-  }
-
-  if (severity === 'error' || status === 'failed' || status === 'providerunavailable') {
-    return 'issue';
-  }
-
   if (status === 'fresh' && (severity === undefined || severity === 'ok')) {
-    return 'healthy';
+    return 'fresh';
   }
 
   if (['syncing', 'initializing', 'partial', 'stale'].includes(status ?? '') || severity === 'info' || severity === 'warning') {
     return 'syncing';
   }
 
-  return null;
+  return status ? 'unknown' : freshness ? 'fresh' : 'unknown';
+}
+
+function resolveMarketDataStatusLabel(
+  readiness: MarketReadinessDto | null | undefined,
+  freshness: MarketFreshnessDto | undefined,
+  hasPollingError: boolean
+) {
+  if (hasPollingError) {
+    return 'Refresh issue';
+  }
+
+  const status = readiness?.status?.trim().toLowerCase();
+  const severity = readiness?.severity?.trim().toLowerCase();
+
+  if (status === 'providerunavailable') {
+    return 'Provider unavailable';
+  }
+
+  if (severity === 'error' || status === 'failed') {
+    return 'Refresh issue';
+  }
+
+  if (status === 'fresh' && (severity === undefined || severity === 'ok')) {
+    return 'Fresh';
+  }
+
+  if (status === 'syncing') {
+    return 'Syncing';
+  }
+
+  if (status === 'initializing') {
+    return 'Initializing';
+  }
+
+  if (status === 'partial') {
+    return 'Partial';
+  }
+
+  if (status === 'stale') {
+    return 'Stale';
+  }
+
+  if (freshness?.hasUsableMarketData === false || freshness?.providerRejectedKeyDetected === true || hasProviderIssue(freshness?.providerStatus?.status, freshness?.hasUsableMarketData)) {
+    return 'Refresh issue';
+  }
+
+  if (status) {
+    return 'Unknown';
+  }
+
+  return freshness ? 'Fresh' : 'Unknown';
+}
+
+function resolveMarketDataBadgeColor(tone: MarketDataStatusTone) {
+  if (tone === 'fresh') {
+    return palette.success;
+  }
+
+  if (tone === 'syncing') {
+    return palette.warning;
+  }
+
+  if (tone === 'issue') {
+    return palette.danger;
+  }
+
+  return palette.textSubtle;
+}
+
+function resolveMarketDataDetail(label: string) {
+  if (label === 'Fresh') {
+    return 'Market data is up-to-date';
+  }
+
+  if (label === 'Checking') {
+    return 'Market status is loading';
+  }
+
+  if (label === 'Syncing') {
+    return 'Market data is updating';
+  }
+
+  if (label === 'Partial') {
+    return 'Some markets are still updating';
+  }
+
+  if (label === 'Stale') {
+    return 'Market data may be outdated';
+  }
+
+  if (label === 'Refresh issue' || label === 'Provider unavailable') {
+    return 'Market data is unavailable';
+  }
+
+  return 'Market status is unavailable';
 }
 
 function hasProviderIssue(status: string | undefined, hasUsableMarketData: boolean | undefined) {
