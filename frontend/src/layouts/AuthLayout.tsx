@@ -16,9 +16,9 @@ export function AuthLayout() {
         overflow: 'hidden'
       }}
     >
-      <Container maxWidth="lg" sx={{ py: { xs: 4, md: 9 } }}>
+      <Container maxWidth="lg" sx={{ py: { xs: 2.5, md: 9 } }}>
         <Grid container spacing={{ xs: 3, md: 5 }} alignItems="center" sx={{ position: 'relative', zIndex: 1 }}>
-          <Grid size={{ xs: 12, md: 6 }}>
+          <Grid size={{ xs: 12, md: 6 }} sx={{ display: { xs: 'none', md: 'block' } }}>
             <Stack spacing={{ xs: 2, md: 2.5 }}>
               <Typography variant="h2">Your prop research stays organized.</Typography>
               <Typography color="text.secondary" fontSize={{ md: 18 }}>

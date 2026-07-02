@@ -3,7 +3,9 @@ import { SignUp } from '@clerk/clerk-react';
 import { Box, Button, Stack, Typography } from '@mui/material';
 import { Link as RouterLink, Navigate, useSearchParams } from 'react-router-dom';
 import { AuthSetupState } from '../../auth/AuthSetupState';
+import { AuthFormSkeleton, authFormSlotMinHeight } from '../../auth/AuthFormSkeleton';
 import { clerkSignInUrl, useAppAuth } from '../../auth/AppAuthProvider';
+import { clerkAppearance } from '../../auth/clerkAppearance';
 import { AppCard } from '../../components/ui/AppCard';
 import { palette } from '../../theme/palette';
 import { radius } from '../../theme/radius';
@@ -13,6 +15,7 @@ export function CreateAccountPage() {
   const [searchParams] = useSearchParams();
   const selectedPlan = searchParams.get('plan') ?? '';
   const selectedInterval = searchParams.get('interval') ?? 'Monthly';
+  const selectedPlanLabel = formatSelectedPlanLabel(selectedPlan);
   const billingReturnPath = buildBillingReturnPath(selectedPlan, selectedInterval);
   const returnTo = readSafeAppRedirect(searchParams) ?? billingReturnPath;
 
@@ -52,7 +55,7 @@ export function CreateAccountPage() {
             <Stack direction="row" spacing={1.3} alignItems="flex-start">
               <WorkspacePremiumOutlinedIcon color="primary" />
               <Box>
-                <Typography fontWeight={950}>Selected plan: {selectedPlan}</Typography>
+                <Typography fontWeight={950}>Selected plan: {selectedPlanLabel}</Typography>
                 <Typography variant="body2" color="text.secondary">
                   You can review plan setup after sign-up.
                 </Typography>
@@ -65,15 +68,39 @@ export function CreateAccountPage() {
           </Button>
         )}
 
-        <SignUp
-          routing="path"
-          path="/create-account"
-          signInUrl={clerkSignInUrl}
-          fallbackRedirectUrl={billingReturnPath}
-        />
+        <Box sx={{ minHeight: authFormSlotMinHeight.signUp, width: '100%' }}>
+          {auth.isLoaded ? (
+            <SignUp
+              routing="path"
+              path="/create-account"
+              signInUrl={clerkSignInUrl}
+              fallbackRedirectUrl={billingReturnPath}
+              appearance={clerkAppearance}
+            />
+          ) : (
+            <AuthFormSkeleton variant="signUp" />
+          )}
+        </Box>
       </Stack>
     </AppCard>
   );
+}
+
+function formatSelectedPlanLabel(plan: string) {
+  const knownPlans: Record<string, string> = {
+    free: 'Free',
+    pro: 'Pro'
+  };
+  const normalized = plan.trim().toLowerCase();
+
+  if (knownPlans[normalized]) {
+    return knownPlans[normalized];
+  }
+
+  return plan
+    .trim()
+    .replace(/[-_]+/g, ' ')
+    .replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 
 function buildBillingReturnPath(plan: string, interval: string) {

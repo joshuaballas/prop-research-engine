@@ -1,8 +1,10 @@
 import { SignIn } from '@clerk/clerk-react';
-import { Stack, Typography } from '@mui/material';
+import { Box, Stack, Typography } from '@mui/material';
 import { Navigate, useSearchParams } from 'react-router-dom';
 import { AuthSetupState } from '../../auth/AuthSetupState';
+import { AuthFormSkeleton, authFormSlotMinHeight } from '../../auth/AuthFormSkeleton';
 import { clerkSignInFallbackRedirectUrl, clerkSignUpUrl, useAppAuth } from '../../auth/AppAuthProvider';
+import { clerkAppearance } from '../../auth/clerkAppearance';
 import { AppCard } from '../../components/ui/AppCard';
 import { palette } from '../../theme/palette';
 
@@ -34,12 +36,19 @@ export function SignInPage() {
           <Typography variant="h4">Welcome back</Typography>
           <Typography color="text.secondary">Sign in to continue your prop research workflow.</Typography>
         </Stack>
-        <SignIn
-          routing="path"
-          path="/sign-in"
-          signUpUrl={clerkSignUpUrl}
-          fallbackRedirectUrl={returnTo}
-        />
+        <Box sx={{ minHeight: authFormSlotMinHeight.signIn, width: '100%' }}>
+          {auth.isLoaded ? (
+            <SignIn
+              routing="path"
+              path="/sign-in"
+              signUpUrl={clerkSignUpUrl}
+              fallbackRedirectUrl={returnTo}
+              appearance={clerkAppearance}
+            />
+          ) : (
+            <AuthFormSkeleton variant="signIn" />
+          )}
+        </Box>
       </Stack>
     </AppCard>
   );
