@@ -2,8 +2,8 @@ import HelpOutlineRoundedIcon from '@mui/icons-material/HelpOutlineRounded';
 import LogoutRoundedIcon from '@mui/icons-material/LogoutRounded';
 import ManageAccountsOutlinedIcon from '@mui/icons-material/ManageAccountsOutlined';
 import PaymentOutlinedIcon from '@mui/icons-material/PaymentOutlined';
-import { Avatar, Box, Button, Divider, IconButton, ListItemIcon, Menu, MenuItem, Stack, Tooltip, Typography } from '@mui/material';
-import { useState } from 'react';
+import { Avatar, Box, Button, Divider, IconButton, ListItemIcon, Menu, MenuItem, Stack, Tooltip, Typography, useMediaQuery, useTheme } from '@mui/material';
+import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { GlossaryDialog } from '../glossary/GlossaryDialog';
 import type { MarketReadinessDto } from '../../api/types';
@@ -17,16 +17,24 @@ export function AppTopBar() {
   const [glossaryOpen, setGlossaryOpen] = useState(false);
   const [profileAnchorEl, setProfileAnchorEl] = useState<HTMLElement | null>(null);
   const navigate = useNavigate();
+  const theme = useTheme();
+  const desktopProfileMenuEnabled = useMediaQuery(theme.breakpoints.up('lg'));
   const auth = useAppAuth();
   const freshnessQuery = useMarketFreshnessData(['app-top-bar-live-data']);
   const freshness = freshnessQuery.data;
   const liveDataState = resolveLiveDataState(freshness, Boolean(freshnessQuery.error));
   const userInitial = (auth.user?.displayName || auth.user?.email || 'U').trim()[0]?.toUpperCase() ?? 'U';
-  const profileMenuOpen = Boolean(profileAnchorEl);
+  const profileMenuOpen = desktopProfileMenuEnabled && Boolean(profileAnchorEl);
   const displayName = auth.user?.displayName?.trim();
   const email = auth.user?.email?.trim();
   const accountLabel = displayName || email || 'Account';
   const secondaryAccountLabel = displayName && email ? email : undefined;
+
+  useEffect(() => {
+    if (!desktopProfileMenuEnabled) {
+      setProfileAnchorEl(null);
+    }
+  }, [desktopProfileMenuEnabled]);
 
   const closeProfileMenu = () => setProfileAnchorEl(null);
 
@@ -85,6 +93,9 @@ export function AppTopBar() {
               Demo data
             </Typography>
           ) : null}
+          <Box aria-hidden="true" sx={{ display: { xs: 'flex', lg: 'none' }, alignItems: 'center', flexShrink: 0 }}>
+            <Avatar sx={{ width: 34, height: 34 }}>{userInitial}</Avatar>
+          </Box>
           <Tooltip title="Account menu" arrow>
             <IconButton
               aria-label="Open account menu"
@@ -94,6 +105,7 @@ export function AppTopBar() {
               onClick={(event) => setProfileAnchorEl(event.currentTarget)}
               size="small"
               sx={{
+                display: { xs: 'none', lg: 'inline-flex' },
                 p: 0.25,
                 borderRadius: radius.circle,
                 color: 'text.primary',

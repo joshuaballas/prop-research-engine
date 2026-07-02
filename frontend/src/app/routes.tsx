@@ -4,6 +4,7 @@ import { AuthLayout } from '../layouts/AuthLayout';
 import { PublicLayout } from '../layouts/PublicLayout';
 import { ProtectedAppRoute } from '../auth/ProtectedAppRoute';
 import { AccountPage } from '../pages/app/AccountPage';
+import { AppMenuPage } from '../pages/app/AppMenuPage';
 import { BillingPage } from '../pages/app/BillingPage';
 import { DashboardPage } from '../pages/app/DashboardPage';
 import { EntryBuilderPage } from '../pages/app/EntryBuilderPage';
@@ -45,6 +46,7 @@ export function AppRoutes() {
         <Route path="markets" element={<MarketsPage />} />
         <Route path="top-picks" element={<TopPicksPage />} />
         <Route path="line-shopping" element={<LineShoppingPage />} />
+        <Route path="menu" element={<AppMenuPage />} />
         <Route path="player-research" element={<PlayerResearchPage />} />
         <Route path="entry-tracker" element={<EntryTrackerPage />} />
         <Route path="entry-builder" element={<EntryBuilderPage />} />
