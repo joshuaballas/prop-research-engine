@@ -3,7 +3,7 @@ import LockRoundedIcon from '@mui/icons-material/LockRounded';
 import RemoveCircleOutlineRoundedIcon from '@mui/icons-material/RemoveCircleOutlineRounded';
 import { Button, Stack, Typography } from '@mui/material';
 import { useState } from 'react';
-import { formatAmericanOdds, formatDecimal, formatPercent } from '../../utils/formatters';
+import { formatPercent } from '../../utils/formatters';
 import { marketDisplayLabel } from '../../utils/marketDisplay';
 import type { MarketOpportunity } from '../../types/markets';
 import { MetricLabelWithHelp } from '../metrics/MetricLabelWithHelp';
@@ -12,7 +12,8 @@ import { StatusPill } from '../ui/StatusPill';
 import { ProjectionModifierBadge } from './ProjectionModifierBadge';
 import { compactActionButtonSx, lockedActionButtonSx, removeActionButtonSx, secondaryGhostButtonSx } from '../ui/buttonStyles';
 import { mobileCardActionButtonSx, mobileCardDetailsButtonSx } from '../ui/AppRowActions';
-import { OpportunityCardLayout, OpportunityMetricGrid, OpportunityMetricItem, OpportunityPickText, OpportunityProviderRow } from '../ui/OpportunityCard';
+import { OpportunityCardLayout, OpportunityMetricGrid, OpportunityMetricItem, OpportunityProviderRow } from '../ui/OpportunityCard';
+import { MarketPickPrice } from './MarketPickPrice';
 
 interface TopPickCardProps {
   market: MarketOpportunity;
@@ -45,7 +46,7 @@ export function TopPickCard({ market, onAdd, hideActions = false, variant = 'def
         title={featured ? <Typography variant="h5" lineHeight={1.08}>{market.player}</Typography> : market.player}
         value={<TopPickHitChance market={market} compact={compact} />}
         event={`${market.event} - ${market.startTime}`}
-        market={<OpportunityPickText side={market.side} propType={market.propType} line={market.line} />}
+        market={<MarketPickPrice market={market} variant="card" />}
         provider={<TopPickProviderRow market={market} />}
         metrics={<TopPickMetrics market={market} detailed={!compact} />}
         actions={actions}
@@ -104,11 +105,6 @@ function TopPickMetrics({ market, detailed }: { market: MarketOpportunity; detai
     <OpportunityMetricGrid columns={{ xs: 2, sm: detailed ? 4 : 3 }} sx={{ borderTop: 0, pt: 0 }}>
       {showSportsbookPricing ? (
         <>
-          <OpportunityMetricItem
-            label="Odds"
-            value={`${formatAmericanOdds(market.bestAmericanPrice)} / ${formatDecimal(market.bestDecimalPrice)}`}
-            noWrap={false}
-          />
           <OpportunityMetricItem label="Modifier" value={market.projectionModifier === 'Normal' ? '-' : market.projectionModifier} noWrap={false} />
         </>
       ) : null}

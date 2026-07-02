@@ -7,8 +7,8 @@ import { useState } from 'react';
 import { useEntryBuilder } from '../../hooks/useEntryBuilder';
 import type { MarketOpportunity, ProviderLine } from '../../types/markets';
 import { formatPercent } from '../../utils/formatters';
+import { formatProviderLinePickPrice } from '../../utils/marketPriceDisplay';
 import { entryBuilderUnavailableReason, isEntryBuilderAddableMarket } from '../../utils/marketCautions';
-import { marketDisplayLabel } from '../../utils/marketDisplay';
 import { renderOpportunityCautionText } from '../../utils/warnings';
 import { palette } from '../../theme/palette';
 import { radius } from '../../theme/radius';
@@ -27,8 +27,9 @@ import {
   mobileCardDetailsButtonSx
 } from '../ui/AppRowActions';
 import { AppTableMetricValue, AppTablePrimaryText, AppTableSecondaryText } from '../ui/AppTableTypography';
-import { OpportunityMetricGrid, OpportunityMetricItem, OpportunityPickText } from '../ui/OpportunityCard';
+import { OpportunityMetricGrid, OpportunityMetricItem } from '../ui/OpportunityCard';
 import { ProjectionModifierBadge } from './ProjectionModifierBadge';
+import { MarketPickPrice } from './MarketPickPrice';
 
 export interface LineShoppingGroup {
   key: string;
@@ -49,7 +50,7 @@ export function LineShoppingTable({ markets, showActions = true }: { markets: Ma
   const [detailsMarket, setDetailsMarket] = useState<MarketOpportunity | null>(null);
   const visibleMarkets = markets.filter((market) => market.providerCategory === 'DFS' || market.providerCategory === 'Sportsbook');
   const showReferenceLines = visibleMarkets.some(hasReferenceLine);
-  const minWidth = (showActions ? 680 : 560) + 95 - (showReferenceLines ? 0 : 170);
+  const minWidth = (showActions ? 810 : 690) + 95 - (showReferenceLines ? 0 : 170);
 
   return (
     <>
@@ -63,6 +64,7 @@ export function LineShoppingTable({ markets, showActions = true }: { markets: Ma
           <TableRow>
             <TableCell>Opportunity</TableCell>
             <TableCell>Provider</TableCell>
+            <TableCell>Pick / Price</TableCell>
             {showReferenceLines ? <TableCell>Reference Lines</TableCell> : null}
             <TableCell align="right"><MetricLabelWithHelp metric="edge" align="right" variant="table" /></TableCell>
             <TableCell align="right"><MetricLabelWithHelp metric="hitChance" align="right" variant="table" /></TableCell>
@@ -99,18 +101,6 @@ function LineShoppingRow({
               <TableCell sx={{ minWidth: 220 }}>
                 <Stack spacing={0.45}>
                   <AppTablePrimaryText>{market.player}</AppTablePrimaryText>
-                  <OpportunityPickText
-                    side={market.side}
-                    propType={market.propType}
-                    line={market.line}
-                    sport={marketDisplayLabel(market)}
-                    sx={{
-                      fontSize: 13,
-                      flexWrap: 'nowrap',
-                      overflow: 'hidden',
-                      '& .MuiTypography-root': { fontSize: 'inherit' }
-                    }}
-                  />
                   <AppTableSecondaryText>
                     {market.event}
                   </AppTableSecondaryText>
@@ -118,6 +108,9 @@ function LineShoppingRow({
               </TableCell>
               <TableCell sx={{ minWidth: 150 }}>
                 <ProviderLabel provider={market.provider} category={market.providerCategory} compact />
+              </TableCell>
+              <TableCell sx={{ minWidth: 150 }}>
+                <MarketPickPrice market={market} />
               </TableCell>
               {showReferenceLines ? (
                 <TableCell sx={{ minWidth: 170 }}>
@@ -169,7 +162,7 @@ export function LineShoppingCard({ market }: { market: MarketOpportunity }) {
   const [detailsOpen, setDetailsOpen] = useState(false);
   const providerLines = orderProviderLines((market.providerLines?.filter((line) => line.providerCategory === market.providerCategory) ?? []).map((line) => ({
     ...line,
-    note: `${market.side} ${line.line}`
+    note: line.note ?? formatProviderLinePickPrice(line, market.side)
   })), market.provider);
   const referenceLines = market.providerCategory === 'DFS'
     ? market.providerLines?.filter((line) => line.providerCategory === 'Sportsbook') ?? []
@@ -219,7 +212,7 @@ export function LineShoppingCard({ market }: { market: MarketOpportunity }) {
           </Typography>
         </Stack>
       </Stack>
-      <OpportunityPickText side={market.side} propType={market.propType} line={market.line} />
+      <MarketPickPrice market={market} variant="card" />
       <Stack direction="row" justifyContent="space-between" alignItems="center" gap={1.2} flexWrap="wrap">
         <ProviderLabel provider={market.provider} category={market.providerCategory} compact />
         <Stack direction="row" gap={0.6} flexWrap="wrap" useFlexGap justifyContent="flex-end">
@@ -287,8 +280,8 @@ export function LineShoppingCard({ market }: { market: MarketOpportunity }) {
               <OpportunityMetricItem label="Edge" value={formatPercent(market.probabilityEdge, { signed: true })} metric="edge" />
               <OpportunityMetricItem label="Hit chance" value={formatPercent(market.modelProbability)} metric="hitChance" />
             </OpportunityMetricGrid>
-            <ProviderLineGroup title="Provider lines" lines={providerLines} marketId={market.id} selectedBestLine={selectedBestLine} />
-            {referenceLines.length ? <ProviderLineGroup title="Reference lines" lines={referenceLines} marketId={market.id} selectedBestLine={selectedBestLine} /> : null}
+            <ProviderLineGroup title="Provider lines" lines={providerLines} marketId={market.id} selectedSide={market.side} selectedBestLine={selectedBestLine} />
+            {referenceLines.length ? <ProviderLineGroup title="Reference lines" lines={referenceLines} marketId={market.id} selectedSide={market.side} selectedBestLine={selectedBestLine} /> : null}
             <AppMobileCardActions sx={{ mt: 2.45, pt: 0.2 }}>
               {actions}
             </AppMobileCardActions>
@@ -336,7 +329,7 @@ export function LineShoppingComparisonList({ groups }: { groups: LineShoppingGro
           <TableRow>
             <TableCell>Opportunity</TableCell>
             <TableCell>Best Provider</TableCell>
-            <TableCell>Best Pick</TableCell>
+            <TableCell>Pick / Price</TableCell>
             <TableCell align="right"><MetricLabelWithHelp metric="edge" align="right" variant="table" /></TableCell>
             <TableCell align="right"><MetricLabelWithHelp metric="hitChance" align="right" variant="table" /></TableCell>
             <TableCell align="center" aria-label="Expand details" />
@@ -381,28 +374,14 @@ function LineShoppingComparisonRow({
         <TableCell sx={{ minWidth: 260 }}>
           <Stack spacing={0.45}>
             <AppTablePrimaryText>{market.player}</AppTablePrimaryText>
-            <OpportunityPickText
-              side={market.side}
-              propType={market.propType}
-              line={market.line}
-              sport={marketDisplayLabel(market)}
-              sx={{
-                fontSize: 13,
-                flexWrap: 'nowrap',
-                overflow: 'hidden',
-                '& .MuiTypography-root': { fontSize: 'inherit' }
-              }}
-            />
             <AppTableSecondaryText>{market.event}</AppTableSecondaryText>
           </Stack>
         </TableCell>
         <TableCell sx={{ minWidth: 150 }}>
           <ProviderLabel provider={market.provider} category={market.providerCategory} compact />
         </TableCell>
-        <TableCell sx={{ minWidth: 108 }}>
-          <AppTableMetricValue sx={{ whiteSpace: 'nowrap' }}>
-            {market.side} {market.line}
-          </AppTableMetricValue>
+        <TableCell sx={{ minWidth: 150 }}>
+          <MarketPickPrice market={market} />
         </TableCell>
         <TableCell align="right">
           <AppTableMetricValue>{formatPercent(market.probabilityEdge, { signed: true })}</AppTableMetricValue>
@@ -494,13 +473,13 @@ function ComparisonLineGroups({
       ) : null}
       {Array.from({ length: rowCount }).map((_, index) => (
         <Box key={`${marketId}-comparison-${index}`} sx={{ display: 'contents' }}>
-          <LineComparisonCell line={providerLines[index]} fallbackText={index === 0 ? 'No provider-line details available.' : undefined} isBest={providerLines[index] === selectedBestLine} />
-          {showReferenceLines ? <LineComparisonCell line={referenceLines[index]} isBest={referenceLines[index] === selectedBestLine} sx={{ display: { xs: 'none', md: 'grid' } }} /> : null}
+          <LineComparisonCell line={providerLines[index]} selectedSide={selectedMarket.side} fallbackText={index === 0 ? 'No provider-line details available.' : undefined} isBest={providerLines[index] === selectedBestLine} />
+          {showReferenceLines ? <LineComparisonCell line={referenceLines[index]} selectedSide={selectedMarket.side} isBest={referenceLines[index] === selectedBestLine} sx={{ display: { xs: 'none', md: 'grid' } }} /> : null}
         </Box>
       ))}
       {showReferenceLines ? (
         <Box sx={{ display: { xs: 'block', md: 'none' }, mt: 1.2 }}>
-          <ProviderLineGroup title="Reference lines" lines={referenceLines} marketId={marketId} selectedBestLine={selectedBestLine} />
+          <ProviderLineGroup title="Reference lines" lines={referenceLines} marketId={marketId} selectedSide={selectedMarket.side} selectedBestLine={selectedBestLine} />
         </Box>
       ) : null}
     </Box>
@@ -509,11 +488,13 @@ function ComparisonLineGroups({
 
 function LineComparisonCell({
   line,
+  selectedSide,
   fallbackText,
   isBest = false,
   sx
 }: {
   line?: ProviderLine;
+  selectedSide: MarketOpportunity['side'];
   fallbackText?: string;
   isBest?: boolean;
   sx?: Record<string, unknown>;
@@ -551,7 +532,7 @@ function LineComparisonCell({
         {isBest ? <BestLineLabel /> : null}
       </Stack>
       <Typography color="text.secondary" variant="body2" fontWeight={850} lineHeight={1.2} sx={{ whiteSpace: 'nowrap' }}>
-        {line.note ?? `Line ${line.line}`}
+        {line.note ?? formatProviderLinePickPrice(line, selectedSide)}
       </Typography>
     </Box>
   );
@@ -561,12 +542,14 @@ function ProviderLineGroup({
   title,
   lines,
   marketId,
+  selectedSide,
   selectedBestLine,
   emptyText = 'No provider-line details available.'
 }: {
   title: string;
   lines: NonNullable<MarketOpportunity['providerLines']>;
   marketId: string;
+  selectedSide: MarketOpportunity['side'];
   selectedBestLine?: ProviderLine | null;
   emptyText?: string;
 }) {
@@ -590,7 +573,7 @@ function ProviderLineGroup({
               {line === selectedBestLine ? <BestLineLabel /> : null}
             </Stack>
             <Typography color="text.secondary" variant="body2" fontWeight={850} lineHeight={1.2} sx={{ whiteSpace: 'nowrap' }}>
-              {line.note ?? `Line ${line.line}`}
+              {line.note ?? formatProviderLinePickPrice(line, selectedSide)}
             </Typography>
           </Box>
         ))
@@ -726,7 +709,9 @@ export function groupLineShoppingMarkets(markets: MarketOpportunity[]): LineShop
         provider: market.provider,
         providerCategory: market.providerCategory,
         line: market.line,
-        note: `${market.side} ${market.line}`
+        overPrice: market.side === 'Over' ? market.bestAmericanPrice : undefined,
+        underPrice: market.side === 'Under' ? market.bestAmericanPrice : undefined,
+        note: undefined
       }))), bestMarket.provider),
       referenceLines: bestMarket.providerCategory === 'DFS'
         ? uniqueProviderLines(rows.flatMap((market) => market.providerLines?.filter((line) => line.providerCategory === 'Sportsbook') ?? []))

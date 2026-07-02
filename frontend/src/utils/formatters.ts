@@ -16,8 +16,13 @@ export function formatCurrency(cents: number) {
   }).format(cents / 100);
 }
 
-export function formatAmericanOdds(value: number) {
-  return value > 0 ? `+${value}` : `${value}`;
+export function formatAmericanOdds(value: number | null | undefined, fallback = 'Odds unavailable') {
+  if (value === null || value === undefined || !Number.isFinite(value) || Math.abs(value) < 0.0001) {
+    return fallback;
+  }
+
+  const roundedValue = Math.round(value);
+  return roundedValue > 0 ? `+${roundedValue}` : `${roundedValue}`;
 }
 
 export function formatRiskToWin(americanOdds: number) {

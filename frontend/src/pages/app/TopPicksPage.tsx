@@ -16,7 +16,7 @@ import { AppRowActions, desktopRowActionButtonSx, desktopRowDetailsButtonSx } fr
 import { AppTablePagination } from '../../components/ui/AppTablePagination';
 import { AppTableMetricValue, AppTablePrimaryText, AppTableSecondaryText } from '../../components/ui/AppTableTypography';
 import { MarketTableSkeleton, TopPickCardSkeleton, TopPickSkeletonGrid } from '../../components/ui/LoadingSkeletons';
-import { OpportunityPickText } from '../../components/ui/OpportunityCard';
+import { MarketPickPrice } from '../../components/markets/MarketPickPrice';
 import { useEntryBuilder } from '../../hooks/useEntryBuilder';
 import { useTopPicksData } from '../../hooks/useMarketData';
 import type { MarketReadSport } from '../../hooks/useMarketData';
@@ -25,7 +25,6 @@ import { palette } from '../../theme/palette';
 import { radius } from '../../theme/radius';
 import type { MarketOpportunity } from '../../types/markets';
 import { formatPercent } from '../../utils/formatters';
-import { marketDisplayLabel } from '../../utils/marketDisplay';
 import { buildAvailableSportOptions, getAvailableSportCodes } from '../../utils/sportOptions';
 
 type TopPickFilterValues = {
@@ -115,7 +114,7 @@ export function TopPicksPage() {
               <Typography variant="h5" fontWeight={950}>
                 All Ranked Picks
               </Typography>
-              <MarketTableSkeleton rows={8} columns={6} minWidth={1040} />
+              <MarketTableSkeleton rows={8} columns={7} minWidth={1160} />
             </Stack>
           </>
         )
@@ -401,12 +400,13 @@ function RankedPicksTable({ markets, builder }: { markets: MarketOpportunity[]; 
 
   return (
     <>
-      <AppDataTable minWidth={1040}>
+      <AppDataTable minWidth={1160}>
           <TableHead>
             <TableRow>
               <TableCell>Rank</TableCell>
               <TableCell>Opportunity</TableCell>
               <TableCell>Provider</TableCell>
+              <TableCell>Pick / Price</TableCell>
               <TableCell align="right"><MetricLabelWithHelp metric="edge" align="right" variant="table" /></TableCell>
               <TableCell align="right"><MetricLabelWithHelp metric="hitChance" align="right" variant="table" /></TableCell>
               <TableCell align="center" sx={stickyActionHeaderCellSx}>Action</TableCell>
@@ -426,18 +426,6 @@ function RankedPicksTable({ markets, builder }: { markets: MarketOpportunity[]; 
                 <TableCell sx={{ minWidth: 230 }}>
                   <Stack spacing={0.3}>
                     <AppTablePrimaryText>{market.player}</AppTablePrimaryText>
-                    <OpportunityPickText
-                      side={market.side}
-                      propType={market.propType}
-                      line={market.line}
-                      sport={marketDisplayLabel(market)}
-                      sx={{
-                        fontSize: 13,
-                        flexWrap: 'nowrap',
-                        overflow: 'hidden',
-                        '& .MuiTypography-root': { fontSize: 'inherit' }
-                      }}
-                    />
                     {market.event || market.startTime ? (
                       <AppTableSecondaryText>
                         {[market.event, market.startTime].filter(Boolean).join(' - ')}
@@ -447,6 +435,9 @@ function RankedPicksTable({ markets, builder }: { markets: MarketOpportunity[]; 
                 </TableCell>
                 <TableCell sx={{ minWidth: 160 }}>
                   <ProviderLabel provider={market.provider} category={market.providerCategory} compact />
+                </TableCell>
+                <TableCell sx={{ minWidth: 150 }}>
+                  <MarketPickPrice market={market} />
                 </TableCell>
                 <TableCell align="right"><AppTableMetricValue>{formatPercent(market.probabilityEdge, { signed: true })}</AppTableMetricValue></TableCell>
                 <TableCell align="right"><AppTableMetricValue>{formatPercent(market.modelProbability)}</AppTableMetricValue></TableCell>

@@ -23,9 +23,10 @@ import { useSelectedSports } from '../../hooks/useSelectedSports';
 import { radius } from '../../theme/radius';
 import type { MarketOpportunity } from '../../types/markets';
 import type { SportCode } from '../../types/sports';
-import { formatAmericanOdds, formatPercent } from '../../utils/formatters';
-import { marketDisplayLabel } from '../../utils/marketDisplay';
+import { formatPercent } from '../../utils/formatters';
+import { formatSelectedMarketAmericanOdds } from '../../utils/marketPriceDisplay';
 import { buildAvailableSportOptions, getAvailableSportCodes } from '../../utils/sportOptions';
+import { MarketPickPrice } from '../../components/markets/MarketPickPrice';
 
 const TOP_OPPORTUNITY_LIMIT = 8;
 const LINE_EDGE_LIMIT = 5;
@@ -143,7 +144,7 @@ export function DashboardPage() {
           to="/app/line-shopping"
         >
           {lineShoppingQuery.loading ? (
-            isMobile ? <DashboardMobileListSkeleton rows={5} showProviderCount /> : <MarketTableSkeleton rows={5} columns={5} minWidth={0} />
+            isMobile ? <DashboardMobileListSkeleton rows={5} /> : <MarketTableSkeleton rows={5} columns={5} minWidth={0} />
           ) : lineShoppingQuery.error ? (
             <InlineState tone="error" message="Line-shopping edges could not be loaded." />
           ) : filteredLineMarkets.length ? (
@@ -226,7 +227,7 @@ function TopOpportunitiesBoard({ markets }: { markets: MarketOpportunity[] }) {
           <TableHead>
             <TableRow>
               <TableCell>Rank</TableCell>
-              <TableCell>Player / prop</TableCell>
+              <TableCell>Player</TableCell>
               <TableCell>Best pick</TableCell>
               <TableCell align="right"><MetricLabelWithHelp metric="edge" align="right" variant="table" /></TableCell>
               <TableCell align="right"><MetricLabelWithHelp metric="hitChance" align="right" variant="table" /></TableCell>
@@ -261,6 +262,8 @@ function DashboardTopPickRow({
   rank: number;
   onDetails: () => void;
 }) {
+  const priceText = formatSelectedMarketAmericanOdds(market, null);
+
   return (
     <TableRow hover sx={dashboardTableRowSx}>
       <TableCell>
@@ -269,9 +272,6 @@ function DashboardTopPickRow({
       <TableCell sx={{ overflow: 'hidden' }}>
         <Stack spacing={0.35}>
           <AppTablePrimaryText>{market.player}</AppTablePrimaryText>
-          <AppTableSecondaryText>
-            {[market.propType, marketDisplayLabel(market)].filter(Boolean).join(' - ')}
-          </AppTableSecondaryText>
           <AppTableSecondaryText>{market.event || market.startTime ? [market.event, market.startTime].filter(Boolean).join(' - ') : 'Current board'}</AppTableSecondaryText>
         </Stack>
       </TableCell>
@@ -285,12 +285,16 @@ function DashboardTopPickRow({
               fontSize: 13,
               flexWrap: 'nowrap',
               overflow: 'hidden',
-              '& .MuiTypography-root': { fontSize: 'inherit', fontWeight: 700 }
+              '& .MuiTypography-root': { fontSize: 'inherit', fontWeight: 500 }
             }}
           />
           <Stack direction="row" spacing={0.65} alignItems="center" minWidth={0}>
             <ProviderLabel provider={providerDisplayName(market)} category={market.providerCategory} compact />
-            <AppTableSecondaryText sx={{ flexShrink: 0 }}>{formatPrice(market.bestAmericanPrice)}</AppTableSecondaryText>
+            {priceText ? (
+              <Typography variant="caption" color="text.secondary" fontWeight={850} sx={{ whiteSpace: 'nowrap' }}>
+                {priceText}
+              </Typography>
+            ) : null}
           </Stack>
         </Stack>
       </TableCell>
@@ -312,19 +316,17 @@ function LineShoppingEdgesBoard({ markets }: { markets: MarketOpportunity[] }) {
         <AppDataTable tableSx={{ tableLayout: 'fixed', width: '100%' }}>
           <colgroup>
             <col style={{ width: '30%' }} />
-            <col style={{ width: '24%' }} />
-            <col style={{ width: '17%' }} />
+            <col style={{ width: '28%' }} />
+            <col style={{ width: '18%' }} />
             <col style={{ width: '12%' }} />
-            <col style={{ width: '7%' }} />
-            <col style={{ width: '10%' }} />
+            <col style={{ width: '12%' }} />
           </colgroup>
           <TableHead>
             <TableRow>
-              <TableCell>Player / prop</TableCell>
+              <TableCell>Player</TableCell>
               <TableCell>Best line</TableCell>
               <TableCell>Best provider</TableCell>
               <TableCell align="right"><MetricLabelWithHelp metric="edge" align="right" variant="table" /></TableCell>
-              <TableCell align="right">Providers</TableCell>
               <TableCell align="center" sx={stickyActionHeaderCellSx}>Details</TableCell>
             </TableRow>
           </TableHead>
@@ -340,7 +342,7 @@ function LineShoppingEdgesBoard({ markets }: { markets: MarketOpportunity[] }) {
         </AppDataTable>
       </Box>
 
-      <DashboardMobileList markets={markets} onDetails={setDetailsMarket} showProviderCount />
+      <DashboardMobileList markets={markets} onDetails={setDetailsMarket} />
       <PropDetailsModal market={detailsMarket} open={Boolean(detailsMarket)} onClose={() => setDetailsMarket(null)} />
     </>
   );
@@ -358,33 +360,16 @@ function DashboardLineShoppingRow({
       <TableCell sx={{ overflow: 'hidden' }}>
         <Stack spacing={0.35}>
           <AppTablePrimaryText>{market.player}</AppTablePrimaryText>
-          <AppTableSecondaryText>
-            {[market.propType, marketDisplayLabel(market)].filter(Boolean).join(' - ')}
-          </AppTableSecondaryText>
           <AppTableSecondaryText>{market.event || 'Current board'}</AppTableSecondaryText>
         </Stack>
       </TableCell>
       <TableCell sx={{ overflow: 'hidden' }}>
-        <Stack spacing={0.35}>
-          <OpportunityPickText
-            side={market.side}
-            propType={market.propType}
-            line={market.line}
-            sx={{
-              fontSize: 13,
-              flexWrap: 'nowrap',
-              overflow: 'hidden',
-              '& .MuiTypography-root': { fontSize: 'inherit', fontWeight: 700 }
-            }}
-          />
-          <AppTableSecondaryText>{formatPrice(market.bestAmericanPrice)}</AppTableSecondaryText>
-        </Stack>
+        <MarketPickPrice market={market} />
       </TableCell>
       <TableCell sx={{ overflow: 'hidden' }}>
         <ProviderLabel provider={providerDisplayName(market)} category={market.providerCategory} compact />
       </TableCell>
       <TableCell align="right" sx={metricCellSx}><AppTableMetricValue>{formatPercent(market.probabilityEdge, { signed: true })}</AppTableMetricValue></TableCell>
-      <TableCell align="right" sx={metricCellSx}><AppTableMetricValue>{getProviderCount(market)}</AppTableMetricValue></TableCell>
       <TableCell data-sticky-action="true" align="center" sx={{ ...stickyActionCellSx, px: 0.5 }}>
         <DashboardMarketActions onDetails={onDetails} />
       </TableCell>
@@ -394,12 +379,10 @@ function DashboardLineShoppingRow({
 
 function DashboardMobileListSkeleton({
   rows,
-  ranked = false,
-  showProviderCount = false
+  ranked = false
 }: {
   rows: number;
   ranked?: boolean;
-  showProviderCount?: boolean;
 }) {
   return (
     <Box
@@ -437,7 +420,6 @@ function DashboardMobileListSkeleton({
 
             <Stack direction="row" justifyContent="space-between" alignItems="center" gap={1}>
               <Skeleton width={120} height={24} />
-              {showProviderCount ? <Skeleton width={78} height={16} /> : null}
             </Stack>
 
             <Skeleton variant="rounded" width="100%" height={32} sx={{ borderRadius: radius.control }} />
@@ -451,12 +433,10 @@ function DashboardMobileListSkeleton({
 function DashboardMobileList({
   markets,
   ranked = false,
-  showProviderCount = false,
   onDetails
 }: {
   markets: MarketOpportunity[];
   ranked?: boolean;
-  showProviderCount?: boolean;
   onDetails: (market: MarketOpportunity) => void;
 }) {
   return (
@@ -490,18 +470,7 @@ function DashboardMobileList({
                       {market.player}
                     </Typography>
                   </Stack>
-                  <OpportunityPickText
-                    side={market.side}
-                    propType={market.propType}
-                    line={market.line}
-                    sport={marketDisplayLabel(market)}
-                    sx={{
-                      fontSize: 13,
-                      flexWrap: 'nowrap',
-                      overflow: 'hidden',
-                      '& .MuiTypography-root': { fontSize: 'inherit' }
-                    }}
-                  />
+                  <AppTableSecondaryText>{market.event || market.startTime ? [market.event, market.startTime].filter(Boolean).join(' - ') : 'Current board'}</AppTableSecondaryText>
                 </Box>
                 <Stack spacing={0.25} alignItems="flex-end" flexShrink={0}>
                   <Typography color={(market.probabilityEdge ?? 0) >= 0 ? 'success.main' : 'error.main'} fontWeight={950}>
@@ -513,13 +482,10 @@ function DashboardMobileList({
                 </Stack>
               </Stack>
 
+              <MarketPickPrice market={market} variant="card" />
+
               <Stack direction="row" justifyContent="space-between" alignItems="center" gap={1}>
                 <ProviderLabel provider={providerDisplayName(market)} category={market.providerCategory} compact />
-                {showProviderCount ? (
-                  <Typography variant="caption" color="text.secondary" fontWeight={850}>
-                    {getProviderCount(market)} providers
-                  </Typography>
-                ) : null}
               </Stack>
 
               <Box sx={{ display: 'grid', gridTemplateColumns: '1fr', gap: 0.65, '& > .MuiButton-root': { width: '100%' } }}>
@@ -576,24 +542,6 @@ const metricCellSx = {
 
 function providerDisplayName(market: MarketOpportunity) {
   return market.provider || (market.providerCategory === 'Sportsbook' ? 'Sportsbook' : 'Unknown');
-}
-
-function getProviderCount(market: MarketOpportunity) {
-  const providers = new Set<string>();
-  if (market.provider) providers.add(market.provider);
-  for (const line of market.providerLines ?? []) {
-    if (line.provider) providers.add(line.provider);
-  }
-
-  return Math.max(
-    providers.size || 1,
-    market.providerFanoutCount ?? 1,
-    (market.alternateProviderCount ?? 0) + 1
-  );
-}
-
-function formatPrice(value?: number | null) {
-  return value && Number.isFinite(value) ? formatAmericanOdds(value) : 'Price n/a';
 }
 
 function formatDateShort(value?: string | null) {

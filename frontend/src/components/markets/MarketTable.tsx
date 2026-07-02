@@ -15,14 +15,14 @@ import { appTableRowSx, stickyActionCellSx, stickyActionHeaderCellSx } from '../
 import { AppDataTable } from '../ui/AppDataTable';
 import { AppRowActions, desktopRowActionButtonSx, desktopRowDetailsButtonSx } from '../ui/AppRowActions';
 import { AppTableMetricValue, AppTablePrimaryText, AppTableSecondaryText } from '../ui/AppTableTypography';
-import { OpportunityPickText } from '../ui/OpportunityCard';
 import { marketDisplayLabel } from '../../utils/marketDisplay';
+import { MarketPickPrice } from './MarketPickPrice';
 
 export function MarketTable({ markets }: { markets: MarketOpportunity[] }) {
   const builder = useEntryBuilder();
   const [detailsMarket, setDetailsMarket] = useState<MarketOpportunity | null>(null);
   const showSportColumn = new Set(markets.map((market) => market.sport)).size > 1;
-  const minWidth = 845 - (showSportColumn ? 0 : 100);
+  const minWidth = 965 - (showSportColumn ? 0 : 100);
 
   return (
     <>
@@ -31,6 +31,7 @@ export function MarketTable({ markets }: { markets: MarketOpportunity[] }) {
           <col style={{ width: '28%' }} />
           {showSportColumn ? <col style={{ width: 100 }} /> : null}
           <col style={{ width: 150 }} />
+          <col style={{ width: 132 }} />
           <col style={{ width: 95 }} />
           <col style={{ width: 100 }} />
           <col style={{ width: 130 }} />
@@ -40,6 +41,7 @@ export function MarketTable({ markets }: { markets: MarketOpportunity[] }) {
             <TableCell>Opportunity</TableCell>
             {showSportColumn ? <TableCell>Sport</TableCell> : null}
             <TableCell>Provider</TableCell>
+            <TableCell>Pick / Price</TableCell>
             <TableCell align="right"><MetricLabelWithHelp metric="edge" align="right" variant="table" /></TableCell>
             <TableCell align="right"><MetricLabelWithHelp metric="hitChance" align="right" variant="table" /></TableCell>
             <TableCell align="center" sx={{ ...stickyActionHeaderCellSx, pl: 1.5, pr: 2 }}>Action</TableCell>
@@ -60,17 +62,6 @@ export function MarketTable({ markets }: { markets: MarketOpportunity[] }) {
               >
                 <TableCell sx={{ overflow: 'hidden', py: 1.05 }}>
                   <AppTablePrimaryText>{market.player}</AppTablePrimaryText>
-                  <OpportunityPickText
-                    side={market.side}
-                    propType={market.propType}
-                    line={market.line}
-                    sx={{
-                      fontSize: 13,
-                      flexWrap: 'nowrap',
-                      overflow: 'hidden',
-                      '& .MuiTypography-root': { fontSize: 'inherit', fontWeight: 500 }
-                    }}
-                  />
                   <AppTableSecondaryText>
                     {market.event} - {market.startTime}
                   </AppTableSecondaryText>
@@ -84,6 +75,9 @@ export function MarketTable({ markets }: { markets: MarketOpportunity[] }) {
                   <Stack spacing={0.45} alignItems="flex-start">
                     <ProviderLabel provider={market.provider || (market.providerCategory === 'Sportsbook' ? 'Sportsbook' : 'Unknown')} category={market.providerCategory} compact />
                   </Stack>
+                </TableCell>
+                <TableCell sx={{ overflow: 'hidden', py: 1.05 }}>
+                  <MarketPickPrice market={market} />
                 </TableCell>
                 <TableCell align="right" sx={{ py: 1.05 }}>
                   <AppTableMetricValue>{formatPercent(market.probabilityEdge, { signed: true })}</AppTableMetricValue>

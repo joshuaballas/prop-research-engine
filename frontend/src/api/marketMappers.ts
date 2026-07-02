@@ -1,5 +1,6 @@
 import type { MarketOpportunity, PlayerHistoryStatKey, PlayerHistorySummary, ProjectionModifier, ProviderCategory, StrategyClassification } from '../types/markets';
 import type { PerformanceGroup } from '../types/performance';
+import { formatAmericanOdds } from '../utils/formatters';
 import type { BookmakerPriceDto, MarketGroupDto, MarketPerformanceSummaryDto, PerformanceGroupDto, PlayerHistoryCompetitionBreakdownDto, PlayerHistoryGameLogRowDto, PlayerHistoryStatSummaryDto, PlayerHistorySummaryDto, TopPickProviderOptionDto } from './types';
 
 export function mapMarketGroupsToOpportunities(groups: MarketGroupDto[] | undefined, sourcePrefix = 'market'): MarketOpportunity[] {
@@ -222,7 +223,7 @@ function mapMarketGroupToOpportunity(group: MarketGroupDto, index: number, sourc
         line,
         overPrice: undefined,
         underPrice: undefined,
-        note: formatProviderOptionPrice(option)
+        note: formatProviderOptionPrice(option, side, line)
       })),
       ...bookmakerPrices.map((priceLine) => ({
         provider: cleanProvider(readString(priceLine, 'bookmaker', 'Bookmaker', 'bookmakerKey', 'BookmakerKey') ?? 'Unknown'),
@@ -230,7 +231,7 @@ function mapMarketGroupToOpportunity(group: MarketGroupDto, index: number, sourc
         line: readNumber(priceLine, 'line', 'Line') ?? line,
         overPrice: readNumber(priceLine, 'overPrice', 'OverPrice') ?? undefined,
         underPrice: readNumber(priceLine, 'underPrice', 'UnderPrice') ?? undefined,
-        note: readString(priceLine, 'region', 'Region')
+        note: undefined
       }))
     ]
   };
@@ -281,14 +282,13 @@ function resolveDisplayProvider(group: MarketGroupDto, providerCategory: Provide
   return cleanProvider(entryProvider ?? bestBookmaker ?? provider ?? 'Unknown');
 }
 
-function formatProviderOptionPrice(option: TopPickProviderOptionDto) {
+function formatProviderOptionPrice(option: TopPickProviderOptionDto, side: MarketOpportunity['side'], line: number) {
   const american = readNumber(option, 'bestAmericanPrice', 'BestAmericanPrice');
-  if (typeof american === 'number' && Number.isFinite(american)) {
-    return american > 0 ? `+${american}` : `${american}`;
+  if (typeof american === 'number' && Number.isFinite(american) && Math.abs(american) >= 0.0001) {
+    return `${side} ${line} · ${formatAmericanOdds(american)}`;
   }
 
-  const decimal = readNumber(option, 'bestDecimalPrice', 'BestDecimalPrice');
-  return typeof decimal === 'number' && Number.isFinite(decimal) ? decimal.toFixed(2) : undefined;
+  return undefined;
 }
 
 function mapPlayerHistoryStats(source: Record<string, PlayerHistoryStatSummaryDto | undefined>): PlayerHistorySummary['stats'] {

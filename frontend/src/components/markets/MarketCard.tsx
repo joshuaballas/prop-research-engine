@@ -16,11 +16,11 @@ import {
   OpportunityCardLayout,
   OpportunityMetricGrid,
   OpportunityMetricItem,
-  OpportunityPickText,
   OpportunityProviderRow
 } from '../ui/OpportunityCard';
 import { CautionLabels } from './CautionLabels';
 import { marketDisplayLabel } from '../../utils/marketDisplay';
+import { MarketPickPrice } from './MarketPickPrice';
 
 export function MarketCard({ market }: { market: MarketOpportunity }) {
   const [detailsOpen, setDetailsOpen] = useState(false);
@@ -84,7 +84,7 @@ export function MarketCard({ market }: { market: MarketOpportunity }) {
             {displayLabel} - {market.event} - {market.startTime}
           </Box>
         }
-        market={<OpportunityPickText side={market.side} propType={market.propType} line={market.line} />}
+        market={<MarketPickPrice market={market} variant="card" />}
         provider={
           <OpportunityProviderRow provider={market.provider || (market.providerCategory === 'Sportsbook' ? 'Sportsbook' : 'Unknown')} category={market.providerCategory} sx={{ minHeight: 28 }}>
             <StatusRow market={market} />
