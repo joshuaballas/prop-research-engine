@@ -3,7 +3,7 @@ import { createContext, useContext, useEffect, useMemo } from 'react';
 import type { PropsWithChildren } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { setAccessTokenProvider } from '../api/authToken';
-import { clerkAppearance } from './clerkAppearance';
+import { clerkBaseAppearance } from './clerkAppearance';
 import { clerkLocalization } from './clerkLocalization';
 
 export interface AppAuthUser {
@@ -48,7 +48,7 @@ export function AppAuthProvider({ children }: PropsWithChildren) {
       signUpUrl={clerkSignUpUrl}
       signInFallbackRedirectUrl={clerkSignInFallbackRedirectUrl}
       signUpFallbackRedirectUrl={clerkSignUpFallbackRedirectUrl}
-      appearance={clerkAppearance}
+      appearance={clerkBaseAppearance}
       localization={clerkLocalization}
     >
       <ClerkAuthBridge>{children}</ClerkAuthBridge>

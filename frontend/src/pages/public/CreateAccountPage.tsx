@@ -8,61 +8,61 @@ import { useApiQuery } from '../../api/useApiQuery';
 import { AuthSetupState } from '../../auth/AuthSetupState';
 import { AuthFormSkeleton, authFormSlotMinHeight } from '../../auth/AuthFormSkeleton';
 import { clerkSignInUrl, useAppAuth } from '../../auth/AppAuthProvider';
-import { clerkAppearance } from '../../auth/clerkAppearance';
+import { clerkAuthAppearance } from '../../auth/clerkAppearance';
 import { planSelectionCode } from '../../components/billing/PlanCard';
 import { AccountFunnelCard } from '../../components/auth/AccountFunnelCard';
 import { formatCurrency } from '../../utils/formatters';
 
 const accountFormRailMaxWidth = 440;
 const signUpRailAppearance = {
-  ...clerkAppearance,
+  ...clerkAuthAppearance,
   elements: {
-    ...clerkAppearance.elements,
+    ...clerkAuthAppearance.elements,
     rootBox: {
-      ...clerkAppearance.elements.rootBox,
+      ...clerkAuthAppearance.elements.rootBox,
       width: '100%',
       maxWidth: '100%',
       marginInline: 'auto'
     },
     cardBox: {
-      ...clerkAppearance.elements.cardBox,
+      ...clerkAuthAppearance.elements.cardBox,
       width: '100%',
       maxWidth: '100%'
     },
     card: {
-      ...clerkAppearance.elements.card,
+      ...clerkAuthAppearance.elements.card,
       width: '100%',
       maxWidth: '100%',
       padding: '0'
     },
     main: {
-      ...clerkAppearance.elements.main,
+      ...clerkAuthAppearance.elements.main,
       width: '100%',
       maxWidth: '100%',
       padding: '0'
     },
     form: {
-      ...clerkAppearance.elements.form,
+      ...clerkAuthAppearance.elements.form,
       width: '100%',
       maxWidth: '100%'
     },
     formField: {
-      ...clerkAppearance.elements.formField,
+      ...clerkAuthAppearance.elements.formField,
       width: '100%',
       maxWidth: '100%'
     },
     formFieldRow: {
-      ...clerkAppearance.elements.formFieldRow,
+      ...clerkAuthAppearance.elements.formFieldRow,
       width: '100%',
       maxWidth: '100%'
     },
     formButtonPrimary: {
-      ...clerkAppearance.elements.formButtonPrimary,
+      ...clerkAuthAppearance.elements.formButtonPrimary,
       width: '100%',
       maxWidth: '100%'
     },
     footer: {
-      ...clerkAppearance.elements.footer,
+      ...clerkAuthAppearance.elements.footer,
       width: '100%',
       maxWidth: '100%',
       paddingInline: '0'

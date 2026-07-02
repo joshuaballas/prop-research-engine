@@ -4,7 +4,7 @@ import { Navigate, useSearchParams } from 'react-router-dom';
 import { AuthSetupState } from '../../auth/AuthSetupState';
 import { AuthFormSkeleton, authFormSlotMinHeight } from '../../auth/AuthFormSkeleton';
 import { clerkSignInFallbackRedirectUrl, clerkSignUpUrl, useAppAuth } from '../../auth/AppAuthProvider';
-import { clerkAppearance } from '../../auth/clerkAppearance';
+import { clerkAuthAppearance } from '../../auth/clerkAppearance';
 import { AccountFunnelCard } from '../../components/auth/AccountFunnelCard';
 
 export function SignInPage() {
@@ -29,7 +29,7 @@ export function SignInPage() {
             path="/sign-in"
             signUpUrl={clerkSignUpUrl}
             fallbackRedirectUrl={returnTo}
-            appearance={clerkAppearance}
+            appearance={clerkAuthAppearance}
           />
         ) : (
           <AuthFormSkeleton variant="signIn" />
