@@ -309,11 +309,12 @@ public sealed class TheOddsMlbScheduledRefreshWorker(
         }
     }
 
-    private static bool IsSoccerWorldCupSportsbookTarget(TheOddsRefreshTargetPlan target)
+    private static bool IsSoccerWorldCupTarget(TheOddsRefreshTargetPlan target)
     {
         return string.Equals(target.Sport, "SOCCER", StringComparison.OrdinalIgnoreCase)
             && string.Equals(target.Competition, "World Cup", StringComparison.OrdinalIgnoreCase)
-            && string.Equals(target.ProviderCategory, "Sportsbook", StringComparison.OrdinalIgnoreCase);
+            && (string.Equals(target.ProviderCategory, "Sportsbook", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(target.ProviderCategory, "DFS", StringComparison.OrdinalIgnoreCase));
     }
 
     private async Task<ScheduledTargetExecutionResult> RunTargetIngestInOwnScopeAsync(
@@ -332,9 +333,9 @@ public sealed class TheOddsMlbScheduledRefreshWorker(
                 return await RunMlbTargetAsync(scope.ServiceProvider, target, refreshOptions, scheduledCycleId, startedAtUtc, cancellationToken);
             }
 
-            if (IsSoccerWorldCupSportsbookTarget(target))
+            if (IsSoccerWorldCupTarget(target))
             {
-                return await RunSoccerWorldCupSportsbookTargetAsync(scope.ServiceProvider, target, refreshOptions, scheduledCycleId, startedAtUtc, cancellationToken);
+                return await RunSoccerWorldCupTargetAsync(scope.ServiceProvider, target, refreshOptions, scheduledCycleId, startedAtUtc, cancellationToken);
             }
 
             var completedAtUtc = DateTimeOffset.UtcNow;
@@ -443,7 +444,7 @@ public sealed class TheOddsMlbScheduledRefreshWorker(
             run?.PlatformPropsUpserted);
     }
 
-    private async Task<ScheduledTargetExecutionResult> RunSoccerWorldCupSportsbookTargetAsync(
+    private async Task<ScheduledTargetExecutionResult> RunSoccerWorldCupTargetAsync(
         IServiceProvider serviceProvider,
         TheOddsRefreshTargetPlan target,
         TheOddsScheduledRefreshOptions refreshOptions,
@@ -462,6 +463,7 @@ public sealed class TheOddsMlbScheduledRefreshWorker(
         var effectiveBookmakers = string.IsNullOrWhiteSpace(target.Bookmakers)
             ? JoinOrNull(target.EffectiveBookmakers)
             : target.Bookmakers;
+        var isDfs = string.Equals(target.ProviderCategory, "DFS", StringComparison.OrdinalIgnoreCase);
         var request = new TheOddsMarketRefreshRequest(
             Sport: target.Sport,
             Competition: target.Competition,
@@ -471,8 +473,8 @@ public sealed class TheOddsMlbScheduledRefreshWorker(
             DryRun: false,
             ForceLive: true,
             BookmakerPreset: target.BookmakerPreset,
-            IncludeDfs: false,
-            IncludeSportsbook: true,
+            IncludeDfs: isDfs,
+            IncludeSportsbook: !isDfs,
             IncludeCandidates: refreshOptions.IncludeCandidates,
             IncludeLineShopping: refreshOptions.IncludeLineShopping,
             IncludeFullDiagnostics: refreshOptions.IncludeFullDiagnostics,

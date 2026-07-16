@@ -1997,7 +1997,11 @@ public static partial class TheOddsApiDebugEndpoints
                     liveExecutionRequiresAllowScheduledLiveRefresh = true,
                     plannerGatedExecution = true,
                     soccerEntryBuilderEnabled = false,
-                    worldCupDfsEnabled = false
+                    worldCupDfsEnabled = targets.Any(target =>
+                        target.Enabled
+                        && string.Equals(target.Sport, "SOCCER", StringComparison.OrdinalIgnoreCase)
+                        && string.Equals(target.Competition, "World Cup", StringComparison.OrdinalIgnoreCase)
+                        && string.Equals(target.ProviderCategory, "DFS", StringComparison.OrdinalIgnoreCase))
                 }
             });
         })
@@ -4259,6 +4263,23 @@ public static partial class TheOddsApiDebugEndpoints
         })
         .WithName("TheOddsApiSoccerWorldCupProviderAvailabilityDebug")
         .WithSummary("Debug-only read-only Soccer / World Cup provider availability probe for The Odds regions, bookmakers, and market keys.");
+
+        endpoints.MapGet("/api/debug/the-odds/soccer/world-cup/provider-coverage", async (
+            string? provider,
+            string? providerCategory,
+            bool? includeSamples,
+            ApplicationDbContext dbContext,
+            CancellationToken cancellationToken) =>
+        {
+            return Results.Ok(await BuildSoccerWorldCupProviderCoverageResponseAsync(
+                provider,
+                providerCategory,
+                includeSamples == true,
+                dbContext,
+                cancellationToken));
+        })
+        .WithName("TheOddsApiSoccerWorldCupProviderCoverageDebug")
+        .WithSummary("Read-only Soccer / World Cup persisted provider coverage report for raw provider, normalized, public read, and model-ready row counts.");
 
         endpoints.MapGet("/api/debug/the-odds/mlb/provider-availability", async (
             DateOnly? slateDate,
@@ -11628,6 +11649,12 @@ public static partial class TheOddsApiDebugEndpoints
             "pitcher_hits_allowed" => "Hits Allowed",
             "pitcher_earned_runs" => "Earned Runs Allowed",
             "pitcher_outs" => "Pitching Outs",
+            "player_goals" => "Goals",
+            "player_assists" => "Assists",
+            "player_shots" => "Shots",
+            "player_shots_on_target" => "Shots On Target",
+            "player_passes" => "Passes Attempted",
+            "player_tackles" => "Tackles",
             _ => CultureInfo.InvariantCulture.TextInfo.ToTitleCase(marketKey.Replace('_', ' '))
         };
     }
@@ -14104,6 +14131,648 @@ public static partial class TheOddsApiDebugEndpoints
             ?? "us";
     }
 
+    private static async Task<object> BuildSoccerWorldCupProviderCoverageResponseAsync(
+        string? provider,
+        string? providerCategory,
+        bool includeSamples,
+        ApplicationDbContext dbContext,
+        CancellationToken cancellationToken)
+    {
+        var generatedAtUtc = DateTimeOffset.UtcNow;
+        var effectiveProvider = NullIfWhiteSpace(provider) ?? "PrizePicks";
+        var effectiveProviderKey = NormalizeTheOddsBookmakerKey(effectiveProvider, effectiveProvider);
+        var effectiveProviderCategory = ResolveSoccerWorldCupCoverageProviderCategory(providerCategory, effectiveProviderKey);
+        var worldCupRuns = await dbContext.TheOddsRefreshRuns
+            .AsNoTracking()
+            .Where(row => row.Provider == "The Odds API"
+                && row.Sport == "SOCCER"
+                && row.Succeeded
+                && !row.DryRun)
+            .OrderByDescending(row => row.CompletedAtUtc ?? row.StartedAtUtc)
+            .Take(100)
+            .ToListAsync(cancellationToken);
+        worldCupRuns = worldCupRuns
+            .Where(IsSoccerWorldCupRefreshRun)
+            .ToList();
+        var latestRefreshRun = worldCupRuns
+            .FirstOrDefault(run => SoccerWorldCupCoverageRunMatchesRequest(run, effectiveProviderCategory, effectiveProviderKey));
+        var latestAnyWorldCupRefreshRun = worldCupRuns.FirstOrDefault();
+        var latestSportsbookWorldCupRefreshRun = worldCupRuns
+            .FirstOrDefault(run => SoccerWorldCupCoverageRunMatchesProviderCategory(run, "Sportsbook"));
+        var latestDfsWorldCupRefreshRun = worldCupRuns
+            .FirstOrDefault(run => SoccerWorldCupCoverageRunMatchesProviderCategory(run, "DFS"));
+        var hasMatchingRefreshRun = latestRefreshRun is not null;
+        var noMatchReason = hasMatchingRefreshRun
+            ? null
+            : BuildSoccerWorldCupCoverageNoMatchingRunReason(effectiveProviderCategory, effectiveProviderKey);
+
+        var persistedProviderProps = await LoadSoccerWorldCupProviderPlatformPropsAsync(
+            dbContext,
+            providerCategory: effectiveProviderCategory,
+            readTimeUtc: null,
+            lifecycleFreshnessMinutes: null,
+            cancellationToken);
+        var providerProps = persistedProviderProps
+            .Where(row => IsTheOddsProviderMatch(row, effectiveProviderKey))
+            .ToArray();
+
+        var publicCategoryProps = await LoadSoccerWorldCupProviderPlatformPropsAsync(
+            dbContext,
+            providerCategory: effectiveProviderCategory,
+            readTimeUtc: generatedAtUtc,
+            lifecycleFreshnessMinutes: DefaultTheOddsLineShoppingFreshnessMinutes,
+            cancellationToken);
+        var publicProviderProps = publicCategoryProps
+            .Where(row => IsTheOddsProviderMatch(row, effectiveProviderKey))
+            .ToArray();
+        var publicRows = BuildTheOddsResearchOnlyLineShoppingRows(publicProviderProps);
+        var publicGroups = BuildTheOddsLineShoppingGroups(publicRows, generatedAtUtc, DefaultTheOddsLineShoppingFreshnessMinutes);
+        var rawRows = await LoadSoccerWorldCupProviderRawOutcomeRowsAsync(
+            dbContext,
+            providerProps,
+            cancellationToken);
+        rawRows = rawRows
+            .Where(row => IsTheOddsProviderMatch(row, effectiveProviderKey))
+            .ToList();
+        var runCoverageRows = ExtractSoccerWorldCupRunProviderCoverageRows(latestRefreshRun?.DiagnosticsJson, effectiveProviderKey);
+        var persistedKeys = providerProps
+            .Select(BuildSoccerWorldCupProviderCoverageKey)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var rawClassifiedRows = rawRows
+            .Select(row => new
+            {
+                Row = row,
+                DropReason = ClassifySoccerWorldCupRawProviderOutcome(row, persistedKeys)
+            })
+            .ToArray();
+        var rawEventCount = rawRows.Count > 0
+            ? rawRows
+                .Select(row => row.EventId)
+                .Where(value => !string.IsNullOrWhiteSpace(value))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .Count()
+            : runCoverageRows
+                .Select(row => row.ProviderEventId)
+                .Where(value => !string.IsNullOrWhiteSpace(value))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .Count();
+        var rawMarketCount = rawRows.Count > 0
+            ? rawRows
+                .Select(row => $"{row.EventId}|{row.MarketKey}")
+                .Where(value => !string.IsNullOrWhiteSpace(value))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .Count()
+            : runCoverageRows
+                .SelectMany(row => row.MarketKeysReturned.Select(market => $"{row.ProviderEventId}|{market}"))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .Count();
+        var rawOutcomeCount = rawRows.Count > 0
+            ? rawRows.Count
+            : runCoverageRows.Sum(row => row.PlayerOutcomeCount);
+        var dropReasonCounts = rawClassifiedRows.Length > 0
+            ? BuildCoverageCountBreakdown(rawClassifiedRows, row => row.DropReason)
+            : providerProps.Length > 0
+                ? BuildCoverageCountBreakdown(providerProps, _ => "Accepted")
+                : runCoverageRows.Sum(row => row.PlayerOutcomeCount) > 0
+                    ? BuildCoverageCountBreakdown(runCoverageRows, _ => "ProviderReturnedRowsButNoNormalizedProps")
+                    : BuildCoverageCountBreakdown(Array.Empty<string>(), _ => "NoProviderRowsObserved");
+
+        return new
+        {
+            readOnly = true,
+            callsExternalApis = false,
+            writesRows = false,
+            generatedAtUtc,
+            sport = "SOCCER",
+            competition = "World Cup",
+            provider = effectiveProvider,
+            providerKey = effectiveProviderKey,
+            providerCategory = effectiveProviderCategory,
+            hasMatchingRefreshRun,
+            reason = noMatchReason,
+            latestRefreshRun = ToSoccerWorldCupCoverageRefreshRunSummary(latestRefreshRun),
+            latestMatchingRefreshRun = ToSoccerWorldCupCoverageRefreshRunSummary(latestRefreshRun),
+            latestAnyWorldCupRefreshRun = ToSoccerWorldCupCoverageRefreshRunSummary(latestAnyWorldCupRefreshRun),
+            latestSportsbookWorldCupRefreshRun = ToSoccerWorldCupCoverageRefreshRunSummary(latestSportsbookWorldCupRefreshRun),
+            latestDfsWorldCupRefreshRun = ToSoccerWorldCupCoverageRefreshRunSummary(latestDfsWorldCupRefreshRun),
+            requested = new
+            {
+                sportKeys = new[] { "soccer_fifa_world_cup" },
+                competitionKeys = new[] { "World Cup" },
+                providerCategories = new[] { effectiveProviderCategory },
+                sportsbookBookmakers = string.Equals(effectiveProviderCategory, "Sportsbook", StringComparison.OrdinalIgnoreCase)
+                    ? new[] { effectiveProviderKey }
+                    : Array.Empty<string>(),
+                dfsBookmakers = string.Equals(effectiveProviderCategory, "DFS", StringComparison.OrdinalIgnoreCase)
+                    ? new[] { effectiveProviderKey }
+                    : Array.Empty<string>(),
+                marketKeys = latestRefreshRun is null ? Array.Empty<string>() : ParseCommaSeparatedSet(latestRefreshRun.MarketsRequested)
+            },
+            matchingRunRequested = new
+            {
+                providerCategories = latestRefreshRun is null ? Array.Empty<string>() : ParseCommaSeparatedSet(latestRefreshRun.ProviderCategoriesIncluded),
+                sportsbookBookmakers = latestRefreshRun is null ? Array.Empty<string>() : ParseCommaSeparatedSet(latestRefreshRun.SportsbookBookmakersRequested),
+                dfsBookmakers = latestRefreshRun is null ? Array.Empty<string>() : ParseCommaSeparatedSet(latestRefreshRun.DfsBookmakersRequested),
+                marketKeys = latestRefreshRun is null ? Array.Empty<string>() : ParseCommaSeparatedSet(latestRefreshRun.MarketsRequested)
+            },
+            counts = new
+            {
+                rawProviderEventCount = rawEventCount,
+                rawProviderMarketCount = rawMarketCount,
+                rawProviderOutcomePropCount = rawOutcomeCount,
+                normalizedPropCount = providerProps.Length,
+                persistedPropSnapshotCount = providerProps.Length,
+                publicPropScannerRowCount = publicGroups.Count,
+                publicLineShoppingRowCount = publicGroups.Count,
+                publicLineShoppingComparableGroupCount = publicGroups.Count(group => group.BookmakerPrices.Count > 1),
+                modelReadyRowCount = publicGroups.Count(group => group.BestProbability.HasValue),
+                publicGroupsWithNoPrediction = publicGroups.Count(group => !group.BestProbability.HasValue)
+            },
+            byProvider = BuildCoverageCountBreakdown(providerProps, row => NormalizeTheOddsBookmakerKey(row.BookmakerKey, row.PlatformName)),
+            bySport = BuildCoverageCountBreakdown(providerProps, row => row.SportCode),
+            byCompetition = BuildCoverageCountBreakdown(providerProps, row => row.Competition),
+            byRawMarketKey = rawRows.Count > 0
+                ? BuildCoverageCountBreakdown(rawRows, row => row.MarketKey)
+                : runCoverageRows.Count > 0
+                    ? BuildCoverageCountBreakdown(runCoverageRows.SelectMany(row => row.MarketKeysReturned), row => row)
+                    : BuildCoverageCountBreakdown(providerProps, row => row.MarketKey),
+            byNormalizedPropType = BuildCoverageCountBreakdown(providerProps, row => row.PropType),
+            dropReasonCounts,
+            samples = includeSamples
+                ? new
+                {
+                    acceptedRows = providerProps
+                        .Take(10)
+                        .Select(ToSoccerWorldCupAcceptedCoverageSample)
+                        .ToArray(),
+                    droppedRows = rawClassifiedRows
+                        .Where(row => !string.Equals(row.DropReason, "Accepted", StringComparison.OrdinalIgnoreCase))
+                        .Take(10)
+                        .Select(row => ToSoccerWorldCupDroppedCoverageSample(row.Row, row.DropReason))
+                        .ToArray()
+                }
+                : null
+        };
+    }
+
+    private static string ResolveSoccerWorldCupCoverageProviderCategory(string? providerCategory, string providerKey)
+    {
+        if (string.Equals(providerCategory, "DFS", StringComparison.OrdinalIgnoreCase))
+        {
+            return "DFS";
+        }
+
+        if (string.Equals(providerCategory, "Sportsbook", StringComparison.OrdinalIgnoreCase))
+        {
+            return "Sportsbook";
+        }
+
+        return providerKey is "prizepicks" or "underdog" or "pick6" or "betr_us_dfs"
+            ? "DFS"
+            : "Sportsbook";
+    }
+
+    private static bool IsSoccerWorldCupRefreshRun(TheOddsRefreshRun run)
+    {
+        if (!string.Equals(run.Sport, "SOCCER", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        var competition = GetDiagnosticsString(run.DiagnosticsJson, "competition");
+        if (!string.IsNullOrWhiteSpace(competition))
+        {
+            return string.Equals(competition, "World Cup", StringComparison.OrdinalIgnoreCase);
+        }
+
+        var targetKey = GetDiagnosticsString(run.DiagnosticsJson, "targetKey");
+        if (!string.IsNullOrWhiteSpace(targetKey))
+        {
+            return targetKey.Contains("world-cup", StringComparison.OrdinalIgnoreCase);
+        }
+
+        return run.BookmakerPreset.Contains("soccer", StringComparison.OrdinalIgnoreCase)
+            || run.BookmakerPreset.Equals("allSportsbooks", StringComparison.OrdinalIgnoreCase)
+            || run.BookmakerPreset.Equals("dfsOnly", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool SoccerWorldCupCoverageRunMatchesRequest(
+        TheOddsRefreshRun run,
+        string providerCategory,
+        string providerKey)
+    {
+        return SoccerWorldCupCoverageRunMatchesProviderCategory(run, providerCategory)
+            && SoccerWorldCupCoverageRunMatchesProvider(run, providerCategory, providerKey);
+    }
+
+    private static bool SoccerWorldCupCoverageRunMatchesProviderCategory(TheOddsRefreshRun run, string providerCategory)
+    {
+        return ParseCommaSeparatedSet(run.ProviderCategoriesIncluded)
+            .Any(value => string.Equals(value, providerCategory, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static bool SoccerWorldCupCoverageRunMatchesProvider(
+        TheOddsRefreshRun run,
+        string providerCategory,
+        string providerKey)
+    {
+        var requested = string.Equals(providerCategory, "DFS", StringComparison.OrdinalIgnoreCase)
+            ? ParseCommaSeparatedSet(run.DfsBookmakersRequested)
+            : ParseCommaSeparatedSet(run.SportsbookBookmakersRequested);
+
+        if (requested.Any(value => string.Equals(NormalizeTheOddsBookmakerKey(value, value), providerKey, StringComparison.OrdinalIgnoreCase)))
+        {
+            return true;
+        }
+
+        var diagnosticsRegion = GetDiagnosticsString(run.DiagnosticsJson, "region");
+        return string.Equals(providerCategory, "DFS", StringComparison.OrdinalIgnoreCase)
+            && string.Equals(providerKey, "prizepicks", StringComparison.OrdinalIgnoreCase)
+            && (requested.Any(IsSoccerWorldCupDfsRegionMarker)
+                || IsSoccerWorldCupDfsRegionMarker(diagnosticsRegion)
+                || string.Equals(run.BookmakerPreset, "dfsOnly", StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static bool IsSoccerWorldCupDfsRegionMarker(string? value)
+    {
+        return !string.IsNullOrWhiteSpace(value)
+            && value.Contains("us_dfs", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string BuildSoccerWorldCupCoverageNoMatchingRunReason(string providerCategory, string providerKey)
+    {
+        if (string.Equals(providerCategory, "DFS", StringComparison.OrdinalIgnoreCase)
+            && string.Equals(providerKey, "prizepicks", StringComparison.OrdinalIgnoreCase))
+        {
+            return "NoMatchingDfsPrizePicksWorldCupRefreshRun";
+        }
+
+        var providerLabel = CultureInfo.InvariantCulture.TextInfo.ToTitleCase(providerKey.Replace("_", " ", StringComparison.Ordinal));
+        return $"NoMatching{providerCategory}{providerLabel.Replace(" ", string.Empty, StringComparison.Ordinal)}WorldCupRefreshRun";
+    }
+
+    private static object? ToSoccerWorldCupCoverageRefreshRunSummary(TheOddsRefreshRun? run)
+    {
+        return run is null
+            ? null
+            : new
+            {
+                id = run.Id,
+                completedAtUtc = run.CompletedAtUtc,
+                run.StartedAtUtc,
+                run.Succeeded,
+                run.Failed,
+                run.Blocked,
+                run.BookmakerPreset,
+                run.ProviderCategoriesIncluded,
+                run.SportsbookBookmakersRequested,
+                run.DfsBookmakersRequested,
+                run.MarketsRequested,
+                run.PlatformPropsUpserted,
+                diagnosticsProviderCategory = GetDiagnosticsString(run.DiagnosticsJson, "providerCategory"),
+                diagnosticsRegion = GetDiagnosticsString(run.DiagnosticsJson, "region"),
+                diagnosticsCompetition = GetDiagnosticsString(run.DiagnosticsJson, "competition"),
+                diagnosticsTargetKey = GetDiagnosticsString(run.DiagnosticsJson, "targetKey")
+            };
+    }
+
+    private static bool IsTheOddsProviderMatch(TheOddsPersistedPlatformPropRow row, string providerKey)
+        => string.Equals(
+                NormalizeTheOddsBookmakerKey(row.BookmakerKey, row.PlatformName),
+                providerKey,
+                StringComparison.OrdinalIgnoreCase)
+            || string.Equals(row.PlatformName, providerKey, StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsTheOddsProviderMatch(SoccerWorldCupRawProviderOutcomeRow row, string providerKey)
+        => string.Equals(
+                NormalizeTheOddsBookmakerKey(row.BookmakerKey, row.BookmakerName),
+                providerKey,
+                StringComparison.OrdinalIgnoreCase)
+            || string.Equals(row.BookmakerName, providerKey, StringComparison.OrdinalIgnoreCase);
+
+    private static string BuildSoccerWorldCupProviderCoverageKey(TheOddsPersistedPlatformPropRow row)
+        => string.Join("|", new[]
+        {
+            row.EventId ?? string.Empty,
+            NormalizeTheOddsBookmakerKey(row.BookmakerKey, row.PlatformName),
+            row.MarketKey ?? string.Empty,
+            NormalizeSnapshotLookupText(row.PlayerName),
+            row.CurrentLine.ToString("0.####", CultureInfo.InvariantCulture)
+        });
+
+    private static string BuildSoccerWorldCupProviderCoverageKey(SoccerWorldCupRawProviderOutcomeRow row)
+        => string.Join("|", new[]
+        {
+            row.EventId ?? string.Empty,
+            NormalizeTheOddsBookmakerKey(row.BookmakerKey, row.BookmakerName),
+            row.MarketKey ?? string.Empty,
+            NormalizeSnapshotLookupText(row.PlayerOrTeamLabel),
+            row.Line?.ToString("0.####", CultureInfo.InvariantCulture) ?? string.Empty
+        });
+
+    private static string ClassifySoccerWorldCupRawProviderOutcome(
+        SoccerWorldCupRawProviderOutcomeRow row,
+        IReadOnlySet<string> persistedKeys)
+    {
+        if (string.IsNullOrWhiteSpace(row.BookmakerKey) && string.IsNullOrWhiteSpace(row.BookmakerName))
+        {
+            return "MissingProvider";
+        }
+
+        if (string.IsNullOrWhiteSpace(row.MarketKey))
+        {
+            return "MissingMarketKey";
+        }
+
+        if (row.Line is null)
+        {
+            return "MissingLine";
+        }
+
+        if (string.IsNullOrWhiteSpace(row.PlayerOrTeamLabel))
+        {
+            return "MissingPlayerOrTeamLabel";
+        }
+
+        if (row.Side is not ("Over" or "Under"))
+        {
+            return "UnsupportedOutcomeSide";
+        }
+
+        return persistedKeys.Contains(BuildSoccerWorldCupProviderCoverageKey(row))
+            ? "Accepted"
+            : "NotPersistedAfterNormalization";
+    }
+
+    private static async Task<List<SoccerWorldCupRawProviderOutcomeRow>> LoadSoccerWorldCupProviderRawOutcomeRowsAsync(
+        ApplicationDbContext dbContext,
+        IReadOnlyCollection<TheOddsPersistedPlatformPropRow> platformProps,
+        CancellationToken cancellationToken)
+    {
+        var rawPayloadIds = platformProps
+            .Select(row => row.RawPayloadId)
+            .Where(value => value.HasValue)
+            .Select(value => value!.Value)
+            .Distinct()
+            .ToArray();
+        if (rawPayloadIds.Length == 0)
+        {
+            return [];
+        }
+
+        var rawPayloads = await dbContext.RawIngestionPayloads
+            .AsNoTracking()
+            .Where(row => rawPayloadIds.Contains(row.Id))
+            .Select(row => new
+            {
+                row.Id,
+                row.Payload
+            })
+            .ToListAsync(cancellationToken);
+        var rows = new List<SoccerWorldCupRawProviderOutcomeRow>();
+        foreach (var payload in rawPayloads)
+        {
+            rows.AddRange(ExtractSoccerWorldCupRawProviderOutcomeRows(payload.Payload));
+        }
+
+        return rows;
+    }
+
+    private static IEnumerable<SoccerWorldCupRawProviderOutcomeRow> ExtractSoccerWorldCupRawProviderOutcomeRows(JsonDocument payload)
+    {
+        var root = payload.RootElement;
+        if (root.ValueKind != JsonValueKind.Object ||
+            !root.TryGetProperty("bookmakers", out var bookmakers) ||
+            bookmakers.ValueKind != JsonValueKind.Array)
+        {
+            yield break;
+        }
+
+        var eventId = GetJsonString(root, "id");
+        var sportKey = GetJsonString(root, "sport_key");
+        var homeTeam = GetJsonString(root, "home_team");
+        var awayTeam = GetJsonString(root, "away_team");
+        foreach (var bookmaker in bookmakers.EnumerateArray())
+        {
+            if (bookmaker.ValueKind != JsonValueKind.Object ||
+                !bookmaker.TryGetProperty("markets", out var markets) ||
+                markets.ValueKind != JsonValueKind.Array)
+            {
+                continue;
+            }
+
+            var bookmakerKey = GetJsonString(bookmaker, "key");
+            var bookmakerName = GetJsonString(bookmaker, "title");
+            foreach (var market in markets.EnumerateArray())
+            {
+                if (market.ValueKind != JsonValueKind.Object)
+                {
+                    continue;
+                }
+
+                var marketKey = GetJsonString(market, "key");
+                if (!market.TryGetProperty("outcomes", out var outcomes) ||
+                    outcomes.ValueKind != JsonValueKind.Array)
+                {
+                    continue;
+                }
+
+                foreach (var outcome in outcomes.EnumerateArray())
+                {
+                    if (outcome.ValueKind != JsonValueKind.Object)
+                    {
+                        continue;
+                    }
+
+                    var side = NormalizeTheOddsOutcomeSide(GetJsonString(outcome, "name"));
+                    var playerOrTeamLabel = FirstNonBlank(
+                        GetJsonString(outcome, "description"),
+                        GetJsonString(outcome, "participant"),
+                        GetJsonString(outcome, "team"),
+                        GetJsonString(outcome, "name"));
+                    yield return new SoccerWorldCupRawProviderOutcomeRow(
+                        EventId: eventId,
+                        RawSportKey: sportKey,
+                        EventName: BuildTheOddsEventName(homeTeam, awayTeam),
+                        BookmakerKey: bookmakerKey,
+                        BookmakerName: bookmakerName,
+                        MarketKey: marketKey,
+                        PlayerOrTeamLabel: playerOrTeamLabel,
+                        Line: GetJsonDecimal(outcome, "point"),
+                        Side: side,
+                        Price: GetJsonInt32(outcome, "price"));
+                }
+            }
+        }
+    }
+
+    private static IReadOnlyList<SoccerWorldCupRunProviderCoverageRow> ExtractSoccerWorldCupRunProviderCoverageRows(
+        JsonDocument? diagnosticsJson,
+        string providerKey)
+    {
+        if (diagnosticsJson is null ||
+            !diagnosticsJson.RootElement.TryGetProperty("diagnostics", out var diagnostics) ||
+            diagnostics.ValueKind != JsonValueKind.Object ||
+            !diagnostics.TryGetProperty("events", out var events) ||
+            events.ValueKind != JsonValueKind.Array)
+        {
+            return [];
+        }
+
+        var rows = new List<SoccerWorldCupRunProviderCoverageRow>();
+        foreach (var item in events.EnumerateArray())
+        {
+            if (item.ValueKind != JsonValueKind.Object)
+            {
+                continue;
+            }
+
+            var bookmakerKeys = GetJsonStringArray(item, "bookmakerKeysReturned");
+            if (!bookmakerKeys.Any(key => string.Equals(NormalizeTheOddsBookmakerKey(key, key), providerKey, StringComparison.OrdinalIgnoreCase)))
+            {
+                continue;
+            }
+
+            rows.Add(new SoccerWorldCupRunProviderCoverageRow(
+                ProviderEventId: GetJsonString(item, "providerEventId"),
+                MarketKeysReturned: GetJsonStringArray(item, "marketKeysReturned"),
+                OutcomeCount: GetJsonInt32(item, "outcomeCount") ?? 0,
+                PlayerOutcomeCount: GetJsonInt32(item, "playerOutcomeCount") ?? 0));
+        }
+
+        return rows;
+    }
+
+    private static object[] BuildCoverageCountBreakdown<T>(
+        IEnumerable<T> rows,
+        Func<T, string?> keySelector)
+    {
+        return rows
+            .Select(row => NullIfWhiteSpace(keySelector(row)) ?? "Unknown")
+            .GroupBy(row => row, StringComparer.OrdinalIgnoreCase)
+            .Select(group => new
+            {
+                key = group.Key,
+                count = group.Count()
+            })
+            .OrderByDescending(row => row.count)
+            .ThenBy(row => row.key, StringComparer.OrdinalIgnoreCase)
+            .Cast<object>()
+            .ToArray();
+    }
+
+    private static object ToSoccerWorldCupAcceptedCoverageSample(TheOddsPersistedPlatformPropRow row)
+        => new
+        {
+            rawSportKey = row.ProviderSportKey,
+            eventId = row.EventId,
+            eventName = BuildTheOddsEventName(row.HomeTeam, row.AwayTeam),
+            provider = row.PlatformName,
+            providerKey = NormalizeTheOddsBookmakerKey(row.BookmakerKey, row.PlatformName),
+            marketKey = row.MarketKey,
+            normalizedPropType = row.PropType,
+            playerTeamOrLabel = row.PlayerName,
+            line = row.CurrentLine,
+            side = BuildCoverageSideLabel(row.OverAvailable, row.UnderAvailable),
+            dropReason = "Accepted"
+        };
+
+    private static object ToSoccerWorldCupDroppedCoverageSample(SoccerWorldCupRawProviderOutcomeRow row, string dropReason)
+        => new
+        {
+            rawSportKey = row.RawSportKey,
+            eventId = row.EventId,
+            row.EventName,
+            provider = row.BookmakerName,
+            providerKey = NormalizeTheOddsBookmakerKey(row.BookmakerKey, row.BookmakerName),
+            marketKey = row.MarketKey,
+            playerTeamOrLabel = row.PlayerOrTeamLabel,
+            line = row.Line,
+            side = row.Side,
+            row.Price,
+            dropReason
+        };
+
+    private static string BuildCoverageSideLabel(bool overAvailable, bool underAvailable)
+    {
+        return (overAvailable, underAvailable) switch
+        {
+            (true, true) => "Over/Under",
+            (true, false) => "Over",
+            (false, true) => "Under",
+            _ => "None"
+        };
+    }
+
+    private static string? NormalizeTheOddsOutcomeSide(string? side)
+    {
+        if (string.Equals(side, "Over", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(side, "Higher", StringComparison.OrdinalIgnoreCase))
+        {
+            return "Over";
+        }
+
+        if (string.Equals(side, "Under", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(side, "Lower", StringComparison.OrdinalIgnoreCase))
+        {
+            return "Under";
+        }
+
+        return side;
+    }
+
+    private static IReadOnlyList<string> GetJsonStringArray(JsonElement element, string propertyName)
+    {
+        if (!element.TryGetProperty(propertyName, out var property) ||
+            property.ValueKind != JsonValueKind.Array)
+        {
+            return [];
+        }
+
+        return property
+            .EnumerateArray()
+            .Select(row => row.ValueKind == JsonValueKind.String ? row.GetString() : null)
+            .Where(value => !string.IsNullOrWhiteSpace(value))
+            .Select(value => value!)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Order(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+    }
+
+    private static decimal? GetJsonDecimal(JsonElement element, string propertyName)
+    {
+        if (!element.TryGetProperty(propertyName, out var property))
+        {
+            return null;
+        }
+
+        if (property.ValueKind == JsonValueKind.Number && property.TryGetDecimal(out var decimalValue))
+        {
+            return decimalValue;
+        }
+
+        return property.ValueKind == JsonValueKind.String && decimal.TryParse(property.GetString(), NumberStyles.Number, CultureInfo.InvariantCulture, out var parsed)
+            ? parsed
+            : null;
+    }
+
+    private static int? GetJsonInt32(JsonElement element, string propertyName)
+    {
+        if (!element.TryGetProperty(propertyName, out var property))
+        {
+            return null;
+        }
+
+        if (property.ValueKind == JsonValueKind.Number && property.TryGetInt32(out var intValue))
+        {
+            return intValue;
+        }
+
+        return property.ValueKind == JsonValueKind.String && int.TryParse(property.GetString(), NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed)
+            ? parsed
+            : null;
+    }
+
     private static async Task<IResult> BuildSoccerWorldCupProviderAvailabilityResponseAsync(
         DateOnly? slateDate,
         string? regions,
@@ -15070,6 +15739,24 @@ public static partial class TheOddsApiDebugEndpoints
         IReadOnlyList<string> SkipReasons,
         IReadOnlyList<string> Warnings,
         IReadOnlyList<string> Errors);
+
+    private sealed record SoccerWorldCupRawProviderOutcomeRow(
+        string? EventId,
+        string? RawSportKey,
+        string? EventName,
+        string? BookmakerKey,
+        string? BookmakerName,
+        string? MarketKey,
+        string? PlayerOrTeamLabel,
+        decimal? Line,
+        string? Side,
+        int? Price);
+
+    private sealed record SoccerWorldCupRunProviderCoverageRow(
+        string? ProviderEventId,
+        IReadOnlyList<string> MarketKeysReturned,
+        int OutcomeCount,
+        int PlayerOutcomeCount);
 
     private sealed record SoccerWorldCupProviderAvailabilityEvent(
         string? ProviderEventId,

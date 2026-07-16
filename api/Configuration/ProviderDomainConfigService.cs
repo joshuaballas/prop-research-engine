@@ -44,7 +44,7 @@ public sealed class ProviderDomainConfigService(
     private const string DefaultExpandedSportsbookBookmakers =
         "draftkings,fanduel,betmgm,espnbet,betrivers,fanatics,williamhill_us,betonlineag,bovada,lowvig,mybookieag";
     private const string DefaultDfsBookmakers = "prizepicks,underdog,pick6,betr_us_dfs";
-    private const string DefaultSoccerWorldCupMarkets = "player_goals,player_assists,player_shots,player_shots_on_target";
+    internal const string DefaultSoccerWorldCupMarkets = "player_goals,player_assists,player_shots,player_shots_on_target,player_passes,player_tackles";
 
     public async Task<ProviderDomainConfigSnapshot> GetSnapshotAsync(CancellationToken cancellationToken)
     {
@@ -788,29 +788,32 @@ public static class ProviderDomainConfigSeeder
             };
         }
 
-        priority = 100;
-        foreach (var market in SplitCsv("player_goals,player_assists,player_shots,player_shots_on_target"))
+        foreach (var providerCategory in new[] { "Sportsbook", "DFS" })
         {
-            yield return new ProviderMarket
+            priority = 100;
+            foreach (var market in SplitCsv(ProviderDomainConfigService.DefaultSoccerWorldCupMarkets))
             {
-                Id = Guid.NewGuid(),
-                ProviderKey = TheOddsProviderKey,
-                Sport = "SOCCER",
-                CompetitionKey = ProviderDomainConfigService.WorldCupCompetitionKey,
-                ProviderCategory = "Sportsbook",
-                MarketKey = market,
-                DisplayName = HumanizeMarketKey(market),
-                InternalPropType = MapTheOddsMarketToPropType(market),
-                IsEnabled = true,
-                IsDefault = true,
-                SupportsOddsImport = true,
-                SupportsLineShopping = true,
-                SupportsTopPicks = true,
-                Priority = priority++,
-                Notes = "Seeded Soccer World Cup sportsbook market key.",
-                CreatedAtUtc = now,
-                UpdatedAtUtc = now
-            };
+                yield return new ProviderMarket
+                {
+                    Id = Guid.NewGuid(),
+                    ProviderKey = TheOddsProviderKey,
+                    Sport = "SOCCER",
+                    CompetitionKey = ProviderDomainConfigService.WorldCupCompetitionKey,
+                    ProviderCategory = providerCategory,
+                    MarketKey = market,
+                    DisplayName = HumanizeMarketKey(market),
+                    InternalPropType = MapTheOddsMarketToPropType(market),
+                    IsEnabled = true,
+                    IsDefault = true,
+                    SupportsOddsImport = true,
+                    SupportsLineShopping = true,
+                    SupportsTopPicks = string.Equals(providerCategory, "Sportsbook", StringComparison.OrdinalIgnoreCase),
+                    Priority = priority++,
+                    Notes = $"Seeded Soccer World Cup {providerCategory} market key.",
+                    CreatedAtUtc = now,
+                    UpdatedAtUtc = now
+                };
+            }
         }
     }
 
@@ -1013,6 +1016,8 @@ public static class ProviderDomainConfigSeeder
             "player_assists" => "Assists",
             "player_shots" => "Shots",
             "player_shots_on_target" => "Shots On Target",
+            "player_passes" => "Passes Attempted",
+            "player_tackles" => "Tackles",
             _ => null
         };
 

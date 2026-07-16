@@ -522,6 +522,7 @@ public sealed class TheOddsApiMlbPlayerPropsAdapter(
             "player_assists" => "Assists",
             "player_shots" => "Shots",
             "player_shots_on_target" => "Shots On Target",
+            "player_passes" => "Passes Attempted",
             "player_tackles" => "Tackles",
             _ when !string.IsNullOrWhiteSpace(marketKey) => CultureInfo.InvariantCulture.TextInfo.ToTitleCase(marketKey.Replace('_', ' ')),
             _ => "Unknown"

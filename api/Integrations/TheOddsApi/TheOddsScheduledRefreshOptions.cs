@@ -95,7 +95,27 @@ public sealed class TheOddsScheduledRefreshOptions
                 SupportsHistory = true,
                 DisabledReason = soccerWorldCupEnabled ? null : "Enable explicitly after Soccer scheduled execution is approved.",
                 Notes = soccerWorldCupEnabled
-                    ? "Development-only scheduled Soccer World Cup sportsbook context refresh. Entry Builder and World Cup DFS remain disabled."
+                    ? "Development-only scheduled Soccer World Cup sportsbook context refresh. Entry Builder remains disabled for Soccer."
+                    : null
+            },
+            new TheOddsScheduledRefreshTargetOptions
+            {
+                Enabled = soccerWorldCupEnabled,
+                Key = "soccer-world-cup-dfs",
+                Sport = "SOCCER",
+                Competition = "World Cup",
+                ProviderCategory = "DFS",
+                BookmakerPreset = "dfsOnly",
+                ProviderSportKey = "soccer_fifa_world_cup",
+                Regions = "us,us_dfs",
+                MaxEvents = 10,
+                EstimatedApiCalls = Math.Max(1, fallbackEstimatedApiCalls),
+                RefreshIntervalMinutes = 30,
+                SupportsResults = false,
+                SupportsHistory = true,
+                DisabledReason = soccerWorldCupEnabled ? null : "Enable explicitly after Soccer scheduled execution is approved.",
+                Notes = soccerWorldCupEnabled
+                    ? "Development-only scheduled Soccer World Cup DFS provider availability refresh. Entry Builder remains disabled for Soccer."
                     : null
             },
             new TheOddsScheduledRefreshTargetOptions

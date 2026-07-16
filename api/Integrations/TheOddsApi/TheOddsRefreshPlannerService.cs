@@ -605,7 +605,8 @@ public sealed class TheOddsRefreshPlannerService(
 
         return string.Equals(target.Sport, "SOCCER", StringComparison.OrdinalIgnoreCase)
             && string.Equals(target.Competition, "World Cup", StringComparison.OrdinalIgnoreCase)
-            && string.Equals(target.ProviderCategory, "Sportsbook", StringComparison.OrdinalIgnoreCase);
+            && (string.Equals(target.ProviderCategory, "Sportsbook", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(target.ProviderCategory, "DFS", StringComparison.OrdinalIgnoreCase));
     }
 
     private static bool IsProviderSportKeyVerified(TheOddsScheduledRefreshTargetOptions target)

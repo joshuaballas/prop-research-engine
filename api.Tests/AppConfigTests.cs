@@ -259,7 +259,15 @@ public sealed class AppConfigTests
             row.ProviderKey == ProviderDomainConfigService.TheOddsProviderKey
             && row.Sport == "SOCCER"
             && row.CompetitionKey == ProviderDomainConfigService.WorldCupCompetitionKey
+            && row.ProviderCategory == "Sportsbook"
             && row.MarketKey == "player_shots");
+        Assert.Contains(await dbContext.ProviderMarkets.ToArrayAsync(), row =>
+            row.ProviderKey == ProviderDomainConfigService.TheOddsProviderKey
+            && row.Sport == "SOCCER"
+            && row.CompetitionKey == ProviderDomainConfigService.WorldCupCompetitionKey
+            && row.ProviderCategory == "DFS"
+            && row.MarketKey == "player_passes"
+            && row.InternalPropType == "Passes Attempted");
         Assert.Contains(await dbContext.ProviderBookmakers.ToArrayAsync(), row =>
             row.BookmakerKey == "draftkings"
             && row.ProviderCategory == "Sportsbook"
@@ -281,6 +289,11 @@ public sealed class AppConfigTests
         Assert.Contains(await dbContext.ProviderRefreshTargets.ToArrayAsync(), row =>
             row.TargetKey == "soccer-world-cup-sportsbook"
             && row.CompetitionKey == ProviderDomainConfigService.WorldCupCompetitionKey
+            && row.RefreshIntervalMinutes == 30);
+        Assert.Contains(await dbContext.ProviderRefreshTargets.ToArrayAsync(), row =>
+            row.TargetKey == "soccer-world-cup-dfs"
+            && row.CompetitionKey == ProviderDomainConfigService.WorldCupCompetitionKey
+            && row.ProviderCategory == "DFS"
             && row.RefreshIntervalMinutes == 30);
     }
 
@@ -465,19 +478,26 @@ public sealed class AppConfigTests
         var mlbSportsbook = targets.Single(row => row.ResolveKey() == "mlb-sportsbook");
         var mlbDfs = targets.Single(row => row.ResolveKey() == "mlb-dfs");
         var worldCup = targets.Single(row => row.ResolveKey() == "soccer-world-cup-sportsbook");
+        var worldCupDfs = targets.Single(row => row.ResolveKey() == "soccer-world-cup-dfs");
         var sportsbookBookmakers = await service.GetTheOddsBookmakerKeysAsync(mlbSportsbook, workerOptions, CancellationToken.None);
         var dfsBookmakers = await service.GetTheOddsBookmakerKeysAsync(mlbDfs, workerOptions, CancellationToken.None);
+        var worldCupDfsBookmakers = await service.GetTheOddsBookmakerKeysAsync(worldCupDfs, workerOptions, CancellationToken.None);
         var mlbMarkets = await service.GetTheOddsMarketKeysAsync(mlbSportsbook, theOddsApiOptions, workerOptions, CancellationToken.None);
+        var worldCupDfsMarkets = await service.GetTheOddsMarketKeysAsync(worldCupDfs, theOddsApiOptions, workerOptions, CancellationToken.None);
 
         Assert.Contains(competitions, row => row.Key == ProviderDomainConfigService.WorldCupCompetitionKey && row.IsWorldCup);
         Assert.Contains(competitions, row => row.Key == "EPL" && !row.IsWorldCup);
         Assert.Contains(targets, row => row.ResolveKey() == "soccer-world-cup-sportsbook");
+        Assert.Contains(targets, row => row.ResolveKey() == "soccer-world-cup-dfs");
         Assert.Equal(15, mlbDfs.RefreshIntervalMinutes);
         Assert.Equal(15, mlbSportsbook.RefreshIntervalMinutes);
         Assert.Equal(30, worldCup.RefreshIntervalMinutes);
+        Assert.Equal(30, worldCupDfs.RefreshIntervalMinutes);
         Assert.Contains("mybookieag", sportsbookBookmakers);
         Assert.Contains("prizepicks", dfsBookmakers);
+        Assert.Contains("prizepicks", worldCupDfsBookmakers);
         Assert.Contains("batter_hits", mlbMarkets);
+        Assert.Contains("player_passes", worldCupDfsMarkets);
     }
 
     [Fact]

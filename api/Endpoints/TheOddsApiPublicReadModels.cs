@@ -572,7 +572,7 @@ public static partial class TheOddsApiDebugEndpoints
             .OrderByDescending(row => row.CompletedAtUtc ?? row.StartedAtUtc)
             .FirstOrDefaultAsync(cancellationToken);
         AddTimingStage(timingStages, stepStopwatch, "freshness/run lookup", latestSoccerRun is null ? 0 : 1);
-        var platformProps = await LoadSoccerWorldCupSportsbookPlatformPropsAsync(
+        var platformProps = await LoadSoccerWorldCupProviderPlatformPropsAsync(
             dbContext,
             providerCategory,
             generatedAtUtc,
@@ -625,8 +625,8 @@ public static partial class TheOddsApiDebugEndpoints
             SnapshotBacked: false,
             RefreshRunId: latestSoccerRun?.Id,
             FallbackReason: platformProps.Count == 0
-                ? "No persisted Soccer / World Cup sportsbook provider context rows are available yet."
-                : "Built from persisted Soccer / World Cup sportsbook provider context rows because prediction-backed line-shopping snapshots are not enabled for Soccer yet.",
+                ? "No persisted Soccer / World Cup provider context rows are available yet."
+                : "Built from persisted Soccer / World Cup provider context rows because prediction-backed line-shopping snapshots are not enabled for Soccer yet.",
             Diagnostics: new
             {
                 callsTheOddsApi = false,
@@ -635,7 +635,7 @@ public static partial class TheOddsApiDebugEndpoints
                 contextSchemaVersion = "the-odds-provider-context-v2",
                 sport = "SOCCER",
                 competition = "World Cup",
-                providerCategory = "Sportsbook",
+                providerCategory = NormalizePublicProviderCategoryFilter(providerCategory) ?? "All",
                 endpointKind = includePlayerHistory ? "line-shopping" : "top-picks",
                 publicSoccerGradingEnabled = soccerGradingOptions.Enabled,
                 soccerPredictionsEnabled = soccerPredictionOptions.Enabled,
@@ -677,8 +677,8 @@ public static partial class TheOddsApiDebugEndpoints
                 eligibleComparisonGroups = groups.Count(group => group.BestProbability.HasValue),
                 returnedComparisonGroups = comparisonGroups.Length,
                 actionableCandidateCount = 0,
-                sportsbookContextCandidateCount = groups.Count(group => group.BestProbability.HasValue),
-                dfsCandidateCount = 0,
+                sportsbookContextCandidateCount = groups.Count(group => group.BestProbability.HasValue && string.Equals(group.ProviderCategory, "Sportsbook", StringComparison.OrdinalIgnoreCase)),
+                dfsCandidateCount = groups.Count(group => group.BestProbability.HasValue && string.Equals(group.ProviderCategory, "DFS", StringComparison.OrdinalIgnoreCase)),
                 providerContextRowCount = platformProps.Count,
                 providerCategoryBreakdown = groups
                     .GroupBy(group => group.ProviderCategory, StringComparer.OrdinalIgnoreCase)
@@ -2557,7 +2557,7 @@ public static partial class TheOddsApiDebugEndpoints
         ApplicationDbContext dbContext,
         CancellationToken cancellationToken)
     {
-        var platformProps = await LoadSoccerWorldCupSportsbookPlatformPropsAsync(
+        var platformProps = await LoadSoccerWorldCupProviderPlatformPropsAsync(
             dbContext,
             providerCategory: null,
             readTimeUtc: null,
@@ -2580,34 +2580,31 @@ public static partial class TheOddsApiDebugEndpoints
                 .Count());
     }
 
-    private static async Task<List<TheOddsPersistedPlatformPropRow>> LoadSoccerWorldCupSportsbookPlatformPropsAsync(
+    private static async Task<List<TheOddsPersistedPlatformPropRow>> LoadSoccerWorldCupProviderPlatformPropsAsync(
         ApplicationDbContext dbContext,
         string? providerCategory,
         DateTimeOffset? readTimeUtc,
         int? lifecycleFreshnessMinutes,
         CancellationToken cancellationToken)
     {
-        if (!string.IsNullOrWhiteSpace(providerCategory)
-            && !string.Equals(providerCategory, "All", StringComparison.OrdinalIgnoreCase)
-            && !string.Equals(providerCategory, "Sportsbook", StringComparison.OrdinalIgnoreCase))
-        {
-            return [];
-        }
+        var normalizedProviderCategory = NormalizePublicProviderCategoryFilter(providerCategory);
 
-        var rows = await LoadSoccerWorldCupSportsbookPlatformPropDataRowsAsync(
+        var rows = await LoadSoccerWorldCupProviderPlatformPropDataRowsAsync(
             dbContext,
+            normalizedProviderCategory,
             readTimeUtc,
             lifecycleFreshnessMinutes,
             cancellationToken);
         var platformProps = ParseTheOddsPlatformProps(rows);
 
         return platformProps
-            .Where(IsRealSoccerWorldCupSportsbookContextRow)
+            .Where(row => IsRealSoccerWorldCupProviderContextRow(row, normalizedProviderCategory))
             .ToList();
     }
 
-    private static async Task<List<TheOddsPlatformPropDataRow>> LoadSoccerWorldCupSportsbookPlatformPropDataRowsAsync(
+    private static async Task<List<TheOddsPlatformPropDataRow>> LoadSoccerWorldCupProviderPlatformPropDataRowsAsync(
         ApplicationDbContext dbContext,
+        string? providerCategory,
         DateTimeOffset? readTimeUtc,
         int? lifecycleFreshnessMinutes,
         CancellationToken cancellationToken)
@@ -2653,23 +2650,35 @@ public static partial class TheOddsApiDebugEndpoints
                 .Where(row =>
                 {
                     var parsed = ParseTheOddsPlatformProps([row]).FirstOrDefault();
-                    return parsed is not null && IsRealSoccerWorldCupSportsbookContextRow(parsed);
+                    return parsed is not null && IsRealSoccerWorldCupProviderContextRow(parsed, providerCategory);
                 })
                 .ToList();
         }
 
-        using var filter = JsonSerializer.SerializeToDocument(new
-        {
-            dataProvider = "The Odds API",
-            contextSchemaVersion = "the-odds-provider-context-v2",
-            providerCategory = "Sportsbook",
-            sport = new
+        using var filter = string.IsNullOrWhiteSpace(providerCategory)
+            ? JsonSerializer.SerializeToDocument(new
             {
-                code = "SOCCER",
-                competition = "World Cup",
-                providerSportKey = "soccer_fifa_world_cup"
-            }
-        });
+                dataProvider = "The Odds API",
+                contextSchemaVersion = "the-odds-provider-context-v2",
+                sport = new
+                {
+                    code = "SOCCER",
+                    competition = "World Cup",
+                    providerSportKey = "soccer_fifa_world_cup"
+                }
+            })
+            : JsonSerializer.SerializeToDocument(new
+            {
+                dataProvider = "The Odds API",
+                contextSchemaVersion = "the-odds-provider-context-v2",
+                providerCategory,
+                sport = new
+                {
+                    code = "SOCCER",
+                    competition = "World Cup",
+                    providerSportKey = "soccer_fifa_world_cup"
+                }
+            });
 
         var npgsqlQuery = dbContext.PlatformProps
             .AsNoTracking()
@@ -2724,14 +2733,15 @@ public static partial class TheOddsApiDebugEndpoints
         return query;
     }
 
-    private static bool IsRealSoccerWorldCupSportsbookContextRow(TheOddsPersistedPlatformPropRow row)
+    private static bool IsRealSoccerWorldCupProviderContextRow(TheOddsPersistedPlatformPropRow row, string? providerCategory = null)
     {
         return row.HasTheOddsDataProvider
             && string.Equals(row.ContextSchemaVersion, "the-odds-provider-context-v2", StringComparison.OrdinalIgnoreCase)
             && string.Equals(row.SportCode, "SOCCER", StringComparison.OrdinalIgnoreCase)
             && string.Equals(row.Competition, "World Cup", StringComparison.OrdinalIgnoreCase)
             && string.Equals(row.ProviderSportKey, "soccer_fifa_world_cup", StringComparison.OrdinalIgnoreCase)
-            && string.Equals(row.ProviderCategory, "Sportsbook", StringComparison.OrdinalIgnoreCase)
+            && (string.IsNullOrWhiteSpace(providerCategory)
+                || string.Equals(row.ProviderCategory, providerCategory, StringComparison.OrdinalIgnoreCase))
             && !IsSyntheticSoccerProviderEventId(row.EventId);
     }
 
@@ -2769,9 +2779,9 @@ public static partial class TheOddsApiDebugEndpoints
                     row.ProjectionMetadata.IsAlternateMarket,
                     row.ProjectionMetadata.PayoutMultiplierMayDiffer,
                     row.ProjectionMetadata.SpecialProjectionWarning,
-                    "Sportsbook",
+                    row.ProviderCategory,
                     row.Region,
-                    IsActionableForUser: false,
+                    row.IsActionableForUser,
                     row.IsIndicativeOdds,
                     IsEligibleAsNormalRecommendation: false,
                     ModelProbabilityOver: null,
@@ -3175,13 +3185,21 @@ public static partial class TheOddsApiDebugEndpoints
             SoccerWorldCupPredictionService.ResolveSupportedStatKey(group.NormalizedPropType, group.MarketKey) is not null;
         var soccerRecommendationEligible = IsSoccerWorldCupRecommendationEligible(group, soccerTopPicksOptions, lifecycleBlocked);
         var soccerResearchOnly = !soccerRecommendationEligible;
+        var isDfs = string.Equals(group.ProviderCategory, "DFS", StringComparison.OrdinalIgnoreCase);
+        var providerContextDescription = isDfs
+            ? "Soccer World Cup DFS provider availability is shown for research; Entry Builder is disabled for Soccer."
+            : "Soccer World Cup sportsbook context is research-only and not Entry Builder playable.";
 
         node["sport"] = "SOCCER";
         node["competition"] = "World Cup";
-        node["providerCategory"] = "Sportsbook";
-        node["entryProviderCategory"] = "Sportsbook";
+        node["providerCategory"] = group.ProviderCategory;
+        node["entryProviderCategory"] = group.ProviderCategory;
         node["entryActionableForUser"] = false;
         node["isActionableForUser"] = false;
+        node["providerAvailable"] = true;
+        node["modelRated"] = modelProbabilityAvailable;
+        node["hasPrediction"] = modelProbabilityAvailable;
+        node["source"] = "ProviderSnapshot";
         node["sportsbookContextResearchOnly"] = soccerResearchOnly;
         node["isResearchOnly"] = soccerResearchOnly;
         node["resultGradingSupported"] = resultGradingSupported;
@@ -3197,18 +3215,20 @@ public static partial class TheOddsApiDebugEndpoints
         node["publicSoccerGradingEnabled"] = publicGradingEnabled;
         node["recommendationActionableForUser"] = soccerRecommendationEligible;
         node["isRecommendation"] = soccerRecommendationEligible;
-        node["recommendationType"] = soccerRecommendationEligible ? "Sportsbook" : null;
+        node["recommendationType"] = soccerRecommendationEligible ? group.ProviderCategory : null;
         node["entryUnavailableReason"] = soccerRecommendationEligible
             ? "Soccer sportsbook recommendation. Entry Builder is disabled for Soccer."
-            : "Soccer World Cup sportsbook context is research-only and not Entry Builder playable.";
+            : providerContextDescription;
         node["entryRuleWarning"] = soccerRecommendationEligible
             ? "Soccer sportsbook recommendation. Entry Builder is disabled for Soccer."
-            : "Soccer World Cup sportsbook context is research-only and not Entry Builder playable.";
+            : providerContextDescription;
         if (!modelProbabilityAvailable)
         {
             node["showExpectedValue"] = false;
             node["displayExpectedValue"] = null;
-            node["expectedValueUnavailableReason"] = "World Cup sportsbook EV requires model probability and real odds.";
+            node["expectedValueUnavailableReason"] = isDfs
+                ? "DFS props do not expose sportsbook break-even EV in this view."
+                : "World Cup sportsbook EV requires model probability and real odds.";
             node["bestEstimatedEv"] = null;
             node["bestProbability"] = null;
             node["selectedSideProbability"] = null;

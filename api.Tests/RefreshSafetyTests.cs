@@ -1287,7 +1287,7 @@ public sealed class RefreshSafetyTests
     }
 
     [Fact]
-    public async Task RefreshPlan_WiresSoccerWorldCupSportsbookTarget_ButKeepsUnverifiedSoccerLeaguesSkipped()
+    public async Task RefreshPlan_WiresSoccerWorldCupTargets_ButKeepsUnverifiedSoccerLeaguesSkipped()
     {
         await using var factory = new SafetyTestApplicationFactory(new Dictionary<string, string?>
         {
@@ -1304,14 +1304,17 @@ public sealed class RefreshSafetyTests
         using (var scope = factory.Services.CreateScope())
         {
             var dbContext = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
-            var worldCupTarget = await dbContext.ProviderRefreshTargets.SingleAsync(
-                row => row.TargetKey == "soccer-world-cup-sportsbook");
-            worldCupTarget.IsEnabled = true;
-            worldCupTarget.DisabledReason = null;
-            worldCupTarget.ProviderSportKey = "soccer_fifa_world_cup";
-            worldCupTarget.BookmakerPreset = "allSportsbooks";
-            worldCupTarget.Regions = "us";
-            worldCupTarget.UpdatedAtUtc = DateTimeOffset.UtcNow;
+            foreach (var worldCupTarget in await dbContext.ProviderRefreshTargets
+                .Where(row => row.TargetKey == "soccer-world-cup-sportsbook" || row.TargetKey == "soccer-world-cup-dfs")
+                .ToArrayAsync())
+            {
+                worldCupTarget.IsEnabled = true;
+                worldCupTarget.DisabledReason = null;
+                worldCupTarget.ProviderSportKey = "soccer_fifa_world_cup";
+                worldCupTarget.BookmakerPreset = worldCupTarget.TargetKey == "soccer-world-cup-dfs" ? "dfsOnly" : "allSportsbooks";
+                worldCupTarget.Regions = worldCupTarget.TargetKey == "soccer-world-cup-dfs" ? "us,us_dfs" : "us";
+                worldCupTarget.UpdatedAtUtc = DateTimeOffset.UtcNow;
+            }
             await dbContext.SaveChangesAsync();
             scope.ServiceProvider.GetRequiredService<IProviderDomainConfigService>().ClearCache();
         }
@@ -1322,6 +1325,7 @@ public sealed class RefreshSafetyTests
         var json = await response.Content.ReadFromJsonAsync<JsonElement>();
         var targets = json.GetProperty("targets").EnumerateArray().ToArray();
         var worldCup = targets.Single(row => row.GetProperty("key").GetString() == "soccer-world-cup-sportsbook");
+        var worldCupDfs = targets.Single(row => row.GetProperty("key").GetString() == "soccer-world-cup-dfs");
         var epl = targets.Single(row => row.GetProperty("key").GetString() == "soccer-epl-sportsbook");
 
         Assert.True(worldCup.GetProperty("enabled").GetBoolean());
@@ -1332,6 +1336,14 @@ public sealed class RefreshSafetyTests
         Assert.Contains(worldCup.GetProperty("effectiveBookmakers").EnumerateArray(), row => row.GetString() == "bovada");
         Assert.False(worldCup.GetProperty("shouldRefresh").GetBoolean());
         Assert.Contains("CadenceNotDue", worldCup.GetProperty("skipReason").GetString());
+        Assert.True(worldCupDfs.GetProperty("enabled").GetBoolean());
+        Assert.True(worldCupDfs.GetProperty("executionWired").GetBoolean());
+        Assert.True(worldCupDfs.GetProperty("providerSportKeyVerified").GetBoolean());
+        Assert.Equal("DFS", worldCupDfs.GetProperty("providerCategory").GetString());
+        Assert.Equal("us,us_dfs", worldCupDfs.GetProperty("regions").GetString());
+        Assert.Contains(worldCupDfs.GetProperty("effectiveBookmakers").EnumerateArray(), row => row.GetString() == "prizepicks");
+        Assert.False(worldCupDfs.GetProperty("shouldRefresh").GetBoolean());
+        Assert.Contains("CadenceNotDue", worldCupDfs.GetProperty("skipReason").GetString());
         Assert.False(epl.GetProperty("enabled").GetBoolean());
         Assert.False(epl.GetProperty("executionWired").GetBoolean());
         Assert.False(epl.GetProperty("providerSportKeyVerified").GetBoolean());
@@ -1420,6 +1432,7 @@ public sealed class RefreshSafetyTests
         var mlbDfs = targets.Single(row => row.GetProperty("key").GetString() == "mlb-dfs");
         var mlbSportsbookTarget = targets.Single(row => row.GetProperty("key").GetString() == "mlb-sportsbook");
         var worldCupTarget = targets.Single(row => row.GetProperty("key").GetString() == "soccer-world-cup-sportsbook");
+        var worldCupDfsTarget = targets.Single(row => row.GetProperty("key").GetString() == "soccer-world-cup-dfs");
 
         Assert.Equal(15, mlbDfs.GetProperty("refreshIntervalMinutes").GetInt32());
         Assert.False(mlbDfs.GetProperty("shouldRefresh").GetBoolean());
@@ -1430,6 +1443,9 @@ public sealed class RefreshSafetyTests
         Assert.Equal(30, worldCupTarget.GetProperty("refreshIntervalMinutes").GetInt32());
         Assert.False(worldCupTarget.GetProperty("shouldRefresh").GetBoolean());
         Assert.Contains("CadenceNotDue", worldCupTarget.GetProperty("skipReason").GetString());
+        Assert.Equal(30, worldCupDfsTarget.GetProperty("refreshIntervalMinutes").GetInt32());
+        Assert.False(worldCupDfsTarget.GetProperty("shouldRefresh").GetBoolean());
+        Assert.Contains("CadenceNotDue", worldCupDfsTarget.GetProperty("skipReason").GetString());
         Assert.Equal(0, factory.TheOddsAdapter.CallCount);
     }
 
@@ -1585,6 +1601,7 @@ public sealed class RefreshSafetyTests
         var mlbDfs = targets.Single(row => row.GetProperty("key").GetString() == "mlb-dfs");
         var mlbSportsbook = targets.Single(row => row.GetProperty("key").GetString() == "mlb-sportsbook");
         var worldCup = targets.Single(row => row.GetProperty("key").GetString() == "soccer-world-cup-sportsbook");
+        var worldCupDfs = targets.Single(row => row.GetProperty("key").GetString() == "soccer-world-cup-dfs");
         var epl = targets.Single(row => row.GetProperty("key").GetString() == "soccer-epl-sportsbook");
 
         Assert.Equal(mlbDfsRunId, mlbDfs.GetProperty("latestRefreshRunId").GetGuid());
@@ -1597,6 +1614,9 @@ public sealed class RefreshSafetyTests
         Assert.Contains(mlbSportsbook.GetProperty("effectiveBookmakers").EnumerateArray(), row => row.GetString() == "mybookieag");
         Assert.Equal(worldCupRunId, worldCup.GetProperty("latestRefreshRunId").GetGuid());
         Assert.Equal(10, worldCup.GetProperty("actualApiCalls").GetInt32());
+        Assert.Equal(JsonValueKind.Null, worldCupDfs.GetProperty("latestRefreshRunId").ValueKind);
+        Assert.True(worldCupDfs.GetProperty("executionWired").GetBoolean());
+        Assert.Contains(worldCupDfs.GetProperty("effectiveBookmakers").EnumerateArray(), row => row.GetString() == "prizepicks");
         Assert.Equal(JsonValueKind.Null, epl.GetProperty("latestRefreshRunId").ValueKind);
         Assert.Equal(JsonValueKind.Null, epl.GetProperty("latestRunSucceeded").ValueKind);
         Assert.Equal(JsonValueKind.Null, epl.GetProperty("actualApiCalls").ValueKind);
@@ -3725,6 +3745,177 @@ public sealed class RefreshSafetyTests
         Assert.False(unavailableSummary.GetProperty("available").GetBoolean());
         Assert.Equal("No approved API-Sports player link found for this Soccer platform player.", unavailableSummary.GetProperty("unavailableReason").GetString());
         Assert.Empty(topPicks.GetProperty("topPicks").EnumerateArray());
+        Assert.Equal(0, factory.TheOddsAdapter.CallCount);
+        Assert.Equal(before, await factory.CountArtifactsAsync());
+    }
+
+    [Fact]
+    public async Task SoccerWorldCupLineShopping_ReturnsDfsProviderRows_WhenNotModelReady()
+    {
+        await using var factory = new SafetyTestApplicationFactory();
+        using var client = factory.CreateClient();
+        await factory.SeedSoccerWorldCupProviderContextRowsWithoutSnapshotsAsync(
+            providerCategory: "DFS",
+            platformName: "PrizePicks",
+            bookmakerKey: "prizepicks",
+            bookmakerTitle: "PrizePicks",
+            marketKey: "player_passes",
+            propTypeName: "Passes Attempted",
+            statKey: "PASSES_ATTEMPTED",
+            region: "us");
+        var before = await factory.CountArtifactsAsync();
+
+        var response = await client.GetAsync("/api/markets/line-shopping?sport=SOCCER&competition=World%20Cup&providerCategory=DFS&topOnly=false&take=10&includeBookmakerPrices=true");
+
+        await EnsureSuccessWithBodyAsync(response);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.True(json.GetProperty("readOnly").GetBoolean());
+        Assert.False(json.GetProperty("callsExternalApis").GetBoolean());
+        Assert.False(json.GetProperty("snapshotBacked").GetBoolean());
+        Assert.Equal(2, json.GetProperty("summary").GetProperty("providerContextRowCount").GetInt32());
+        Assert.Equal(2, json.GetProperty("summary").GetProperty("returnedComparisonGroups").GetInt32());
+        var group = json.GetProperty("comparisonGroups").EnumerateArray().First();
+        Assert.Equal("SOCCER", group.GetProperty("sport").GetString());
+        Assert.Equal("World Cup", group.GetProperty("competition").GetString());
+        Assert.Equal("DFS", group.GetProperty("providerCategory").GetString());
+        Assert.Equal("DFS", group.GetProperty("entryProviderCategory").GetString());
+        Assert.True(group.GetProperty("providerAvailable").GetBoolean());
+        Assert.False(group.GetProperty("modelRated").GetBoolean());
+        Assert.False(group.GetProperty("hasPrediction").GetBoolean());
+        Assert.Equal("ProviderSnapshot", group.GetProperty("source").GetString());
+        Assert.Equal("player_passes", group.GetProperty("marketKey").GetString());
+        Assert.Equal("Passes Attempted", group.GetProperty("normalizedPropType").GetString());
+        Assert.False(group.GetProperty("modelProbabilityAvailable").GetBoolean());
+        Assert.Equal(JsonValueKind.Null, group.GetProperty("selectedSideProbability").ValueKind);
+        Assert.Equal(JsonValueKind.Null, group.GetProperty("bestAmericanPrice").ValueKind);
+        Assert.Equal(JsonValueKind.Null, group.GetProperty("bestDecimalPrice").ValueKind);
+        Assert.False(group.GetProperty("showExpectedValue").GetBoolean());
+        Assert.Contains("DFS props", group.GetProperty("expectedValueUnavailableReason").GetString(), StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(0, factory.TheOddsAdapter.CallCount);
+        Assert.Equal(before, await factory.CountArtifactsAsync());
+    }
+
+    [Fact]
+    public async Task SoccerWorldCupProviderCoverage_ReportReconcilesDfsProviderRows()
+    {
+        await using var factory = new SafetyTestApplicationFactory();
+        using var client = factory.CreateClient();
+        await factory.SeedSoccerWorldCupProviderContextRowsWithoutSnapshotsAsync(
+            providerCategory: "DFS",
+            platformName: "PrizePicks",
+            bookmakerKey: "prizepicks",
+            bookmakerTitle: "PrizePicks",
+            marketKey: "player_passes",
+            propTypeName: "Passes Attempted",
+            statKey: "PASSES_ATTEMPTED",
+            region: "us");
+        var before = await factory.CountArtifactsAsync();
+
+        var response = await client.GetAsync("/api/debug/the-odds/soccer/world-cup/provider-coverage?provider=PrizePicks&includeSamples=true");
+
+        await EnsureSuccessWithBodyAsync(response);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.True(json.GetProperty("readOnly").GetBoolean());
+        Assert.False(json.GetProperty("callsExternalApis").GetBoolean());
+        Assert.False(json.GetProperty("writesRows").GetBoolean());
+        Assert.Equal("PrizePicks", json.GetProperty("provider").GetString());
+        Assert.Equal("prizepicks", json.GetProperty("providerKey").GetString());
+        Assert.Equal("DFS", json.GetProperty("providerCategory").GetString());
+        Assert.True(json.GetProperty("hasMatchingRefreshRun").GetBoolean());
+        Assert.Equal(JsonValueKind.Null, json.GetProperty("reason").ValueKind);
+        Assert.Equal("dfsOnly", json.GetProperty("latestRefreshRun").GetProperty("bookmakerPreset").GetString());
+        Assert.Equal("DFS", json.GetProperty("latestRefreshRun").GetProperty("providerCategoriesIncluded").GetString());
+        Assert.Equal("prizepicks", json.GetProperty("latestRefreshRun").GetProperty("dfsBookmakersRequested").GetString());
+        Assert.Contains(json.GetProperty("requested").GetProperty("providerCategories").EnumerateArray(), row => row.GetString() == "DFS");
+        Assert.Contains(json.GetProperty("requested").GetProperty("dfsBookmakers").EnumerateArray(), row => row.GetString() == "prizepicks");
+        Assert.Contains(json.GetProperty("matchingRunRequested").GetProperty("providerCategories").EnumerateArray(), row => row.GetString() == "DFS");
+        Assert.Contains(json.GetProperty("matchingRunRequested").GetProperty("dfsBookmakers").EnumerateArray(), row => row.GetString() == "prizepicks");
+        var counts = json.GetProperty("counts");
+        Assert.Equal(2, counts.GetProperty("normalizedPropCount").GetInt32());
+        Assert.Equal(2, counts.GetProperty("persistedPropSnapshotCount").GetInt32());
+        Assert.Equal(2, counts.GetProperty("publicPropScannerRowCount").GetInt32());
+        Assert.Equal(2, counts.GetProperty("publicLineShoppingRowCount").GetInt32());
+        Assert.Equal(0, counts.GetProperty("modelReadyRowCount").GetInt32());
+        Assert.Contains(json.GetProperty("byRawMarketKey").EnumerateArray(), row =>
+            row.GetProperty("key").GetString() == "Unknown" || row.GetProperty("key").GetString() == "player_passes");
+        Assert.Contains(json.GetProperty("byNormalizedPropType").EnumerateArray(), row =>
+            row.GetProperty("key").GetString() == "Passes Attempted" && row.GetProperty("count").GetInt32() == 2);
+        Assert.Contains(json.GetProperty("dropReasonCounts").EnumerateArray(), row =>
+            row.GetProperty("key").GetString() == "Accepted" && row.GetProperty("count").GetInt32() == 2);
+        var accepted = json.GetProperty("samples").GetProperty("acceptedRows").EnumerateArray().ToArray();
+        Assert.NotEmpty(accepted);
+        Assert.All(accepted, row =>
+        {
+            Assert.Equal("prizepicks", row.GetProperty("providerKey").GetString());
+            Assert.Equal("player_passes", row.GetProperty("marketKey").GetString());
+            Assert.Equal("Accepted", row.GetProperty("dropReason").GetString());
+        });
+        Assert.Equal(0, factory.TheOddsAdapter.CallCount);
+        Assert.Equal(before, await factory.CountArtifactsAsync());
+    }
+
+    [Fact]
+    public async Task SoccerWorldCupProviderCoverage_PrizePicksDfsDoesNotSelectSportsbookOnlyRun()
+    {
+        await using var factory = new SafetyTestApplicationFactory();
+        using var client = factory.CreateClient();
+        using (var scope = factory.Services.CreateScope())
+        {
+            var dbContext = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+            await dbContext.Database.EnsureDeletedAsync();
+            await dbContext.Database.EnsureCreatedAsync();
+            var now = DateTimeOffset.UtcNow;
+            var sportsbookRun = CreateTheOddsRun(
+                Guid.NewGuid(),
+                "SOCCER",
+                now.AddMinutes(-10),
+                now.AddMinutes(-9),
+                "allSportsbooks",
+                "Sportsbook",
+                new
+                {
+                    sport = "SOCCER",
+                    competition = "World Cup",
+                    providerCategory = "Sportsbook",
+                    region = "us",
+                    diagnostics = new
+                    {
+                        events = Array.Empty<object>()
+                    }
+                });
+            sportsbookRun.SportsbookBookmakersRequested = "fanduel,draftkings,betmgm";
+            sportsbookRun.DfsBookmakersRequested = string.Empty;
+            sportsbookRun.MarketsRequested = "player_goals,player_assists,player_shots,player_shots_on_target";
+            dbContext.TheOddsRefreshRuns.Add(sportsbookRun);
+            await dbContext.SaveChangesAsync();
+        }
+        var before = await factory.CountArtifactsAsync();
+
+        var response = await client.GetAsync("/api/debug/the-odds/soccer/world-cup/provider-coverage?provider=PrizePicks&includeSamples=true");
+
+        await EnsureSuccessWithBodyAsync(response);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.True(json.GetProperty("readOnly").GetBoolean());
+        Assert.False(json.GetProperty("callsExternalApis").GetBoolean());
+        Assert.False(json.GetProperty("writesRows").GetBoolean());
+        Assert.Equal("PrizePicks", json.GetProperty("provider").GetString());
+        Assert.Equal("prizepicks", json.GetProperty("providerKey").GetString());
+        Assert.Equal("DFS", json.GetProperty("providerCategory").GetString());
+        Assert.False(json.GetProperty("hasMatchingRefreshRun").GetBoolean());
+        Assert.Equal("NoMatchingDfsPrizePicksWorldCupRefreshRun", json.GetProperty("reason").GetString());
+        Assert.Equal(JsonValueKind.Null, json.GetProperty("latestRefreshRun").ValueKind);
+        Assert.Equal(JsonValueKind.Null, json.GetProperty("latestMatchingRefreshRun").ValueKind);
+        Assert.Equal("allSportsbooks", json.GetProperty("latestAnyWorldCupRefreshRun").GetProperty("bookmakerPreset").GetString());
+        Assert.Equal("Sportsbook", json.GetProperty("latestSportsbookWorldCupRefreshRun").GetProperty("providerCategoriesIncluded").GetString());
+        Assert.Equal(JsonValueKind.Null, json.GetProperty("latestDfsWorldCupRefreshRun").ValueKind);
+        Assert.Contains(json.GetProperty("requested").GetProperty("providerCategories").EnumerateArray(), row => row.GetString() == "DFS");
+        Assert.Contains(json.GetProperty("requested").GetProperty("dfsBookmakers").EnumerateArray(), row => row.GetString() == "prizepicks");
+        Assert.Empty(json.GetProperty("matchingRunRequested").GetProperty("providerCategories").EnumerateArray());
+        var counts = json.GetProperty("counts");
+        Assert.Equal(0, counts.GetProperty("rawProviderOutcomePropCount").GetInt32());
+        Assert.Equal(0, counts.GetProperty("normalizedPropCount").GetInt32());
+        Assert.Equal(0, counts.GetProperty("publicPropScannerRowCount").GetInt32());
+        Assert.Equal(0, counts.GetProperty("publicLineShoppingRowCount").GetInt32());
         Assert.Equal(0, factory.TheOddsAdapter.CallCount);
         Assert.Equal(before, await factory.CountArtifactsAsync());
     }
@@ -9181,13 +9372,15 @@ public sealed class RefreshSafetyTests
             target.ProviderSportKey ??= "baseball_mlb";
         }
 
-        var worldCup = targets.Single(row => row.TargetKey == "soccer-world-cup-sportsbook");
-        worldCup.IsEnabled = enableSoccer;
-        worldCup.DisabledReason = enableSoccer ? null : "Disabled for test readiness scope.";
-        worldCup.ProviderSportKey = "soccer_fifa_world_cup";
-        worldCup.BookmakerPreset = "allSportsbooks";
-        worldCup.Regions = "us";
-        worldCup.UpdatedAtUtc = DateTimeOffset.UtcNow;
+        foreach (var worldCup in targets.Where(row => row.TargetKey is "soccer-world-cup-sportsbook" or "soccer-world-cup-dfs"))
+        {
+            worldCup.IsEnabled = enableSoccer;
+            worldCup.DisabledReason = enableSoccer ? null : "Disabled for test readiness scope.";
+            worldCup.ProviderSportKey = "soccer_fifa_world_cup";
+            worldCup.BookmakerPreset = worldCup.TargetKey == "soccer-world-cup-dfs" ? "dfsOnly" : "allSportsbooks";
+            worldCup.Regions = worldCup.TargetKey == "soccer-world-cup-dfs" ? "us,us_dfs" : "us";
+            worldCup.UpdatedAtUtc = DateTimeOffset.UtcNow;
+        }
 
         await dbContext.SaveChangesAsync();
         scope.ServiceProvider.GetRequiredService<IProviderDomainConfigService>().ClearCache();
@@ -11786,12 +11979,21 @@ public sealed class SafetyTestApplicationFactory : WebApplicationFactory<Program
         await dbContext.SaveChangesAsync();
     }
 
-    public async Task SeedSoccerWorldCupProviderContextRowsWithoutSnapshotsAsync()
+    public async Task SeedSoccerWorldCupProviderContextRowsWithoutSnapshotsAsync(
+        string providerCategory = "Sportsbook",
+        string platformName = "FanDuel",
+        string bookmakerKey = "fanduel",
+        string bookmakerTitle = "FanDuel",
+        string marketKey = "player_shots",
+        string propTypeName = "Shots",
+        string statKey = "SHOTS",
+        string region = "us")
     {
         using var scope = Services.CreateScope();
         var dbContext = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
         await dbContext.Database.EnsureDeletedAsync();
         await dbContext.Database.EnsureCreatedAsync();
+        var isDfs = string.Equals(providerCategory, "DFS", StringComparison.OrdinalIgnoreCase);
 
         var sport = new Sport { Id = Guid.NewGuid(), Code = "SOCCER", Name = "Soccer" };
         var league = new League
@@ -11819,15 +12021,15 @@ public sealed class SafetyTestApplicationFactory : WebApplicationFactory<Program
         {
             Id = Guid.NewGuid(),
             SportId = sport.Id,
-            Name = "Shots",
-            StatKey = "SHOTS",
+            Name = propTypeName,
+            StatKey = statKey,
             ValueType = "numeric"
         };
         var platform = new Platform
         {
             Id = Guid.NewGuid(),
-            Name = "FanDuel",
-            Slug = "theodds-fanduel"
+            Name = platformName,
+            Slug = $"theodds-{bookmakerKey}"
         };
         var refreshRun = new TheOddsRefreshRun
         {
@@ -11842,11 +12044,11 @@ public sealed class SafetyTestApplicationFactory : WebApplicationFactory<Program
             Blocked = false,
             DryRun = false,
             ForceLive = true,
-            BookmakerPreset = "sportsbookContext",
-            ProviderCategoriesIncluded = "Sportsbook",
-            SportsbookBookmakersRequested = "fanduel",
-            DfsBookmakersRequested = string.Empty,
-            MarketsRequested = "player_shots",
+            BookmakerPreset = isDfs ? "dfsOnly" : "sportsbookContext",
+            ProviderCategoriesIncluded = providerCategory,
+            SportsbookBookmakersRequested = isDfs ? string.Empty : bookmakerKey,
+            DfsBookmakersRequested = isDfs ? bookmakerKey : string.Empty,
+            MarketsRequested = marketKey,
             EstimatedApiCalls = 1,
             ActualApiCalls = 1,
             PlatformPropsCreated = 2,
@@ -11900,21 +12102,21 @@ public sealed class SafetyTestApplicationFactory : WebApplicationFactory<Program
                 Id = Guid.NewGuid(),
                 PropId = prop.Id,
                 PlatformId = platform.Id,
-                PlatformPropId = $"fanduel-{Guid.NewGuid():N}",
+                PlatformPropId = $"{bookmakerKey}-{Guid.NewGuid():N}",
                 ExternalStableKey = "852a3abe6d46820720febc0fedebff9a",
-                Label = $"{playerName} Shots",
+                Label = $"{playerName} {propTypeName}",
                 CurrentLine = 1.5m,
                 OverAvailable = true,
                 UnderAvailable = true,
-                PayoutType = "sportsbook",
+                PayoutType = isDfs ? "pickem" : "sportsbook",
                 Status = "active",
                 ObservedAt = DateTimeOffset.UtcNow.AddMinutes(-8),
                 Metadata = JsonSerializer.SerializeToDocument(new
                 {
                     dataProvider = "The Odds API",
                     contextSchemaVersion = "the-odds-provider-context-v2",
-                    providerCategory = "Sportsbook",
-                    region = "us",
+                    providerCategory,
+                    region,
                     sport = new
                     {
                         code = "SOCCER",
@@ -11924,12 +12126,12 @@ public sealed class SafetyTestApplicationFactory : WebApplicationFactory<Program
                         leagueCode = "WC2026",
                         leagueName = "World Cup"
                     },
-                    isActionableForUser = false,
-                    isIndicativeOdds = false,
+                    isActionableForUser = isDfs,
+                    isIndicativeOdds = isDfs,
                     bookmaker = new
                     {
-                        key = "fanduel",
-                        title = "FanDuel"
+                        key = bookmakerKey,
+                        title = bookmakerTitle
                     },
                     eventInfo = new
                     {
@@ -11942,12 +12144,12 @@ public sealed class SafetyTestApplicationFactory : WebApplicationFactory<Program
                     },
                     market = new
                     {
-                        key = "player_shots"
+                        key = marketKey
                     },
                     options = new
                     {
-                        higher = new { americanPrice = 120, decimalPrice = 2.20m },
-                        lower = new { americanPrice = -140, decimalPrice = 1.71m }
+                        higher = new { americanPrice = isDfs ? (int?)null : 120, decimalPrice = isDfs ? (decimal?)null : 2.20m },
+                        lower = new { americanPrice = isDfs ? (int?)null : -140, decimalPrice = isDfs ? (decimal?)null : 1.71m }
                     }
                 })
             });
